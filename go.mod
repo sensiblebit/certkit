@@ -8,7 +8,7 @@ require (
 	github.com/mattn/go-sqlite3 v1.14.28
 	golang.org/x/crypto v0.39.0
 	gopkg.in/yaml.v3 v3.0.1
-	software.sslmate.com/src/go-pkcs12 v0.5.0
+	software.sslmate.com/src/go-pkcs12 v0.6.0
 )
 
 require (
