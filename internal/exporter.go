@@ -25,7 +25,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func writeBundleFiles(outDir, bundleFolder string, cert *CertificateRecord, key *KeyRecord, bundle *bundler.Bundle) error {
+func writeBundleFiles(outDir, bundleFolder string, cert *CertificateRecord, key *KeyRecord, bundle *bundler.Bundle, bundleConfig *BundleConfig) error {
 	prefix := cert.CommonName.String
 	if prefix == "" {
 		prefix = "unknown"
@@ -148,7 +148,7 @@ func writeBundleFiles(outDir, bundleFolder string, cert *CertificateRecord, key 
 		return err
 	}
 
-	csrPEM, csrJSON, err := generateCSR(cert, key)
+	csrPEM, csrJSON, err := generateCSR(cert, key, bundleConfig)
 	if err != nil {
 		return err
 	}
@@ -290,7 +290,7 @@ func generateYAML(key *KeyRecord, bundle *bundler.Bundle) ([]byte, error) {
 }
 
 // generateCSR creates a new CSR using the existing certificate's details and private key
-func generateCSR(cert *CertificateRecord, key *KeyRecord) (csrPEM []byte, csrJSON []byte, err error) {
+func generateCSR(cert *CertificateRecord, key *KeyRecord, bundleConfig *BundleConfig) (csrPEM []byte, csrJSON []byte, err error) {
 	// Parse the existing certificate
 	block, _ := pem.Decode([]byte(cert.PEM))
 	if block == nil {
@@ -352,14 +352,32 @@ func generateCSR(cert *CertificateRecord, key *KeyRecord) (csrPEM []byte, csrJSO
 
 	// Create a new Subject without CommonName
 	csrSubject := pkix.Name{
-		Country:            existingCert.Subject.Country,
-		Organization:       existingCert.Subject.Organization,
-		OrganizationalUnit: existingCert.Subject.OrganizationalUnit,
-		Locality:           existingCert.Subject.Locality,
-		Province:           existingCert.Subject.Province,
-		StreetAddress:      existingCert.Subject.StreetAddress,
-		PostalCode:         existingCert.Subject.PostalCode,
-		SerialNumber:       existingCert.Subject.SerialNumber,
+		StreetAddress: existingCert.Subject.StreetAddress,
+		PostalCode:    existingCert.Subject.PostalCode,
+		SerialNumber:  existingCert.Subject.SerialNumber,
+	}
+	
+	// Use subject fields from bundle config if provided, otherwise use existing cert
+	if bundleConfig != nil && bundleConfig.Subject != nil {
+		csrSubject.Country = bundleConfig.Subject.Country
+		csrSubject.Province = bundleConfig.Subject.Province
+		csrSubject.Locality = bundleConfig.Subject.Locality
+		csrSubject.Organization = bundleConfig.Subject.Organization
+		csrSubject.OrganizationalUnit = bundleConfig.Subject.OrganizationalUnit
+		// Ensure OrganizationalUnit is never empty
+		if len(csrSubject.OrganizationalUnit) == 0 {
+			csrSubject.OrganizationalUnit = []string{"None"}
+		}
+	} else {
+		csrSubject.Country = existingCert.Subject.Country
+		csrSubject.Province = existingCert.Subject.Province
+		csrSubject.Locality = existingCert.Subject.Locality
+		csrSubject.Organization = existingCert.Subject.Organization
+		csrSubject.OrganizationalUnit = existingCert.Subject.OrganizationalUnit
+		// Ensure OrganizationalUnit is never empty
+		if len(csrSubject.OrganizationalUnit) == 0 {
+			csrSubject.OrganizationalUnit = []string{"None"}
+		}
 	}
 
 	template := &x509.CertificateRequest{
@@ -398,7 +416,12 @@ func generateCSR(cert *CertificateRecord, key *KeyRecord) (csrPEM []byte, csrJSO
 			"province":            parsedCSR.Subject.Province,
 			"locality":            parsedCSR.Subject.Locality,
 			"organization":        parsedCSR.Subject.Organization,
-			"organizational_unit": parsedCSR.Subject.OrganizationalUnit,
+			"organizational_unit": func() any {
+				if len(parsedCSR.Subject.OrganizationalUnit) == 0 {
+					return []string{"None"}
+				}
+				return parsedCSR.Subject.OrganizationalUnit
+			}(),
 		},
 		"dns_names":           parsedCSR.DNSNames,
 		"ip_addresses":        formatIPAddresses(parsedCSR.IPAddresses),
@@ -534,8 +557,17 @@ func ExportBundles(cfgs []BundleConfig, outDir string, db *DB, forceBundle bool)
 					continue
 				}
 
+				// Find the matching bundle configuration
+				var matchingConfig *BundleConfig
+				for _, cfg := range cfgs {
+					if cfg.BundleName == bundleName {
+						matchingConfig = &cfg
+						break
+					}
+				}
+				
 				// Write all bundle files for this specific certificate
-				if err := writeBundleFiles(outDir, bundleFolder, &bundleCert, &key, bundle); err != nil {
+				if err := writeBundleFiles(outDir, bundleFolder, &bundleCert, &key, bundle, matchingConfig); err != nil {
 					log.Warningf("Failed to write bundle files for cert %s: %v", bundleCert.Serial, err)
 					continue
 				}
