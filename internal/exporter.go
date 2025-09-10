@@ -310,6 +310,24 @@ func generateCSR(cert *CertificateRecord, key *KeyRecord) (csrPEM []byte, csrJSO
 	// Create CSR template using certificate details
 
 	csrDNSNames := make([]string, 0, len(existingCert.DNSNames))
+	
+	// Check if we should exclude www.CN
+	cn := existingCert.Subject.CommonName
+	shouldExcludeWWW := false
+	if len(existingCert.DNSNames) == 2 {
+		// Check if the only SANs are CN and www.CN
+		hasCN := false
+		hasWWWCN := false
+		for _, name := range existingCert.DNSNames {
+			if name == cn {
+				hasCN = true
+			} else if name == "www."+cn {
+				hasWWWCN = true
+			}
+		}
+		shouldExcludeWWW = hasCN && hasWWWCN
+	}
+	
 	hasWildcard := false
 	var wildcardDomain string
 	for _, name := range existingCert.DNSNames {
@@ -322,6 +340,10 @@ func generateCSR(cert *CertificateRecord, key *KeyRecord) (csrPEM []byte, csrJSO
 	for _, name := range existingCert.DNSNames {
 		// If there's a wildcard, skip the base domain
 		if hasWildcard && name == strings.TrimPrefix(wildcardDomain, "*.") {
+			continue
+		}
+		// If we should exclude www.CN and this is www.CN, skip it
+		if shouldExcludeWWW && name == "www."+cn {
 			continue
 		}
 		// Include all other names (including the wildcard)
