@@ -7,21 +7,15 @@ import (
 	"github.com/jmoiron/sqlx/types"
 )
 
-// Config holds the application configuration
+// Config holds the runtime application configuration
 type Config struct {
-	InputPath         string
-	LogLevel          string
-	Passwords         []string
-	PasswordFile      string
-	PasswordList      string
-	IsStdinSet        bool
-	DB                *DB
-	ExportBundles     bool
-	ForceExport       bool
-	BundlesConfigPath string
-	BundleConfigs     []BundleConfig
-	OutDir            string
-	DBPath            string
+	InputPath     string
+	Passwords     []string
+	DB            *DB
+	ExportBundles bool
+	ForceExport   bool
+	BundleConfigs []BundleConfig
+	OutDir        string
 }
 
 // CertificateRecord encodes a certificate and its metadata
@@ -57,12 +51,11 @@ type K8sMetadata struct {
 
 // KeyRecord encodes a key and its metadata
 type KeyRecord struct {
-	SubjectKeyIdentifier       string `db:"subject_key_identifier"`
-	SubjectKeyIdentifierSha256 string `db:"subject_key_identifier_sha256"`
-	KeyType                    string `db:"key_type"`
-	BitLength                  int    `db:"bit_length"`
-	PublicExponent             int    `db:"public_exponent"`
-	Modulus                    string `db:"modulus"`
-	Curve                      string `db:"curve"`
-	KeyData                    []byte `db:"key_data"`
+	SubjectKeyIdentifier string `db:"subject_key_identifier"`
+	KeyType              string `db:"key_type"`
+	BitLength            int    `db:"bit_length"`
+	PublicExponent       int    `db:"public_exponent"`
+	Modulus              string `db:"modulus"`
+	Curve                string `db:"curve"`
+	KeyData              []byte `db:"key_data"`
 }

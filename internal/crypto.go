@@ -32,18 +32,12 @@ type subjectPublicKeyInfo struct {
 	SubjectPublicKey asn1.BitString
 }
 
-// getPublicKey extracts the public key from a private key
+// getPublicKey extracts the public key from a private key via crypto.Signer
 func getPublicKey(priv crypto.PrivateKey) (crypto.PublicKey, error) {
-	switch k := priv.(type) {
-	case *rsa.PrivateKey:
-		return &k.PublicKey, nil
-	case *ecdsa.PrivateKey:
-		return &k.PublicKey, nil
-	case ed25519.PrivateKey:
-		return k.Public(), nil
-	default:
-		return nil, fmt.Errorf("unsupported private key type: %T", priv)
+	if signer, ok := priv.(crypto.Signer); ok {
+		return signer.Public(), nil
 	}
+	return nil, fmt.Errorf("unsupported private key type: %T", priv)
 }
 
 // getKeyType returns a string description of the key type
@@ -73,7 +67,9 @@ func getCertificateType(cert *x509.Certificate) string {
 	return "leaf"
 }
 
-func computeSKIDRawBits(pub crypto.PublicKey, sumType ...string) ([]byte, error) {
+// subjectPublicKeyBytes extracts the raw SubjectPublicKey BIT STRING bytes
+// from a public key by marshalling to PKIX SPKI DER and unwrapping ASN.1.
+func subjectPublicKeyBytes(pub crypto.PublicKey) ([]byte, error) {
 	der, err := x509.MarshalPKIXPublicKey(pub)
 	if err != nil {
 		return nil, fmt.Errorf("marshal PKIX: %v", err)
@@ -84,22 +80,30 @@ func computeSKIDRawBits(pub crypto.PublicKey, sumType ...string) ([]byte, error)
 		return nil, fmt.Errorf("unmarshal SPKI: %v", err)
 	}
 
-	hashType := "sha1"
-	if len(sumType) > 0 && sumType[0] != "" {
-		hashType = sumType[0]
-	}
+	return spki.SubjectPublicKey.Bytes, nil
+}
 
-	switch hashType {
-	case "sha1":
-		sum := sha1.Sum(spki.SubjectPublicKey.Bytes)
-		return sum[:], nil
-	case "sha256":
-		sum := sha256.Sum256(spki.SubjectPublicKey.Bytes)
-		// Yes, first 40 characters, I think its dumb too
-		return sum[:20], nil
-	default:
-		return nil, fmt.Errorf("unsupported hash type: %s", hashType)
+// computeSKID computes a Subject Key Identifier using RFC 7093 Method 1:
+// SHA-256 of subjectPublicKey BIT STRING bytes, truncated to 160 bits (20 bytes).
+func computeSKID(pub crypto.PublicKey) ([]byte, error) {
+	bits, err := subjectPublicKeyBytes(pub)
+	if err != nil {
+		return nil, err
 	}
+	sum := sha256.Sum256(bits)
+	return sum[:20], nil
+}
+
+// computeSKIDLegacy computes a Subject Key Identifier using the RFC 5280 method:
+// SHA-1 of subjectPublicKey BIT STRING bytes (20 bytes).
+// Used only for AKI cross-matching with legacy certificates.
+func computeSKIDLegacy(pub crypto.PublicKey) ([]byte, error) {
+	bits, err := subjectPublicKeyBytes(pub)
+	if err != nil {
+		return nil, err
+	}
+	sum := sha1.Sum(bits)
+	return sum[:], nil
 }
 
 func isPEM(data []byte) bool {
@@ -139,95 +143,106 @@ func parsePrivateKey(data []byte, passwords []string) (crypto.PrivateKey, error)
 	return nil, fmt.Errorf("failed to decrypt private key with any password")
 }
 
-func processPEM(data []byte, path string, cfg *Config) {
-	// Try parsing as certificates first
-	if certs, err := helpers.ParseCertificatesPEM(data); err == nil && len(certs) > 0 {
-		for _, cert := range certs {
-			skid := "N/A"
-			if len(cert.SubjectKeyId) > 0 {
-				skid = hex.EncodeToString(cert.SubjectKeyId)
-			} else {
-				log.Errorf("No SKID found in certificate %s", cert.SerialNumber)
-				continue
-			}
-
-			// For root certificates, if AKI is missing, use SKI
-			aki := cert.AuthorityKeyId
-			if len(aki) == 0 && cert.IsCA && bytes.Equal(cert.RawIssuer, cert.RawSubject) {
-				aki = cert.SubjectKeyId
-			}
-
-			// Format SANs
-			var sans []string
-			sans = append(sans, cert.DNSNames...)
-			for _, ip := range cert.IPAddresses {
-				sans = append(sans, ip.String())
-			}
-			sansJSON, err := json.Marshal(sans)
-			if err != nil {
-				sansJSON = []byte("[]")
-			}
-
-			// Check if certificate is expired
-			if time.Now().After(cert.NotAfter) {
-				log.Debugf("Skipping expired certificate: CN=%s, Serial=%s, Expired=%v",
-					cert.Subject.CommonName,
-					cert.SerialNumber.String(),
-					cert.NotAfter.Format(time.RFC3339))
-				continue
-			}
-
-			// Determine bundle name from configuration
-			bundleName := determineBundleName(cert.Subject.CommonName, cfg.BundleConfigs)
-			log.Debugf("Determined bundle name %s for certificate CN=%s", bundleName, cert.Subject.CommonName)
-			PEM := pem.EncodeToMemory(&pem.Block{
-				Type:  "CERTIFICATE",
-				Bytes: cert.Raw,
-			})
-
-			certRecord := CertificateRecord{
-				Serial:               cert.SerialNumber.String(),
-				AKI:                  hex.EncodeToString(aki),
-				Type:                 getCertificateType(cert),
-				KeyType:              getKeyType(cert),
-				PEM:                  string(PEM),
-				SubjectKeyIdentifier: hex.EncodeToString(cert.SubjectKeyId),
-				NotBefore:            &cert.NotBefore,
-				Expiry:               cert.NotAfter,
-				CommonName:           sql.NullString{String: cert.Subject.CommonName, Valid: cert.Subject.CommonName != ""},
-				SANsJSON:             types.JSONText(sansJSON),
-				BundleName:           bundleName,
-			}
-
-			if err := cfg.DB.InsertCertificate(certRecord); err != nil {
-				log.Warningf("Failed to insert certificate into the database: %v", err)
-			} else {
-				log.Debugf("Inserted certificate %s with SKID %s into database", cert.SerialNumber.String(), skid)
-			}
-
-			log.Infof("%s, certificate, sha:%s", path, skid)
-		}
-		return
+// processPEMCertificates attempts to parse PEM data as certificates and insert them into the DB.
+// Returns true if the data contained certificates.
+func processPEMCertificates(data []byte, path string, cfg *Config) bool {
+	certs, err := helpers.ParseCertificatesPEM(data)
+	if err != nil || len(certs) == 0 {
+		return false
 	}
 
-	// Try parsing as CSR
-	if csr, err := helpers.ParseCSRPEM(data); err == nil && csr != nil {
-		skid, skid256 := "N/A", "N/A"
-
-		if pub := csr.PublicKey; pub != nil {
-			if rawSKID, err := computeSKIDRawBits(pub); err == nil {
-				skid = hex.EncodeToString(rawSKID)
-				skid256 = hex.EncodeToString(rawSKID)
-			} else {
-				log.Debugf("computeSKIDRawBits error on %s (CSR): %v", path, err)
-			}
+	for _, cert := range certs {
+		// Always compute SKI from the public key (never use embedded SubjectKeyId)
+		rawSKID, err := computeSKID(cert.PublicKey)
+		if err != nil {
+			log.Errorf("Failed to compute SKID for certificate %s: %v", cert.SerialNumber, err)
+			continue
 		}
-		log.Infof("%s, csr, sha1:%s, sha256:%s", path, skid, skid256)
-		return
+		skid := hex.EncodeToString(rawSKID)
+
+		certType := getCertificateType(cert)
+
+		// For root certificates, AKI = SKI (self-signed)
+		// For non-root certificates, temporarily use embedded AKI; ResolveAKIs will fix it later
+		var akiHex string
+		if certType == "root" {
+			akiHex = skid
+		} else {
+			akiHex = hex.EncodeToString(cert.AuthorityKeyId)
+		}
+
+		// Format SANs
+		var sans []string
+		sans = append(sans, cert.DNSNames...)
+		for _, ip := range cert.IPAddresses {
+			sans = append(sans, ip.String())
+		}
+		sansJSON, err := json.Marshal(sans)
+		if err != nil {
+			sansJSON = []byte("[]")
+		}
+
+		if time.Now().After(cert.NotAfter) {
+			log.Debugf("Skipping expired certificate: CN=%s, Serial=%s, Expired=%v",
+				cert.Subject.CommonName,
+				cert.SerialNumber.String(),
+				cert.NotAfter.Format(time.RFC3339))
+			continue
+		}
+
+		bundleName := determineBundleName(cert.Subject.CommonName, cfg.BundleConfigs)
+		log.Debugf("Determined bundle name %s for certificate CN=%s", bundleName, cert.Subject.CommonName)
+
+		certPEM := encodeCertPEM(cert)
+
+		certRecord := CertificateRecord{
+			Serial:               cert.SerialNumber.String(),
+			AKI:                  akiHex,
+			Type:                 certType,
+			KeyType:              getKeyType(cert),
+			PEM:                  string(certPEM),
+			SubjectKeyIdentifier: skid,
+			NotBefore:            &cert.NotBefore,
+			Expiry:               cert.NotAfter,
+			CommonName:           sql.NullString{String: cert.Subject.CommonName, Valid: cert.Subject.CommonName != ""},
+			SANsJSON:             types.JSONText(sansJSON),
+			BundleName:           bundleName,
+		}
+
+		if err := cfg.DB.InsertCertificate(certRecord); err != nil {
+			log.Warningf("Failed to insert certificate into the database: %v", err)
+		} else {
+			log.Debugf("Inserted certificate %s with SKID %s into database", cert.SerialNumber.String(), skid)
+		}
+
+		log.Infof("%s, certificate, sha:%s", path, skid)
+	}
+	return true
+}
+
+// processPEMCSR attempts to parse PEM data as a CSR and logs it.
+// Returns true if the data contained a CSR.
+func processPEMCSR(data []byte, path string) bool {
+	csr, err := helpers.ParseCSRPEM(data)
+	if err != nil || csr == nil {
+		return false
 	}
 
-	// Process all PEM blocks for private keys
-	var rest []byte = data
+	skid := "N/A"
+	if pub := csr.PublicKey; pub != nil {
+		if rawSKID, err := computeSKID(pub); err == nil {
+			skid = hex.EncodeToString(rawSKID)
+		} else {
+			log.Debugf("computeSKID error on %s (CSR): %v", path, err)
+		}
+	}
+	log.Infof("%s, csr, sha256:%s", path, skid)
+	return true
+}
+
+// processPEMPrivateKeys iterates over PEM blocks looking for private keys and inserts them into the DB.
+func processPEMPrivateKeys(data []byte, path string, cfg *Config) {
+	rest := data
 	for len(rest) > 0 {
 		var block *pem.Block
 		block, rest = pem.Decode(rest)
@@ -237,100 +252,85 @@ func processPEM(data []byte, path string, cfg *Config) {
 		}
 
 		// Skip non-private key blocks
-		if !strings.Contains(block.Type, "PRIVATE KEY") && block.Type != "RSA PRIVATE KEY" && block.Type != "EC PRIVATE KEY" {
+		if !strings.Contains(block.Type, "PRIVATE KEY") {
 			continue
 		}
 
-		// Encode the block back to PEM for processing
 		pemData := pem.EncodeToMemory(block)
-		if key, err := parsePrivateKey(pemData, cfg.Passwords); err == nil && key != nil {
-			skid := "N/A"
-			skid256 := "N/A"
-			if pub, err := getPublicKey(key); err == nil {
-				log.Debugf("Got public key of type: %T", pub)
-				if rawSKID, err := computeSKIDRawBits(pub); err == nil {
-					skid = hex.EncodeToString(rawSKID)
-					rawSKID256, _ := computeSKIDRawBits(pub, "sha256")
-					skid256 = hex.EncodeToString(rawSKID256)
-					keyRecord := KeyRecord{
-						SubjectKeyIdentifier:       skid,
-						SubjectKeyIdentifierSha256: skid256,
-						KeyData:                    pemData,
-					}
-					if rsaKey, ok := key.(*rsa.PrivateKey); ok {
-						keyRecord.KeyData = pem.EncodeToMemory(&pem.Block{
-							Type:  "RSA PRIVATE KEY",
-							Bytes: x509.MarshalPKCS1PrivateKey(rsaKey),
-						})
-						keyRecord.KeyType = "rsa"
-						keyRecord.BitLength = rsaKey.N.BitLen()
-						keyRecord.PublicExponent = rsaKey.E
-						keyRecord.Modulus = rsaKey.N.String()
-					} else if ecdsaKey, ok := key.(*ecdsa.PrivateKey); ok {
-						keyBytes, _ := x509.MarshalECPrivateKey(ecdsaKey)
-						keyRecord.KeyData = pem.EncodeToMemory(&pem.Block{
-							Type:  "EC PRIVATE KEY",
-							Bytes: keyBytes,
-						})
-						keyRecord.KeyType = "ecdsa"
-						keyRecord.Curve = ecdsaKey.Curve.Params().Name
-						keyRecord.BitLength = ecdsaKey.Curve.Params().BitSize
-					} else if ed25519Key, ok := key.(ed25519.PrivateKey); ok {
-						keyBytes, _ := x509.MarshalPKCS8PrivateKey(ed25519Key)
-						keyRecord.KeyData = pem.EncodeToMemory(&pem.Block{
-							Type:  "PRIVATE KEY",
-							Bytes: keyBytes,
-						})
-						keyRecord.KeyType = "ed25519"
-						keyRecord.BitLength = len(ed25519Key) * 8
-					}
-
-					if err := cfg.DB.InsertKey(keyRecord); err != nil {
-						log.Warningf("Failed to insert key into database: %v", err)
-					} else {
-						log.Debugf("Inserted key with SKID %s into database", skid)
-					}
-
-				} else {
-					log.Debugf("computeSKIDRawBits error on %s (private key): %v", path, err)
-				}
-			} else {
-				log.Debugf("getPublicKey error on %s: %v", path, err)
-			}
-			log.Infof("%s, private key, sha1:%s, sha256:%s", path, skid, skid256)
-		} else {
+		key, err := parsePrivateKey(pemData, cfg.Passwords)
+		if err != nil || key == nil {
 			log.Debugf("Failed to parse private key from PEM block in %s: %v", path, err)
+			continue
 		}
-	}
 
-	if len(rest) == len(data) {
-		log.Debugf("Unrecognized PEM format in %s", path)
+		skid := "N/A"
+		pub, err := getPublicKey(key)
+		if err != nil {
+			log.Debugf("getPublicKey error on %s: %v", path, err)
+			log.Infof("%s, private key, sha256:%s", path, skid)
+			continue
+		}
+
+		log.Debugf("Got public key of type: %T", pub)
+		rawSKID, err := computeSKID(pub)
+		if err != nil {
+			log.Debugf("computeSKID error on %s (private key): %v", path, err)
+			log.Infof("%s, private key, sha256:%s", path, skid)
+			continue
+		}
+
+		skid = hex.EncodeToString(rawSKID)
+
+		rec := KeyRecord{
+			SubjectKeyIdentifier: skid,
+		}
+		switch k := key.(type) {
+		case *rsa.PrivateKey:
+			rec.KeyData = pem.EncodeToMemory(&pem.Block{
+				Type:  "RSA PRIVATE KEY",
+				Bytes: x509.MarshalPKCS1PrivateKey(k),
+			})
+			rec.KeyType = "rsa"
+			rec.BitLength = k.N.BitLen()
+			rec.PublicExponent = k.E
+			rec.Modulus = k.N.String()
+		case *ecdsa.PrivateKey:
+			keyBytes, _ := x509.MarshalECPrivateKey(k)
+			rec.KeyData = pem.EncodeToMemory(&pem.Block{
+				Type:  "EC PRIVATE KEY",
+				Bytes: keyBytes,
+			})
+			rec.KeyType = "ecdsa"
+			rec.Curve = k.Curve.Params().Name
+			rec.BitLength = k.Curve.Params().BitSize
+		case ed25519.PrivateKey:
+			keyBytes, _ := x509.MarshalPKCS8PrivateKey(k)
+			rec.KeyData = pem.EncodeToMemory(&pem.Block{
+				Type:  "PRIVATE KEY",
+				Bytes: keyBytes,
+			})
+			rec.KeyType = "ed25519"
+			rec.BitLength = len(k) * 8
+		}
+
+		if err := cfg.DB.InsertKey(rec); err != nil {
+			log.Warningf("Failed to insert key into database: %v", err)
+		} else {
+			log.Debugf("Inserted key with SKID %s into database", skid)
+		}
+
+		log.Infof("%s, private key, sha256:%s", path, skid)
 	}
 }
 
 func processDER(data []byte, path string, cfg *Config) {
-	// Try parsing as a certificate first
-	cert, err := x509.ParseCertificate(data)
-	if err == nil {
-		log.Debugf("Successfully parsed single DER certificate")
-		certPEM := pem.EncodeToMemory(&pem.Block{
-			Type:  "CERTIFICATE",
-			Bytes: cert.Raw,
-		})
-		processPEM(certPEM, path, cfg)
-		return
-	}
-
-	// Try parsing as a certificate sequence
+	// Try parsing as certificate(s) — handles both single and multi-cert DER
 	certs, err := x509.ParseCertificates(data)
 	if err == nil && len(certs) > 0 {
-		log.Debugf("Successfully parsed DER certificate sequence with %d certificates", len(certs))
+		log.Debugf("Successfully parsed %d DER certificate(s)", len(certs))
 		for _, cert := range certs {
-			certPEM := pem.EncodeToMemory(&pem.Block{
-				Type:  "CERTIFICATE",
-				Bytes: cert.Raw,
-			})
-			processPEM(certPEM, path, cfg)
+			certPEM := encodeCertPEM(cert)
+			processPEMCertificates(certPEM, path, cfg)
 		}
 		return
 	}
@@ -344,7 +344,7 @@ func processDER(data []byte, path string, cfg *Config) {
 				Type:  "PRIVATE KEY",
 				Bytes: keyDER,
 			})
-			processPEM(keyPEM, path, cfg)
+			processPEMPrivateKeys(keyPEM, path, cfg)
 			return
 		}
 	}
@@ -358,7 +358,7 @@ func processDER(data []byte, path string, cfg *Config) {
 				Type:  "PRIVATE KEY",
 				Bytes: keyDER,
 			})
-			processPEM(keyPEM, path, cfg)
+			processPEMPrivateKeys(keyPEM, path, cfg)
 			return
 		}
 	}
@@ -373,7 +373,7 @@ func processDER(data []byte, path string, cfg *Config) {
 				Type:  "PRIVATE KEY",
 				Bytes: keyDER,
 			})
-			processPEM(keyPEM, path, cfg)
+			processPEMPrivateKeys(keyPEM, path, cfg)
 			return
 		}
 	}
@@ -390,7 +390,10 @@ func processDER(data []byte, path string, cfg *Config) {
 		for i, pemBlock := range pems {
 			log.Debugf("Processing extracted PEM block %d from %s", i+1, path)
 			pemData := pem.EncodeToMemory(pemBlock)
-			processPEM(pemData, fmt.Sprintf("%s[%d]", path, i+1), cfg)
+			blockPath := fmt.Sprintf("%s[%d]", path, i+1)
+			if !processPEMCertificates(pemData, blockPath, cfg) {
+				processPEMPrivateKeys(pemData, blockPath, cfg)
+			}
 		}
 		return
 	}
@@ -402,7 +405,7 @@ func ProcessFile(path string, cfg *Config) error {
 	var data []byte
 	var err error
 
-	if cfg.IsStdinSet {
+	if cfg.InputPath == "-" {
 		data, err = io.ReadAll(os.Stdin)
 	} else {
 		data, err = os.ReadFile(path)
@@ -417,7 +420,10 @@ func ProcessFile(path string, cfg *Config) error {
 	// Check if the data is PEM format
 	if isPEM(data) {
 		log.Debug("Processing as PEM format")
-		processPEM(data, path, cfg)
+		if !processPEMCertificates(data, path, cfg) &&
+			!processPEMCSR(data, path) {
+			processPEMPrivateKeys(data, path, cfg)
+		}
 		return nil
 	}
 

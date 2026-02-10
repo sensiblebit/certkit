@@ -28,26 +28,26 @@ func parseLogLevel(level string) int {
 
 func ParseFlags() *Config {
 	cfg := &Config{}
+	var logLevel, passwordFile, passwordList, dbPath, bundlesConfigPath string
 
-	flag.StringVar(&cfg.InputPath, "path", "", "Path to certificate file or directory (use '-' for stdin)")
-	flag.StringVar(&cfg.BundlesConfigPath, "bundles-config", "./bundles.yaml", "Path to bundles configuration YAML")
-	flag.StringVar(&cfg.LogLevel, "loglevel", "debug", "Log level (debug, info, warning, error)")
-	flag.StringVar(&cfg.PasswordFile, "password-file", "", "File containing passwords (one per line)")
-	flag.StringVar(&cfg.PasswordList, "passwords", "", "Comma-separated list of passwords")
+	flag.StringVar(&cfg.InputPath, "input", "", "Path to certificate file or directory (use - for stdin)")
+	flag.StringVar(&logLevel, "log-level", "debug", "Log level: debug, info, warning, error")
+	flag.StringVar(&dbPath, "db", "", "SQLite database path (default: in-memory)")
+	flag.StringVar(&bundlesConfigPath, "bundles-config", "./bundles.yaml", "Path to bundle config YAML")
+	flag.StringVar(&passwordFile, "password-file", "", "File containing passwords, one per line")
+	flag.StringVar(&passwordList, "passwords", "", "Comma-separated passwords for encrypted keys")
 	flag.BoolVar(&cfg.ExportBundles, "export", false, "Export certificate bundles")
-	flag.BoolVar(&cfg.ForceExport, "force", false, "Export untrusted certificate bundles")
-	flag.StringVar(&cfg.OutDir, "out", "./bundles", "Directory to write exported bundles")
-	flag.StringVar(&cfg.DBPath, "dbpath", "", "Path to SQLite database file (leave empty for in-memory)")
+	flag.BoolVar(&cfg.ForceExport, "force", false, "Allow export of untrusted certificate bundles")
+	flag.StringVar(&cfg.OutDir, "out", "./bundles", "Output directory for exported bundles")
 	flag.Parse()
 
 	// Set up global logger
-	level := parseLogLevel(cfg.LogLevel)
-	log.Level = level
+	log.Level = parseLogLevel(logLevel)
 
-	cfg.Passwords = ProcessPasswords(cfg.PasswordList, cfg.PasswordFile)
+	cfg.Passwords = ProcessPasswords(passwordList, passwordFile)
 
 	// Initialize the database
-	db, err := NewDB(cfg.DBPath)
+	db, err := NewDB(dbPath)
 	if err != nil {
 		log.Errorf("Failed to initialize database: %v", err)
 		os.Exit(1)
@@ -55,22 +55,23 @@ func ParseFlags() *Config {
 	cfg.DB = db
 
 	// Load bundle configurations
-	bundleConfigs, err := LoadBundleConfigs(cfg.BundlesConfigPath)
+	bundleConfigs, err := LoadBundleConfigs(bundlesConfigPath)
 	if err != nil {
 		log.Warningf("Failed to load bundle configurations: %v", err)
 		bundleConfigs = []BundleConfig{}
 	}
 	cfg.BundleConfigs = bundleConfigs
 
-	// Handle stdin
+	// Validate input path
 	if cfg.InputPath == "-" {
-		cfg.IsStdinSet = true
+		// stdin mode, no validation needed
 	} else if cfg.InputPath == "" {
 		flag.Usage()
 		log.Fatal("No input path specified")
-	} else if _, err := os.Stat(cfg.InputPath); os.IsNotExist(err) {
-		log.Fatalf("Input path %s does not exist", cfg.InputPath)
 	} else if _, err := os.Stat(cfg.InputPath); err != nil {
+		if os.IsNotExist(err) {
+			log.Fatalf("Input path %s does not exist", cfg.InputPath)
+		}
 		log.Fatalf("Error accessing input path %s: %v", cfg.InputPath, err)
 	}
 	return cfg

@@ -13,7 +13,7 @@ func main() {
 	cfg := internal.ParseFlags()
 
 	// Handle stdin
-	if cfg.IsStdinSet {
+	if cfg.InputPath == "-" {
 		if err := internal.ProcessFile("-", cfg); err != nil {
 			log.Fatal(err)
 		}
@@ -37,30 +37,21 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// If the exportbundles flag is set, run the bundling exporter and exit.
-	if cfg.ExportBundles {
-		// Load bundle configuration from bundles.yaml.
-		cfgs, err := internal.LoadBundleConfigs(cfg.BundlesConfigPath)
-		if err != nil {
-			log.Fatalf("Failed to load bundle configurations: %v", err)
-		}
+	// Resolve non-root certificate AKIs using issuer's computed SHA256 SKI
+	if err := cfg.DB.ResolveAKIs(); err != nil {
+		log.Warningf("Failed to resolve AKIs: %v", err)
+	}
 
-		// Ensure the output directory exists.
+	// Export bundles if requested
+	if cfg.ExportBundles {
 		if err := os.MkdirAll(cfg.OutDir, 0755); err != nil {
 			log.Fatalf("Failed to create output directory %s: %v", cfg.OutDir, err)
 		}
-
-		if err := internal.ExportBundles(cfgs, cfg.OutDir, cfg.DB, cfg.ForceExport); err != nil {
+		if err := internal.ExportBundles(cfg.BundleConfigs, cfg.OutDir, cfg.DB, cfg.ForceExport); err != nil {
 			log.Fatalf("Failed to export bundles: %v", err)
 		}
-
-		if err := cfg.DB.DumpDB(); err != nil {
-			log.Fatal(err)
-		}
-		return
 	}
 
-	// Otherwise, continue with normal file processing and dump the database.
 	if err := cfg.DB.DumpDB(); err != nil {
 		log.Fatal(err)
 	}
