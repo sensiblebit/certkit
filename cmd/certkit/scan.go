@@ -12,6 +12,7 @@ import (
 )
 
 var (
+	dbPath          string
 	scanConfigPath  string
 	scanOutDir      string
 	scanForceExport bool
@@ -28,6 +29,7 @@ var scanCmd = &cobra.Command{
 }
 
 func init() {
+	scanCmd.Flags().StringVarP(&dbPath, "db", "d", "", "SQLite database path (default: in-memory)")
 	scanCmd.Flags().BoolVar(&scanExport, "export", false, "Export certificate bundles after scanning")
 	scanCmd.Flags().StringVarP(&scanConfigPath, "config", "c", "./bundles.yaml", "Path to bundle config YAML")
 	scanCmd.Flags().StringVarP(&scanOutDir, "out", "o", "./bundles", "Output directory for exported bundles")
@@ -36,8 +38,6 @@ func init() {
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
-	internal.SetupLogger(logLevel)
-
 	inputPath := args[0]
 
 	db, err := internal.NewDB(dbPath)
@@ -46,7 +46,10 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 	defer db.Close()
 
-	passwords := internal.ProcessPasswords(passwordList, passwordFile)
+	passwords, err := internal.ProcessPasswords(passwordList, passwordFile)
+	if err != nil {
+		return fmt.Errorf("loading passwords: %w", err)
+	}
 
 	// Only load bundle configs when exporting
 	var bundleConfigs []internal.BundleConfig

@@ -25,7 +25,7 @@ type VerifyResult struct {
 }
 
 // VerifyCert verifies a certificate file with optional key matching, chain validation, and expiry checking.
-func VerifyCert(certPath, keyPath string, checkChain bool, expiryDuration time.Duration, passwords []string, trustStore string) (*VerifyResult, error) {
+func VerifyCert(ctx context.Context, certPath, keyPath string, checkChain bool, expiryDuration time.Duration, passwords []string, trustStore string) (*VerifyResult, error) {
 	certData, err := os.ReadFile(certPath)
 	if err != nil {
 		return nil, fmt.Errorf("reading certificate: %w", err)
@@ -76,7 +76,7 @@ func VerifyCert(certPath, keyPath string, checkChain bool, expiryDuration time.D
 	if checkChain {
 		opts := certkit.DefaultOptions()
 		opts.TrustStore = trustStore
-		_, err := certkit.Bundle(context.Background(), cert, opts)
+		_, err := certkit.Bundle(ctx, cert, opts)
 		valid := err == nil
 		result.ChainValid = &valid
 		if err != nil {
@@ -103,8 +103,8 @@ func VerifyCert(certPath, keyPath string, checkChain bool, expiryDuration time.D
 // FormatVerifyResult formats a verify result as human-readable text.
 func FormatVerifyResult(r *VerifyResult) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Certificate: %s\n", r.Subject))
-	sb.WriteString(fmt.Sprintf("  Not After: %s\n", r.NotAfter))
+	fmt.Fprintf(&sb, "Certificate: %s\n", r.Subject)
+	fmt.Fprintf(&sb, "  Not After: %s\n", r.NotAfter)
 
 	if r.KeyMatch != nil {
 		if *r.KeyMatch {
@@ -113,23 +113,23 @@ func FormatVerifyResult(r *VerifyResult) string {
 			sb.WriteString("  Key Match: MISMATCH\n")
 		}
 	} else if r.KeyMatchErr != "" {
-		sb.WriteString(fmt.Sprintf("  Key Match: ERROR (%s)\n", r.KeyMatchErr))
+		fmt.Fprintf(&sb, "  Key Match: ERROR (%s)\n", r.KeyMatchErr)
 	}
 
 	if r.ChainValid != nil {
 		if *r.ChainValid {
 			sb.WriteString("  Chain:     VALID\n")
 		} else {
-			sb.WriteString(fmt.Sprintf("  Chain:     INVALID (%s)\n", r.ChainErr))
+			fmt.Fprintf(&sb, "  Chain:     INVALID (%s)\n", r.ChainErr)
 		}
 	}
 
 	if r.Expiry != nil {
-		sb.WriteString(fmt.Sprintf("  Expiry:    %s\n", r.ExpiryInfo))
+		fmt.Fprintf(&sb, "  Expiry:    %s\n", r.ExpiryInfo)
 	}
 
 	if len(r.Errors) > 0 {
-		sb.WriteString(fmt.Sprintf("\nVerification FAILED (%d error(s))\n", len(r.Errors)))
+		fmt.Fprintf(&sb, "\nVerification FAILED (%d error(s))\n", len(r.Errors))
 	} else {
 		sb.WriteString("\nVerification OK\n")
 	}

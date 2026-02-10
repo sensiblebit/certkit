@@ -22,9 +22,10 @@ func init() {
 }
 
 func runInspect(cmd *cobra.Command, args []string) error {
-	internal.SetupLogger(logLevel)
-
-	passwords := internal.ProcessPasswords(passwordList, passwordFile)
+	passwords, err := internal.ProcessPasswords(passwordList, passwordFile)
+	if err != nil {
+		return fmt.Errorf("loading passwords: %w", err)
+	}
 
 	results, err := internal.InspectFile(args[0], passwords)
 	if err != nil {

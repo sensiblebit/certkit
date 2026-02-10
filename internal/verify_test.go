@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -21,7 +22,7 @@ func TestVerifyCert_KeyMatch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := VerifyCert(certFile, keyFile, false, 0, []string{}, "mozilla")
+	result, err := VerifyCert(context.Background(), certFile, keyFile, false, 0, []string{}, "mozilla")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +49,7 @@ func TestVerifyCert_KeyMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := VerifyCert(certFile, keyFile, false, 0, []string{}, "mozilla")
+	result, err := VerifyCert(context.Background(), certFile, keyFile, false, 0, []string{}, "mozilla")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +72,7 @@ func TestVerifyCert_ExpiryCheck(t *testing.T) {
 	}
 
 	// Cert expires in ~365 days, so 400d should trigger
-	result, err := VerifyCert(certFile, "", false, 400*24*time.Hour, []string{}, "mozilla")
+	result, err := VerifyCert(context.Background(), certFile, "", false, 400*24*time.Hour, []string{}, "mozilla")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +81,7 @@ func TestVerifyCert_ExpiryCheck(t *testing.T) {
 	}
 
 	// 30d window should not trigger
-	result, err = VerifyCert(certFile, "", false, 30*24*time.Hour, []string{}, "mozilla")
+	result, err = VerifyCert(context.Background(), certFile, "", false, 30*24*time.Hour, []string{}, "mozilla")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +100,7 @@ func TestVerifyCert_ExpiredCert(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := VerifyCert(certFile, "", false, 1*time.Hour, []string{}, "mozilla")
+	result, err := VerifyCert(context.Background(), certFile, "", false, 1*time.Hour, []string{}, "mozilla")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +110,7 @@ func TestVerifyCert_ExpiredCert(t *testing.T) {
 }
 
 func TestVerifyCert_FileNotFound(t *testing.T) {
-	_, err := VerifyCert("/nonexistent/cert.pem", "", false, 0, []string{}, "mozilla")
+	_, err := VerifyCert(context.Background(), "/nonexistent/cert.pem", "", false, 0, []string{}, "mozilla")
 	if err == nil {
 		t.Error("expected error for nonexistent file")
 	}

@@ -2,7 +2,6 @@ package main
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/sensiblebit/certkit/internal"
 	"github.com/spf13/cobra"
@@ -14,7 +13,7 @@ var (
 	keygenCurve     string
 	keygenOutPath   string
 	keygenCN        string
-	keygenSANs      string
+	keygenSANs      []string
 )
 
 var keygenCmd = &cobra.Command{
@@ -31,28 +30,17 @@ func init() {
 	keygenCmd.Flags().StringVar(&keygenCurve, "curve", "P-256", "ECDSA curve: P-256, P-384, or P-521")
 	keygenCmd.Flags().StringVarP(&keygenOutPath, "out", "o", ".", "Output directory for generated files")
 	keygenCmd.Flags().StringVar(&keygenCN, "cn", "", "Common Name for CSR generation")
-	keygenCmd.Flags().StringVar(&keygenSANs, "sans", "", "Comma-separated SANs for CSR generation")
+	keygenCmd.Flags().StringSliceVar(&keygenSANs, "sans", nil, "Comma-separated SANs for CSR generation")
 }
 
 func runKeygen(cmd *cobra.Command, args []string) error {
-	internal.SetupLogger(logLevel)
-
-	var sans []string
-	if keygenSANs != "" {
-		for _, s := range strings.Split(keygenSANs, ",") {
-			if trimmed := strings.TrimSpace(s); trimmed != "" {
-				sans = append(sans, trimmed)
-			}
-		}
-	}
-
 	result, err := internal.GenerateKeyFiles(internal.KeygenOptions{
 		Algorithm: keygenAlgorithm,
 		Bits:      keygenBits,
 		Curve:     keygenCurve,
 		OutPath:   keygenOutPath,
 		CN:        keygenCN,
-		SANs:      sans,
+		SANs:      keygenSANs,
 	})
 	if err != nil {
 		return err

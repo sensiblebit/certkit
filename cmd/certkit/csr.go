@@ -24,10 +24,8 @@ var csrCmd = &cobra.Command{
 	Long: `Generate a CSR from a JSON template, existing certificate, or existing CSR.
 
 A new key is generated unless --key is provided. The CSR is written to csr.pem
-and the key (if generated) to key.pem in the output directory.
-
-Examples:
-  certkit csr --template request.json
+and the key (if generated) to key.pem in the output directory.`,
+	Example: `  certkit csr --template request.json
   certkit csr --cert existing.pem --algorithm rsa --bits 4096
   certkit csr --from-csr old.csr --key mykey.pem`,
 	Args: cobra.NoArgs,
@@ -43,12 +41,16 @@ func init() {
 	csrCmd.Flags().IntVarP(&csrBits, "bits", "b", 4096, "RSA key size in bits")
 	csrCmd.Flags().StringVar(&csrCurve, "curve", "P-256", "ECDSA curve: P-256, P-384, or P-521")
 	csrCmd.Flags().StringVarP(&csrOutPath, "out", "o", ".", "Output directory for generated files")
+
+	csrCmd.MarkFlagsMutuallyExclusive("template", "cert", "from-csr")
+	csrCmd.MarkFlagsOneRequired("template", "cert", "from-csr")
 }
 
 func runCSR(cmd *cobra.Command, args []string) error {
-	internal.SetupLogger(logLevel)
-
-	passwords := internal.ProcessPasswords(passwordList, passwordFile)
+	passwords, err := internal.ProcessPasswords(passwordList, passwordFile)
+	if err != nil {
+		return fmt.Errorf("loading passwords: %w", err)
+	}
 
 	result, err := internal.GenerateCSRFiles(internal.CSROptions{
 		TemplatePath: csrTemplatePath,

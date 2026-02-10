@@ -46,8 +46,6 @@ func parseDuration(s string) (time.Duration, error) {
 }
 
 func runVerify(cmd *cobra.Command, args []string) error {
-	internal.SetupLogger(logLevel)
-
 	var expiryDuration time.Duration
 	if verifyExpiry != "" {
 		var err error
@@ -57,9 +55,12 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	passwords := internal.ProcessPasswords(passwordList, passwordFile)
+	passwords, err := internal.ProcessPasswords(passwordList, passwordFile)
+	if err != nil {
+		return fmt.Errorf("loading passwords: %w", err)
+	}
 
-	result, err := internal.VerifyCert(args[0], verifyKeyPath, verifyChain, expiryDuration, passwords, verifyTrustStore)
+	result, err := internal.VerifyCert(cmd.Context(), args[0], verifyKeyPath, verifyChain, expiryDuration, passwords, verifyTrustStore)
 	if err != nil {
 		return err
 	}

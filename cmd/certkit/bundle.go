@@ -44,9 +44,10 @@ func init() {
 }
 
 func runBundle(cmd *cobra.Command, args []string) error {
-	internal.SetupLogger(logLevel)
-
-	passwords := internal.ProcessPasswords(passwordList, passwordFile)
+	passwords, err := internal.ProcessPasswords(passwordList, passwordFile)
+	if err != nil {
+		return fmt.Errorf("loading passwords: %w", err)
+	}
 
 	leaf, key, extraCerts, err := loadBundleInput(args[0], passwords)
 	if err != nil {
