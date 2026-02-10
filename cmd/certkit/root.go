@@ -14,7 +14,7 @@ var (
 var rootCmd = &cobra.Command{
 	Use:           "certkit",
 	Short:         "Certificate management tool",
-	Long:          "Ingest TLS/SSL certificates and keys, catalog them in SQLite, and export organized bundles.",
+	Long:          "Inspect, bundle, verify, and manage TLS/SSL certificates and keys.",
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {

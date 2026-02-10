@@ -124,7 +124,10 @@ func (db *DB) InsertKey(key KeyRecord) error {
 		INSERT OR IGNORE INTO keys (subject_key_identifier, key_type, bit_length, public_exponent, modulus, curve, key_data)
 		VALUES (:subject_key_identifier, :key_type, :bit_length, :public_exponent, :modulus, :curve, :key_data)
 	`, key)
-	return err
+	if err != nil {
+		return fmt.Errorf("inserting key: %w", err)
+	}
+	return nil
 }
 
 // InsertCertificate inserts a new certificate record into the database.
@@ -133,7 +136,10 @@ func (db *DB) InsertCertificate(cert CertificateRecord) error {
 		INSERT OR IGNORE INTO certificates (serial_number, authority_key_identifier, cert_type, key_type, expiry, not_before, metadata, sans, common_name, bundle_name, subject_key_identifier, pem)
 		VALUES (:serial_number, :authority_key_identifier, :cert_type, :key_type, :expiry, :not_before, :metadata, :sans, :common_name, :bundle_name, :subject_key_identifier, :pem)
 	`, cert)
-	return err
+	if err != nil {
+		return fmt.Errorf("inserting certificate: %w", err)
+	}
+	return nil
 }
 
 // GetKey returns the key record matching the given subject key identifier.
@@ -304,6 +310,9 @@ func (db *DB) DumpDB() error {
 			"expiry", cert.Expiry)
 		certCount++
 	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating certificates: %w", err)
+	}
 	slog.Debug("Total certificates", "count", certCount)
 
 	slog.Debug("Dumping keys")
@@ -322,6 +331,9 @@ func (db *DB) DumpDB() error {
 		}
 		slog.Debug("Key record", "ski", key.SubjectKeyIdentifier, "type", strings.ToUpper(key.KeyType))
 		keyCount++
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating keys: %w", err)
 	}
 	slog.Debug("Total keys", "count", keyCount)
 

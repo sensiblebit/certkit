@@ -56,7 +56,7 @@ func writeBundleFiles(outDir, bundleFolder string, cert *CertificateRecord, key 
 
 	folderPath := filepath.Join(outDir, bundleFolder)
 	if err := os.MkdirAll(folderPath, 0755); err != nil {
-		return err
+		return fmt.Errorf("creating bundle directory %s: %w", folderPath, err)
 	}
 
 	leafPEM := []byte(certkit.CertToPEM(bundle.Leaf))
@@ -103,7 +103,7 @@ func writeBundleFiles(outDir, bundleFolder string, cert *CertificateRecord, key 
 	for _, file := range files {
 		path := filepath.Join(folderPath, file.name)
 		if err := os.WriteFile(path, file.data, 0644); err != nil {
-			return err
+			return fmt.Errorf("writing %s: %w", path, err)
 		}
 	}
 
@@ -150,29 +150,29 @@ func writeBundleFiles(outDir, bundleFolder string, cert *CertificateRecord, key 
 
 	jsonData, err := generateJSON(bundle)
 	if err != nil {
-		return err
+		return fmt.Errorf("generating JSON: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(folderPath, prefix+".json"), jsonData, 0644); err != nil {
-		return err
+		return fmt.Errorf("writing JSON file: %w", err)
 	}
 
 	yamlData, err := generateYAML(key, bundle)
 	if err != nil {
-		return err
+		return fmt.Errorf("generating YAML: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(folderPath, prefix+".yaml"), yamlData, 0644); err != nil {
-		return err
+		return fmt.Errorf("writing YAML file: %w", err)
 	}
 
 	csrPEM, csrJSON, err := generateCSR(cert, key, bundleConfig)
 	if err != nil {
-		return err
+		return fmt.Errorf("generating CSR: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(folderPath, prefix+".csr"), csrPEM, 0644); err != nil {
-		return err
+		return fmt.Errorf("writing CSR file: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(folderPath, prefix+".csr.json"), csrJSON, 0644); err != nil {
-		return err
+		return fmt.Errorf("writing CSR JSON file: %w", err)
 	}
 
 	return nil

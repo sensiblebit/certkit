@@ -35,15 +35,27 @@ func getKeyType(cert *x509.Certificate) string {
 	}
 }
 
-// processPEMCertificates attempts to parse PEM data as certificates and insert them into the DB.
-// Returns true if the data contained certificates.
+// processPEMCertificates iterates over PEM blocks looking for certificates and inserts them into the DB.
+// Malformed certificates are logged and skipped rather than aborting the entire file.
+// Returns true if at least one certificate was found.
 func processPEMCertificates(data []byte, path string, cfg *Config) bool {
-	certs, err := certkit.ParsePEMCertificates(data)
-	if err != nil || len(certs) == 0 {
-		return false
-	}
-
-	for _, cert := range certs {
+	found := false
+	rest := data
+	for len(rest) > 0 {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		cert, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			slog.Warn("Skipping malformed certificate", "path", path, "error", err)
+			continue
+		}
+		found = true
 		// Always compute SKI from the public key (never use embedded SubjectKeyId)
 		rawSKID, err := certkit.ComputeSKID(cert.PublicKey)
 		if err != nil {
@@ -109,7 +121,7 @@ func processPEMCertificates(data []byte, path string, cfg *Config) bool {
 
 		slog.Info("Found certificate", "path", path, "skid", skid)
 	}
-	return true
+	return found
 }
 
 // processPEMCSR attempts to parse PEM data as a CSR and logs it.
@@ -358,10 +370,9 @@ func ProcessFile(path string, cfg *Config) error {
 	// Check if the data is PEM format
 	if certkit.IsPEM(data) {
 		slog.Debug("Processing as PEM format")
-		if !processPEMCertificates(data, path, cfg) &&
-			!processPEMCSR(data, path) {
-			processPEMPrivateKeys(data, path, cfg)
-		}
+		processPEMCertificates(data, path, cfg)
+		processPEMCSR(data, path)
+		processPEMPrivateKeys(data, path, cfg)
 		return nil
 	}
 
