@@ -47,3 +47,5 @@ homebrew_casks:
     directory: Casks
     homepage: https://github.com/sensiblebit/certWrangler
     description: A certificate management tool that ingests TLS/SSL certificates and keys, catalogs them in SQLite, and exports organized bundles.
+    custom_block: |
+      no_quarantine true
