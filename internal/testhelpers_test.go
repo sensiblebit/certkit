@@ -14,6 +14,9 @@ import (
 	"testing"
 	"time"
 
+	"bytes"
+
+	"github.com/pavlo-v-chernykh/keystore-go/v4"
 	gopkcs12 "software.sslmate.com/src/go-pkcs12"
 )
 
@@ -341,4 +344,33 @@ func ed25519KeyPEM(t *testing.T) []byte {
 		t.Fatalf("marshal Ed25519 key: %v", err)
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+}
+
+// newJKSBundle creates a JKS keystore containing a private key entry with a leaf
+// cert chain (leaf + CA), protected by the given password.
+func newJKSBundle(t *testing.T, leaf testLeaf, ca testCA, password string) []byte {
+	t.Helper()
+
+	pkcs8Key, err := x509.MarshalPKCS8PrivateKey(leaf.key)
+	if err != nil {
+		t.Fatalf("marshal PKCS8 key for JKS: %v", err)
+	}
+
+	ks := keystore.New()
+	if err := ks.SetPrivateKeyEntry("server", keystore.PrivateKeyEntry{
+		CreationTime: time.Now(),
+		PrivateKey:   pkcs8Key,
+		CertificateChain: []keystore.Certificate{
+			{Type: "X.509", Content: leaf.certDER},
+			{Type: "X.509", Content: ca.certDER},
+		},
+	}, []byte(password)); err != nil {
+		t.Fatalf("set JKS private key entry: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := ks.Store(&buf, []byte(password)); err != nil {
+		t.Fatalf("store JKS: %v", err)
+	}
+	return buf.Bytes()
 }

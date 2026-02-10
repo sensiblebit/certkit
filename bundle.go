@@ -146,9 +146,73 @@ func fetchCertFromURL(client *http.Client, certURL string) (*x509.Certificate, e
 	return nil, fmt.Errorf("could not parse as DER (%v) or PEM (%v)", err, pemErr)
 }
 
+// detectAndSwapLeaf checks if the first cert is a CA and exactly one non-CA
+// cert exists among the extras. If so, it swaps them and returns a warning.
+func detectAndSwapLeaf(leaf *x509.Certificate, extras []*x509.Certificate) (*x509.Certificate, []*x509.Certificate, []string) {
+	if !leaf.IsCA {
+		return leaf, extras, nil
+	}
+
+	var nonCAIdx []int
+	for i, c := range extras {
+		if !c.IsCA {
+			nonCAIdx = append(nonCAIdx, i)
+		}
+	}
+
+	if len(nonCAIdx) != 1 {
+		return leaf, extras, nil
+	}
+
+	idx := nonCAIdx[0]
+	realLeaf := extras[idx]
+	newExtras := make([]*x509.Certificate, 0, len(extras))
+	newExtras = append(newExtras, extras[:idx]...)
+	newExtras = append(newExtras, extras[idx+1:]...)
+	newExtras = append(newExtras, leaf)
+
+	warnings := []string{
+		fmt.Sprintf("reversed chain detected: swapped CA %q with leaf %q", leaf.Subject.CommonName, realLeaf.Subject.CommonName),
+	}
+	return realLeaf, newExtras, warnings
+}
+
+// checkSHA1Signatures checks the chain for SHA-1 signature algorithms and
+// returns warnings for each cert that uses one.
+func checkSHA1Signatures(chain []*x509.Certificate) []string {
+	var warnings []string
+	for _, cert := range chain {
+		switch cert.SignatureAlgorithm {
+		case x509.SHA1WithRSA, x509.ECDSAWithSHA1:
+			warnings = append(warnings, fmt.Sprintf("certificate %q uses deprecated SHA-1 signature algorithm (%s)", cert.Subject.CommonName, cert.SignatureAlgorithm))
+		}
+	}
+	return warnings
+}
+
+// checkExpiryWarnings checks the chain for expired or soon-to-expire certificates.
+func checkExpiryWarnings(chain []*x509.Certificate) []string {
+	var warnings []string
+	now := time.Now()
+	thirtyDays := 30 * 24 * time.Hour
+	for _, cert := range chain {
+		if now.After(cert.NotAfter) {
+			warnings = append(warnings, fmt.Sprintf("certificate %q has expired (not after: %s)", cert.Subject.CommonName, cert.NotAfter.UTC().Format("2006-01-02")))
+		} else if CertExpiresWithin(cert, thirtyDays) {
+			warnings = append(warnings, fmt.Sprintf("certificate %q expires within 30 days (not after: %s)", cert.Subject.CommonName, cert.NotAfter.UTC().Format("2006-01-02")))
+		}
+	}
+	return warnings
+}
+
 // Bundle resolves the full certificate chain for a leaf certificate.
 func Bundle(leaf *x509.Certificate, opts BundleOptions) (*BundleResult, error) {
+	// Detect reversed chain order
+	var swapWarnings []string
+	leaf, opts.ExtraIntermediates, swapWarnings = detectAndSwapLeaf(leaf, opts.ExtraIntermediates)
+
 	result := &BundleResult{Leaf: leaf}
+	result.Warnings = append(result.Warnings, swapWarnings...)
 
 	// Build intermediate pool
 	intermediatePool := x509.NewCertPool()
@@ -222,6 +286,15 @@ func Bundle(leaf *x509.Certificate, opts BundleOptions) (*BundleResult, error) {
 		// No verification — just pass through what we have
 		result.Intermediates = allIntermediates
 	}
+
+	// Build full chain for warning checks
+	var fullChain []*x509.Certificate
+	fullChain = append(fullChain, result.Leaf)
+	fullChain = append(fullChain, result.Intermediates...)
+	fullChain = append(fullChain, result.Roots...)
+
+	result.Warnings = append(result.Warnings, checkSHA1Signatures(fullChain)...)
+	result.Warnings = append(result.Warnings, checkExpiryWarnings(fullChain)...)
 
 	return result, nil
 }

@@ -239,6 +239,39 @@ func (db *DB) ResolveAKIs() error {
 	return nil
 }
 
+// ScanSummary holds aggregate counts from a scan.
+type ScanSummary struct {
+	Roots         int
+	Intermediates int
+	Leaves        int
+	Keys          int
+	Matched       int // keys that have a matching certificate
+}
+
+// GetScanSummary queries the database for aggregate counts.
+func (db *DB) GetScanSummary() (*ScanSummary, error) {
+	s := &ScanSummary{}
+
+	if err := db.Get(&s.Roots, "SELECT COUNT(*) FROM certificates WHERE cert_type = 'root'"); err != nil {
+		return nil, fmt.Errorf("counting roots: %w", err)
+	}
+	if err := db.Get(&s.Intermediates, "SELECT COUNT(*) FROM certificates WHERE cert_type = 'intermediate'"); err != nil {
+		return nil, fmt.Errorf("counting intermediates: %w", err)
+	}
+	if err := db.Get(&s.Leaves, "SELECT COUNT(*) FROM certificates WHERE cert_type = 'leaf'"); err != nil {
+		return nil, fmt.Errorf("counting leaves: %w", err)
+	}
+	if err := db.Get(&s.Keys, "SELECT COUNT(*) FROM keys"); err != nil {
+		return nil, fmt.Errorf("counting keys: %w", err)
+	}
+	if err := db.Get(&s.Matched, `SELECT COUNT(*) FROM keys k
+		INNER JOIN certificates c ON k.subject_key_identifier = c.subject_key_identifier`); err != nil {
+		return nil, fmt.Errorf("counting matched: %w", err)
+	}
+
+	return s, nil
+}
+
 func (db *DB) DumpDB() error {
 	// Helper function to print formatted headers
 	printHeader := func(title string) {

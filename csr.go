@@ -6,8 +6,12 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"net"
+	"net/url"
 )
 
 // GenerateCSR creates a Certificate Signing Request that copies Subject, DNSNames,
@@ -62,4 +66,115 @@ func GenerateCSR(leaf *x509.Certificate, privateKey crypto.PrivateKey) (csrPEM s
 	}
 
 	return csrPEM, keyPEM, nil
+}
+
+// CSRTemplate is a JSON-serializable template for CSR generation.
+type CSRTemplate struct {
+	Subject CSRSubject `json:"subject"`
+	Hosts   []string   `json:"hosts"`
+}
+
+// CSRSubject holds the subject fields for a CSR template.
+type CSRSubject struct {
+	CommonName         string   `json:"common_name"`
+	Organization       []string `json:"organization,omitempty"`
+	OrganizationalUnit []string `json:"organizational_unit,omitempty"`
+	Country            []string `json:"country,omitempty"`
+	Province           []string `json:"province,omitempty"`
+	Locality           []string `json:"locality,omitempty"`
+}
+
+// ParseCSRTemplate unmarshals JSON data into a CSRTemplate.
+func ParseCSRTemplate(data []byte) (*CSRTemplate, error) {
+	var tmpl CSRTemplate
+	if err := json.Unmarshal(data, &tmpl); err != nil {
+		return nil, fmt.Errorf("parsing CSR template: %w", err)
+	}
+	return &tmpl, nil
+}
+
+// ClassifyHosts splits a mixed host list into DNS names, IPs, URIs, and emails.
+// Classification order: net.ParseIP for IPs, contains "://" for URIs,
+// contains "@" for emails, otherwise DNS name.
+func ClassifyHosts(hosts []string) (dnsNames []string, ips []net.IP, uris []*url.URL, emails []string) {
+	for _, h := range hosts {
+		if ip := net.ParseIP(h); ip != nil {
+			ips = append(ips, ip)
+		} else if parsed, err := url.Parse(h); err == nil && parsed.Scheme != "" && parsed.Host != "" {
+			uris = append(uris, parsed)
+		} else if len(h) > 0 && contains(h, "@") {
+			emails = append(emails, h)
+		} else {
+			dnsNames = append(dnsNames, h)
+		}
+	}
+	return
+}
+
+func contains(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}
+
+// GenerateCSRFromTemplate creates a PEM-encoded CSR from a template and signer.
+func GenerateCSRFromTemplate(tmpl *CSRTemplate, signer crypto.Signer) (string, error) {
+	subject := pkix.Name{
+		CommonName:         tmpl.Subject.CommonName,
+		Organization:       tmpl.Subject.Organization,
+		OrganizationalUnit: tmpl.Subject.OrganizationalUnit,
+		Country:            tmpl.Subject.Country,
+		Province:           tmpl.Subject.Province,
+		Locality:           tmpl.Subject.Locality,
+	}
+
+	dnsNames, ips, uris, emails := ClassifyHosts(tmpl.Hosts)
+
+	// Auto-fill CN from first DNS name if empty
+	if subject.CommonName == "" && len(dnsNames) > 0 {
+		subject.CommonName = dnsNames[0]
+	}
+
+	csrTemplate := &x509.CertificateRequest{
+		Subject:        subject,
+		DNSNames:       dnsNames,
+		IPAddresses:    ips,
+		URIs:           uris,
+		EmailAddresses: emails,
+	}
+
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, csrTemplate, signer)
+	if err != nil {
+		return "", fmt.Errorf("creating CSR: %w", err)
+	}
+
+	return string(pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE REQUEST",
+		Bytes: csrDER,
+	})), nil
+}
+
+// GenerateCSRFromCSR creates a new CSR using an existing CSR as template,
+// signed by the provided key.
+func GenerateCSRFromCSR(source *x509.CertificateRequest, signer crypto.Signer) (string, error) {
+	csrTemplate := &x509.CertificateRequest{
+		Subject:        source.Subject,
+		DNSNames:       source.DNSNames,
+		IPAddresses:    source.IPAddresses,
+		URIs:           source.URIs,
+		EmailAddresses: source.EmailAddresses,
+	}
+
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, csrTemplate, signer)
+	if err != nil {
+		return "", fmt.Errorf("creating CSR: %w", err)
+	}
+
+	return string(pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE REQUEST",
+		Bytes: csrDER,
+	})), nil
 }

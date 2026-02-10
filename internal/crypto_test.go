@@ -413,6 +413,40 @@ func TestProcessFile_PKCS12(t *testing.T) {
 	}
 }
 
+func TestProcessFile_JKS(t *testing.T) {
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "jks.example.com", []string{"jks.example.com"}, nil)
+	cfg := newTestConfig(t)
+	defer cfg.DB.Close()
+
+	jksData := newJKSBundle(t, leaf, ca, "changeit")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bundle.jks")
+	if err := os.WriteFile(path, jksData, 0600); err != nil {
+		t.Fatalf("write jks: %v", err)
+	}
+
+	if err := ProcessFile(path, cfg); err != nil {
+		t.Fatalf("ProcessFile: %v", err)
+	}
+
+	// JKS should extract both cert and key
+	keys, _ := cfg.DB.GetAllKeys()
+	if len(keys) < 1 {
+		t.Error("expected at least 1 key from JKS")
+	}
+
+	expectedSKI := computeSKIDHex(t, leaf.cert.PublicKey)
+	cert, err := cfg.DB.GetCertBySKI(expectedSKI)
+	if err != nil {
+		t.Fatalf("GetCertBySKI: %v", err)
+	}
+	if cert == nil {
+		t.Error("expected leaf certificate from JKS to be inserted into DB")
+	}
+}
+
 func TestProcessFile_ExpiredCertSkipped(t *testing.T) {
 	ca := newRSACA(t)
 	expired := newExpiredLeaf(t, ca)

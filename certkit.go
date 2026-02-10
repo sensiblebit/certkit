@@ -7,6 +7,8 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha1"
 	"crypto/sha256"
@@ -15,6 +17,8 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"fmt"
+	"strings"
+	"time"
 )
 
 // ParsePEMCertificates parses all certificates from a PEM bundle.
@@ -82,6 +86,53 @@ func ParsePEMPrivateKey(pemData []byte) (crypto.PrivateKey, error) {
 	}
 }
 
+// DefaultPasswords is the list of passwords tried by default when decrypting
+// password-protected PEM blocks or PKCS#12 files. Callers can append additional
+// passwords to this list.
+var DefaultPasswords = []string{"", "password", "changeit"}
+
+// ParsePEMPrivateKeyWithPasswords tries to parse a PEM-encoded private key.
+// It first attempts unencrypted parsing via ParsePEMPrivateKey. If that fails
+// and the PEM block is encrypted (legacy RFC 1423), it tries each password in
+// order. Returns the first successfully decrypted key, or an error if all
+// passwords fail.
+func ParsePEMPrivateKeyWithPasswords(pemData []byte, passwords []string) (crypto.PrivateKey, error) {
+	// Try unencrypted first
+	if key, err := ParsePEMPrivateKey(pemData); err == nil {
+		return key, nil
+	}
+
+	block, _ := pem.Decode(pemData)
+	if block == nil {
+		return nil, fmt.Errorf("no PEM block found in private key data")
+	}
+
+	//nolint:staticcheck // x509.IsEncryptedPEMBlock is deprecated but needed for legacy encrypted PEM support
+	if !x509.IsEncryptedPEMBlock(block) {
+		// Not encrypted and unencrypted parse failed — return the original error
+		_, err := ParsePEMPrivateKey(pemData)
+		return nil, err
+	}
+
+	for _, password := range passwords {
+		//nolint:staticcheck // x509.DecryptPEMBlock is deprecated but needed for legacy encrypted PEM support
+		decrypted, err := x509.DecryptPEMBlock(block, []byte(password))
+		if err != nil {
+			continue
+		}
+
+		clearPEM := pem.EncodeToMemory(&pem.Block{
+			Type:  block.Type,
+			Bytes: decrypted,
+		})
+		if key, err := ParsePEMPrivateKey(clearPEM); err == nil {
+			return key, nil
+		}
+	}
+
+	return nil, fmt.Errorf("failed to decrypt private key with any provided password")
+}
+
 // ParsePEMCertificateRequest parses a single certificate request from PEM data.
 func ParsePEMCertificateRequest(pemData []byte) (*x509.CertificateRequest, error) {
 	block, _ := pem.Decode(pemData)
@@ -120,9 +171,16 @@ func MarshalPrivateKeyToPEM(key crypto.PrivateKey) (string, error) {
 	return string(pemBytes), nil
 }
 
-// CertFingerprint returns the SHA-256 fingerprint of a certificate as a hex string.
+// CertFingerprint returns the SHA-256 fingerprint of a certificate as a lowercase hex string.
 func CertFingerprint(cert *x509.Certificate) string {
 	hash := sha256.Sum256(cert.Raw)
+	return fmt.Sprintf("%x", hash)
+}
+
+// CertFingerprintSHA1 returns the SHA-1 fingerprint of a certificate as a lowercase hex string.
+// SHA-1 fingerprints are widely used in browser UIs, CT logs, and legacy systems.
+func CertFingerprintSHA1(cert *x509.Certificate) string {
+	hash := sha1.Sum(cert.Raw)
 	return fmt.Sprintf("%x", hash)
 }
 
@@ -276,7 +334,110 @@ func GetPublicKey(priv crypto.PrivateKey) (crypto.PublicKey, error) {
 	return nil, fmt.Errorf("unsupported private key type: %T", priv)
 }
 
+// KeyMatchesCert reports whether a private key corresponds to the public key
+// in a certificate. This is the equivalent of comparing the output of
+// "openssl x509 -noout -modulus" and "openssl rsa -noout -modulus".
+// Supports RSA, ECDSA, and Ed25519 key types.
+func KeyMatchesCert(priv crypto.PrivateKey, cert *x509.Certificate) (bool, error) {
+	pub, err := GetPublicKey(priv)
+	if err != nil {
+		return false, err
+	}
+	certPub := cert.PublicKey
+
+	switch p := pub.(type) {
+	case *rsa.PublicKey:
+		cp, ok := certPub.(*rsa.PublicKey)
+		if !ok {
+			return false, nil
+		}
+		return p.Equal(cp), nil
+	case *ecdsa.PublicKey:
+		cp, ok := certPub.(*ecdsa.PublicKey)
+		if !ok {
+			return false, nil
+		}
+		return p.Equal(cp), nil
+	case ed25519.PublicKey:
+		cp, ok := certPub.(ed25519.PublicKey)
+		if !ok {
+			return false, nil
+		}
+		return p.Equal(cp), nil
+	default:
+		return false, fmt.Errorf("unsupported public key type: %T", pub)
+	}
+}
+
 // IsPEM returns true if the data appears to contain PEM-encoded content.
 func IsPEM(data []byte) bool {
 	return bytes.Contains(data, []byte("-----BEGIN"))
+}
+
+// CertExpiresWithin reports whether the certificate will expire within the
+// given duration from now.
+func CertExpiresWithin(cert *x509.Certificate, d time.Duration) bool {
+	return time.Now().Add(d).After(cert.NotAfter)
+}
+
+// MarshalPublicKeyToPEM marshals a public key to PKIX PEM format.
+// Supports RSA, ECDSA, and Ed25519 public keys.
+func MarshalPublicKeyToPEM(pub crypto.PublicKey) (string, error) {
+	der, err := x509.MarshalPKIXPublicKey(pub)
+	if err != nil {
+		return "", fmt.Errorf("marshaling public key to PKIX: %w", err)
+	}
+	pemBytes := pem.EncodeToMemory(&pem.Block{
+		Type:  "PUBLIC KEY",
+		Bytes: der,
+	})
+	return string(pemBytes), nil
+}
+
+// CertFingerprintColonSHA256 returns the SHA-256 fingerprint of a certificate
+// in uppercase colon-separated hex format (AA:BB:CC:...), matching the format
+// used by OpenSSL and browser certificate viewers.
+func CertFingerprintColonSHA256(cert *x509.Certificate) string {
+	hash := sha256.Sum256(cert.Raw)
+	return strings.ToUpper(ColonHex(hash[:]))
+}
+
+// CertFingerprintColonSHA1 returns the SHA-1 fingerprint of a certificate
+// in uppercase colon-separated hex format (AA:BB:CC:...), matching the format
+// used by OpenSSL and browser certificate viewers.
+func CertFingerprintColonSHA1(cert *x509.Certificate) string {
+	hash := sha1.Sum(cert.Raw)
+	return strings.ToUpper(ColonHex(hash[:]))
+}
+
+// GenerateRSAKey generates a new RSA private key with the given bit size.
+func GenerateRSAKey(bits int) (*rsa.PrivateKey, error) {
+	key, err := rsa.GenerateKey(rand.Reader, bits)
+	if err != nil {
+		return nil, fmt.Errorf("generating RSA key: %w", err)
+	}
+	return key, nil
+}
+
+// GenerateECKey generates a new ECDSA private key on the given curve.
+func GenerateECKey(curve elliptic.Curve) (*ecdsa.PrivateKey, error) {
+	key, err := ecdsa.GenerateKey(curve, rand.Reader)
+	if err != nil {
+		return nil, fmt.Errorf("generating EC key: %w", err)
+	}
+	return key, nil
+}
+
+// GenerateEd25519Key generates a new Ed25519 key pair.
+func GenerateEd25519Key() (ed25519.PublicKey, ed25519.PrivateKey, error) {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return nil, nil, fmt.Errorf("generating Ed25519 key: %w", err)
+	}
+	return pub, priv, nil
+}
+
+// VerifyCSR checks that the signature on a certificate signing request is valid.
+func VerifyCSR(csr *x509.CertificateRequest) error {
+	return csr.CheckSignature()
 }

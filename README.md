@@ -11,6 +11,9 @@ A certificate management tool that ingests TLS/SSL certificates and private keys
 - **Smart CSR generation** -- Produces renewal CSRs from existing certificates with configurable subject fields and intelligent SAN filtering
 - **SQLite catalog** -- Persistent or in-memory database indexed by Subject Key Identifier, serial number, and Authority Key Identifier
 - **Encrypted key handling** -- Tries user-supplied passwords plus common defaults (`""`, `"password"`, `"changeit"`)
+- **Certificate inspection** -- Display detailed certificate, key, and CSR information
+- **Verification** -- Check chain validity, key-cert matching, and expiry windows
+- **Key generation** -- Generate RSA, ECDSA, or Ed25519 key pairs with optional CSR
 
 ## Install
 
@@ -31,48 +34,114 @@ go build -o certkit ./cmd/certkit/
 
 ## Usage
 
-```
-certkit -input <path> [flags]
-```
+### Commands
 
-### Flags
+| Command | Description |
+|---|---|
+| `certkit scan <path>` | Scan and catalog certificates and keys, optionally export bundles |
+| `certkit bundle <file>` | Build a certificate chain from a leaf cert, P12, or P7B |
+| `certkit inspect <file>` | Display certificate, key, or CSR information |
+| `certkit verify <file>` | Verify chain, key-cert match, or expiry |
+| `certkit keygen` | Generate key pairs and optionally CSRs |
+
+### Global Flags
 
 | Flag | Default | Description |
 |---|---|---|
-| `-input` | *(required)* | Path to a certificate file or directory, or `-` for stdin |
-| `-export` | `false` | Export certificate bundles after ingestion |
-| `-force` | `false` | Allow export of untrusted certificate bundles |
-| `-out` | `./bundles` | Output directory for exported bundles |
-| `-bundles-config` | `./bundles.yaml` | Path to bundle config YAML |
-| `-db` | *(empty)* | SQLite database path (empty = in-memory) |
-| `-passwords` | *(empty)* | Comma-separated passwords for encrypted keys |
-| `-password-file` | *(empty)* | File containing passwords, one per line |
-| `-log-level` | `debug` | Log level: `debug`, `info`, `warning`, `error` |
+| `--log-level`, `-l` | `info` | Log level: `debug`, `info`, `warn`, `error` |
+| `--db`, `-d` | *(empty)* | SQLite database path (empty = in-memory) |
+| `--passwords`, `-p` | *(empty)* | Comma-separated passwords for encrypted keys |
+| `--password-file` | *(empty)* | File containing passwords, one per line |
+
+### Scan Flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--config`, `-c` | `./bundles.yaml` | Path to bundle config YAML |
+| `--export` | `false` | Export certificate bundles after scanning |
+| `--out`, `-o` | `./bundles` | Output directory for exported bundles |
+| `--force`, `-f` | `false` | Allow export of untrusted certificate bundles |
 
 ### Examples
 
-Ingest a directory of certificates and keys:
+Scan a directory and export bundles:
 
 ```sh
-certkit -input ./certs/
+certkit scan ./certs/ --export
 ```
 
-Ingest and export bundles with a persistent database:
+Scan and export with a persistent database:
 
 ```sh
-certkit -input ./certs/ -export -db certs.db -out ./bundles
+certkit scan ./certs/ --export -d certs.db -o ./bundles
+```
+
+Scan only (no export):
+
+```sh
+certkit scan ./certs/ -d certs.db
+```
+
+Build a chain bundle from a leaf cert (outputs PEM to stdout):
+
+```sh
+certkit bundle leaf.pem
+```
+
+Build a chain with a key, write to file:
+
+```sh
+certkit bundle leaf.pem --key key.pem -o chain.pem
+```
+
+Bundle a PKCS#12 file to PEM:
+
+```sh
+certkit bundle server.p12 -p "secret"
+```
+
+Build a fullchain (includes root):
+
+```sh
+certkit bundle leaf.pem --format fullchain -o fullchain.pem
 ```
 
 Read from stdin:
 
 ```sh
-cat server.pem | certkit -input -
+cat server.pem | certkit scan -
+```
+
+Inspect a certificate file:
+
+```sh
+certkit inspect cert.pem
+certkit inspect cert.pem --format json
+```
+
+Verify a certificate with key matching and expiry check:
+
+```sh
+certkit verify cert.pem --key key.pem --expiry 30d
+certkit verify cert.pem --chain
+```
+
+Generate an ECDSA key pair with a CSR:
+
+```sh
+certkit keygen -a ecdsa --cn example.com --sans "example.com,www.example.com" -o ./keys
+```
+
+Generate an RSA key pair:
+
+```sh
+certkit keygen -a rsa -b 4096 -o ./keys
 ```
 
 Provide passwords for encrypted PKCS#12 or PEM files:
 
 ```sh
-certkit -input ./certs/ -passwords "secret1,secret2" -password-file extra_passwords.txt
+certkit scan ./certs/ -p "secret1,secret2" --password-file extra_passwords.txt
 ```
 
 ## Bundle Configuration
@@ -113,7 +182,7 @@ Bundles without an explicit `subject` block inherit from `defaultSubject`.
 
 ## Output Files
 
-When `-export` is set, each bundle produces the following files under `<out>/<bundleName>/`:
+When running `certkit scan --export` or `certkit bundle`, each bundle produces the following files under `<out>/<bundleName>/`:
 
 | File | Contents |
 |---|---|
@@ -151,7 +220,7 @@ Input files/stdin
   Resolve AKIs (match legacy SHA-1 AKIs to computed RFC 7093 M1 SKIs)
        |
        v
-  [if -export] Match keys to certs, build chains via certkit,
+  [if --export] Match keys to certs, build chains via certkit,
   write all output formats per bundle
 ```
 
@@ -170,10 +239,27 @@ key, _ := certkit.ParsePEMPrivateKey(keyPEM)
 
 // Compute identifiers
 fingerprint := certkit.CertFingerprint(cert)
+colonFP := certkit.CertFingerprintColonSHA256(cert)  // AA:BB:CC format
 skid := certkit.CertSKID(cert)
+
+// Check expiry
+if certkit.CertExpiresWithin(cert, 30*24*time.Hour) {
+    // cert expires within 30 days
+}
 
 // Build verified chains
 bundle, _ := certkit.Bundle(leaf, certkit.DefaultOptions())
+
+// Generate keys
+ecKey, _ := certkit.GenerateECKey(elliptic.P256())
+rsaKey, _ := certkit.GenerateRSAKey(4096)
+
+// Marshal public keys
+pubPEM, _ := certkit.MarshalPublicKeyToPEM(&ecKey.PublicKey)
+
+// Verify CSR signatures
+csr, _ := certkit.ParsePEMCertificateRequest(csrPEM)
+err := certkit.VerifyCSR(csr)
 
 // PKCS operations
 p12, _ := certkit.EncodePKCS12(key, leaf, intermediates, "password")

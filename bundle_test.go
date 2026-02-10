@@ -384,6 +384,185 @@ func TestFetchAIACertificates_maxDepthZero(t *testing.T) {
 	}
 }
 
+// --- Bundle warning tests ---
+
+func TestDetectAndSwapLeaf_ReversedChain(t *testing.T) {
+	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Swap CA"},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	caBytes, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	caCert, _ := x509.ParseCertificate(caBytes)
+
+	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	leafTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "swap-leaf.example.com"},
+		NotBefore:    time.Now().Add(-1 * time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	leafBytes, _ := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
+	leafCert, _ := x509.ParseCertificate(leafBytes)
+
+	// Pass CA as "leaf" and real leaf as extra — reversed order
+	result, err := Bundle(caCert, BundleOptions{
+		ExtraIntermediates: []*x509.Certificate{leafCert},
+		FetchAIA:           false,
+		TrustStore:         "custom",
+		CustomRoots:        []*x509.Certificate{caCert},
+		Verify:             true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if result.Leaf.Subject.CommonName != "swap-leaf.example.com" {
+		t.Errorf("leaf CN=%q, want swap-leaf.example.com", result.Leaf.Subject.CommonName)
+	}
+
+	hasSwapWarning := false
+	for _, w := range result.Warnings {
+		if strings.Contains(w, "reversed chain detected") {
+			hasSwapWarning = true
+		}
+	}
+	if !hasSwapWarning {
+		t.Error("expected reversed chain warning")
+	}
+}
+
+func TestDetectAndSwapLeaf_NoSwapWhenLeafIsCorrect(t *testing.T) {
+	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "NoSwap CA"},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	caBytes, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	caCert, _ := x509.ParseCertificate(caBytes)
+
+	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	leafTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "noswap-leaf.example.com"},
+		NotBefore:    time.Now().Add(-1 * time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	leafBytes, _ := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
+	leafCert, _ := x509.ParseCertificate(leafBytes)
+
+	// Correct order — leaf first
+	result, err := Bundle(leafCert, BundleOptions{
+		ExtraIntermediates: []*x509.Certificate{caCert},
+		FetchAIA:           false,
+		TrustStore:         "custom",
+		CustomRoots:        []*x509.Certificate{caCert},
+		Verify:             false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, w := range result.Warnings {
+		if strings.Contains(w, "reversed chain detected") {
+			t.Error("should not have swap warning when leaf is correct")
+		}
+	}
+}
+
+func TestCheckSHA1Signatures(t *testing.T) {
+	// Test the helper directly with hand-set SignatureAlgorithm
+	certs := []*x509.Certificate{
+		{Subject: pkix.Name{CommonName: "sha1-cert"}, SignatureAlgorithm: x509.SHA1WithRSA},
+		{Subject: pkix.Name{CommonName: "sha256-cert"}, SignatureAlgorithm: x509.SHA256WithRSA},
+		{Subject: pkix.Name{CommonName: "ecdsa-sha1"}, SignatureAlgorithm: x509.ECDSAWithSHA1},
+	}
+
+	warnings := checkSHA1Signatures(certs)
+	if len(warnings) != 2 {
+		t.Errorf("expected 2 SHA-1 warnings, got %d: %v", len(warnings), warnings)
+	}
+	for _, w := range warnings {
+		if !strings.Contains(w, "SHA-1") {
+			t.Errorf("warning should mention SHA-1: %s", w)
+		}
+	}
+}
+
+func TestCheckSHA1Signatures_NoWarning(t *testing.T) {
+	certs := []*x509.Certificate{
+		{Subject: pkix.Name{CommonName: "modern"}, SignatureAlgorithm: x509.SHA256WithRSA},
+		{Subject: pkix.Name{CommonName: "ecdsa"}, SignatureAlgorithm: x509.ECDSAWithSHA256},
+	}
+
+	warnings := checkSHA1Signatures(certs)
+	if len(warnings) != 0 {
+		t.Errorf("expected no warnings for SHA-256 certs, got %d", len(warnings))
+	}
+}
+
+func TestCheckExpiryWarnings_Expired(t *testing.T) {
+	certs := []*x509.Certificate{
+		{
+			Subject:  pkix.Name{CommonName: "expired-cert"},
+			NotAfter: time.Now().Add(-24 * time.Hour),
+		},
+	}
+
+	warnings := checkExpiryWarnings(certs)
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %d", len(warnings))
+	}
+	if !strings.Contains(warnings[0], "has expired") {
+		t.Errorf("warning should mention expired: %s", warnings[0])
+	}
+}
+
+func TestCheckExpiryWarnings_ExpiringSoon(t *testing.T) {
+	certs := []*x509.Certificate{
+		{
+			Subject:  pkix.Name{CommonName: "expiring-cert"},
+			NotAfter: time.Now().Add(10 * 24 * time.Hour),
+		},
+	}
+
+	warnings := checkExpiryWarnings(certs)
+	if len(warnings) != 1 {
+		t.Fatalf("expected 1 warning, got %d", len(warnings))
+	}
+	if !strings.Contains(warnings[0], "expires within 30 days") {
+		t.Errorf("warning should mention 30 days: %s", warnings[0])
+	}
+}
+
+func TestCheckExpiryWarnings_FarFuture(t *testing.T) {
+	certs := []*x509.Certificate{
+		{
+			Subject:  pkix.Name{CommonName: "far-future-cert"},
+			NotAfter: time.Now().Add(365 * 24 * time.Hour),
+		},
+	}
+
+	warnings := checkExpiryWarnings(certs)
+	if len(warnings) != 0 {
+		t.Errorf("expected no warnings for far-future cert, got %d", len(warnings))
+	}
+}
+
 func TestFetchAIACertificates_duplicateURLs(t *testing.T) {
 	issuerKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	issuerTemplate := &x509.Certificate{

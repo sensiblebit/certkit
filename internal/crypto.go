@@ -38,36 +38,7 @@ func getKeyType(cert *x509.Certificate) string {
 }
 
 func parsePrivateKey(data []byte, passwords []string) (crypto.PrivateKey, error) {
-	if key, err := certkit.ParsePEMPrivateKey(data); err == nil && key != nil {
-		return key, nil
-	}
-
-	block, _ := pem.Decode(data)
-	if block == nil {
-		return nil, fmt.Errorf("failed to decode PEM block")
-	}
-
-	if !x509.IsEncryptedPEMBlock(block) {
-		return nil, fmt.Errorf("PEM block is not encrypted")
-	}
-
-	for _, password := range passwords {
-		decrypted, err := x509.DecryptPEMBlock(block, []byte(password))
-		if err != nil {
-			continue
-		}
-
-		pemBlock := &pem.Block{
-			Type:  block.Type,
-			Bytes: decrypted,
-		}
-		key, err := certkit.ParsePEMPrivateKey(pem.EncodeToMemory(pemBlock))
-		if err == nil && key != nil {
-			return key, nil
-		}
-	}
-
-	return nil, fmt.Errorf("failed to decrypt private key with any password")
+	return certkit.ParsePEMPrivateKeyWithPasswords(data, passwords)
 }
 
 // processPEMCertificates attempts to parse PEM data as certificates and insert them into the DB.
@@ -301,6 +272,31 @@ func processDER(data []byte, path string, cfg *Config) {
 				Bytes: keyDER,
 			})
 			processPEMPrivateKeys(keyPEM, path, cfg)
+			return
+		}
+	}
+
+	// Try JKS (Java KeyStore) — magic bytes 0xFEEDFEED
+	if len(data) >= 4 && data[0] == 0xFE && data[1] == 0xED && data[2] == 0xFE && data[3] == 0xED {
+		slog.Debug("Attempting JKS parsing")
+		for _, password := range cfg.Passwords {
+			certs, keys, err := certkit.DecodeJKS(data, password)
+			if err != nil {
+				slog.Debug(fmt.Sprintf("Failed JKS decode with password '%s': %v", password, err))
+				continue
+			}
+			for _, cert := range certs {
+				certPEM := []byte(certkit.CertToPEM(cert))
+				processPEMCertificates(certPEM, path, cfg)
+			}
+			for _, key := range keys {
+				keyPEM, err := certkit.MarshalPrivateKeyToPEM(key)
+				if err != nil {
+					slog.Debug(fmt.Sprintf("Failed to marshal JKS key: %v", err))
+					continue
+				}
+				processPEMPrivateKeys([]byte(keyPEM), path, cfg)
+			}
 			return
 		}
 	}
