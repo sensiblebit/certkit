@@ -12,7 +12,16 @@ A certificate management tool that ingests TLS/SSL certificates and private keys
 - **SQLite catalog** -- Persistent or in-memory database indexed by Subject Key Identifier, serial number, and Authority Key Identifier
 - **Encrypted key handling** -- Tries user-supplied passwords plus common defaults (`""`, `"password"`, `"changeit"`)
 
-## Build
+## Install
+
+### Homebrew (macOS)
+
+```sh
+brew tap sensiblebit/tap
+brew install certwrangler
+```
+
+### From source
 
 Requires Go 1.25+ and a C compiler (for SQLite via cgo).
 

@@ -1,0 +1,49 @@
+version: 2
+
+builds:
+  - id: certwrangler
+    binary: certwrangler
+    main: ./main.go
+    env:
+      - CGO_ENABLED=1
+    goos:
+      - darwin
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    overrides:
+      - goos: darwin
+        goarch: amd64
+        env:
+          - CGO_ENABLED=1
+          - CC=clang -arch x86_64
+
+archives:
+  - id: default
+    formats:
+      - tar.gz
+    files:
+      - LICENSE
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+release:
+  github:
+    owner: sensiblebit
+    name: certWrangler
+
+homebrew_casks:
+  - name: certwrangler
+    binaries:
+      - certwrangler
+    repository:
+      owner: sensiblebit
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    directory: Casks
+    homepage: https://github.com/sensiblebit/certWrangler
+    description: A certificate management tool that ingests TLS/SSL certificates and keys, catalogs them in SQLite, and exports organized bundles.

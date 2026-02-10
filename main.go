@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -9,7 +10,14 @@ import (
 	"github.com/sensiblebit/certwrangler/internal"
 )
 
+var version = "dev"
+
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "--version" {
+		fmt.Println("certwrangler version " + version)
+		os.Exit(0)
+	}
+
 	cfg := internal.ParseFlags()
 
 	// Handle stdin
