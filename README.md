@@ -29,47 +29,47 @@ Or use the included build script:
 ## Usage
 
 ```
-certmangler -path <input> [flags]
+certmangler -input <path> [flags]
 ```
 
 ### Flags
 
 | Flag | Default | Description |
 |---|---|---|
-| `-path` | *(required)* | Path to a certificate file or directory, or `-` for stdin |
+| `-input` | *(required)* | Path to a certificate file or directory, or `-` for stdin |
 | `-export` | `false` | Export certificate bundles after ingestion |
-| `-force` | `false` | Export bundles even for untrusted certificates |
+| `-force` | `false` | Allow export of untrusted certificate bundles |
 | `-out` | `./bundles` | Output directory for exported bundles |
-| `-bundles-config` | `./bundles.yaml` | Path to bundle configuration file |
-| `-dbpath` | *(empty)* | SQLite database path (empty = in-memory) |
-| `-passwords` | *(empty)* | Comma-separated list of passwords for encrypted keys |
+| `-bundles-config` | `./bundles.yaml` | Path to bundle config YAML |
+| `-db` | *(empty)* | SQLite database path (empty = in-memory) |
+| `-passwords` | *(empty)* | Comma-separated passwords for encrypted keys |
 | `-password-file` | *(empty)* | File containing passwords, one per line |
-| `-loglevel` | `debug` | Log level: `debug`, `info`, `warning`, `error`, `critical`, `fatal` |
+| `-log-level` | `debug` | Log level: `debug`, `info`, `warning`, `error` |
 
 ### Examples
 
 Ingest a directory of certificates and keys:
 
 ```sh
-./certmangler -path ./certs/
+./certmangler -input ./certs/
 ```
 
 Ingest and export bundles with a persistent database:
 
 ```sh
-./certmangler -path ./certs/ -export -dbpath certs.db -out ./bundles
+./certmangler -input ./certs/ -export -db certs.db -out ./bundles
 ```
 
 Read from stdin:
 
 ```sh
-cat server.pem | ./certmangler -path -
+cat server.pem | ./certmangler -input -
 ```
 
 Provide passwords for encrypted PKCS#12 or PEM files:
 
 ```sh
-./certmangler -path ./certs/ -passwords "secret1,secret2" -password-file extra_passwords.txt
+./certmangler -input ./certs/ -passwords "secret1,secret2" -password-file extra_passwords.txt
 ```
 
 ## Bundle Configuration
@@ -145,11 +145,14 @@ Input files/stdin
   Store in SQLite (certificates + keys indexed by SKI)
        |
        v
+  Resolve AKIs (match legacy SHA-1 AKIs to computed RFC 7093 M1 SKIs)
+       |
+       v
   [if -export] Match keys to certs, build chains via CFSSL,
   write all output formats per bundle
 ```
 
-Expired certificates are skipped during ingestion. Root certificates missing an Authority Key Identifier use their own Subject Key Identifier as a fallback. Certificate-to-bundle matching is performed by comparing the certificate's Common Name against the `commonNames` list in each bundle configuration.
+Expired certificates are skipped during ingestion. Root certificates use their own Subject Key Identifier as their Authority Key Identifier (self-signed). Non-root certificate AKIs are resolved post-ingestion by matching embedded AKIs against a multi-hash lookup (RFC 7093 M1 SHA-256 + legacy SHA-1) of all CA certificates. Certificate-to-bundle matching is performed by comparing the certificate's Common Name against the `commonNames` list in each bundle configuration.
 
 ## License
 
