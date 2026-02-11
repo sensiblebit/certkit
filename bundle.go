@@ -184,10 +184,8 @@ func detectAndSwapLeaf(leaf *x509.Certificate, extras []*x509.Certificate) (*x50
 
 	idx := nonCAIdx[0]
 	realLeaf := extras[idx]
-	newExtras := make([]*x509.Certificate, 0, len(extras))
-	newExtras = append(newExtras, extras[:idx]...)
-	newExtras = append(newExtras, extras[idx+1:]...)
-	newExtras = append(newExtras, leaf)
+	// Replace the non-CA cert with the original leaf (a CA), preserving the rest.
+	newExtras := slices.Concat(extras[:idx:idx], extras[idx+1:], []*x509.Certificate{leaf})
 
 	warnings := []string{
 		fmt.Sprintf("reversed chain detected: swapped CA %q with leaf %q", leaf.Subject.CommonName, realLeaf.Subject.CommonName),
