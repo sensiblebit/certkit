@@ -20,9 +20,5 @@ jobs:
           check-latest: true
           cache: true
       - run: go build ./...
-        env:
-          CGO_ENABLED: "1"
       - run: go vet ./...
       - run: go test -race ./...
-        env:
-          CGO_ENABLED: "1"

@@ -25,6 +25,14 @@ brew tap sensiblebit/tap
 brew install certkit
 ```
 
+### Debian/Ubuntu (Linux)
+
+Download the `.deb` package from the [latest release](https://github.com/sensiblebit/certkit/releases/latest) and install:
+
+```sh
+sudo dpkg -i certkit_*.deb
+```
+
 ### From source
 
 Requires Go 1.25+. No CGO required.

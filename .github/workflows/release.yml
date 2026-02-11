@@ -10,7 +10,7 @@ permissions:
 
 jobs:
   release:
-    runs-on: macos-latest
+    runs-on: ubuntu-latest
 
     steps:
       - name: Checkout
@@ -39,3 +39,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+  winget:
+    if: false # Enable after initial manual winget-pkgs submission
+    needs: release
+    runs-on: windows-latest
+    steps:
+      - name: Publish to WinGet
+        uses: vedantmgoyal9/winget-releaser@v2
+        with:
+          identifier: Sensiblebit.Certkit
+          installers-regex: '\.zip$'
+          token: ${{ secrets.WINGET_TOKEN }}
+

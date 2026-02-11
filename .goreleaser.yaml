@@ -5,28 +5,42 @@ builds:
     binary: certkit
     main: ./cmd/certkit/
     env:
-      - CGO_ENABLED=1
+      - CGO_ENABLED=0
     goos:
       - darwin
+      - linux
+      - windows
     goarch:
       - amd64
       - arm64
     ldflags:
       - -s -w -X main.version={{.Version}}
-    overrides:
-      - goos: darwin
-        goarch: amd64
-        env:
-          - CGO_ENABLED=1
-          - CC=clang -arch x86_64
 
 archives:
   - id: default
     formats:
       - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
     files:
       - LICENSE
       - README.md
+
+nfpms:
+  - id: certkit-deb
+    package_name: certkit
+    vendor: Sensiblebit
+    homepage: https://github.com/sensiblebit/certkit
+    maintainer: Sensiblebit <github@sensiblebit.com>
+    description: >-
+      A certificate management tool that ingests TLS/SSL certificates
+      and private keys, catalogs them in SQLite, and exports organized bundles.
+    license: MIT
+    formats:
+      - deb
+    bindir: /usr/bin
 
 checksum:
   name_template: checksums.txt
