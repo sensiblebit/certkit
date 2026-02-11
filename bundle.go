@@ -3,8 +3,8 @@ package certkit
 import (
 	"context"
 	"crypto/tls"
-	"errors"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -33,8 +33,8 @@ type BundleOptions struct {
 	ExtraIntermediates []*x509.Certificate
 	// FetchAIA enables fetching intermediate certificates via AIA CA Issuers URLs.
 	FetchAIA bool
-	// AIATimeoutMs is the HTTP timeout in milliseconds for AIA fetches.
-	AIATimeoutMs int
+	// AIATimeout is the HTTP timeout for AIA fetches.
+	AIATimeout time.Duration
 	// AIAMaxDepth is the maximum number of AIA hops to follow.
 	AIAMaxDepth int
 	// TrustStore selects the root certificate pool: "system", "mozilla", or "custom".
@@ -50,18 +50,18 @@ type BundleOptions struct {
 // DefaultOptions returns sensible defaults.
 func DefaultOptions() BundleOptions {
 	return BundleOptions{
-		FetchAIA:     true,
-		AIATimeoutMs: 2000,
-		AIAMaxDepth:  5,
-		TrustStore:   "system",
-		Verify:       true,
-		IncludeRoot:  true,
+		FetchAIA:    true,
+		AIATimeout:  2 * time.Second,
+		AIAMaxDepth: 5,
+		TrustStore:  "system",
+		Verify:      true,
+		IncludeRoot: true,
 	}
 }
 
 // FetchLeafFromURL connects to the given HTTPS URL via TLS and returns the
 // leaf (server) certificate from the handshake.
-func FetchLeafFromURL(ctx context.Context, rawURL string, timeoutMs int) (*x509.Certificate, error) {
+func FetchLeafFromURL(ctx context.Context, rawURL string, timeout time.Duration) (*x509.Certificate, error) {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
 		return nil, fmt.Errorf("parsing URL: %w", err)
@@ -79,7 +79,7 @@ func FetchLeafFromURL(ctx context.Context, rawURL string, timeoutMs int) (*x509.
 		},
 	}
 	dialer.NetDialer = &net.Dialer{
-		Timeout: time.Duration(timeoutMs) * time.Millisecond,
+		Timeout: timeout,
 	}
 
 	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
@@ -97,11 +97,11 @@ func FetchLeafFromURL(ctx context.Context, rawURL string, timeoutMs int) (*x509.
 }
 
 // FetchAIACertificates follows AIA CA Issuers URLs to fetch intermediate certificates.
-func FetchAIACertificates(ctx context.Context, cert *x509.Certificate, timeoutMs int, maxDepth int) ([]*x509.Certificate, []string) {
+func FetchAIACertificates(ctx context.Context, cert *x509.Certificate, timeout time.Duration, maxDepth int) ([]*x509.Certificate, []string) {
 	var fetched []*x509.Certificate
 	var warnings []string
 
-	client := &http.Client{Timeout: time.Duration(timeoutMs) * time.Millisecond}
+	client := &http.Client{Timeout: timeout}
 	seen := make(map[string]bool)
 	queue := []*x509.Certificate{cert}
 
@@ -241,7 +241,7 @@ func Bundle(ctx context.Context, leaf *x509.Certificate, opts BundleOptions) (*B
 	}
 
 	if opts.FetchAIA {
-		aiaCerts, warnings := FetchAIACertificates(ctx, leaf, opts.AIATimeoutMs, opts.AIAMaxDepth)
+		aiaCerts, warnings := FetchAIACertificates(ctx, leaf, opts.AIATimeout, opts.AIAMaxDepth)
 		result.Warnings = append(result.Warnings, warnings...)
 		for _, cert := range aiaCerts {
 			intermediatePool.AddCert(cert)

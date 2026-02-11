@@ -82,14 +82,14 @@ func TestBundle_customRoots(t *testing.T) {
 }
 
 func TestBundle_mozillaRoots(t *testing.T) {
-	leaf, err := FetchLeafFromURL(context.Background(), "https://google.com", 5000)
+	leaf, err := FetchLeafFromURL(context.Background(), "https://google.com", 5*time.Second)
 	if err != nil {
 		t.Skipf("cannot connect to google.com: %v", err)
 	}
 
 	result, err := Bundle(context.Background(), leaf, BundleOptions{
 		FetchAIA:     true,
-		AIATimeoutMs: 5000,
+		AIATimeout: 5 * time.Second,
 		AIAMaxDepth:  5,
 		TrustStore:   "mozilla",
 		Verify:       true,
@@ -242,7 +242,7 @@ func TestBundle_verifyFalsePassthrough(t *testing.T) {
 }
 
 func TestFetchLeafFromURL(t *testing.T) {
-	cert, err := FetchLeafFromURL(context.Background(), "https://google.com", 5000)
+	cert, err := FetchLeafFromURL(context.Background(), "https://google.com", 5*time.Second)
 	if err != nil {
 		t.Skipf("cannot connect to google.com: %v", err)
 	}
@@ -255,7 +255,7 @@ func TestFetchLeafFromURL(t *testing.T) {
 }
 
 func TestFetchLeafFromURL_withPort(t *testing.T) {
-	cert, err := FetchLeafFromURL(context.Background(), "https://google.com:443", 5000)
+	cert, err := FetchLeafFromURL(context.Background(), "https://google.com:443", 5*time.Second)
 	if err != nil {
 		t.Skipf("cannot connect to google.com:443: %v", err)
 	}
@@ -265,14 +265,14 @@ func TestFetchLeafFromURL_withPort(t *testing.T) {
 }
 
 func TestFetchLeafFromURL_badHost(t *testing.T) {
-	_, err := FetchLeafFromURL(context.Background(), "https://this-does-not-exist.invalid", 2000)
+	_, err := FetchLeafFromURL(context.Background(), "https://this-does-not-exist.invalid", 2*time.Second)
 	if err == nil {
 		t.Error("expected error for non-existent host")
 	}
 }
 
 func TestFetchLeafFromURL_invalidURL(t *testing.T) {
-	_, err := FetchLeafFromURL(context.Background(), "://bad", 2000)
+	_, err := FetchLeafFromURL(context.Background(), "://bad", 2*time.Second)
 	if err == nil {
 		t.Error("expected error for invalid URL")
 	}
@@ -376,7 +376,7 @@ func TestFetchAIACertificates_maxDepthZero(t *testing.T) {
 	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
 	cert, _ := x509.ParseCertificate(certBytes)
 
-	fetched, warnings := FetchAIACertificates(context.Background(), cert,1000, 0)
+	fetched, warnings := FetchAIACertificates(context.Background(), cert, 1*time.Second, 0)
 	if len(fetched) != 0 {
 		t.Errorf("expected 0 fetched certs with maxDepth=0, got %d", len(fetched))
 	}
@@ -596,7 +596,7 @@ func TestFetchAIACertificates_duplicateURLs(t *testing.T) {
 	leafBytes, _ := x509.CreateCertificate(rand.Reader, leafTemplate, issuerCert, &leafKey.PublicKey, issuerKey)
 	leafCert, _ := x509.ParseCertificate(leafBytes)
 
-	fetched, _ := FetchAIACertificates(context.Background(), leafCert,2000, 5)
+	fetched, _ := FetchAIACertificates(context.Background(), leafCert, 2*time.Second, 5)
 	if len(fetched) != 1 {
 		t.Errorf("expected 1 fetched cert (deduped), got %d", len(fetched))
 	}

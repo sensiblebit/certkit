@@ -2,10 +2,7 @@ package internal
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/ed25519"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
@@ -17,6 +14,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -76,8 +74,8 @@ func writeBundleFiles(outDir, bundleFolder string, cert *CertificateRecord, key 
 	}
 
 	// Build chain and full chain
-	chainPEM := append(leafPEM, intermediatePEM...)
-	fullchainPEM := append(chainPEM, rootPEM...)
+	chainPEM := slices.Concat(leafPEM, intermediatePEM)
+	fullchainPEM := slices.Concat(chainPEM, rootPEM)
 
 	// Write files with consistent error handling
 	files := []struct {
@@ -394,7 +392,7 @@ func generateCSR(cert *CertificateRecord, key *KeyRecord, bundleConfig *BundleCo
 		"dns_names":           parsedCSR.DNSNames,
 		"ip_addresses":        formatIPAddresses(parsedCSR.IPAddresses),
 		"email_addresses":     parsedCSR.EmailAddresses,
-		"key_algorithm":       formatKeyAlgorithm(parsedCSR.PublicKey),
+		"key_algorithm":       certkit.PublicKeyAlgorithmName(parsedCSR.PublicKey),
 		"signature_algorithm": parsedCSR.SignatureAlgorithm.String(),
 		"pem":                 string(csrPEM),
 	}
@@ -414,20 +412,6 @@ func formatIPAddresses(ips []net.IP) []string {
 		result[i] = ip.String()
 	}
 	return result
-}
-
-// formatKeyAlgorithm returns a string description of the public key algorithm
-func formatKeyAlgorithm(pub any) string {
-	switch pub.(type) {
-	case *rsa.PublicKey:
-		return "RSA"
-	case *ecdsa.PublicKey:
-		return "ECDSA"
-	case ed25519.PublicKey:
-		return "Ed25519"
-	default:
-		return fmt.Sprintf("Unknown (%T)", pub)
-	}
 }
 
 // ExportBundles iterates over all key records in the database, finds the matching

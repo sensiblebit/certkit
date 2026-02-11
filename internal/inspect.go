@@ -192,7 +192,7 @@ func FormatInspectResults(results []InspectResult, format string) (string, error
 		if err != nil {
 			return "", fmt.Errorf("marshaling JSON: %w", err)
 		}
-		return string(data), nil
+		return string(data) + "\n", nil
 	default:
 		return "", fmt.Errorf("unsupported output format %q (use text or json)", format)
 	}

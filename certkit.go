@@ -5,7 +5,6 @@ package certkit
 import (
 	"bytes"
 	"crypto"
-	"errors"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -17,6 +16,7 @@ import (
 	"encoding/asn1"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
