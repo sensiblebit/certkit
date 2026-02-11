@@ -881,63 +881,39 @@ func TestGetPublicKey_UnsupportedType(t *testing.T) {
 	}
 }
 
-func TestKeyMatchesCert_RSA(t *testing.T) {
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "rsa-match"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-	}
-	certDER, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	cert, _ := x509.ParseCertificate(certDER)
+func TestKeyMatchesCert(t *testing.T) {
+	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	edPub, edPriv, _ := ed25519.GenerateKey(rand.Reader)
 
-	match, err := KeyMatchesCert(key, cert)
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name string
+		priv any
+		pub  any
+	}{
+		{"RSA", rsaKey, &rsaKey.PublicKey},
+		{"ECDSA", ecKey, &ecKey.PublicKey},
+		{"Ed25519", edPriv, edPub},
 	}
-	if !match {
-		t.Error("expected RSA key to match its certificate")
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			tmpl := &x509.Certificate{
+				SerialNumber: big.NewInt(1),
+				Subject:      pkix.Name{CommonName: tt.name + "-match"},
+				NotBefore:    time.Now().Add(-1 * time.Hour),
+				NotAfter:     time.Now().Add(24 * time.Hour),
+			}
+			certDER, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, tt.pub, tt.priv)
+			cert, _ := x509.ParseCertificate(certDER)
 
-func TestKeyMatchesCert_ECDSA(t *testing.T) {
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "ecdsa-match"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-	}
-	certDER, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	cert, _ := x509.ParseCertificate(certDER)
-
-	match, err := KeyMatchesCert(key, cert)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !match {
-		t.Error("expected ECDSA key to match its certificate")
-	}
-}
-
-func TestKeyMatchesCert_Ed25519(t *testing.T) {
-	pub, priv, _ := ed25519.GenerateKey(rand.Reader)
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "ed25519-match"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-	}
-	certDER, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
-	cert, _ := x509.ParseCertificate(certDER)
-
-	match, err := KeyMatchesCert(priv, cert)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !match {
-		t.Error("expected Ed25519 key to match its certificate")
+			match, err := KeyMatchesCert(tt.priv, cert)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !match {
+				t.Errorf("expected %s key to match its certificate", tt.name)
+			}
+		})
 	}
 }
 
