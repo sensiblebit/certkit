@@ -103,6 +103,49 @@ func inspectDERData(data []byte, passwords []string) []InspectResult {
 		return results
 	}
 
+	// Try PKCS#7
+	if certs, err := certkit.DecodePKCS7(data); err == nil {
+		for _, cert := range certs {
+			results = append(results, inspectCert(cert))
+		}
+		return results
+	}
+
+	// Try JKS (Java KeyStore) — magic bytes 0xFEEDFEED
+	if len(data) >= 4 && data[0] == 0xFE && data[1] == 0xED && data[2] == 0xFE && data[3] == 0xED {
+		for _, password := range passwords {
+			certs, keys, err := certkit.DecodeJKS(data, password)
+			if err != nil {
+				continue
+			}
+			for _, cert := range certs {
+				results = append(results, inspectCert(cert))
+			}
+			for _, key := range keys {
+				results = append(results, inspectKey(key))
+			}
+			return results
+		}
+	}
+
+	// Try PKCS#12 as last resort
+	for _, password := range passwords {
+		privKey, leaf, caCerts, err := certkit.DecodePKCS12(data, password)
+		if err != nil {
+			continue
+		}
+		if leaf != nil {
+			results = append(results, inspectCert(leaf))
+		}
+		for _, ca := range caCerts {
+			results = append(results, inspectCert(ca))
+		}
+		if privKey != nil {
+			results = append(results, inspectKey(privKey))
+		}
+		return results
+	}
+
 	return results
 }
 

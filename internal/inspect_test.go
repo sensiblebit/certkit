@@ -89,6 +89,83 @@ func TestInspectFile_NotFound(t *testing.T) {
 	}
 }
 
+func TestInspectFile_PKCS12(t *testing.T) {
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "p12.example.com", []string{"p12.example.com"}, nil)
+	p12 := newPKCS12Bundle(t, leaf, ca, "changeit")
+
+	dir := t.TempDir()
+	p12File := filepath.Join(dir, "bundle.p12")
+	if err := os.WriteFile(p12File, p12, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := InspectFile(p12File, []string{"changeit"})
+	if err != nil {
+		t.Fatalf("InspectFile failed: %v", err)
+	}
+
+	var certs, keys int
+	for _, r := range results {
+		switch r.Type {
+		case "certificate":
+			certs++
+		case "private_key":
+			keys++
+		}
+	}
+	if certs < 1 {
+		t.Errorf("expected at least 1 certificate, got %d", certs)
+	}
+	if keys != 1 {
+		t.Errorf("expected 1 private key, got %d", keys)
+	}
+
+	// Verify leaf CN is present
+	found := false
+	for _, r := range results {
+		if r.Type == "certificate" && strings.Contains(r.Subject, "p12.example.com") {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected to find leaf certificate with CN=p12.example.com")
+	}
+}
+
+func TestInspectFile_JKS(t *testing.T) {
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "jks.example.com", []string{"jks.example.com"}, nil)
+	jks := newJKSBundle(t, leaf, ca, "changeit")
+
+	dir := t.TempDir()
+	jksFile := filepath.Join(dir, "keystore.jks")
+	if err := os.WriteFile(jksFile, jks, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := InspectFile(jksFile, []string{"changeit"})
+	if err != nil {
+		t.Fatalf("InspectFile failed: %v", err)
+	}
+
+	var certs, keys int
+	for _, r := range results {
+		switch r.Type {
+		case "certificate":
+			certs++
+		case "private_key":
+			keys++
+		}
+	}
+	if certs < 1 {
+		t.Errorf("expected at least 1 certificate, got %d", certs)
+	}
+	if keys != 1 {
+		t.Errorf("expected 1 private key, got %d", keys)
+	}
+}
+
 func TestFormatInspectResults_JSON(t *testing.T) {
 	results := []InspectResult{
 		{Type: "certificate", Subject: "CN=test", SHA256: "AA:BB"},
