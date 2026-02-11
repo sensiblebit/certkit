@@ -776,25 +776,25 @@ func TestMarshalPrivateKeyToPEM_unsupported(t *testing.T) {
 	}
 }
 
-func TestComputeSKI_RFC7093Method1(t *testing.T) {
+func TestComputeSKI_Length(t *testing.T) {
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	ski, err := ComputeSKI(&key.PublicKey)
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name string
+		fn   func(crypto.PublicKey) ([]byte, error)
+	}{
+		{"RFC7093", ComputeSKI},
+		{"Legacy SHA-1", ComputeSKILegacy},
 	}
-	if len(ski) != 20 {
-		t.Errorf("expected 20 bytes, got %d", len(ski))
-	}
-}
-
-func TestComputeSKILegacy_SHA1(t *testing.T) {
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	ski, err := ComputeSKILegacy(&key.PublicKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(ski) != 20 {
-		t.Errorf("expected 20 bytes, got %d", len(ski))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw, err := tt.fn(&key.PublicKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(raw) != 20 {
+				t.Errorf("got %d bytes, want 20", len(raw))
+			}
+		})
 	}
 }
 
