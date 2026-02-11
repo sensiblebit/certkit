@@ -7,13 +7,14 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
-	"github.com/cloudflare/cfssl/log"
 	"github.com/jmoiron/sqlx"
 	"github.com/jmoiron/sqlx/types"
 	_ "github.com/mattn/go-sqlite3"
+	"github.com/sensiblebit/certkit"
 )
 
 // DB represents the database connection.
@@ -26,20 +27,20 @@ func (db *DB) GetAllKeys() ([]KeyRecord, error) {
 	var keys []KeyRecord
 	err := db.Select(&keys, "SELECT * FROM keys")
 	if err != nil {
-		return nil, fmt.Errorf("failed to get all keys: %w", err)
+		return nil, fmt.Errorf("getting all keys: %w", err)
 	}
 	return keys, nil
 }
 
-// GetCertBySKI returns the certificate record matching the given subject key identifier.
-func (db *DB) GetCertBySKI(skid string) (*CertificateRecord, error) {
+// GetCertBySKID returns the certificate record matching the given subject key identifier.
+func (db *DB) GetCertBySKID(skid string) (*CertificateRecord, error) {
 	var cert CertificateRecord
 	err := db.Get(&cert, "SELECT * FROM certificates WHERE subject_key_identifier = ?", skid)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("failed to get certificate by SKI: %w", err)
+		return nil, fmt.Errorf("getting certificate by SKID: %w", err)
 	}
 	return &cert, nil
 }
@@ -55,17 +56,17 @@ func NewDB(dbPath string) (*DB, error) {
 	// Open database connection
 	db, err := sqlx.Open("sqlite3", connectionString)
 	if err != nil {
-		return nil, fmt.Errorf("failed to open database: %w", err)
+		return nil, fmt.Errorf("opening database: %w", err)
 	}
 
 	dbObj := &DB{DB: db}
 
 	// Initialize database schema
 	if err := dbObj.initSchema(); err != nil {
-		return nil, fmt.Errorf("failed to initialize schema: %w", err)
+		return nil, fmt.Errorf("initializing schema: %w", err)
 	}
 
-	log.Debugf("Database initialized (path: %s)", connectionString)
+	slog.Debug("database initialized", "path", connectionString)
 
 	return dbObj, nil
 }
@@ -85,18 +86,18 @@ func (db *DB) initSchema() error {
 			cert_type               text NOT NULL,
 			metadata                text,
 			bundle_name             text NOT NULL,
-			PRIMARY KEY(serial_number, authority_key_identifier, subject_key_identifier)
+			PRIMARY KEY(serial_number, authority_key_identifier)
 		);
 	`)
 	if err != nil {
-		return fmt.Errorf("failed to create certificates table: %w", err)
+		return fmt.Errorf("creating certificates table: %w", err)
 	}
 
 	_, err = db.Exec(`
 		CREATE INDEX IF NOT EXISTS idx_certificates_skid ON certificates (subject_key_identifier);
 	`)
 	if err != nil {
-		return fmt.Errorf("failed to create subject key identifier index on certificates table: %w", err)
+		return fmt.Errorf("creating subject key identifier index on certificates table: %w", err)
 	}
 
 	_, err = db.Exec(`
@@ -112,17 +113,21 @@ func (db *DB) initSchema() error {
 	`)
 
 	if err != nil {
-		return fmt.Errorf("failed to create keys table: %w", err)
+		return fmt.Errorf("creating keys table: %w", err)
 	}
 	return nil
 }
 
+// InsertKey inserts a new key record into the database, ignoring duplicates.
 func (db *DB) InsertKey(key KeyRecord) error {
 	_, err := db.NamedExec(`
 		INSERT OR IGNORE INTO keys (subject_key_identifier, key_type, bit_length, public_exponent, modulus, curve, key_data)
 		VALUES (:subject_key_identifier, :key_type, :bit_length, :public_exponent, :modulus, :curve, :key_data)
 	`, key)
-	return err
+	if err != nil {
+		return fmt.Errorf("inserting key: %w", err)
+	}
+	return nil
 }
 
 // InsertCertificate inserts a new certificate record into the database.
@@ -131,9 +136,13 @@ func (db *DB) InsertCertificate(cert CertificateRecord) error {
 		INSERT OR IGNORE INTO certificates (serial_number, authority_key_identifier, cert_type, key_type, expiry, not_before, metadata, sans, common_name, bundle_name, subject_key_identifier, pem)
 		VALUES (:serial_number, :authority_key_identifier, :cert_type, :key_type, :expiry, :not_before, :metadata, :sans, :common_name, :bundle_name, :subject_key_identifier, :pem)
 	`, cert)
-	return err
+	if err != nil {
+		return fmt.Errorf("inserting certificate: %w", err)
+	}
+	return nil
 }
 
+// GetKey returns the key record matching the given subject key identifier.
 func (db *DB) GetKey(skid string) (*KeyRecord, error) {
 	var key KeyRecord
 	err := db.Get(&key, "SELECT * FROM keys WHERE subject_key_identifier = ?", skid)
@@ -141,11 +150,12 @@ func (db *DB) GetKey(skid string) (*KeyRecord, error) {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("failed to get key: %w", err)
+		return nil, fmt.Errorf("getting key: %w", err)
 	}
 	return &key, nil
 }
 
+// GetCert returns the certificate record matching the given serial number and authority key identifier.
 func (db *DB) GetCert(serial, aki string) (*CertificateRecord, error) {
 	var cert CertificateRecord
 	err := db.Get(&cert, "SELECT * FROM certificates WHERE serial_number = ? AND authority_key_identifier = ?", serial, aki)
@@ -153,7 +163,7 @@ func (db *DB) GetCert(serial, aki string) (*CertificateRecord, error) {
 		if errors.Is(err, sql.ErrNoRows) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("failed to get certificate: %w", err)
+		return nil, fmt.Errorf("getting certificate: %w", err)
 	}
 	return &cert, nil
 }
@@ -177,20 +187,26 @@ func formatTimePtr(t *time.Time) string {
 // It builds a multi-hash lookup (RFC 7093 M1 + legacy SHA-1) from all CA certs, then for each
 // non-root cert, matches its embedded AKI against any variant to find the issuer.
 func (db *DB) ResolveAKIs() error {
+	tx, err := db.Beginx()
+	if err != nil {
+		return fmt.Errorf("beginning transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	// Get all potential issuers (root + intermediate CAs)
 	var issuers []CertificateRecord
-	err := db.Select(&issuers, "SELECT * FROM certificates WHERE cert_type IN ('root', 'intermediate')")
+	err = tx.Select(&issuers, "SELECT * FROM certificates WHERE cert_type IN ('root', 'intermediate')")
 	if err != nil {
-		return fmt.Errorf("failed to select issuer certificates: %w", err)
+		return fmt.Errorf("selecting issuer certificates: %w", err)
 	}
 
-	// Build lookup: various SKI hex values → issuer's computed RFC 7093 M1 SKI
-	skiLookup := make(map[string]string) // akiHex → issuer's computed SKI
+	// Build lookup: various SKID hex values → issuer's computed RFC 7093 M1 SKID
+	skidLookup := make(map[string]string) // akiHex → issuer's computed SKID
 	for _, issuer := range issuers {
-		// The computed RFC 7093 M1 SKI is already stored
-		skiLookup[issuer.SubjectKeyIdentifier] = issuer.SubjectKeyIdentifier
+		// The computed RFC 7093 M1 SKID is already stored
+		skidLookup[issuer.SubjectKeyIdentifier] = issuer.SubjectKeyIdentifier
 
-		// Parse PEM to compute legacy SHA-1 SKI for cross-matching
+		// Parse PEM to compute legacy SHA-1 SKID for cross-matching
 		block, _ := pem.Decode([]byte(issuer.PEM))
 		if block == nil {
 			continue
@@ -200,59 +216,88 @@ func (db *DB) ResolveAKIs() error {
 			continue
 		}
 
-		legacySKI, err := computeSKIDLegacy(cert.PublicKey)
+		legacySKID, err := certkit.ComputeSKIDLegacy(cert.PublicKey)
 		if err == nil {
-			legacyHex := hex.EncodeToString(legacySKI)
-			if _, exists := skiLookup[legacyHex]; !exists {
-				skiLookup[legacyHex] = issuer.SubjectKeyIdentifier
+			legacyHex := hex.EncodeToString(legacySKID)
+			if _, exists := skidLookup[legacyHex]; !exists {
+				skidLookup[legacyHex] = issuer.SubjectKeyIdentifier
 			}
 		}
 	}
 
 	// Get all non-root certs and resolve their AKIs
 	var certs []CertificateRecord
-	err = db.Select(&certs, "SELECT * FROM certificates WHERE cert_type != 'root'")
+	err = tx.Select(&certs, "SELECT * FROM certificates WHERE cert_type != 'root'")
 	if err != nil {
-		return fmt.Errorf("failed to select non-root certificates: %w", err)
+		return fmt.Errorf("selecting non-root certificates: %w", err)
 	}
 
 	for _, cert := range certs {
-		computedSKI, found := skiLookup[cert.AKI]
+		computedSKID, found := skidLookup[cert.AuthorityKeyIdentifier]
 		if !found {
-			log.Debugf("ResolveAKIs: no issuer found for cert %s (AKI=%s)", cert.Serial, cert.AKI)
+			slog.Debug("no issuer found for AKI resolution", "serial", cert.SerialNumber, "aki", cert.AuthorityKeyIdentifier)
 			continue
 		}
 
-		if cert.AKI != computedSKI {
-			_, err = db.Exec(
-				"UPDATE certificates SET authority_key_identifier = ? WHERE serial_number = ? AND authority_key_identifier = ? AND subject_key_identifier = ?",
-				computedSKI, cert.Serial, cert.AKI, cert.SubjectKeyIdentifier,
+		if cert.AuthorityKeyIdentifier != computedSKID {
+			_, err = tx.Exec(
+				"UPDATE certificates SET authority_key_identifier = ? WHERE serial_number = ? AND authority_key_identifier = ?",
+				computedSKID, cert.SerialNumber, cert.AuthorityKeyIdentifier,
 			)
 			if err != nil {
-				log.Warningf("ResolveAKIs: failed to update AKI for cert %s: %v", cert.Serial, err)
+				slog.Warn("updating AKI", "serial", cert.SerialNumber, "error", err)
 			} else {
-				log.Debugf("ResolveAKIs: updated AKI for cert %s from %s to %s", cert.Serial, cert.AKI, computedSKI)
+				slog.Debug("updated AKI", "serial", cert.SerialNumber, "old_aki", cert.AuthorityKeyIdentifier, "new_aki", computedSKID)
 			}
 		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing AKI resolution: %w", err)
 	}
 	return nil
 }
 
-func (db *DB) DumpDB() error {
-	// Helper function to print formatted headers
-	printHeader := func(title string) {
-		divider := strings.Repeat("=", 10)
-		log.Debugf(divider)
-		log.Debugf(title)
-		log.Debugf(divider)
+// ScanSummary holds aggregate counts from a scan.
+type ScanSummary struct {
+	Roots         int
+	Intermediates int
+	Leaves        int
+	Keys          int
+	Matched       int // keys that have a matching certificate
+}
+
+// GetScanSummary queries the database for aggregate counts.
+func (db *DB) GetScanSummary() (*ScanSummary, error) {
+	s := &ScanSummary{}
+
+	if err := db.Get(&s.Roots, "SELECT COUNT(*) FROM certificates WHERE cert_type = 'root'"); err != nil {
+		return nil, fmt.Errorf("counting roots: %w", err)
+	}
+	if err := db.Get(&s.Intermediates, "SELECT COUNT(*) FROM certificates WHERE cert_type = 'intermediate'"); err != nil {
+		return nil, fmt.Errorf("counting intermediates: %w", err)
+	}
+	if err := db.Get(&s.Leaves, "SELECT COUNT(*) FROM certificates WHERE cert_type = 'leaf'"); err != nil {
+		return nil, fmt.Errorf("counting leaves: %w", err)
+	}
+	if err := db.Get(&s.Keys, "SELECT COUNT(*) FROM keys"); err != nil {
+		return nil, fmt.Errorf("counting keys: %w", err)
+	}
+	if err := db.Get(&s.Matched, `SELECT COUNT(*) FROM keys k
+		INNER JOIN certificates c ON k.subject_key_identifier = c.subject_key_identifier`); err != nil {
+		return nil, fmt.Errorf("counting matched: %w", err)
 	}
 
-	// Print certificates
-	printHeader("CERTIFICATES")
+	return s, nil
+}
+
+// DumpDB logs all certificates and keys in the database at debug level.
+func (db *DB) DumpDB() error {
+	slog.Debug("dumping certificates")
 
 	rows, err := db.Queryx("SELECT * FROM certificates")
 	if err != nil {
-		return fmt.Errorf("failed to query certificates: %w", err)
+		return fmt.Errorf("querying certificates: %w", err)
 	}
 	defer rows.Close()
 
@@ -260,39 +305,31 @@ func (db *DB) DumpDB() error {
 	for rows.Next() {
 		var cert CertificateRecord
 		if err := rows.StructScan(&cert); err != nil {
-			return fmt.Errorf("failed to scan certificate: %w", err)
+			return fmt.Errorf("scanning certificate: %w", err)
 		}
-		log.Debugf("Certificate Details:"+
-			"\n\tSKI: %s"+
-			"\n\tCN: %s"+
-			"\n\tBundleName: %s"+
-			"\n\tSerial: %s"+
-			"\n\tAKI: %s"+
-			"\n\tType: %s"+
-			"\n\tKey Type: %s"+
-			"\n\tSANs: %s"+
-			"\n\tNot Before: %v"+
-			"\n\tExpiry: %v",
-			cert.SubjectKeyIdentifier,
-			cert.CommonName.String,
-			cert.BundleName,
-			cert.Serial,
-			cert.AKI,
-			cert.Type,
-			cert.KeyType,
-			formatSANs(cert.SANsJSON),
-			formatTimePtr(cert.NotBefore),
-			cert.Expiry)
+		slog.Debug("certificate details",
+			"ski", cert.SubjectKeyIdentifier,
+			"cn", cert.CommonName.String,
+			"bundle_name", cert.BundleName,
+			"serial", cert.SerialNumber,
+			"aki", cert.AuthorityKeyIdentifier,
+			"type", cert.CertType,
+			"key_type", cert.KeyType,
+			"sans", formatSANs(cert.SANsJSON),
+			"not_before", formatTimePtr(cert.NotBefore),
+			"expiry", cert.Expiry)
 		certCount++
 	}
-	log.Debugf("Total Certificates: %d", certCount)
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating certificates: %w", err)
+	}
+	slog.Debug("total certificates", "count", certCount)
 
-	// Print keys
-	printHeader("KEYS")
+	slog.Debug("dumping keys")
 
 	rows, err = db.Queryx("SELECT subject_key_identifier, key_type FROM keys")
 	if err != nil {
-		return fmt.Errorf("failed to query keys: %w", err)
+		return fmt.Errorf("querying keys: %w", err)
 	}
 	defer rows.Close()
 
@@ -300,14 +337,15 @@ func (db *DB) DumpDB() error {
 	for rows.Next() {
 		var key KeyRecord
 		if err := rows.StructScan(&key); err != nil {
-			return fmt.Errorf("failed to scan key: %w", err)
+			return fmt.Errorf("scanning key: %w", err)
 		}
-		log.Debugf("SKI: %s | Type: %s",
-			key.SubjectKeyIdentifier,
-			strings.ToUpper(key.KeyType))
+		slog.Debug("key record", "ski", key.SubjectKeyIdentifier, "type", strings.ToUpper(key.KeyType))
 		keyCount++
 	}
-	log.Debugf("Total Keys: %d", keyCount)
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterating keys: %w", err)
+	}
+	slog.Debug("total keys", "count", keyCount)
 
 	return nil
 }

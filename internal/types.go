@@ -20,18 +20,18 @@ type Config struct {
 
 // CertificateRecord encodes a certificate and its metadata
 type CertificateRecord struct {
-	Serial               string         `db:"serial_number"`
-	SubjectKeyIdentifier string         `db:"subject_key_identifier"`
-	AKI                  string         `db:"authority_key_identifier"`
-	Type                 string         `db:"cert_type"`
-	KeyType              string         `db:"key_type"`
-	Expiry               time.Time      `db:"expiry"`
-	PEM                  string         `db:"pem"`
-	NotBefore            *time.Time     `db:"not_before"`
-	MetadataJSON         types.JSONText `db:"metadata"`
-	SANsJSON             types.JSONText `db:"sans"`
-	CommonName           sql.NullString `db:"common_name"`
-	BundleName           string         `db:"bundle_name"`
+	SerialNumber           string         `db:"serial_number"`
+	SubjectKeyIdentifier   string         `db:"subject_key_identifier"`
+	AuthorityKeyIdentifier string         `db:"authority_key_identifier"`
+	CertType               string         `db:"cert_type"`
+	KeyType                string         `db:"key_type"`
+	Expiry                 time.Time      `db:"expiry"`
+	PEM                    string         `db:"pem"`
+	NotBefore              *time.Time     `db:"not_before"`
+	MetadataJSON           types.JSONText `db:"metadata"`
+	SANsJSON               types.JSONText `db:"sans"`
+	CommonName             sql.NullString `db:"common_name"`
+	BundleName             string         `db:"bundle_name"`
 }
 
 // K8sSecret represents a Kubernetes TLS secret

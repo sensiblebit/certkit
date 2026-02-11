@@ -15,24 +15,18 @@ bundles:
     commonNames:
       - '*.example.com'
       - example.com
-    custodian: devops@example.com
-    usage:
-      - k8s
   - bundleName: exampleio-tls
     commonNames:
       - '*.example.io'
       - example.io
-    custodian: devops@example.com
-    usage:
-      - k8s
     subject:
       country:
-        - US
+        - GB
       province:
-        - California
+        - London
       locality:
-        - San Diego
+        - London
       organization:
-        - Company, Inc.
+        - Company UK, Ltd.
       organizationalUnit:
-        - DevOps
+        - Platform Engineering

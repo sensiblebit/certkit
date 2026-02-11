@@ -1,9 +1,9 @@
 version: 2
 
 builds:
-  - id: certwrangler
-    binary: certwrangler
-    main: ./main.go
+  - id: certkit
+    binary: certkit
+    main: ./cmd/certkit/
     env:
       - CGO_ENABLED=1
     goos:
@@ -34,18 +34,18 @@ checksum:
 release:
   github:
     owner: sensiblebit
-    name: certWrangler
+    name: certkit
 
 homebrew_casks:
-  - name: certwrangler
+  - name: certkit
     binaries:
-      - certwrangler
+      - certkit
     repository:
       owner: sensiblebit
       name: homebrew-tap
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     directory: Casks
-    homepage: https://github.com/sensiblebit/certWrangler
+    homepage: https://github.com/sensiblebit/certkit
     description: A certificate management tool that ingests TLS/SSL certificates and keys, catalogs them in SQLite, and exports organized bundles.
     custom_block: |
       postflight do

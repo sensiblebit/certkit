@@ -7,7 +7,10 @@ import (
 )
 
 func TestProcessPasswords_DefaultsAlwaysPresent(t *testing.T) {
-	result := ProcessPasswords("", "")
+	result, err := ProcessPasswords(nil, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	defaults := []string{"", "password", "changeit"}
 	for _, d := range defaults {
@@ -25,7 +28,10 @@ func TestProcessPasswords_DefaultsAlwaysPresent(t *testing.T) {
 }
 
 func TestProcessPasswords_CommaSeparatedList(t *testing.T) {
-	result := ProcessPasswords("secret1,secret2,secret3", "")
+	result, err := ProcessPasswords([]string{"secret1", "secret2", "secret3"}, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	for _, want := range []string{"secret1", "secret2", "secret3"} {
 		found := false
@@ -48,7 +54,10 @@ func TestProcessPasswords_FromFile(t *testing.T) {
 		t.Fatalf("write password file: %v", err)
 	}
 
-	result := ProcessPasswords("", path)
+	result, err := ProcessPasswords(nil, path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	for _, want := range []string{"filepass1", "filepass2"} {
 		found := false
@@ -66,7 +75,10 @@ func TestProcessPasswords_FromFile(t *testing.T) {
 
 func TestProcessPasswords_DeduplicatesPreservingOrder(t *testing.T) {
 	// "password" and "changeit" are defaults, passing them again should not duplicate
-	result := ProcessPasswords("password,changeit,newone", "")
+	result, err := ProcessPasswords([]string{"password", "changeit", "newone"}, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	seen := make(map[string]int)
 	for _, p := range result {
@@ -86,11 +98,21 @@ func TestProcessPasswords_DeduplicatesPreservingOrder(t *testing.T) {
 }
 
 func TestProcessPasswords_EmptyInputs(t *testing.T) {
-	result := ProcessPasswords("", "")
+	result, err := ProcessPasswords(nil, "")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
 
 	// Should still have the 3 defaults
 	if len(result) != 3 {
 		t.Errorf("expected 3 default passwords, got %d: %v", len(result), result)
+	}
+}
+
+func TestProcessPasswords_BadFileReturnsError(t *testing.T) {
+	_, err := ProcessPasswords(nil, "/nonexistent/passwords.txt")
+	if err == nil {
+		t.Error("expected error for nonexistent password file, got nil")
 	}
 }
 

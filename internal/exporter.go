@@ -1,36 +1,51 @@
 package internal
 
 import (
-	"bytes"
-	"crypto/ecdsa"
-	"crypto/ed25519"
-	"crypto/rsa"
+	"context"
+	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
-	"github.com/cloudflare/cfssl/log"
-	"software.sslmate.com/src/go-pkcs12"
-
-	bundler "github.com/cloudflare/cfssl/bundler"
-	"github.com/cloudflare/cfssl/helpers"
+	"github.com/sensiblebit/certkit"
 	"gopkg.in/yaml.v3"
 )
 
-// encodeCertPEM encodes an x509.Certificate into a PEM block.
-func encodeCertPEM(cert *x509.Certificate) []byte {
-	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
+// bundleRoot returns the first root certificate from a BundleResult, or nil.
+func bundleRoot(b *certkit.BundleResult) *x509.Certificate {
+	if len(b.Roots) > 0 {
+		return b.Roots[0]
+	}
+	return nil
 }
 
-func writeBundleFiles(outDir, bundleFolder string, cert *CertificateRecord, key *KeyRecord, bundle *bundler.Bundle, bundleConfig *BundleConfig) error {
+// earliestExpiry returns the earliest NotAfter from the leaf and all intermediates.
+func earliestExpiry(b *certkit.BundleResult) time.Time {
+	earliest := b.Leaf.NotAfter
+	for _, c := range b.Intermediates {
+		if c.NotAfter.Before(earliest) {
+			earliest = c.NotAfter
+		}
+	}
+	root := bundleRoot(b)
+	if root != nil && root.NotAfter.Before(earliest) {
+		earliest = root.NotAfter
+	}
+	return earliest
+}
+
+func writeBundleFiles(outDir, bundleFolder string, cert *CertificateRecord, key *KeyRecord, bundle *certkit.BundleResult, bundleConfig *BundleConfig) error {
 	prefix := cert.CommonName.String
 	if prefix == "" {
 		prefix = "unknown"
@@ -40,29 +55,27 @@ func writeBundleFiles(outDir, bundleFolder string, cert *CertificateRecord, key 
 
 	folderPath := filepath.Join(outDir, bundleFolder)
 	if err := os.MkdirAll(folderPath, 0755); err != nil {
-		return err
+		return fmt.Errorf("creating bundle directory %s: %w", folderPath, err)
 	}
 
-	leafPEM := encodeCertPEM(bundle.Cert)
+	leafPEM := []byte(certkit.CertToPEM(bundle.Leaf))
 
 	// Encode intermediate certificates
 	var intermediatePEM []byte
-	for i, c := range bundle.Chain {
-		if i == 0 {
-			continue // skip the leaf certificate
-		}
-		intermediatePEM = append(intermediatePEM, encodeCertPEM(c)...)
+	for _, c := range bundle.Intermediates {
+		intermediatePEM = append(intermediatePEM, []byte(certkit.CertToPEM(c))...)
 	}
 
 	// Encode root certificate
 	var rootPEM []byte
-	if bundle.Root != nil {
-		rootPEM = encodeCertPEM(bundle.Root)
+	root := bundleRoot(bundle)
+	if root != nil {
+		rootPEM = []byte(certkit.CertToPEM(root))
 	}
 
 	// Build chain and full chain
-	chainPEM := append(leafPEM, intermediatePEM...)
-	fullchainPEM := append(chainPEM, rootPEM...)
+	chainPEM := slices.Concat(leafPEM, intermediatePEM)
+	fullchainPEM := slices.Concat(chainPEM, rootPEM)
 
 	// Write files with consistent error handling
 	files := []struct {
@@ -89,7 +102,7 @@ func writeBundleFiles(outDir, bundleFolder string, cert *CertificateRecord, key 
 	for _, file := range files {
 		path := filepath.Join(folderPath, file.name)
 		if err := os.WriteFile(path, file.data, 0644); err != nil {
-			return err
+			return fmt.Errorf("writing %s: %w", path, err)
 		}
 	}
 
@@ -98,19 +111,19 @@ func writeBundleFiles(outDir, bundleFolder string, cert *CertificateRecord, key 
 	}
 
 	// Generate and write the PKCS#12 (.p12) file.
-	privKey, err := helpers.ParsePrivateKeyPEM(key.KeyData)
+	privKey, err := certkit.ParsePEMPrivateKey(key.KeyData)
 	if err != nil {
-		return fmt.Errorf("failed to parse private key for P12: %v", err)
+		return fmt.Errorf("parsing private key for P12: %w", err)
 	}
 
 	// Create PKCS#12 data with password "changeit"
-	p12Data, err := pkcs12.LegacyRC2.Encode(privKey, bundle.Cert, bundle.Chain[1:], "changeit")
+	p12Data, err := certkit.EncodePKCS12Legacy(privKey, bundle.Leaf, bundle.Intermediates, "changeit")
 	if err != nil {
-		return fmt.Errorf("failed to create P12: %v", err)
+		return fmt.Errorf("creating P12: %w", err)
 	}
 
 	if err := os.WriteFile(filepath.Join(folderPath, prefix+".p12"), p12Data, 0600); err != nil {
-		return fmt.Errorf("failed to write P12 file: %v", err)
+		return fmt.Errorf("writing P12 file: %w", err)
 	}
 
 	// Generate Kubernetes TLS secret YAML
@@ -128,77 +141,79 @@ func writeBundleFiles(outDir, bundleFolder string, cert *CertificateRecord, key 
 	}
 	k8sYAML, err := yaml.Marshal(k8sSecret)
 	if err != nil {
-		return fmt.Errorf("failed to marshal kubernetes secret yaml: %v", err)
+		return fmt.Errorf("marshaling kubernetes secret YAML: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(folderPath, prefix+".k8s.yaml"), k8sYAML, 0600); err != nil {
-		return fmt.Errorf("failed to write kubernetes secret yaml: %v", err)
+		return fmt.Errorf("writing kubernetes secret YAML: %w", err)
 	}
 
 	jsonData, err := generateJSON(bundle)
 	if err != nil {
-		return err
+		return fmt.Errorf("generating JSON: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(folderPath, prefix+".json"), jsonData, 0644); err != nil {
-		return err
+		return fmt.Errorf("writing JSON file: %w", err)
 	}
 
 	yamlData, err := generateYAML(key, bundle)
 	if err != nil {
-		return err
+		return fmt.Errorf("generating YAML: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(folderPath, prefix+".yaml"), yamlData, 0644); err != nil {
-		return err
+		return fmt.Errorf("writing YAML file: %w", err)
 	}
 
 	csrPEM, csrJSON, err := generateCSR(cert, key, bundleConfig)
 	if err != nil {
-		return err
+		return fmt.Errorf("generating CSR: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(folderPath, prefix+".csr"), csrPEM, 0644); err != nil {
-		return err
+		return fmt.Errorf("writing CSR file: %w", err)
 	}
 	if err := os.WriteFile(filepath.Join(folderPath, prefix+".csr.json"), csrJSON, 0644); err != nil {
-		return err
+		return fmt.Errorf("writing CSR JSON file: %w", err)
 	}
 
 	return nil
 }
 
 // generateJSON creates a JSON representation of the certificate bundle.
-func generateJSON(bundle *bundler.Bundle) ([]byte, error) {
+func generateJSON(bundle *certkit.BundleResult) ([]byte, error) {
+	// Build chain PEM: leaf + intermediates
 	var chainPEM []byte
-	for _, cert := range bundle.Chain {
-		chainPEM = append(chainPEM, encodeCertPEM(cert)...)
+	chainPEM = append(chainPEM, []byte(certkit.CertToPEM(bundle.Leaf))...)
+	for _, c := range bundle.Intermediates {
+		chainPEM = append(chainPEM, []byte(certkit.CertToPEM(c))...)
 	}
 
 	authorityKeyID := ""
-	if len(bundle.Cert.AuthorityKeyId) > 0 {
-		authorityKeyID = fmt.Sprintf("%X", bundle.Cert.AuthorityKeyId)
+	if len(bundle.Leaf.AuthorityKeyId) > 0 {
+		authorityKeyID = fmt.Sprintf("%X", bundle.Leaf.AuthorityKeyId)
 	}
 
 	subjectKeyID := ""
-	if len(bundle.Cert.SubjectKeyId) > 0 {
-		subjectKeyID = fmt.Sprintf("%X", bundle.Cert.SubjectKeyId)
+	if len(bundle.Leaf.SubjectKeyId) > 0 {
+		subjectKeyID = fmt.Sprintf("%X", bundle.Leaf.SubjectKeyId)
 	}
 
 	var sans []string
-	sans = append(sans, bundle.Cert.DNSNames...)
-	for _, ip := range bundle.Cert.IPAddresses {
+	sans = append(sans, bundle.Leaf.DNSNames...)
+	for _, ip := range bundle.Leaf.IPAddresses {
 		sans = append(sans, ip.String())
 	}
 
 	out := map[string]any{
 		"authority_key_id": authorityKeyID,
-		"issuer":           bundle.Cert.Issuer.String(),
-		"not_after":        bundle.Cert.NotAfter.Format(time.RFC3339),
-		"not_before":       bundle.Cert.NotBefore.Format(time.RFC3339),
+		"issuer":           bundle.Leaf.Issuer.String(),
+		"not_after":        bundle.Leaf.NotAfter.Format(time.RFC3339),
+		"not_before":       bundle.Leaf.NotBefore.Format(time.RFC3339),
 		"pem":              string(chainPEM),
 		"sans":             sans,
-		"serial_number":    bundle.Cert.SerialNumber.String(),
-		"sigalg":           helpers.SignatureString(bundle.Cert.SignatureAlgorithm),
+		"serial_number":    bundle.Leaf.SerialNumber.String(),
+		"sigalg":           bundle.Leaf.SignatureAlgorithm.String(),
 		"subject": map[string]any{
-			"common_name": bundle.Cert.Subject.CommonName,
-			"names":       []string{bundle.Cert.Subject.CommonName},
+			"common_name": bundle.Leaf.Subject.CommonName,
+			"names":       []string{bundle.Leaf.Subject.CommonName},
 		},
 		"subject_key_id": subjectKeyID,
 	}
@@ -206,55 +221,54 @@ func generateJSON(bundle *bundler.Bundle) ([]byte, error) {
 }
 
 // generateYAML creates a YAML representation of the certificate bundle.
-func generateYAML(key *KeyRecord, bundle *bundler.Bundle) ([]byte, error) {
-	leafPEM := encodeCertPEM(bundle.Cert)
+func generateYAML(key *KeyRecord, bundle *certkit.BundleResult) ([]byte, error) {
+	leafPEM := []byte(certkit.CertToPEM(bundle.Leaf))
 
-	// Build the "bundle" field as the chain (skip root)
+	// Build the "bundle" field as leaf + intermediates (skip root)
 	var chainPEM []byte
-	for _, c := range bundle.Chain {
-		if bundle.Root != nil && bytes.Equal(c.Raw, bundle.Root.Raw) {
-			continue
-		}
-		chainPEM = append(chainPEM, encodeCertPEM(c)...)
+	chainPEM = append(chainPEM, leafPEM...)
+	for _, c := range bundle.Intermediates {
+		chainPEM = append(chainPEM, []byte(certkit.CertToPEM(c))...)
 	}
 
-	// Build intermediates (skip leaf and root)
+	// Build intermediates only
 	var intermediatePEM []byte
-	for i, c := range bundle.Chain {
-		if i == 0 {
-			continue
-		}
-		if bundle.Root != nil && bytes.Equal(c.Raw, bundle.Root.Raw) {
-			continue
-		}
-		intermediatePEM = append(intermediatePEM, encodeCertPEM(c)...)
+	for _, c := range bundle.Intermediates {
+		intermediatePEM = append(intermediatePEM, []byte(certkit.CertToPEM(c))...)
 	}
 
 	var rootPEM []byte
-	if bundle.Root != nil {
-		rootPEM = encodeCertPEM(bundle.Root)
+	root := bundleRoot(bundle)
+	if root != nil {
+		rootPEM = []byte(certkit.CertToPEM(root))
 	}
 
 	keyString := strings.ReplaceAll(string(key.KeyData), "\r\n", "\n")
+
+	// Compute hostnames from leaf
+	var hostnames []string
+	hostnames = append(hostnames, bundle.Leaf.DNSNames...)
+	for _, ip := range bundle.Leaf.IPAddresses {
+		hostnames = append(hostnames, ip.String())
+	}
 
 	out := map[string]any{
 		"bundle":        string(chainPEM),
 		"intermediates": string(intermediatePEM),
 		"crl_support":   false,
 		"crt":           string(leafPEM),
-		"expires":       bundle.Expires.Format(time.RFC3339),
-		"hostnames":     bundle.Hostnames,
-		"issuer":        bundle.Issuer.String(),
+		"expires":       earliestExpiry(bundle).Format(time.RFC3339),
+		"hostnames":     hostnames,
+		"issuer":        bundle.Leaf.Issuer.String(),
 		"key":           keyString,
 		"key_size":      key.BitLength,
 		"key_type":      key.KeyType,
-		"leaf_expires":  bundle.LeafExpires.Format(time.RFC3339),
-		"ocsp":          bundle.Cert.OCSPServer,
-		"ocsp_support":  bundle.Cert.OCSPServer != nil,
+		"leaf_expires":  bundle.Leaf.NotAfter.Format(time.RFC3339),
+		"ocsp":          bundle.Leaf.OCSPServer,
+		"ocsp_support":  bundle.Leaf.OCSPServer != nil,
 		"root":          string(rootPEM),
-		"signature":     helpers.SignatureString(bundle.Cert.SignatureAlgorithm),
-		"status":        bundle.Status,
-		"subject":       bundle.Subject.String(),
+		"signature":     bundle.Leaf.SignatureAlgorithm.String(),
+		"subject":       bundle.Leaf.Subject.String(),
 	}
 	return yaml.Marshal(out)
 }
@@ -293,16 +307,16 @@ func buildCSRSubject(existingCert *x509.Certificate, bundleConfig *BundleConfig)
 func generateCSR(cert *CertificateRecord, key *KeyRecord, bundleConfig *BundleConfig) (csrPEM []byte, csrJSON []byte, err error) {
 	block, _ := pem.Decode([]byte(cert.PEM))
 	if block == nil {
-		return nil, nil, fmt.Errorf("failed to decode certificate PEM")
+		return nil, nil, errors.New("decoding certificate PEM")
 	}
 	existingCert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to parse certificate: %v", err)
+		return nil, nil, fmt.Errorf("parsing certificate: %w", err)
 	}
 
-	privKey, err := helpers.ParsePrivateKeyPEM(key.KeyData)
+	privKey, err := certkit.ParsePEMPrivateKey(key.KeyData)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to parse private key: %v", err)
+		return nil, nil, fmt.Errorf("parsing private key: %w", err)
 	}
 
 	csrDNSNames := make([]string, 0, len(existingCert.DNSNames))
@@ -352,9 +366,9 @@ func generateCSR(cert *CertificateRecord, key *KeyRecord, bundleConfig *BundleCo
 		ExtraExtensions:    []pkix.Extension{},
 	}
 
-	csrDER, err := x509.CreateCertificateRequest(nil, template, privKey)
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, template, privKey)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create CSR: %v", err)
+		return nil, nil, fmt.Errorf("creating CSR: %w", err)
 	}
 
 	csrPEM = pem.EncodeToMemory(&pem.Block{
@@ -364,7 +378,7 @@ func generateCSR(cert *CertificateRecord, key *KeyRecord, bundleConfig *BundleCo
 
 	parsedCSR, err := x509.ParseCertificateRequest(csrDER)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to parse generated CSR: %v", err)
+		return nil, nil, fmt.Errorf("parsing generated CSR: %w", err)
 	}
 
 	csrDetails := map[string]any{
@@ -378,14 +392,14 @@ func generateCSR(cert *CertificateRecord, key *KeyRecord, bundleConfig *BundleCo
 		"dns_names":           parsedCSR.DNSNames,
 		"ip_addresses":        formatIPAddresses(parsedCSR.IPAddresses),
 		"email_addresses":     parsedCSR.EmailAddresses,
-		"key_algorithm":       formatKeyAlgorithm(parsedCSR.PublicKey),
-		"signature_algorithm": helpers.SignatureString(parsedCSR.SignatureAlgorithm),
+		"key_algorithm":       certkit.PublicKeyAlgorithmName(parsedCSR.PublicKey),
+		"signature_algorithm": parsedCSR.SignatureAlgorithm.String(),
 		"pem":                 string(csrPEM),
 	}
 
 	csrJSON, err = json.MarshalIndent(csrDetails, "", "  ")
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to marshal CSR JSON: %v", err)
+		return nil, nil, fmt.Errorf("marshaling CSR JSON: %w", err)
 	}
 
 	return csrPEM, csrJSON, nil
@@ -400,43 +414,17 @@ func formatIPAddresses(ips []net.IP) []string {
 	return result
 }
 
-// formatKeyAlgorithm returns a string description of the public key algorithm
-func formatKeyAlgorithm(pub any) string {
-	switch pub.(type) {
-	case *rsa.PublicKey:
-		return "RSA"
-	case *ecdsa.PublicKey:
-		return "ECDSA"
-	case ed25519.PublicKey:
-		return "Ed25519"
-	default:
-		return fmt.Sprintf("Unknown (%T)", pub)
-	}
-}
-
 // ExportBundles iterates over all key records in the database, finds the matching
-// certificate record, builds a certificate bundle using CFSSL's bundler, and writes out
-// the bundle files into a folder. If multiple certificates share the same BundleName,
-// only the newest certificate (by NotBefore) gets the bare bundle name; all others have
-// their serial appended.
-func ExportBundles(cfgs []BundleConfig, outDir string, db *DB, forceBundle bool) error {
-	bundlerInstance, err := bundler.NewBundler("", "")
-	if err != nil {
-		return fmt.Errorf("failed to create bundler: %v", err)
-	}
-
+// certificate record, builds a certificate bundle using certkit.Bundle, and writes out
+// the bundle files into a folder.
+func ExportBundles(ctx context.Context, cfgs []BundleConfig, outDir string, db *DB, forceBundle bool, duplicates bool) error {
 	keys, err := db.GetAllKeys()
 	if err != nil {
-		return fmt.Errorf("failed to get keys: %v", err)
-	}
-
-	var bundleOpt bundler.BundleFlavor = "optimal"
-	if forceBundle {
-		bundleOpt = "force"
+		return fmt.Errorf("getting keys: %w", err)
 	}
 
 	for _, key := range keys {
-		cert, err := db.GetCertBySKI(key.SubjectKeyIdentifier)
+		cert, err := db.GetCertBySKID(key.SubjectKeyIdentifier)
 		if err != nil || cert == nil {
 			continue
 		}
@@ -446,14 +434,19 @@ func ExportBundles(cfgs []BundleConfig, outDir string, db *DB, forceBundle bool)
 			continue
 		}
 
-		exportBundleCerts(db, bundlerInstance, bundleOpt, cfgs, outDir, bundleName, key)
+		opts := certkit.DefaultOptions()
+		if forceBundle {
+			opts.Verify = false
+		}
+
+		exportBundleCerts(ctx, db, opts, cfgs, outDir, bundleName, key, duplicates)
 	}
 	return nil
 }
 
 // exportBundleCerts processes all certificates for a given bundle name, creating
 // output folders and writing bundle files for each one.
-func exportBundleCerts(db *DB, bundlerInstance *bundler.Bundler, bundleOpt bundler.BundleFlavor, cfgs []BundleConfig, outDir, bundleName string, key KeyRecord) {
+func exportBundleCerts(ctx context.Context, db *DB, opts certkit.BundleOptions, cfgs []BundleConfig, outDir, bundleName string, key KeyRecord, duplicates bool) {
 	var certs []CertificateRecord
 	err := db.Select(&certs, `
 		SELECT c.*
@@ -464,13 +457,13 @@ func exportBundleCerts(db *DB, bundlerInstance *bundler.Bundler, bundleOpt bundl
 		ORDER BY c.expiry DESC
 		`, bundleName)
 	if err != nil {
-		log.Errorf("Failed to retrieve certificates for bundle name %s: %v", bundleName, err)
+		slog.Error("retrieving certificates for bundle", "bundle", bundleName, "error", err)
 		return
 	}
 
-	log.Debugf("Found %d certificates for bundle name %s", len(certs), bundleName)
+	slog.Debug("found certificates for bundle", "count", len(certs), "bundle", bundleName)
 	for _, cert := range certs {
-		log.Debugf("  %s (serial: %s, expiry: %s)", cert.CommonName.String, cert.Serial, cert.Expiry.Format(time.RFC3339))
+		slog.Debug("certificate in bundle", "cn", cert.CommonName.String, "serial", cert.SerialNumber, "expiry", cert.Expiry.Format(time.RFC3339))
 	}
 
 	// Find the matching bundle configuration once (invariant across certs)
@@ -486,25 +479,36 @@ func exportBundleCerts(db *DB, bundlerInstance *bundler.Bundler, bundleOpt bundl
 		var bundleFolder string
 		if i == 0 {
 			bundleFolder = bundleName
-			log.Debugf("Using base name %s for newest certificate (CN=%s)", bundleName, bundleCert.CommonName.String)
+			slog.Debug("using base name for newest certificate", "bundle", bundleName, "cn", bundleCert.CommonName.String)
 		} else {
+			if !duplicates {
+				slog.Debug("skipping older certificate (use --duplicates to export)", "bundle", bundleName, "serial", bundleCert.SerialNumber, "expiry", bundleCert.Expiry.Format(time.RFC3339))
+				continue
+			}
 			expirationDate := bundleCert.Expiry.Format("2006-01-02")
-			bundleFolder = fmt.Sprintf("%s_%s_%s", bundleName, expirationDate, bundleCert.Serial)
-			log.Debugf("Using %s for older certificate (newest is %s, CN=%s)", bundleFolder, certs[0].Serial, bundleCert.CommonName.String)
+			bundleFolder = fmt.Sprintf("%s_%s_%s", bundleName, expirationDate, bundleCert.SerialNumber)
+			slog.Debug("using folder for older certificate", "folder", bundleFolder, "newest_serial", certs[0].SerialNumber, "cn", bundleCert.CommonName.String)
 		}
 
-		bundle, err := bundlerInstance.BundleFromPEMorDER([]byte(bundleCert.PEM), key.KeyData, bundleOpt, "")
+		// Parse the leaf certificate from PEM
+		leaf, err := certkit.ParsePEMCertificate([]byte(bundleCert.PEM))
 		if err != nil {
-			log.Warningf("Failed to bundle cert %s: %v", bundleCert.Serial, err)
+			slog.Warn("parsing cert PEM", "serial", bundleCert.SerialNumber, "error", err)
+			continue
+		}
+
+		bundle, err := certkit.Bundle(ctx, leaf, opts)
+		if err != nil {
+			slog.Warn("bundling cert", "serial", bundleCert.SerialNumber, "error", err)
 			continue
 		}
 
 		if err := writeBundleFiles(outDir, bundleFolder, &bundleCert, &key, bundle, matchingConfig); err != nil {
-			log.Warningf("Failed to write bundle files for cert %s: %v", bundleCert.Serial, err)
+			slog.Warn("writing bundle files", "serial", bundleCert.SerialNumber, "error", err)
 			continue
 		}
-		log.Infof("Exported bundle for %s into folder %s/%s", bundleCert.CommonName.String, outDir, bundleFolder)
-		log.Debugf("  %s (serial: %s, expiry: %s)", bundleCert.CommonName.String, bundleCert.Serial, bundleCert.Expiry.Format(time.RFC3339))
+		slog.Info("exported bundle", "cn", bundleCert.CommonName.String, "dir", outDir, "folder", bundleFolder)
+		slog.Debug("exported certificate details", "cn", bundleCert.CommonName.String, "serial", bundleCert.SerialNumber, "expiry", bundleCert.Expiry.Format(time.RFC3339))
 	}
 }
 

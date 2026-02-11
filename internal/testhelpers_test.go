@@ -14,7 +14,10 @@ import (
 	"testing"
 	"time"
 
-	gopkcs12 "software.sslmate.com/src/go-pkcs12"
+	"bytes"
+
+	"github.com/pavlo-v-chernykh/keystore-go/v4"
+	"github.com/sensiblebit/certkit"
 )
 
 // testCA holds a CA certificate and its private key for signing leaf certs.
@@ -166,10 +169,10 @@ func newECDSALeaf(t *testing.T, ca testCA, cn string, sans []string) testLeaf {
 			Organization: []string{"TestOrg"},
 			Country:      []string{"US"},
 		},
-		DNSNames:  sans,
-		NotBefore: time.Now().Add(-1 * time.Hour),
-		NotAfter:  time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:  x509.KeyUsageDigitalSignature,
+		DNSNames:    sans,
+		NotBefore:   time.Now().Add(-1 * time.Hour),
+		NotAfter:    time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:    x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		SubjectKeyId: []byte{
 			0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca,
@@ -209,10 +212,10 @@ func newEd25519Leaf(t *testing.T, ca testCA, cn string, sans []string) testLeaf 
 			CommonName:   cn,
 			Organization: []string{"TestOrg"},
 		},
-		DNSNames:  sans,
-		NotBefore: time.Now().Add(-1 * time.Hour),
-		NotAfter:  time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:  x509.KeyUsageDigitalSignature,
+		DNSNames:    sans,
+		NotBefore:   time.Now().Add(-1 * time.Hour),
+		NotAfter:    time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:    x509.KeyUsageDigitalSignature,
 		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		SubjectKeyId: []byte{
 			0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea,
@@ -282,7 +285,7 @@ func newExpiredLeaf(t *testing.T, ca testCA) testLeaf {
 // newPKCS12Bundle creates a PKCS#12 bundle from a leaf cert and its key.
 func newPKCS12Bundle(t *testing.T, leaf testLeaf, ca testCA, password string) []byte {
 	t.Helper()
-	p12, err := gopkcs12.LegacyRC2.Encode(leaf.key, leaf.cert, []*x509.Certificate{ca.cert}, password)
+	p12, err := certkit.EncodePKCS12Legacy(leaf.key, leaf.cert, []*x509.Certificate{ca.cert}, password)
 	if err != nil {
 		t.Fatalf("create PKCS#12 bundle: %v", err)
 	}
@@ -341,4 +344,33 @@ func ed25519KeyPEM(t *testing.T) []byte {
 		t.Fatalf("marshal Ed25519 key: %v", err)
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+}
+
+// newJKSBundle creates a JKS keystore containing a private key entry with a leaf
+// cert chain (leaf + CA), protected by the given password.
+func newJKSBundle(t *testing.T, leaf testLeaf, ca testCA, password string) []byte {
+	t.Helper()
+
+	pkcs8Key, err := x509.MarshalPKCS8PrivateKey(leaf.key)
+	if err != nil {
+		t.Fatalf("marshal PKCS8 key for JKS: %v", err)
+	}
+
+	ks := keystore.New()
+	if err := ks.SetPrivateKeyEntry("server", keystore.PrivateKeyEntry{
+		CreationTime: time.Now(),
+		PrivateKey:   pkcs8Key,
+		CertificateChain: []keystore.Certificate{
+			{Type: "X.509", Content: leaf.certDER},
+			{Type: "X.509", Content: ca.certDER},
+		},
+	}, []byte(password)); err != nil {
+		t.Fatalf("set JKS private key entry: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := ks.Store(&buf, []byte(password)); err != nil {
+		t.Fatalf("store JKS: %v", err)
+	}
+	return buf.Bytes()
 }

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/jmoiron/sqlx/types"
+	"github.com/sensiblebit/certkit"
 )
 
 func TestNewDB_InMemory(t *testing.T) {
@@ -35,17 +36,17 @@ func TestInsertAndGetCertificate(t *testing.T) {
 
 	now := time.Now().Truncate(time.Second)
 	cert := CertificateRecord{
-		Serial:               "12345",
-		SubjectKeyIdentifier: "aabbccdd",
-		AKI:                  "eeff0011",
-		Type:                 "leaf",
-		KeyType:              "RSA 2048 bits",
-		Expiry:               now.Add(365 * 24 * time.Hour),
-		PEM:                  "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
-		NotBefore:            &now,
-		SANsJSON:             types.JSONText(`["example.com"]`),
-		CommonName:           sql.NullString{String: "example.com", Valid: true},
-		BundleName:           "example-bundle",
+		SerialNumber:           "12345",
+		SubjectKeyIdentifier:   "aabbccdd",
+		AuthorityKeyIdentifier: "eeff0011",
+		CertType:               "leaf",
+		KeyType:                "RSA 2048 bits",
+		Expiry:                 now.Add(365 * 24 * time.Hour),
+		PEM:                    "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+		NotBefore:              &now,
+		SANsJSON:               types.JSONText(`["example.com"]`),
+		CommonName:             sql.NullString{String: "example.com", Valid: true},
+		BundleName:             "example-bundle",
 	}
 
 	if err := db.InsertCertificate(cert); err != nil {
@@ -59,8 +60,8 @@ func TestInsertAndGetCertificate(t *testing.T) {
 	if got == nil {
 		t.Fatal("GetCert returned nil")
 	}
-	if got.Serial != "12345" {
-		t.Errorf("expected serial 12345, got %s", got.Serial)
+	if got.SerialNumber != "12345" {
+		t.Errorf("expected serial 12345, got %s", got.SerialNumber)
 	}
 	if got.CommonName.String != "example.com" {
 		t.Errorf("expected CN example.com, got %s", got.CommonName.String)
@@ -114,17 +115,17 @@ func TestInsertDuplicateCertificate_NilError(t *testing.T) {
 
 	now := time.Now()
 	cert := CertificateRecord{
-		Serial:               "dup-serial",
-		SubjectKeyIdentifier: "dup-ski",
-		AKI:                  "dup-aki",
-		Type:                 "leaf",
-		KeyType:              "RSA 2048 bits",
-		Expiry:               now.Add(365 * 24 * time.Hour),
-		PEM:                  "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
-		NotBefore:            &now,
-		SANsJSON:             types.JSONText(`[]`),
-		CommonName:           sql.NullString{String: "dup.example.com", Valid: true},
-		BundleName:           "dup-bundle",
+		SerialNumber:           "dup-serial",
+		SubjectKeyIdentifier:   "dup-ski",
+		AuthorityKeyIdentifier: "dup-aki",
+		CertType:               "leaf",
+		KeyType:                "RSA 2048 bits",
+		Expiry:                 now.Add(365 * 24 * time.Hour),
+		PEM:                    "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+		NotBefore:              &now,
+		SANsJSON:               types.JSONText(`[]`),
+		CommonName:             sql.NullString{String: "dup.example.com", Valid: true},
+		BundleName:             "dup-bundle",
 	}
 
 	if err := db.InsertCertificate(cert); err != nil {
@@ -160,14 +161,14 @@ func TestInsertDuplicateKey_NilError(t *testing.T) {
 	}
 }
 
-func TestGetCertBySKI_NotFound(t *testing.T) {
+func TestGetCertBySKID_NotFound(t *testing.T) {
 	db, err := NewDB("")
 	if err != nil {
 		t.Fatalf("NewDB: %v", err)
 	}
 	defer db.Close()
 
-	cert, err := db.GetCertBySKI("nonexistent")
+	cert, err := db.GetCertBySKID("nonexistent")
 	if err != nil {
 		t.Errorf("expected nil error for not found, got: %v", err)
 	}
@@ -245,17 +246,17 @@ func TestDumpDB_NoError(t *testing.T) {
 	// Insert some data
 	now := time.Now()
 	cert := CertificateRecord{
-		Serial:               "dump-serial",
-		SubjectKeyIdentifier: "dump-ski",
-		AKI:                  "dump-aki",
-		Type:                 "leaf",
-		KeyType:              "RSA 2048 bits",
-		Expiry:               now.Add(365 * 24 * time.Hour),
-		PEM:                  "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
-		NotBefore:            &now,
-		SANsJSON:             types.JSONText(`["dump.example.com"]`),
-		CommonName:           sql.NullString{String: "dump.example.com", Valid: true},
-		BundleName:           "dump-bundle",
+		SerialNumber:           "dump-serial",
+		SubjectKeyIdentifier:   "dump-ski",
+		AuthorityKeyIdentifier: "dump-aki",
+		CertType:               "leaf",
+		KeyType:                "RSA 2048 bits",
+		Expiry:                 now.Add(365 * 24 * time.Hour),
+		PEM:                    "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
+		NotBefore:              &now,
+		SANsJSON:               types.JSONText(`["dump.example.com"]`),
+		CommonName:             sql.NullString{String: "dump.example.com", Valid: true},
+		BundleName:             "dump-bundle",
 	}
 	if err := db.InsertCertificate(cert); err != nil {
 		t.Fatalf("InsertCertificate: %v", err)
@@ -285,26 +286,26 @@ func TestResolveAKIs_SameMethod(t *testing.T) {
 	defer db.Close()
 
 	// Compute RFC 7093 M1 SKIs
-	rootSKIDRaw, _ := computeSKID(ca.cert.PublicKey)
+	rootSKIDRaw, _ := certkit.ComputeSKID(ca.cert.PublicKey)
 	rootSKI := hex.EncodeToString(rootSKIDRaw)
-	leafSKIDRaw, _ := computeSKID(leaf.cert.PublicKey)
+	leafSKIDRaw, _ := certkit.ComputeSKID(leaf.cert.PublicKey)
 	leafSKI := hex.EncodeToString(leafSKIDRaw)
 
 	now := time.Now()
 
 	// Insert root cert with computed SKI
 	rootCert := CertificateRecord{
-		Serial:               ca.cert.SerialNumber.String(),
-		SubjectKeyIdentifier: rootSKI,
-		AKI:                  rootSKI, // root: AKI = SKI
-		Type:                 "root",
-		KeyType:              "RSA 2048 bits",
-		Expiry:               ca.cert.NotAfter,
-		PEM:                  string(ca.certPEM),
-		NotBefore:            &now,
-		SANsJSON:             types.JSONText(`[]`),
-		CommonName:           sql.NullString{String: "Root CA", Valid: true},
-		BundleName:           "root",
+		SerialNumber:           ca.cert.SerialNumber.String(),
+		SubjectKeyIdentifier:   rootSKI,
+		AuthorityKeyIdentifier: rootSKI, // root: AKI = SKI
+		CertType:               "root",
+		KeyType:                "RSA 2048 bits",
+		Expiry:                 ca.cert.NotAfter,
+		PEM:                    string(ca.certPEM),
+		NotBefore:              &now,
+		SANsJSON:               types.JSONText(`[]`),
+		CommonName:             sql.NullString{String: "Root CA", Valid: true},
+		BundleName:             "root",
 	}
 	if err := db.InsertCertificate(rootCert); err != nil {
 		t.Fatalf("insert root cert: %v", err)
@@ -312,17 +313,17 @@ func TestResolveAKIs_SameMethod(t *testing.T) {
 
 	// Insert leaf cert with AKI matching root's computed SKI (same method)
 	leafCert := CertificateRecord{
-		Serial:               leaf.cert.SerialNumber.String(),
-		SubjectKeyIdentifier: leafSKI,
-		AKI:                  rootSKI,
-		Type:                 "leaf",
-		KeyType:              "RSA 2048 bits",
-		Expiry:               leaf.cert.NotAfter,
-		PEM:                  string(leaf.certPEM),
-		NotBefore:            &now,
-		SANsJSON:             types.JSONText(`["resolve.example.com"]`),
-		CommonName:           sql.NullString{String: "resolve.example.com", Valid: true},
-		BundleName:           "resolve-bundle",
+		SerialNumber:           leaf.cert.SerialNumber.String(),
+		SubjectKeyIdentifier:   leafSKI,
+		AuthorityKeyIdentifier: rootSKI,
+		CertType:               "leaf",
+		KeyType:                "RSA 2048 bits",
+		Expiry:                 leaf.cert.NotAfter,
+		PEM:                    string(leaf.certPEM),
+		NotBefore:              &now,
+		SANsJSON:               types.JSONText(`["resolve.example.com"]`),
+		CommonName:             sql.NullString{String: "resolve.example.com", Valid: true},
+		BundleName:             "resolve-bundle",
 	}
 	if err := db.InsertCertificate(leafCert); err != nil {
 		t.Fatalf("insert leaf cert: %v", err)
@@ -340,8 +341,8 @@ func TestResolveAKIs_SameMethod(t *testing.T) {
 	if got == nil {
 		t.Fatal("expected leaf cert to be found after AKI resolution")
 	}
-	if got.AKI != rootSKI {
-		t.Errorf("expected leaf AKI %s, got %s", rootSKI, got.AKI)
+	if got.AuthorityKeyIdentifier != rootSKI {
+		t.Errorf("expected leaf AKI %s, got %s", rootSKI, got.AuthorityKeyIdentifier)
 	}
 }
 
@@ -358,14 +359,14 @@ func TestResolveAKIs_CrossHash(t *testing.T) {
 	defer db.Close()
 
 	// Root's stored SKI is RFC 7093 M1
-	rootSKIDRaw, _ := computeSKID(ca.cert.PublicKey)
+	rootSKIDRaw, _ := certkit.ComputeSKID(ca.cert.PublicKey)
 	rootSKI := hex.EncodeToString(rootSKIDRaw)
 
 	// Leaf's AKI is SHA-1 of root's public key (legacy)
-	rootSKIDLegacy, _ := computeSKIDLegacy(ca.cert.PublicKey)
+	rootSKIDLegacy, _ := certkit.ComputeSKIDLegacy(ca.cert.PublicKey)
 	leafAKI := hex.EncodeToString(rootSKIDLegacy)
 
-	leafSKIDRaw, _ := computeSKID(leaf.cert.PublicKey)
+	leafSKIDRaw, _ := certkit.ComputeSKID(leaf.cert.PublicKey)
 	leafSKI := hex.EncodeToString(leafSKIDRaw)
 
 	// Sanity: the two should differ
@@ -376,34 +377,34 @@ func TestResolveAKIs_CrossHash(t *testing.T) {
 	now := time.Now()
 
 	rootCert := CertificateRecord{
-		Serial:               ca.cert.SerialNumber.String(),
-		SubjectKeyIdentifier: rootSKI,
-		AKI:                  rootSKI,
-		Type:                 "root",
-		KeyType:              "RSA 2048 bits",
-		Expiry:               ca.cert.NotAfter,
-		PEM:                  string(ca.certPEM),
-		NotBefore:            &now,
-		SANsJSON:             types.JSONText(`[]`),
-		CommonName:           sql.NullString{String: "Root CA", Valid: true},
-		BundleName:           "root",
+		SerialNumber:           ca.cert.SerialNumber.String(),
+		SubjectKeyIdentifier:   rootSKI,
+		AuthorityKeyIdentifier: rootSKI,
+		CertType:               "root",
+		KeyType:                "RSA 2048 bits",
+		Expiry:                 ca.cert.NotAfter,
+		PEM:                    string(ca.certPEM),
+		NotBefore:              &now,
+		SANsJSON:               types.JSONText(`[]`),
+		CommonName:             sql.NullString{String: "Root CA", Valid: true},
+		BundleName:             "root",
 	}
 	if err := db.InsertCertificate(rootCert); err != nil {
 		t.Fatalf("insert root cert: %v", err)
 	}
 
 	leafCert := CertificateRecord{
-		Serial:               leaf.cert.SerialNumber.String(),
-		SubjectKeyIdentifier: leafSKI,
-		AKI:                  leafAKI, // SHA-1 based AKI (legacy)
-		Type:                 "leaf",
-		KeyType:              "RSA 2048 bits",
-		Expiry:               leaf.cert.NotAfter,
-		PEM:                  string(leaf.certPEM),
-		NotBefore:            &now,
-		SANsJSON:             types.JSONText(`["crosshash.example.com"]`),
-		CommonName:           sql.NullString{String: "crosshash.example.com", Valid: true},
-		BundleName:           "crosshash-bundle",
+		SerialNumber:           leaf.cert.SerialNumber.String(),
+		SubjectKeyIdentifier:   leafSKI,
+		AuthorityKeyIdentifier: leafAKI, // SHA-1 based AKI (legacy)
+		CertType:               "leaf",
+		KeyType:                "RSA 2048 bits",
+		Expiry:                 leaf.cert.NotAfter,
+		PEM:                    string(leaf.certPEM),
+		NotBefore:              &now,
+		SANsJSON:               types.JSONText(`["crosshash.example.com"]`),
+		CommonName:             sql.NullString{String: "crosshash.example.com", Valid: true},
+		BundleName:             "crosshash-bundle",
 	}
 	if err := db.InsertCertificate(leafCert); err != nil {
 		t.Fatalf("insert leaf cert: %v", err)
@@ -421,8 +422,8 @@ func TestResolveAKIs_CrossHash(t *testing.T) {
 	if got == nil {
 		t.Fatal("expected leaf cert to be found after cross-hash AKI resolution")
 	}
-	if got.AKI != rootSKI {
-		t.Errorf("expected leaf AKI updated to %s, got %s", rootSKI, got.AKI)
+	if got.AuthorityKeyIdentifier != rootSKI {
+		t.Errorf("expected leaf AKI updated to %s, got %s", rootSKI, got.AuthorityKeyIdentifier)
 	}
 }
 
@@ -436,17 +437,17 @@ func TestResolveAKIs_NoIssuerFound(t *testing.T) {
 	now := time.Now()
 
 	leafCert := CertificateRecord{
-		Serial:               "orphan-serial",
-		SubjectKeyIdentifier: "orphan-ski",
-		AKI:                  "nonexistent-issuer-ski",
-		Type:                 "leaf",
-		KeyType:              "RSA 2048 bits",
-		Expiry:               now.Add(365 * 24 * time.Hour),
-		PEM:                  "-----BEGIN CERTIFICATE-----\norphan\n-----END CERTIFICATE-----",
-		NotBefore:            &now,
-		SANsJSON:             types.JSONText(`[]`),
-		CommonName:           sql.NullString{String: "orphan.example.com", Valid: true},
-		BundleName:           "orphan-bundle",
+		SerialNumber:           "orphan-serial",
+		SubjectKeyIdentifier:   "orphan-ski",
+		AuthorityKeyIdentifier: "nonexistent-issuer-ski",
+		CertType:               "leaf",
+		KeyType:                "RSA 2048 bits",
+		Expiry:                 now.Add(365 * 24 * time.Hour),
+		PEM:                    "-----BEGIN CERTIFICATE-----\norphan\n-----END CERTIFICATE-----",
+		NotBefore:              &now,
+		SANsJSON:               types.JSONText(`[]`),
+		CommonName:             sql.NullString{String: "orphan.example.com", Valid: true},
+		BundleName:             "orphan-bundle",
 	}
 	if err := db.InsertCertificate(leafCert); err != nil {
 		t.Fatalf("insert orphan cert: %v", err)

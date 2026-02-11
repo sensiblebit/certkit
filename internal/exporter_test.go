@@ -1,10 +1,12 @@
 package internal
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"database/sql"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"net"
@@ -13,8 +15,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/cloudflare/cfssl/bundler"
 	"github.com/jmoiron/sqlx/types"
+	"github.com/sensiblebit/certkit"
 	"gopkg.in/yaml.v3"
 )
 
@@ -43,51 +45,45 @@ func TestFormatIPAddresses_Empty(t *testing.T) {
 	}
 }
 
-func TestFormatKeyAlgorithm_RSA(t *testing.T) {
+func TestPublicKeyAlgorithmName_RSA(t *testing.T) {
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	result := formatKeyAlgorithm(&key.PublicKey)
+	result := certkit.PublicKeyAlgorithmName(&key.PublicKey)
 	if result != "RSA" {
 		t.Errorf("expected 'RSA', got %q", result)
 	}
 }
 
-func TestFormatKeyAlgorithm_ECDSA(t *testing.T) {
+func TestPublicKeyAlgorithmName_ECDSA(t *testing.T) {
 	ca := newECDSACA(t)
 	pub := ca.cert.PublicKey
-	result := formatKeyAlgorithm(pub)
+	result := certkit.PublicKeyAlgorithmName(pub)
 	if result != "ECDSA" {
 		t.Errorf("expected 'ECDSA', got %q", result)
 	}
 }
 
-func TestFormatKeyAlgorithm_Ed25519(t *testing.T) {
+func TestPublicKeyAlgorithmName_Ed25519(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newEd25519Leaf(t, ca, "test.com", []string{"test.com"})
-	result := formatKeyAlgorithm(leaf.cert.PublicKey)
+	result := certkit.PublicKeyAlgorithmName(leaf.cert.PublicKey)
 	if result != "Ed25519" {
 		t.Errorf("expected 'Ed25519', got %q", result)
 	}
 }
 
-func TestFormatKeyAlgorithm_Unknown(t *testing.T) {
-	result := formatKeyAlgorithm("not a key")
-	if result == "RSA" || result == "ECDSA" || result == "Ed25519" {
-		t.Errorf("expected unknown result, got %q", result)
+func TestPublicKeyAlgorithmName_Unknown(t *testing.T) {
+	result := certkit.PublicKeyAlgorithmName("not a key")
+	if result != "unknown" {
+		t.Errorf("expected 'unknown', got %q", result)
 	}
 }
 
-func newTestBundle(t *testing.T, leaf testLeaf, ca testCA) *bundler.Bundle {
+func newTestBundle(t *testing.T, leaf testLeaf, ca testCA) *certkit.BundleResult {
 	t.Helper()
-	return &bundler.Bundle{
-		Chain:       []*x509.Certificate{leaf.cert, ca.cert},
-		Cert:        leaf.cert,
-		Root:        ca.cert,
-		Expires:     leaf.cert.NotAfter,
-		LeafExpires: leaf.cert.NotAfter,
-		Hostnames:   leaf.cert.DNSNames,
-		Issuer:      &ca.cert.Subject,
-		Subject:     &leaf.cert.Subject,
-		Status:      &bundler.BundleStatus{},
+	return &certkit.BundleResult{
+		Leaf:          leaf.cert,
+		Intermediates: []*x509.Certificate{ca.cert},
+		Roots:         []*x509.Certificate{ca.cert},
 	}
 }
 
@@ -147,7 +143,7 @@ func TestGenerateCSR_ValidOutput(t *testing.T) {
 	leaf := newRSALeaf(t, ca, "csr.example.com", []string{"csr.example.com", "www.csr.example.com"}, nil)
 
 	certRecord := &CertificateRecord{
-		Serial:               leaf.cert.SerialNumber.String(),
+		SerialNumber:         leaf.cert.SerialNumber.String(),
 		SubjectKeyIdentifier: "test-ski",
 		PEM:                  string(leaf.certPEM),
 		CommonName:           sql.NullString{String: "csr.example.com", Valid: true},
@@ -400,6 +396,408 @@ func TestWriteBundleFiles_WildcardPrefix(t *testing.T) {
 	}
 }
 
+func TestGenerateJSON_RoundTrip(t *testing.T) {
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "json-rt.example.com", []string{"json-rt.example.com", "www.json-rt.example.com"}, []net.IP{net.ParseIP("10.0.0.1")})
+	bundle := newTestBundle(t, leaf, ca)
+
+	data, err := generateJSON(bundle)
+	if err != nil {
+		t.Fatalf("generateJSON: %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("unmarshal JSON: %v", err)
+	}
+
+	// Validate subject
+	subj, ok := parsed["subject"].(map[string]any)
+	if !ok {
+		t.Fatal("expected subject to be a map")
+	}
+	if cn, _ := subj["common_name"].(string); cn != "json-rt.example.com" {
+		t.Errorf("subject.common_name = %q, want json-rt.example.com", cn)
+	}
+	names, ok := subj["names"].([]any)
+	if !ok || len(names) != 1 || names[0] != "json-rt.example.com" {
+		t.Errorf("subject.names = %v, want [json-rt.example.com]", names)
+	}
+
+	// Validate issuer
+	issuer, _ := parsed["issuer"].(string)
+	if issuer == "" {
+		t.Error("expected non-empty issuer")
+	}
+
+	// Validate SANs (DNS + IP)
+	sans, ok := parsed["sans"].([]any)
+	if !ok {
+		t.Fatal("expected sans to be an array")
+	}
+	if len(sans) != 3 {
+		t.Errorf("expected 3 SANs (2 DNS + 1 IP), got %d: %v", len(sans), sans)
+	}
+	sanStrings := make(map[string]bool)
+	for _, s := range sans {
+		sanStrings[s.(string)] = true
+	}
+	for _, expected := range []string{"json-rt.example.com", "www.json-rt.example.com", "10.0.0.1"} {
+		if !sanStrings[expected] {
+			t.Errorf("missing SAN %q", expected)
+		}
+	}
+
+	// Validate serial number
+	serial, _ := parsed["serial_number"].(string)
+	if serial != leaf.cert.SerialNumber.String() {
+		t.Errorf("serial = %q, want %q", serial, leaf.cert.SerialNumber.String())
+	}
+
+	// Validate signature algorithm
+	sigalg, _ := parsed["sigalg"].(string)
+	if sigalg != leaf.cert.SignatureAlgorithm.String() {
+		t.Errorf("sigalg = %q, want %q", sigalg, leaf.cert.SignatureAlgorithm.String())
+	}
+
+	// Validate not_before and not_after parse as RFC3339
+	for _, field := range []string{"not_before", "not_after"} {
+		val, _ := parsed[field].(string)
+		if _, err := time.Parse(time.RFC3339, val); err != nil {
+			t.Errorf("%s = %q is not valid RFC3339: %v", field, val, err)
+		}
+	}
+
+	// Validate PEM contains leaf + intermediate
+	pemStr, _ := parsed["pem"].(string)
+	certs, err := certkit.ParsePEMCertificates([]byte(pemStr))
+	if err != nil {
+		t.Fatalf("parse PEM from JSON: %v", err)
+	}
+	if len(certs) != 2 {
+		t.Errorf("expected 2 certs in PEM (leaf + intermediate), got %d", len(certs))
+	}
+
+	// Validate authority_key_id and subject_key_id are hex strings
+	aki, _ := parsed["authority_key_id"].(string)
+	ski, _ := parsed["subject_key_id"].(string)
+	if aki == "" {
+		t.Error("expected non-empty authority_key_id")
+	}
+	if ski == "" {
+		t.Error("expected non-empty subject_key_id")
+	}
+}
+
+func TestGenerateYAML_RoundTrip(t *testing.T) {
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "yaml-rt.example.com", []string{"yaml-rt.example.com"}, []net.IP{net.ParseIP("192.168.1.1")})
+	bundle := newTestBundle(t, leaf, ca)
+
+	keyRecord := &KeyRecord{
+		SubjectKeyIdentifier: "test-ski",
+		KeyType:              "rsa",
+		BitLength:            2048,
+		KeyData:              leaf.keyPEM,
+	}
+
+	data, err := generateYAML(keyRecord, bundle)
+	if err != nil {
+		t.Fatalf("generateYAML: %v", err)
+	}
+
+	var parsed map[string]any
+	if err := yaml.Unmarshal(data, &parsed); err != nil {
+		t.Fatalf("unmarshal YAML: %v", err)
+	}
+
+	// Validate crt contains leaf PEM
+	crt, _ := parsed["crt"].(string)
+	leafCert, err := certkit.ParsePEMCertificate([]byte(crt))
+	if err != nil {
+		t.Fatalf("parse crt PEM: %v", err)
+	}
+	if leafCert.Subject.CommonName != "yaml-rt.example.com" {
+		t.Errorf("crt CN = %q, want yaml-rt.example.com", leafCert.Subject.CommonName)
+	}
+
+	// Validate bundle contains leaf + intermediates
+	bundleStr, _ := parsed["bundle"].(string)
+	bundleCerts, err := certkit.ParsePEMCertificates([]byte(bundleStr))
+	if err != nil {
+		t.Fatalf("parse bundle PEM: %v", err)
+	}
+	if len(bundleCerts) != 2 {
+		t.Errorf("expected 2 certs in bundle (leaf + intermediate), got %d", len(bundleCerts))
+	}
+
+	// Validate root
+	rootStr, _ := parsed["root"].(string)
+	rootCert, err := certkit.ParsePEMCertificate([]byte(rootStr))
+	if err != nil {
+		t.Fatalf("parse root PEM: %v", err)
+	}
+	if !rootCert.IsCA {
+		t.Error("root cert should be a CA")
+	}
+
+	// Validate key
+	keyStr, _ := parsed["key"].(string)
+	_, err = certkit.ParsePEMPrivateKey([]byte(keyStr))
+	if err != nil {
+		t.Fatalf("parse key PEM from YAML: %v", err)
+	}
+
+	// Validate key_type and key_size
+	if kt, _ := parsed["key_type"].(string); kt != "rsa" {
+		t.Errorf("key_type = %q, want rsa", kt)
+	}
+	if ks, _ := parsed["key_size"].(int); ks != 2048 {
+		t.Errorf("key_size = %v, want 2048", parsed["key_size"])
+	}
+
+	// Validate expires is valid RFC3339
+	expires, _ := parsed["expires"].(string)
+	if _, err := time.Parse(time.RFC3339, expires); err != nil {
+		t.Errorf("expires = %q is not valid RFC3339: %v", expires, err)
+	}
+
+	// Validate hostnames include DNS + IP
+	hostnames, ok := parsed["hostnames"].([]any)
+	if !ok {
+		t.Fatal("expected hostnames to be a list")
+	}
+	hostnameSet := make(map[string]bool)
+	for _, h := range hostnames {
+		hostnameSet[h.(string)] = true
+	}
+	if !hostnameSet["yaml-rt.example.com"] {
+		t.Error("missing hostname yaml-rt.example.com")
+	}
+	if !hostnameSet["192.168.1.1"] {
+		t.Error("missing hostname 192.168.1.1")
+	}
+
+	// Validate issuer and subject are non-empty strings
+	if issuer, _ := parsed["issuer"].(string); issuer == "" {
+		t.Error("expected non-empty issuer")
+	}
+	if subject, _ := parsed["subject"].(string); subject == "" {
+		t.Error("expected non-empty subject")
+	}
+
+	// Validate signature
+	if sig, _ := parsed["signature"].(string); sig == "" {
+		t.Error("expected non-empty signature")
+	}
+}
+
+func TestWriteBundleFiles_K8sYAMLDecode(t *testing.T) {
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "k8s.example.com", []string{"k8s.example.com"}, nil)
+
+	certRecord := &CertificateRecord{
+		CommonName: sql.NullString{String: "k8s.example.com", Valid: true},
+		PEM:        string(leaf.certPEM),
+	}
+	keyRecord := &KeyRecord{KeyData: leaf.keyPEM}
+	bundle := newTestBundle(t, leaf, ca)
+
+	outDir := t.TempDir()
+	err := writeBundleFiles(outDir, "k8s-test", certRecord, keyRecord, bundle, nil)
+	if err != nil {
+		t.Fatalf("writeBundleFiles: %v", err)
+	}
+
+	// Read and decode the K8s YAML file
+	k8sPath := filepath.Join(outDir, "k8s-test", "k8s.example.com.k8s.yaml")
+	k8sData, err := os.ReadFile(k8sPath)
+	if err != nil {
+		t.Fatalf("read K8s YAML: %v", err)
+	}
+
+	var secret K8sSecret
+	if err := yaml.Unmarshal(k8sData, &secret); err != nil {
+		t.Fatalf("unmarshal K8s YAML: %v", err)
+	}
+
+	// Validate structure
+	if secret.APIVersion != "v1" {
+		t.Errorf("apiVersion = %q, want v1", secret.APIVersion)
+	}
+	if secret.Kind != "Secret" {
+		t.Errorf("kind = %q, want Secret", secret.Kind)
+	}
+	if secret.Type != "kubernetes.io/tls" {
+		t.Errorf("type = %q, want kubernetes.io/tls", secret.Type)
+	}
+	if secret.Metadata.Name != "k8s-test" {
+		t.Errorf("metadata.name = %q, want k8s-test", secret.Metadata.Name)
+	}
+
+	// Validate tls.crt is valid base64 containing PEM certs
+	tlsCrtB64, ok := secret.Data["tls.crt"]
+	if !ok {
+		t.Fatal("missing tls.crt in data")
+	}
+	tlsCrt, err := base64.StdEncoding.DecodeString(tlsCrtB64)
+	if err != nil {
+		t.Fatalf("decode tls.crt base64: %v", err)
+	}
+	certs, err := certkit.ParsePEMCertificates(tlsCrt)
+	if err != nil {
+		t.Fatalf("parse tls.crt PEM: %v", err)
+	}
+	if len(certs) < 1 {
+		t.Error("expected at least 1 cert in tls.crt")
+	}
+	if certs[0].Subject.CommonName != "k8s.example.com" {
+		t.Errorf("tls.crt leaf CN = %q, want k8s.example.com", certs[0].Subject.CommonName)
+	}
+
+	// Validate tls.key is valid base64 containing PEM key
+	tlsKeyB64, ok := secret.Data["tls.key"]
+	if !ok {
+		t.Fatal("missing tls.key in data")
+	}
+	tlsKey, err := base64.StdEncoding.DecodeString(tlsKeyB64)
+	if err != nil {
+		t.Fatalf("decode tls.key base64: %v", err)
+	}
+	_, err = certkit.ParsePEMPrivateKey(tlsKey)
+	if err != nil {
+		t.Fatalf("parse tls.key PEM: %v", err)
+	}
+}
+
+func TestWriteBundleFiles_K8sYAMLDecode_Wildcard(t *testing.T) {
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "*.k8s-wild.com", []string{"*.k8s-wild.com"}, nil)
+
+	certRecord := &CertificateRecord{
+		CommonName: sql.NullString{String: "*.k8s-wild.com", Valid: true},
+		PEM:        string(leaf.certPEM),
+	}
+	keyRecord := &KeyRecord{KeyData: leaf.keyPEM}
+	bundle := newTestBundle(t, leaf, ca)
+
+	outDir := t.TempDir()
+	err := writeBundleFiles(outDir, "_.k8s-wild.com", certRecord, keyRecord, bundle, nil)
+	if err != nil {
+		t.Fatalf("writeBundleFiles: %v", err)
+	}
+
+	// The metadata.name should strip the _. prefix
+	k8sPath := filepath.Join(outDir, "_.k8s-wild.com", "_.k8s-wild.com.k8s.yaml")
+	k8sData, err := os.ReadFile(k8sPath)
+	if err != nil {
+		t.Fatalf("read K8s YAML: %v", err)
+	}
+
+	var secret K8sSecret
+	if err := yaml.Unmarshal(k8sData, &secret); err != nil {
+		t.Fatalf("unmarshal K8s YAML: %v", err)
+	}
+
+	if secret.Metadata.Name != "k8s-wild.com" {
+		t.Errorf("metadata.name = %q, want k8s-wild.com", secret.Metadata.Name)
+	}
+}
+
+func TestWriteBundleFiles_JSONDecode(t *testing.T) {
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "json-file.example.com", []string{"json-file.example.com"}, nil)
+
+	certRecord := &CertificateRecord{
+		CommonName: sql.NullString{String: "json-file.example.com", Valid: true},
+		PEM:        string(leaf.certPEM),
+	}
+	keyRecord := &KeyRecord{KeyData: leaf.keyPEM}
+	bundle := newTestBundle(t, leaf, ca)
+
+	outDir := t.TempDir()
+	err := writeBundleFiles(outDir, "json-test", certRecord, keyRecord, bundle, nil)
+	if err != nil {
+		t.Fatalf("writeBundleFiles: %v", err)
+	}
+
+	jsonPath := filepath.Join(outDir, "json-test", "json-file.example.com.json")
+	jsonData, err := os.ReadFile(jsonPath)
+	if err != nil {
+		t.Fatalf("read JSON: %v", err)
+	}
+
+	var parsed map[string]any
+	if err := json.Unmarshal(jsonData, &parsed); err != nil {
+		t.Fatalf("unmarshal JSON file: %v", err)
+	}
+
+	// Validate subject from file
+	subj, ok := parsed["subject"].(map[string]any)
+	if !ok {
+		t.Fatal("expected subject to be a map")
+	}
+	if cn, _ := subj["common_name"].(string); cn != "json-file.example.com" {
+		t.Errorf("subject.common_name = %q, want json-file.example.com", cn)
+	}
+
+	// Validate PEM from file is parseable
+	pemStr, _ := parsed["pem"].(string)
+	if _, err := certkit.ParsePEMCertificates([]byte(pemStr)); err != nil {
+		t.Fatalf("parse PEM from JSON file: %v", err)
+	}
+}
+
+func TestWriteBundleFiles_YAMLDecode(t *testing.T) {
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "yaml-file.example.com", []string{"yaml-file.example.com"}, nil)
+
+	certRecord := &CertificateRecord{
+		CommonName: sql.NullString{String: "yaml-file.example.com", Valid: true},
+		PEM:        string(leaf.certPEM),
+	}
+	keyRecord := &KeyRecord{
+		SubjectKeyIdentifier: "test-ski",
+		KeyType:              "rsa",
+		BitLength:            2048,
+		KeyData:              leaf.keyPEM,
+	}
+	bundle := newTestBundle(t, leaf, ca)
+
+	outDir := t.TempDir()
+	err := writeBundleFiles(outDir, "yaml-test", certRecord, keyRecord, bundle, nil)
+	if err != nil {
+		t.Fatalf("writeBundleFiles: %v", err)
+	}
+
+	yamlPath := filepath.Join(outDir, "yaml-test", "yaml-file.example.com.yaml")
+	yamlData, err := os.ReadFile(yamlPath)
+	if err != nil {
+		t.Fatalf("read YAML: %v", err)
+	}
+
+	var parsed map[string]any
+	if err := yaml.Unmarshal(yamlData, &parsed); err != nil {
+		t.Fatalf("unmarshal YAML file: %v", err)
+	}
+
+	// Validate crt from file
+	crt, _ := parsed["crt"].(string)
+	leafCert, err := certkit.ParsePEMCertificate([]byte(crt))
+	if err != nil {
+		t.Fatalf("parse crt from YAML file: %v", err)
+	}
+	if leafCert.Subject.CommonName != "yaml-file.example.com" {
+		t.Errorf("crt CN = %q, want yaml-file.example.com", leafCert.Subject.CommonName)
+	}
+
+	// Validate key from file
+	keyStr, _ := parsed["key"].(string)
+	if _, err := certkit.ParsePEMPrivateKey([]byte(keyStr)); err != nil {
+		t.Fatalf("parse key from YAML file: %v", err)
+	}
+}
+
 func TestExportBundles_EndToEnd(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "e2e.example.com", []string{"e2e.example.com"}, nil)
@@ -409,17 +807,17 @@ func TestExportBundles_EndToEnd(t *testing.T) {
 
 	now := time.Now()
 	certRecord := CertificateRecord{
-		Serial:               leaf.cert.SerialNumber.String(),
-		SubjectKeyIdentifier: "e2e-ski",
-		AKI:                  "e2e-aki",
-		Type:                 "leaf",
-		KeyType:              getKeyType(leaf.cert),
-		PEM:                  string(leaf.certPEM),
-		Expiry:               leaf.cert.NotAfter,
-		NotBefore:            &now,
-		SANsJSON:             types.JSONText(`["e2e.example.com"]`),
-		CommonName:           sql.NullString{String: "e2e.example.com", Valid: true},
-		BundleName:           "e2e-bundle",
+		SerialNumber:           leaf.cert.SerialNumber.String(),
+		SubjectKeyIdentifier:   "e2e-ski",
+		AuthorityKeyIdentifier: "e2e-aki",
+		CertType:               "leaf",
+		KeyType:                getKeyType(leaf.cert),
+		PEM:                    string(leaf.certPEM),
+		Expiry:                 leaf.cert.NotAfter,
+		NotBefore:              &now,
+		SANsJSON:               types.JSONText(`["e2e.example.com"]`),
+		CommonName:             sql.NullString{String: "e2e.example.com", Valid: true},
+		BundleName:             "e2e-bundle",
 	}
 	if err := cfg.DB.InsertCertificate(certRecord); err != nil {
 		t.Fatalf("insert cert: %v", err)
@@ -445,7 +843,7 @@ func TestExportBundles_EndToEnd(t *testing.T) {
 	outDir := t.TempDir()
 
 	// Use force=true to allow untrusted certs
-	err := ExportBundles(bundleConfigs, outDir, cfg.DB, true)
+	err := ExportBundles(context.Background(), bundleConfigs, outDir, cfg.DB, true, false)
 	if err != nil {
 		t.Fatalf("ExportBundles: %v", err)
 	}

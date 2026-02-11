@@ -5,11 +5,6 @@ on:
     # runs daily at 12:00 am
     - cron: '0 0 * * *'
   workflow_dispatch:
-  push:
-    branches:
-      - main
-      - develop
-      - 'release/*'
 
 permissions:
   contents: write
@@ -19,12 +14,12 @@ jobs:
   auto-update-go-dependencies:
     runs-on: ubuntu-latest
 
-    steps:    
+    steps:
     - name: Checkout the head commit of the branch
       uses: actions/checkout@v4
       with:
         persist-credentials: false
-          
+
     - name: Go setup
       uses: actions/setup-go@v5
       with:
@@ -37,6 +32,10 @@ jobs:
       run: go mod tidy
     - name: Build the project
       run: go build ./...
+    - name: Run go vet
+      run: go vet ./...
+    - name: Run tests
+      run: go test -race ./...
     - name: Generate change summary
       id: changes
       run: |
@@ -64,14 +63,14 @@ jobs:
       id: cpr
       uses: peter-evans/create-pull-request@v7
       with:
-        commit-message: Update report
+        commit-message: "chore: update Go dependencies"
         committer: github-actions[bot] <41898282+github-actions[bot]@users.noreply.github.com>
         author: ${{ github.actor }} <${{ github.actor_id }}+${{ github.actor }}@users.noreply.github.com>
         signoff: false
         title: 'chore: Update Dependencies'
         body: |
           Updated to latest go dependencies.
-          
+
           ${{ steps.changes.outputs.CHANGES }}
         assignees: danielewood
         reviewers: danielewood

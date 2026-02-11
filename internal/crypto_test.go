@@ -16,18 +16,20 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/sensiblebit/certkit"
 )
 
 func TestIsPEM_True(t *testing.T) {
 	data := []byte("-----BEGIN CERTIFICATE-----\nfoo\n-----END CERTIFICATE-----")
-	if !isPEM(data) {
+	if !certkit.IsPEM(data) {
 		t.Error("expected isPEM to return true for PEM data")
 	}
 }
 
 func TestIsPEM_False(t *testing.T) {
 	data := []byte{0x30, 0x82, 0x01, 0x00} // DER-like bytes
-	if isPEM(data) {
+	if certkit.IsPEM(data) {
 		t.Error("expected isPEM to return false for DER data")
 	}
 }
@@ -38,7 +40,7 @@ func TestGetPublicKey_RSA(t *testing.T) {
 		t.Fatalf("generate key: %v", err)
 	}
 
-	pub, err := getPublicKey(key)
+	pub, err := certkit.GetPublicKey(key)
 	if err != nil {
 		t.Fatalf("getPublicKey: %v", err)
 	}
@@ -54,7 +56,7 @@ func TestGetPublicKey_ECDSA(t *testing.T) {
 		t.Fatalf("generate key: %v", err)
 	}
 
-	pub, err := getPublicKey(key)
+	pub, err := certkit.GetPublicKey(key)
 	if err != nil {
 		t.Fatalf("getPublicKey: %v", err)
 	}
@@ -70,7 +72,7 @@ func TestGetPublicKey_Ed25519(t *testing.T) {
 		t.Fatalf("generate key: %v", err)
 	}
 
-	pub, err := getPublicKey(priv)
+	pub, err := certkit.GetPublicKey(priv)
 	if err != nil {
 		t.Fatalf("getPublicKey: %v", err)
 	}
@@ -82,7 +84,7 @@ func TestGetPublicKey_Ed25519(t *testing.T) {
 
 func TestGetPublicKey_UnsupportedType(t *testing.T) {
 	// Pass a string which is not a valid private key type
-	_, err := getPublicKey("not a key")
+	_, err := certkit.GetPublicKey("not a key")
 	if err == nil {
 		t.Error("expected error for unsupported key type, got nil")
 	}
@@ -121,16 +123,16 @@ func TestGetKeyType_Ed25519(t *testing.T) {
 
 func TestGetCertificateType_Root(t *testing.T) {
 	ca := newRSACA(t)
-	if getCertificateType(ca.cert) != "root" {
-		t.Errorf("expected 'root', got %q", getCertificateType(ca.cert))
+	if certkit.GetCertificateType(ca.cert) != "root" {
+		t.Errorf("expected 'root', got %q", certkit.GetCertificateType(ca.cert))
 	}
 }
 
 func TestGetCertificateType_Leaf(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "test.example.com", []string{"test.example.com"}, nil)
-	if getCertificateType(leaf.cert) != "leaf" {
-		t.Errorf("expected 'leaf', got %q", getCertificateType(leaf.cert))
+	if certkit.GetCertificateType(leaf.cert) != "leaf" {
+		t.Errorf("expected 'leaf', got %q", certkit.GetCertificateType(leaf.cert))
 	}
 }
 
@@ -156,14 +158,14 @@ func TestGetCertificateType_Intermediate(t *testing.T) {
 	}
 	intCert, _ := x509.ParseCertificate(intDER)
 
-	if getCertificateType(intCert) != "intermediate" {
-		t.Errorf("expected 'intermediate', got %q", getCertificateType(intCert))
+	if certkit.GetCertificateType(intCert) != "intermediate" {
+		t.Errorf("expected 'intermediate', got %q", certkit.GetCertificateType(intCert))
 	}
 }
 
 func TestComputeSKID_RFC7093Method1(t *testing.T) {
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	raw, err := computeSKID(&key.PublicKey)
+	raw, err := certkit.ComputeSKID(&key.PublicKey)
 	if err != nil {
 		t.Fatalf("computeSKID: %v", err)
 	}
@@ -174,7 +176,7 @@ func TestComputeSKID_RFC7093Method1(t *testing.T) {
 
 func TestComputeSKIDLegacy_SHA1(t *testing.T) {
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	raw, err := computeSKIDLegacy(&key.PublicKey)
+	raw, err := certkit.ComputeSKIDLegacy(&key.PublicKey)
 	if err != nil {
 		t.Fatalf("computeSKIDLegacy: %v", err)
 	}
@@ -185,8 +187,8 @@ func TestComputeSKIDLegacy_SHA1(t *testing.T) {
 
 func TestComputeSKID_VsLegacy_Different(t *testing.T) {
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	rfc7093, _ := computeSKID(&key.PublicKey)
-	legacy, _ := computeSKIDLegacy(&key.PublicKey)
+	rfc7093, _ := certkit.ComputeSKID(&key.PublicKey)
+	legacy, _ := certkit.ComputeSKIDLegacy(&key.PublicKey)
 
 	if hex.EncodeToString(rfc7093) == hex.EncodeToString(legacy) {
 		t.Error("RFC 7093 M1 and legacy SHA-1 SKIDs should differ for the same key")
@@ -195,8 +197,8 @@ func TestComputeSKID_VsLegacy_Different(t *testing.T) {
 
 func TestComputeSKID_Deterministic(t *testing.T) {
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	raw1, _ := computeSKID(&key.PublicKey)
-	raw2, _ := computeSKID(&key.PublicKey)
+	raw1, _ := certkit.ComputeSKID(&key.PublicKey)
+	raw2, _ := certkit.ComputeSKID(&key.PublicKey)
 
 	if hex.EncodeToString(raw1) != hex.EncodeToString(raw2) {
 		t.Error("computeSKID should return the same result for the same key")
@@ -207,8 +209,8 @@ func TestComputeSKID_DifferentKeysProduceDifferentSKIDs(t *testing.T) {
 	key1, _ := rsa.GenerateKey(rand.Reader, 2048)
 	key2, _ := rsa.GenerateKey(rand.Reader, 2048)
 
-	raw1, _ := computeSKID(&key1.PublicKey)
-	raw2, _ := computeSKID(&key2.PublicKey)
+	raw1, _ := certkit.ComputeSKID(&key1.PublicKey)
+	raw2, _ := certkit.ComputeSKID(&key2.PublicKey)
 
 	if hex.EncodeToString(raw1) == hex.EncodeToString(raw2) {
 		t.Error("different keys should produce different SKIDs")
@@ -217,7 +219,7 @@ func TestComputeSKID_DifferentKeysProduceDifferentSKIDs(t *testing.T) {
 
 func TestParsePrivateKey_Unencrypted_RSA(t *testing.T) {
 	keyPEM := rsaKeyPEM(t)
-	key, err := parsePrivateKey(keyPEM, nil)
+	key, err := certkit.ParsePEMPrivateKeyWithPasswords(keyPEM, nil)
 	if err != nil {
 		t.Fatalf("parsePrivateKey RSA: %v", err)
 	}
@@ -228,7 +230,7 @@ func TestParsePrivateKey_Unencrypted_RSA(t *testing.T) {
 
 func TestParsePrivateKey_Unencrypted_ECDSA(t *testing.T) {
 	keyPEM := ecdsaKeyPEM(t)
-	key, err := parsePrivateKey(keyPEM, nil)
+	key, err := certkit.ParsePEMPrivateKeyWithPasswords(keyPEM, nil)
 	if err != nil {
 		t.Fatalf("parsePrivateKey ECDSA: %v", err)
 	}
@@ -239,7 +241,7 @@ func TestParsePrivateKey_Unencrypted_ECDSA(t *testing.T) {
 
 func TestParsePrivateKey_Unencrypted_Ed25519(t *testing.T) {
 	keyPEM := ed25519KeyPEM(t)
-	key, err := parsePrivateKey(keyPEM, nil)
+	key, err := certkit.ParsePEMPrivateKeyWithPasswords(keyPEM, nil)
 	if err != nil {
 		t.Fatalf("parsePrivateKey Ed25519: %v", err)
 	}
@@ -265,7 +267,7 @@ func TestParsePrivateKey_Encrypted(t *testing.T) {
 	encPEM := pem.EncodeToMemory(encBlock)
 
 	// Correct password should work
-	parsed, err := parsePrivateKey(encPEM, []string{"testpass"})
+	parsed, err := certkit.ParsePEMPrivateKeyWithPasswords(encPEM, []string{"testpass"})
 	if err != nil {
 		t.Fatalf("parsePrivateKey with correct password: %v", err)
 	}
@@ -274,7 +276,7 @@ func TestParsePrivateKey_Encrypted(t *testing.T) {
 	}
 
 	// Wrong password should fail
-	_, err = parsePrivateKey(encPEM, []string{"wrongpass"})
+	_, err = certkit.ParsePEMPrivateKeyWithPasswords(encPEM, []string{"wrongpass"})
 	if err == nil {
 		t.Error("expected error with wrong password, got nil")
 	}
@@ -300,9 +302,9 @@ func TestProcessFile_PEMCertificate(t *testing.T) {
 	expectedSKI := computeSKIDHex(t, leaf.cert.PublicKey)
 
 	// Verify certificate was inserted with computed SKI
-	cert, err := cfg.DB.GetCertBySKI(expectedSKI)
+	cert, err := cfg.DB.GetCertBySKID(expectedSKI)
 	if err != nil {
-		t.Fatalf("GetCertBySKI: %v", err)
+		t.Fatalf("GetCertBySKID: %v", err)
 	}
 	if cert == nil {
 		t.Error("expected certificate to be inserted into DB")
@@ -351,9 +353,9 @@ func TestProcessFile_DERCertificate(t *testing.T) {
 	}
 
 	expectedSKI := computeSKIDHex(t, leaf.cert.PublicKey)
-	cert, err := cfg.DB.GetCertBySKI(expectedSKI)
+	cert, err := cfg.DB.GetCertBySKID(expectedSKI)
 	if err != nil {
-		t.Fatalf("GetCertBySKI: %v", err)
+		t.Fatalf("GetCertBySKID: %v", err)
 	}
 	if cert == nil {
 		t.Error("expected DER certificate to be inserted into DB")
@@ -411,6 +413,40 @@ func TestProcessFile_PKCS12(t *testing.T) {
 	}
 }
 
+func TestProcessFile_JKS(t *testing.T) {
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "jks.example.com", []string{"jks.example.com"}, nil)
+	cfg := newTestConfig(t)
+	defer cfg.DB.Close()
+
+	jksData := newJKSBundle(t, leaf, ca, "changeit")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bundle.jks")
+	if err := os.WriteFile(path, jksData, 0600); err != nil {
+		t.Fatalf("write jks: %v", err)
+	}
+
+	if err := ProcessFile(path, cfg); err != nil {
+		t.Fatalf("ProcessFile: %v", err)
+	}
+
+	// JKS should extract both cert and key
+	keys, _ := cfg.DB.GetAllKeys()
+	if len(keys) < 1 {
+		t.Error("expected at least 1 key from JKS")
+	}
+
+	expectedSKI := computeSKIDHex(t, leaf.cert.PublicKey)
+	cert, err := cfg.DB.GetCertBySKID(expectedSKI)
+	if err != nil {
+		t.Fatalf("GetCertBySKID: %v", err)
+	}
+	if cert == nil {
+		t.Error("expected leaf certificate from JKS to be inserted into DB")
+	}
+}
+
 func TestProcessFile_ExpiredCertSkipped(t *testing.T) {
 	ca := newRSACA(t)
 	expired := newExpiredLeaf(t, ca)
@@ -428,7 +464,7 @@ func TestProcessFile_ExpiredCertSkipped(t *testing.T) {
 	}
 
 	expectedSKI := computeSKIDHex(t, expired.cert.PublicKey)
-	cert, _ := cfg.DB.GetCertBySKI(expectedSKI)
+	cert, _ := cfg.DB.GetCertBySKID(expectedSKI)
 	if cert != nil {
 		t.Error("expired certificate should not be inserted into DB")
 	}
@@ -500,7 +536,7 @@ func TestProcessFile_MultipleCertsInOneFile(t *testing.T) {
 
 	// Both certs should be in DB - look up by computed SKI from public key
 	ski1 := computeSKIDHex(t, leaf1.cert.PublicKey)
-	c1, _ := cfg.DB.GetCertBySKI(ski1)
+	c1, _ := cfg.DB.GetCertBySKID(ski1)
 	if c1 == nil {
 		t.Error("expected first certificate to be in DB")
 	}
@@ -508,7 +544,7 @@ func TestProcessFile_MultipleCertsInOneFile(t *testing.T) {
 	// For the second cert, compute SKI from its public key
 	cert2, _ := x509.ParseCertificate(cert2DER)
 	ski2 := computeSKIDHex(t, cert2.PublicKey)
-	c2, _ := cfg.DB.GetCertBySKI(ski2)
+	c2, _ := cfg.DB.GetCertBySKID(ski2)
 	if c2 == nil {
 		t.Error("expected second certificate to be in DB")
 	}
@@ -569,7 +605,7 @@ func TestProcessFile_PEMCertificateWithIP(t *testing.T) {
 	}
 
 	expectedSKI := computeSKIDHex(t, leaf.cert.PublicKey)
-	cert, _ := cfg.DB.GetCertBySKI(expectedSKI)
+	cert, _ := cfg.DB.GetCertBySKID(expectedSKI)
 	if cert == nil {
 		t.Error("expected cert with IP SAN to be inserted")
 	}
@@ -579,7 +615,7 @@ func TestProcessFile_PEMCertificateWithIP(t *testing.T) {
 
 func computeSKIDHex(t *testing.T, pub crypto.PublicKey) string {
 	t.Helper()
-	raw, err := computeSKID(pub)
+	raw, err := certkit.ComputeSKID(pub)
 	if err != nil {
 		t.Fatalf("computeSKIDHex: %v", err)
 	}

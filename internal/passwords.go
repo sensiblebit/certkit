@@ -2,10 +2,11 @@ package internal
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"strings"
 
-	"github.com/cloudflare/cfssl/log"
+	"github.com/sensiblebit/certkit"
 )
 
 // LoadPasswordsFromFile loads passwords from a file, one password per line
@@ -27,30 +28,22 @@ func LoadPasswordsFromFile(filename string) ([]string, error) {
 }
 
 // ProcessPasswords handles all password loading logic
-func ProcessPasswords(passwordList string, passwordFile string) []string {
+func ProcessPasswords(passwordList []string, passwordFile string) ([]string, error) {
 	var passwords []string
 
 	// Add default passwords
-	passwords = append(passwords, "", "password", "changeit")
+	passwords = append(passwords, certkit.DefaultPasswords()...)
 
 	// Add passwords from command line list if provided
-	if passwordList != "" {
-		pwds := strings.Split(passwordList, ",")
-		for _, pwd := range pwds {
-			if pwd = strings.TrimSpace(pwd); pwd != "" {
-				passwords = append(passwords, pwd)
-			}
-		}
-	}
+	passwords = append(passwords, passwordList...)
 
 	// Add passwords from file if provided
 	if passwordFile != "" {
 		filePasswords, err := LoadPasswordsFromFile(passwordFile)
 		if err != nil {
-			log.Errorf("Failed to load passwords from file: %v", err)
-		} else {
-			passwords = append(passwords, filePasswords...)
+			return nil, fmt.Errorf("loading passwords from file: %w", err)
 		}
+		passwords = append(passwords, filePasswords...)
 	}
 
 	// Remove duplicates while preserving order
@@ -63,5 +56,5 @@ func ProcessPasswords(passwordList string, passwordFile string) []string {
 		}
 	}
 
-	return uniquePasswords
+	return uniquePasswords, nil
 }
