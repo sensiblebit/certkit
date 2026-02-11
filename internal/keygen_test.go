@@ -47,77 +47,45 @@ func TestGenerateKey_InvalidCurve(t *testing.T) {
 	}
 }
 
-func TestGenerateKeyFiles_ECDSA(t *testing.T) {
-	dir := t.TempDir()
-	_, err := GenerateKeyFiles(KeygenOptions{
-		Algorithm: "ecdsa",
-		Curve:     "P-256",
-		OutPath:   dir,
-	})
-	if err != nil {
-		t.Fatal(err)
+func TestGenerateKeyFiles(t *testing.T) {
+	tests := []struct {
+		name string
+		opts KeygenOptions
+	}{
+		{"ECDSA", KeygenOptions{Algorithm: "ecdsa", Curve: "P-256"}},
+		{"RSA", KeygenOptions{Algorithm: "rsa", Bits: 2048}},
+		{"Ed25519", KeygenOptions{Algorithm: "ed25519"}},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			tt.opts.OutPath = dir
+			_, err := GenerateKeyFiles(tt.opts)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	// Check key file exists
-	keyData, err := os.ReadFile(filepath.Join(dir, "key.pem"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(keyData), "PRIVATE KEY") {
-		t.Error("key file should contain PRIVATE KEY")
-	}
+			keyData, err := os.ReadFile(filepath.Join(dir, "key.pem"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(keyData), "PRIVATE KEY") {
+				t.Error("key file should contain PRIVATE KEY")
+			}
 
-	// Check pub file exists
-	pubData, err := os.ReadFile(filepath.Join(dir, "pub.pem"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(pubData), "PUBLIC KEY") {
-		t.Error("pub file should contain PUBLIC KEY")
-	}
+			pubData, err := os.ReadFile(filepath.Join(dir, "pub.pem"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(pubData), "PUBLIC KEY") {
+				t.Error("pub file should contain PUBLIC KEY")
+			}
 
-	// No CSR should be created without CN/SANs
-	if _, err := os.Stat(filepath.Join(dir, "csr.pem")); err == nil {
-		t.Error("CSR should not be created without CN or SANs")
-	}
-}
-
-func TestGenerateKeyFiles_RSA(t *testing.T) {
-	dir := t.TempDir()
-	_, err := GenerateKeyFiles(KeygenOptions{
-		Algorithm: "rsa",
-		Bits:      2048,
-		OutPath:   dir,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	keyData, err := os.ReadFile(filepath.Join(dir, "key.pem"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(keyData), "PRIVATE KEY") {
-		t.Error("key file should contain PRIVATE KEY")
-	}
-}
-
-func TestGenerateKeyFiles_Ed25519(t *testing.T) {
-	dir := t.TempDir()
-	_, err := GenerateKeyFiles(KeygenOptions{
-		Algorithm: "ed25519",
-		OutPath:   dir,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	keyData, err := os.ReadFile(filepath.Join(dir, "key.pem"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(keyData), "PRIVATE KEY") {
-		t.Error("key file should contain PRIVATE KEY")
+			// No CSR should be created without CN/SANs
+			if _, err := os.Stat(filepath.Join(dir, "csr.pem")); err == nil {
+				t.Error("CSR should not be created without CN or SANs")
+			}
+		})
 	}
 }
 
