@@ -325,14 +325,13 @@ func generateCSR(cert *CertificateRecord, key *KeyRecord, bundleConfig *BundleCo
 	// Detect wildcard SANs (e.g., "*.example.com") so we can exclude the
 	// redundant bare domain from the CSR. The "*.example.com" CN in bundle
 	// configs is a literal string match, not a glob pattern.
-	hasWildcard := false
+	wildcardIdx := slices.IndexFunc(existingCert.DNSNames, func(name string) bool {
+		return strings.HasPrefix(name, "*.")
+	})
+	hasWildcard := wildcardIdx >= 0
 	var wildcardDomain string
-	for _, name := range existingCert.DNSNames {
-		if strings.HasPrefix(name, "*.") {
-			hasWildcard = true
-			wildcardDomain = name
-			break
-		}
+	if hasWildcard {
+		wildcardDomain = existingCert.DNSNames[wildcardIdx]
 	}
 	for _, name := range existingCert.DNSNames {
 		if hasWildcard && name == strings.TrimPrefix(wildcardDomain, "*.") {
