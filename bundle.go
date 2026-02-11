@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"slices"
 	"net/url"
 	"time"
 
@@ -305,10 +306,7 @@ func Bundle(ctx context.Context, leaf *x509.Certificate, opts BundleOptions) (*B
 	}
 
 	// Build full chain for warning checks
-	var fullChain []*x509.Certificate
-	fullChain = append(fullChain, result.Leaf)
-	fullChain = append(fullChain, result.Intermediates...)
-	fullChain = append(fullChain, result.Roots...)
+	fullChain := slices.Concat([]*x509.Certificate{result.Leaf}, result.Intermediates, result.Roots)
 
 	result.Warnings = append(result.Warnings, checkSHA1Signatures(fullChain)...)
 	result.Warnings = append(result.Warnings, checkExpiryWarnings(fullChain)...)
