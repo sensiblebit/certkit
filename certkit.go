@@ -327,38 +327,21 @@ func GetPublicKey(priv crypto.PrivateKey) (crypto.PublicKey, error) {
 }
 
 // KeyMatchesCert reports whether a private key corresponds to the public key
-// in a certificate. This is the equivalent of comparing the output of
-// "openssl x509 -noout -modulus" and "openssl rsa -noout -modulus".
-// Supports RSA, ECDSA, and Ed25519 key types.
+// in a certificate. Uses the Equal method available on all standard public key
+// types since Go 1.20, which handles cross-type mismatches by returning false.
 func KeyMatchesCert(priv crypto.PrivateKey, cert *x509.Certificate) (bool, error) {
 	pub, err := GetPublicKey(priv)
 	if err != nil {
 		return false, err
 	}
-	certPub := cert.PublicKey
-
-	switch p := pub.(type) {
-	case *rsa.PublicKey:
-		cp, ok := certPub.(*rsa.PublicKey)
-		if !ok {
-			return false, nil
-		}
-		return p.Equal(cp), nil
-	case *ecdsa.PublicKey:
-		cp, ok := certPub.(*ecdsa.PublicKey)
-		if !ok {
-			return false, nil
-		}
-		return p.Equal(cp), nil
-	case ed25519.PublicKey:
-		cp, ok := certPub.(ed25519.PublicKey)
-		if !ok {
-			return false, nil
-		}
-		return p.Equal(cp), nil
-	default:
+	type equalKey interface {
+		Equal(crypto.PublicKey) bool
+	}
+	eq, ok := pub.(equalKey)
+	if !ok {
 		return false, fmt.Errorf("unsupported public key type: %T", pub)
 	}
+	return eq.Equal(cert.PublicKey), nil
 }
 
 // IsPEM returns true if the data appears to contain PEM-encoded content.
