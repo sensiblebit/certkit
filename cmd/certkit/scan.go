@@ -19,6 +19,7 @@ var (
 	scanExport      bool
 	scanDuplicates  bool
 	scanDumpKeys    string
+	scanMaxFileSize int64
 )
 
 var scanCmd = &cobra.Command{
@@ -41,6 +42,7 @@ func init() {
 	scanCmd.Flags().BoolVarP(&scanForceExport, "force", "f", false, "Allow export of untrusted certificate bundles")
 	scanCmd.Flags().BoolVar(&scanDuplicates, "duplicates", false, "Export all certificates per bundle, not just the newest")
 	scanCmd.Flags().StringVar(&scanDumpKeys, "dump-keys", "", "Dump all discovered keys to a single PEM file")
+	scanCmd.Flags().Int64Var(&scanMaxFileSize, "max-file-size", 10*1024*1024, "Skip files larger than this size in bytes (0 to disable)")
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
@@ -93,6 +95,12 @@ func runScan(cmd *cobra.Command, args []string) error {
 				return filepath.SkipDir
 			}
 			if !d.IsDir() {
+				if scanMaxFileSize > 0 {
+					if info, err := d.Info(); err == nil && info.Size() > scanMaxFileSize {
+						slog.Debug("skipping large file", "path", path, "size", info.Size(), "max", scanMaxFileSize)
+						return nil
+					}
+				}
 				if err := internal.ProcessFile(path, cfg); err != nil {
 					slog.Warn("processing file", "path", path, "error", err)
 				}
