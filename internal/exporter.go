@@ -223,18 +223,14 @@ func generateJSON(bundle *certkit.BundleResult) ([]byte, error) {
 func generateYAML(key *KeyRecord, bundle *certkit.BundleResult) ([]byte, error) {
 	leafPEM := []byte(certkit.CertToPEM(bundle.Leaf))
 
-	// Build the "bundle" field as leaf + intermediates (skip root)
-	var chainPEM []byte
-	chainPEM = append(chainPEM, leafPEM...)
-	for _, c := range bundle.Intermediates {
-		chainPEM = append(chainPEM, []byte(certkit.CertToPEM(c))...)
-	}
-
-	// Build intermediates only
+	// Build intermediates PEM
 	var intermediatePEM []byte
 	for _, c := range bundle.Intermediates {
-		intermediatePEM = append(intermediatePEM, []byte(certkit.CertToPEM(c))...)
+		intermediatePEM = slices.Concat(intermediatePEM, []byte(certkit.CertToPEM(c)))
 	}
+
+	// Build the "bundle" field as leaf + intermediates (skip root)
+	chainPEM := slices.Concat(leafPEM, intermediatePEM)
 
 	var rootPEM []byte
 	root := bundleRoot(bundle)
