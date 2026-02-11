@@ -136,45 +136,60 @@ func TestGetKeyType(t *testing.T) {
 	}
 }
 
-func TestGetCertificateType_Root(t *testing.T) {
-	ca := newRSACA(t)
-	if certkit.GetCertificateType(ca.cert) != "root" {
-		t.Errorf("expected 'root', got %q", certkit.GetCertificateType(ca.cert))
+func TestGetCertificateType(t *testing.T) {
+	tests := []struct {
+		name string
+		cert func(t *testing.T) *x509.Certificate
+		want string
+	}{
+		{
+			name: "root",
+			cert: func(t *testing.T) *x509.Certificate {
+				return newRSACA(t).cert
+			},
+			want: "root",
+		},
+		{
+			name: "leaf",
+			cert: func(t *testing.T) *x509.Certificate {
+				ca := newRSACA(t)
+				return newRSALeaf(t, ca, "test.example.com", []string{"test.example.com"}, nil).cert
+			},
+			want: "leaf",
+		},
+		{
+			name: "intermediate",
+			cert: func(t *testing.T) *x509.Certificate {
+				ca := newRSACA(t)
+				intKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+				intTmpl := &x509.Certificate{
+					SerialNumber:          mustBigInt(50),
+					Subject:               certName("Test Intermediate CA"),
+					NotBefore:             ca.cert.NotBefore,
+					NotAfter:              ca.cert.NotAfter,
+					KeyUsage:              x509.KeyUsageCertSign,
+					BasicConstraintsValid: true,
+					IsCA:                  true,
+					SubjectKeyId:          []byte{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0x00, 0xab, 0xcd, 0xef, 0x01},
+					AuthorityKeyId:        ca.cert.SubjectKeyId,
+				}
+				intDER, err := x509.CreateCertificate(rand.Reader, intTmpl, ca.cert, &intKey.PublicKey, ca.key)
+				if err != nil {
+					t.Fatalf("create intermediate: %v", err)
+				}
+				intCert, _ := x509.ParseCertificate(intDER)
+				return intCert
+			},
+			want: "intermediate",
+		},
 	}
-}
-
-func TestGetCertificateType_Leaf(t *testing.T) {
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "test.example.com", []string{"test.example.com"}, nil)
-	if certkit.GetCertificateType(leaf.cert) != "leaf" {
-		t.Errorf("expected 'leaf', got %q", certkit.GetCertificateType(leaf.cert))
-	}
-}
-
-func TestGetCertificateType_Intermediate(t *testing.T) {
-	ca := newRSACA(t)
-
-	// Create an intermediate CA signed by the root
-	intKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	intTmpl := &x509.Certificate{
-		SerialNumber:          mustBigInt(50),
-		Subject:               certName("Test Intermediate CA"),
-		NotBefore:             ca.cert.NotBefore,
-		NotAfter:              ca.cert.NotAfter,
-		KeyUsage:              x509.KeyUsageCertSign,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-		SubjectKeyId:          []byte{0xaa, 0xbb, 0xcc, 0xdd, 0xee, 0xff, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0x00, 0xab, 0xcd, 0xef, 0x01},
-		AuthorityKeyId:        ca.cert.SubjectKeyId,
-	}
-	intDER, err := x509.CreateCertificate(rand.Reader, intTmpl, ca.cert, &intKey.PublicKey, ca.key)
-	if err != nil {
-		t.Fatalf("create intermediate: %v", err)
-	}
-	intCert, _ := x509.ParseCertificate(intDER)
-
-	if certkit.GetCertificateType(intCert) != "intermediate" {
-		t.Errorf("expected 'intermediate', got %q", certkit.GetCertificateType(intCert))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := certkit.GetCertificateType(tt.cert(t))
+			if got != tt.want {
+				t.Errorf("GetCertificateType() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
