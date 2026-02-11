@@ -1289,32 +1289,29 @@ func TestMarshalPublicKeyToPEM(t *testing.T) {
 	}
 }
 
-func TestCertFingerprintColonSHA256(t *testing.T) {
+func TestCertFingerprintColon(t *testing.T) {
 	_, _, leafPEM := generateTestPKI(t)
 	cert, _ := ParsePEMCertificate([]byte(leafPEM))
 
-	fp := CertFingerprintColonSHA256(cert)
-	// SHA-256 = 32 bytes → 64 hex + 31 colons = 95 chars
-	if len(fp) != 95 {
-		t.Errorf("fingerprint length %d, want 95", len(fp))
+	tests := []struct {
+		name    string
+		fn      func(*x509.Certificate) string
+		wantLen int
+		pattern string
+	}{
+		{"SHA256", CertFingerprintColonSHA256, 95, `^[0-9A-F]{2}(:[0-9A-F]{2}){31}$`},
+		{"SHA1", CertFingerprintColonSHA1, 59, `^[0-9A-F]{2}(:[0-9A-F]{2}){19}$`},
 	}
-	// Should be uppercase with colons
-	if !regexp.MustCompile(`^[0-9A-F]{2}(:[0-9A-F]{2}){31}$`).MatchString(fp) {
-		t.Errorf("fingerprint format invalid: %s", fp)
-	}
-}
-
-func TestCertFingerprintColonSHA1(t *testing.T) {
-	_, _, leafPEM := generateTestPKI(t)
-	cert, _ := ParsePEMCertificate([]byte(leafPEM))
-
-	fp := CertFingerprintColonSHA1(cert)
-	// SHA-1 = 20 bytes → 40 hex + 19 colons = 59 chars
-	if len(fp) != 59 {
-		t.Errorf("fingerprint length %d, want 59", len(fp))
-	}
-	if !regexp.MustCompile(`^[0-9A-F]{2}(:[0-9A-F]{2}){19}$`).MatchString(fp) {
-		t.Errorf("fingerprint format invalid: %s", fp)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			fp := tt.fn(cert)
+			if len(fp) != tt.wantLen {
+				t.Errorf("fingerprint length %d, want %d", len(fp), tt.wantLen)
+			}
+			if !regexp.MustCompile(tt.pattern).MatchString(fp) {
+				t.Errorf("fingerprint format invalid: %s", fp)
+			}
+		})
 	}
 }
 
