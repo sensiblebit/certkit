@@ -39,59 +39,70 @@ func TestIsPEM(t *testing.T) {
 	}
 }
 
-func TestGetPublicKey_RSA(t *testing.T) {
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("generate key: %v", err)
+func TestGetPublicKey(t *testing.T) {
+	tests := []struct {
+		name     string
+		key      func(t *testing.T) crypto.PrivateKey
+		wantType string
+	}{
+		{
+			name: "RSA",
+			key: func(t *testing.T) crypto.PrivateKey {
+				k, err := rsa.GenerateKey(rand.Reader, 2048)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return k
+			},
+			wantType: "*rsa.PublicKey",
+		},
+		{
+			name: "ECDSA",
+			key: func(t *testing.T) crypto.PrivateKey {
+				k, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return k
+			},
+			wantType: "*ecdsa.PublicKey",
+		},
+		{
+			name: "Ed25519",
+			key: func(t *testing.T) crypto.PrivateKey {
+				_, priv, err := ed25519.GenerateKey(rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return priv
+			},
+			wantType: "ed25519.PublicKey",
+		},
+		{
+			name: "unsupported type",
+			key: func(t *testing.T) crypto.PrivateKey {
+				return nil // will be overridden below
+			},
+			wantType: "",
+		},
 	}
-
-	pub, err := certkit.GetPublicKey(key)
-	if err != nil {
-		t.Fatalf("getPublicKey: %v", err)
-	}
-
-	if _, ok := pub.(*rsa.PublicKey); !ok {
-		t.Errorf("expected *rsa.PublicKey, got %T", pub)
-	}
-}
-
-func TestGetPublicKey_ECDSA(t *testing.T) {
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("generate key: %v", err)
-	}
-
-	pub, err := certkit.GetPublicKey(key)
-	if err != nil {
-		t.Fatalf("getPublicKey: %v", err)
-	}
-
-	if _, ok := pub.(*ecdsa.PublicKey); !ok {
-		t.Errorf("expected *ecdsa.PublicKey, got %T", pub)
-	}
-}
-
-func TestGetPublicKey_Ed25519(t *testing.T) {
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("generate key: %v", err)
-	}
-
-	pub, err := certkit.GetPublicKey(priv)
-	if err != nil {
-		t.Fatalf("getPublicKey: %v", err)
-	}
-
-	if _, ok := pub.(ed25519.PublicKey); !ok {
-		t.Errorf("expected ed25519.PublicKey, got %T", pub)
-	}
-}
-
-func TestGetPublicKey_UnsupportedType(t *testing.T) {
-	// Pass a string which is not a valid private key type
-	_, err := certkit.GetPublicKey("not a key")
-	if err == nil {
-		t.Error("expected error for unsupported key type, got nil")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.name == "unsupported type" {
+				_, err := certkit.GetPublicKey("not a key")
+				if err == nil {
+					t.Error("expected error for unsupported key type")
+				}
+				return
+			}
+			pub, err := certkit.GetPublicKey(tt.key(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got := fmt.Sprintf("%T", pub); got != tt.wantType {
+				t.Errorf("got %s, want %s", got, tt.wantType)
+			}
+		})
 	}
 }
 
