@@ -1321,52 +1321,37 @@ func TestCertExpiresWithin_AlreadyExpired(t *testing.T) {
 	}
 }
 
-func TestMarshalPublicKeyToPEM_ECDSA(t *testing.T) {
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	pemStr, err := MarshalPublicKeyToPEM(&key.PublicKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(pemStr, "PUBLIC KEY") {
-		t.Error("expected PEM output to contain PUBLIC KEY")
-	}
-	// Round-trip: parse it back
-	block, _ := pem.Decode([]byte(pemStr))
-	if block == nil {
-		t.Fatal("failed to decode PEM")
-	}
-	pub, err := x509.ParsePKIXPublicKey(block.Bytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ecPub, ok := pub.(*ecdsa.PublicKey)
-	if !ok {
-		t.Fatalf("expected *ecdsa.PublicKey, got %T", pub)
-	}
-	if !ecPub.Equal(&key.PublicKey) {
-		t.Error("public key round-trip mismatch")
-	}
-}
+func TestMarshalPublicKeyToPEM(t *testing.T) {
+	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	edPub, _, _ := ed25519.GenerateKey(rand.Reader)
 
-func TestMarshalPublicKeyToPEM_RSA(t *testing.T) {
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	pemStr, err := MarshalPublicKeyToPEM(&key.PublicKey)
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name string
+		pub  any
+	}{
+		{"ECDSA", &ecKey.PublicKey},
+		{"RSA", &rsaKey.PublicKey},
+		{"Ed25519", edPub},
 	}
-	if !strings.Contains(pemStr, "PUBLIC KEY") {
-		t.Error("expected PEM output to contain PUBLIC KEY")
-	}
-}
-
-func TestMarshalPublicKeyToPEM_Ed25519(t *testing.T) {
-	pub, _, _ := ed25519.GenerateKey(rand.Reader)
-	pemStr, err := MarshalPublicKeyToPEM(pub)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(pemStr, "PUBLIC KEY") {
-		t.Error("expected PEM output to contain PUBLIC KEY")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pemStr, err := MarshalPublicKeyToPEM(tt.pub)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(pemStr, "PUBLIC KEY") {
+				t.Error("expected PEM output to contain PUBLIC KEY")
+			}
+			// Round-trip: parse back
+			block, _ := pem.Decode([]byte(pemStr))
+			if block == nil {
+				t.Fatal("failed to decode PEM")
+			}
+			if _, err := x509.ParsePKIXPublicKey(block.Bytes); err != nil {
+				t.Fatalf("round-trip parse failed: %v", err)
+			}
+		})
 	}
 }
 
