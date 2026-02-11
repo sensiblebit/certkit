@@ -18,6 +18,7 @@ var (
 	scanForceExport bool
 	scanExport      bool
 	scanDuplicates  bool
+	scanDumpKeys    string
 )
 
 var scanCmd = &cobra.Command{
@@ -39,6 +40,7 @@ func init() {
 	scanCmd.Flags().StringVarP(&scanOutDir, "out", "o", "./bundles", "Output directory for exported bundles")
 	scanCmd.Flags().BoolVarP(&scanForceExport, "force", "f", false, "Allow export of untrusted certificate bundles")
 	scanCmd.Flags().BoolVar(&scanDuplicates, "duplicates", false, "Export all certificates per bundle, not just the newest")
+	scanCmd.Flags().StringVar(&scanDumpKeys, "dump-keys", "", "Dump all discovered keys to a single PEM file")
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
@@ -98,6 +100,25 @@ func runScan(cmd *cobra.Command, args []string) error {
 		})
 		if err != nil {
 			return fmt.Errorf("walking input path: %w", err)
+		}
+	}
+
+	if scanDumpKeys != "" {
+		keys, err := db.GetAllKeys()
+		if err != nil {
+			return fmt.Errorf("getting keys: %w", err)
+		}
+		if len(keys) > 0 {
+			var data []byte
+			for _, k := range keys {
+				data = append(data, k.KeyData...)
+			}
+			if err := os.WriteFile(scanDumpKeys, data, 0600); err != nil {
+				return fmt.Errorf("writing keys to %s: %w", scanDumpKeys, err)
+			}
+			fmt.Fprintf(os.Stderr, "Wrote %d key(s) to %s\n", len(keys), scanDumpKeys)
+		} else {
+			fmt.Fprintln(os.Stderr, "No keys found to dump")
 		}
 	}
 
