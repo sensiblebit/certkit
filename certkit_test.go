@@ -635,7 +635,7 @@ func TestKeyAlgorithmName(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		key      interface{}
+		key      any
 		expected string
 	}{
 		{"ECDSA", ecKey, "ECDSA"},
@@ -661,7 +661,7 @@ func TestPublicKeyAlgorithmName(t *testing.T) {
 
 	tests := []struct {
 		name     string
-		key      interface{}
+		key      any
 		expected string
 	}{
 		{"ECDSA", &ecKey.PublicKey, "ECDSA"},
