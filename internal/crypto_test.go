@@ -193,25 +193,25 @@ func TestGetCertificateType(t *testing.T) {
 	}
 }
 
-func TestComputeSKI_RFC7093Method1(t *testing.T) {
+func TestComputeSKI_Length(t *testing.T) {
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	raw, err := certkit.ComputeSKI(&key.PublicKey)
-	if err != nil {
-		t.Fatalf("computeSKI: %v", err)
+	tests := []struct {
+		name string
+		fn   func(crypto.PublicKey) ([]byte, error)
+	}{
+		{"RFC7093", certkit.ComputeSKI},
+		{"Legacy SHA-1", certkit.ComputeSKILegacy},
 	}
-	if len(raw) != 20 {
-		t.Errorf("expected 20 bytes (RFC 7093 M1: truncated SHA-256), got %d", len(raw))
-	}
-}
-
-func TestComputeSKILegacy_SHA1(t *testing.T) {
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	raw, err := certkit.ComputeSKILegacy(&key.PublicKey)
-	if err != nil {
-		t.Fatalf("computeSKILegacy: %v", err)
-	}
-	if len(raw) != 20 {
-		t.Errorf("expected 20 bytes for SHA-1, got %d", len(raw))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw, err := tt.fn(&key.PublicKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(raw) != 20 {
+				t.Errorf("got %d bytes, want 20", len(raw))
+			}
+		})
 	}
 }
 
