@@ -318,19 +318,9 @@ func generateCSR(cert *CertificateRecord, key *KeyRecord, bundleConfig *BundleCo
 
 	// Check if we should exclude www.CN
 	cn := existingCert.Subject.CommonName
-	shouldExcludeWWW := false
-	if len(existingCert.DNSNames) == 2 {
-		hasCN := false
-		hasWWWCN := false
-		for _, name := range existingCert.DNSNames {
-			if name == cn {
-				hasCN = true
-			} else if name == "www."+cn {
-				hasWWWCN = true
-			}
-		}
-		shouldExcludeWWW = hasCN && hasWWWCN
-	}
+	shouldExcludeWWW := len(existingCert.DNSNames) == 2 &&
+		slices.Contains(existingCert.DNSNames, cn) &&
+		slices.Contains(existingCert.DNSNames, "www."+cn)
 
 	// Detect wildcard SANs (e.g., "*.example.com") so we can exclude the
 	// redundant bare domain from the CSR. The "*.example.com" CN in bundle
