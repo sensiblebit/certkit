@@ -176,14 +176,14 @@ func MarshalPrivateKeyToPEM(key crypto.PrivateKey) (string, error) {
 // CertFingerprint returns the SHA-256 fingerprint of a certificate as a lowercase hex string.
 func CertFingerprint(cert *x509.Certificate) string {
 	hash := sha256.Sum256(cert.Raw)
-	return fmt.Sprintf("%x", hash)
+	return hex.EncodeToString(hash[:])
 }
 
 // CertFingerprintSHA1 returns the SHA-1 fingerprint of a certificate as a lowercase hex string.
 // SHA-1 fingerprints are widely used in browser UIs, CT logs, and legacy systems.
 func CertFingerprintSHA1(cert *x509.Certificate) string {
 	hash := sha1.Sum(cert.Raw)
-	return fmt.Sprintf("%x", hash)
+	return hex.EncodeToString(hash[:])
 }
 
 // CertSKI computes a Subject Key Identifier from the certificate's
