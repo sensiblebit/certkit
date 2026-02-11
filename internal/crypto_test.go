@@ -90,34 +90,44 @@ func TestGetPublicKey_UnsupportedType(t *testing.T) {
 	}
 }
 
-func TestGetKeyType_RSA(t *testing.T) {
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "test.example.com", []string{"test.example.com"}, nil)
-
-	result := getKeyType(leaf.cert)
-	if result != "RSA 2048 bits" {
-		t.Errorf("expected 'RSA 2048 bits', got %q", result)
+func TestGetKeyType(t *testing.T) {
+	tests := []struct {
+		name string
+		cert func(t *testing.T) *x509.Certificate
+		want string
+	}{
+		{
+			name: "RSA",
+			cert: func(t *testing.T) *x509.Certificate {
+				ca := newRSACA(t)
+				return newRSALeaf(t, ca, "test.example.com", []string{"test.example.com"}, nil).cert
+			},
+			want: "RSA 2048 bits",
+		},
+		{
+			name: "ECDSA",
+			cert: func(t *testing.T) *x509.Certificate {
+				ca := newECDSACA(t)
+				return newECDSALeaf(t, ca, "test.example.com", []string{"test.example.com"}).cert
+			},
+			want: "ECDSA P-256",
+		},
+		{
+			name: "Ed25519",
+			cert: func(t *testing.T) *x509.Certificate {
+				ca := newRSACA(t)
+				return newEd25519Leaf(t, ca, "test.example.com", []string{"test.example.com"}).cert
+			},
+			want: "Ed25519",
+		},
 	}
-}
-
-func TestGetKeyType_ECDSA(t *testing.T) {
-	ca := newECDSACA(t)
-	leaf := newECDSALeaf(t, ca, "test.example.com", []string{"test.example.com"})
-
-	result := getKeyType(leaf.cert)
-	if result != "ECDSA P-256" {
-		t.Errorf("expected 'ECDSA P-256', got %q", result)
-	}
-}
-
-func TestGetKeyType_Ed25519(t *testing.T) {
-	// Ed25519 certs need an RSA or ECDSA CA to sign them (CA key signs, not leaf key)
-	ca := newRSACA(t)
-	leaf := newEd25519Leaf(t, ca, "test.example.com", []string{"test.example.com"})
-
-	result := getKeyType(leaf.cert)
-	if result != "Ed25519" {
-		t.Errorf("expected 'Ed25519', got %q", result)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := getKeyType(tt.cert(t))
+			if got != tt.want {
+				t.Errorf("getKeyType() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
