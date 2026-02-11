@@ -550,41 +550,45 @@ func TestProcessFile_MultipleCertsInOneFile(t *testing.T) {
 	}
 }
 
-func TestDetermineBundleName_ExactMatch(t *testing.T) {
-	configs := []BundleConfig{
-		{CommonNames: []string{"example.com"}, BundleName: "my-bundle"},
+func TestDetermineBundleName(t *testing.T) {
+	tests := []struct {
+		name    string
+		cn      string
+		configs []BundleConfig
+		want    string
+	}{
+		{
+			name:    "exact match",
+			cn:      "example.com",
+			configs: []BundleConfig{{CommonNames: []string{"example.com"}, BundleName: "my-bundle"}},
+			want:    "my-bundle",
+		},
+		{
+			name:    "no match falls back to CN",
+			cn:      "example.com",
+			configs: []BundleConfig{{CommonNames: []string{"other.com"}, BundleName: "other-bundle"}},
+			want:    "example.com",
+		},
+		{
+			name:    "wildcard sanitized",
+			cn:      "*.example.com",
+			configs: []BundleConfig{},
+			want:    "_.example.com",
+		},
+		{
+			name:    "config without bundle name",
+			cn:      "*.example.com",
+			configs: []BundleConfig{{CommonNames: []string{"*.example.com"}}},
+			want:    "_.example.com",
+		},
 	}
-	got := determineBundleName("example.com", configs)
-	if got != "my-bundle" {
-		t.Errorf("expected 'my-bundle', got %q", got)
-	}
-}
-
-func TestDetermineBundleName_NoMatch(t *testing.T) {
-	configs := []BundleConfig{
-		{CommonNames: []string{"other.com"}, BundleName: "other-bundle"},
-	}
-	got := determineBundleName("example.com", configs)
-	if got != "example.com" {
-		t.Errorf("expected 'example.com' (sanitized CN), got %q", got)
-	}
-}
-
-func TestDetermineBundleName_WildcardSanitized(t *testing.T) {
-	configs := []BundleConfig{}
-	got := determineBundleName("*.example.com", configs)
-	if got != "_.example.com" {
-		t.Errorf("expected '_.example.com', got %q", got)
-	}
-}
-
-func TestDetermineBundleName_ConfigWithoutBundleName(t *testing.T) {
-	configs := []BundleConfig{
-		{CommonNames: []string{"*.example.com"}},
-	}
-	got := determineBundleName("*.example.com", configs)
-	if got != "_.example.com" {
-		t.Errorf("expected '_.example.com', got %q", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := determineBundleName(tt.cn, tt.configs)
+			if got != tt.want {
+				t.Errorf("determineBundleName(%q) = %q, want %q", tt.cn, got, tt.want)
+			}
+		})
 	}
 }
 
