@@ -57,7 +57,7 @@ func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) 
 		Subject:  cert.Subject.String(),
 		SANs:     cert.DNSNames,
 		NotAfter: cert.NotAfter.UTC().Format(time.RFC3339),
-		SKI:      certkit.CertSKI(cert),
+		SKI:      certkit.CertSKIEmbedded(cert),
 	}
 
 	// Key-cert match check
@@ -114,20 +114,20 @@ func buildChainDisplay(bundle *certkit.BundleResult) []ChainCert {
 	chain = append(chain, ChainCert{
 		Subject: bundle.Leaf.Subject.String(),
 		Expiry:  bundle.Leaf.NotAfter.UTC().Format("2006-01-02"),
-		SKI:     certkit.CertSKI(bundle.Leaf),
+		SKI:     certkit.CertSKIEmbedded(bundle.Leaf),
 	})
 	for _, c := range bundle.Intermediates {
 		chain = append(chain, ChainCert{
 			Subject: c.Subject.String(),
 			Expiry:  c.NotAfter.UTC().Format("2006-01-02"),
-			SKI:     certkit.CertSKI(c),
+			SKI:     certkit.CertSKIEmbedded(c),
 		})
 	}
 	for _, c := range bundle.Roots {
 		chain = append(chain, ChainCert{
 			Subject: c.Subject.String(),
 			Expiry:  c.NotAfter.UTC().Format("2006-01-02"),
-			SKI:     certkit.CertSKI(c),
+			SKI:     certkit.CertSKIEmbedded(c),
 			IsRoot:  true,
 		})
 	}

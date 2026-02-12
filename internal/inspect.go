@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/rsa"
@@ -30,6 +31,7 @@ type InspectResult struct {
 	SHA256      string   `json:"sha256_fingerprint,omitempty"`
 	SHA1        string   `json:"sha1_fingerprint,omitempty"`
 	SKI         string   `json:"subject_key_id,omitempty"`
+	SKILegacy   string   `json:"subject_key_id_sha1,omitempty"`
 	AKI         string   `json:"authority_key_id,omitempty"`
 	SigAlg      string   `json:"signature_algorithm,omitempty"`
 	KeyType     string   `json:"key_type,omitempty"`
@@ -186,11 +188,21 @@ func inspectCSR(csr *x509.CertificateRequest) InspectResult {
 }
 
 func inspectKey(key any) InspectResult {
-	return InspectResult{
+	r := InspectResult{
 		Type:    "private_key",
 		KeyType: certkit.KeyAlgorithmName(key),
 		KeySize: privateKeySize(key),
 	}
+	if signer, ok := key.(crypto.Signer); ok {
+		pub := signer.Public()
+		if ski, err := certkit.ComputeSKI(pub); err == nil {
+			r.SKI = certkit.ColonHex(ski)
+		}
+		if ski, err := certkit.ComputeSKILegacy(pub); err == nil {
+			r.SKILegacy = certkit.ColonHex(ski)
+		}
+	}
+	return r
 }
 
 func publicKeySize(pub any) string {
@@ -245,6 +257,9 @@ func formatInspectText(results []InspectResult) string {
 		case "certificate":
 			fmt.Fprintf(&sb, "Certificate:\n")
 			fmt.Fprintf(&sb, "  Subject:     %s\n", r.Subject)
+			if len(r.SANs) > 0 {
+				fmt.Fprintf(&sb, "  SANs:        %s\n", strings.Join(r.SANs, ", "))
+			}
 			fmt.Fprintf(&sb, "  Issuer:      %s\n", r.Issuer)
 			fmt.Fprintf(&sb, "  Serial:      %s\n", r.Serial)
 			fmt.Fprintf(&sb, "  Type:        %s\n", r.CertType)
@@ -260,9 +275,6 @@ func formatInspectText(results []InspectResult) string {
 			if r.AKI != "" {
 				fmt.Fprintf(&sb, "  AKI:         %s\n", r.AKI)
 			}
-			if len(r.SANs) > 0 {
-				fmt.Fprintf(&sb, "  SANs:        %s\n", strings.Join(r.SANs, ", "))
-			}
 		case "csr":
 			fmt.Fprintf(&sb, "Certificate Signing Request:\n")
 			fmt.Fprintf(&sb, "  Subject:     %s\n", r.CSRSubject)
@@ -273,8 +285,14 @@ func formatInspectText(results []InspectResult) string {
 			}
 		case "private_key":
 			fmt.Fprintf(&sb, "Private Key:\n")
-			fmt.Fprintf(&sb, "  Type:        %s\n", r.KeyType)
-			fmt.Fprintf(&sb, "  Size:        %s\n", r.KeySize)
+			fmt.Fprintf(&sb, "  Type:          %s\n", r.KeyType)
+			fmt.Fprintf(&sb, "  Size:          %s\n", r.KeySize)
+			if r.SKI != "" {
+				fmt.Fprintf(&sb, "  SKI (SHA-256): %s\n", r.SKI)
+			}
+			if r.SKILegacy != "" {
+				fmt.Fprintf(&sb, "  SKI (SHA-1):   %s\n", r.SKILegacy)
+			}
 		}
 	}
 	return sb.String()
