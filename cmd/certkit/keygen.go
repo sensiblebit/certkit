@@ -50,7 +50,7 @@ func runKeygen(cmd *cobra.Command, args []string) error {
 		SANs:      keygenSANs,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("generating key: %w", err)
 	}
 
 	if keygenOutPath == "" {

@@ -325,7 +325,7 @@ func processDER(data []byte, path string, cfg *Config) {
 	for _, password := range cfg.Passwords {
 		privKey, leaf, caCerts, err := certkit.DecodePKCS12(data, password)
 		if err != nil {
-			slog.Debug("PKCS#12 decode failed", "password", password, "error", err)
+			slog.Debug("PKCS#12 decode failed", "error", err)
 			continue
 		}
 

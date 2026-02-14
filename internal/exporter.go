@@ -107,7 +107,7 @@ func writeBundleFiles(outDir, bundleFolder string, cert *CertificateRecord, key 
 	}
 
 	if err := os.WriteFile(filepath.Join(folderPath, prefix+".key"), key.KeyData, 0600); err != nil {
-		return err
+		return fmt.Errorf("writing key file: %w", err)
 	}
 
 	// Generate and write the PKCS#12 (.p12) file.
@@ -464,7 +464,7 @@ func exportBundleCerts(ctx context.Context, db *DB, opts certkit.BundleOptions, 
 				slog.Debug("skipping older certificate (use --duplicates to export)", "bundle", bundleName, "serial", bundleCert.SerialNumber, "expiry", bundleCert.Expiry.Format(time.RFC3339))
 				continue
 			}
-			expirationDate := bundleCert.Expiry.Format("2006-01-02")
+			expirationDate := bundleCert.Expiry.Format(time.RFC3339)
 			bundleFolder = fmt.Sprintf("%s_%s_%s", bundleName, expirationDate, bundleCert.SerialNumber)
 			slog.Debug("using folder for older certificate", "folder", bundleFolder, "newest_serial", certs[0].SerialNumber, "cn", bundleCert.CommonName.String)
 		}

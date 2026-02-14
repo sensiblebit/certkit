@@ -57,7 +57,7 @@ func runBundle(cmd *cobra.Command, args []string) error {
 
 	leaf, key, extraCerts, err := loadBundleInput(args[0], passwords)
 	if err != nil {
-		return err
+		return fmt.Errorf("loading %s: %w", args[0], err)
 	}
 
 	// Load explicit key if provided
@@ -77,7 +77,7 @@ func runBundle(cmd *cobra.Command, args []string) error {
 	if key != nil {
 		leaf, extraCerts, err = selectLeafByKey(key, leaf, extraCerts)
 		if err != nil {
-			return err
+			return fmt.Errorf("selecting leaf certificate: %w", err)
 		}
 	}
 
@@ -103,7 +103,7 @@ func runBundle(cmd *cobra.Command, args []string) error {
 
 	output, err := formatBundleOutput(bundle, key, bundleFormat, passwords)
 	if err != nil {
-		return err
+		return fmt.Errorf("formatting bundle output: %w", err)
 	}
 
 	if bundleOutFile != "" {

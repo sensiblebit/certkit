@@ -66,7 +66,7 @@ func runCSR(cmd *cobra.Command, args []string) error {
 		Passwords:    passwords,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("generating CSR: %w", err)
 	}
 
 	if csrOutPath == "" {

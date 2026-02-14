@@ -113,20 +113,20 @@ func buildChainDisplay(bundle *certkit.BundleResult) []ChainCert {
 	var chain []ChainCert
 	chain = append(chain, ChainCert{
 		Subject: bundle.Leaf.Subject.String(),
-		Expiry:  bundle.Leaf.NotAfter.UTC().Format("2006-01-02"),
+		Expiry:  bundle.Leaf.NotAfter.UTC().Format(time.RFC3339),
 		SKI:     certkit.CertSKIEmbedded(bundle.Leaf),
 	})
 	for _, c := range bundle.Intermediates {
 		chain = append(chain, ChainCert{
 			Subject: c.Subject.String(),
-			Expiry:  c.NotAfter.UTC().Format("2006-01-02"),
+			Expiry:  c.NotAfter.UTC().Format(time.RFC3339),
 			SKI:     certkit.CertSKIEmbedded(c),
 		})
 	}
 	for _, c := range bundle.Roots {
 		chain = append(chain, ChainCert{
 			Subject: c.Subject.String(),
-			Expiry:  c.NotAfter.UTC().Format("2006-01-02"),
+			Expiry:  c.NotAfter.UTC().Format(time.RFC3339),
 			SKI:     certkit.CertSKIEmbedded(c),
 			IsRoot:  true,
 		})

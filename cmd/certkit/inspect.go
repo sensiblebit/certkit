@@ -34,7 +34,7 @@ func runInspect(cmd *cobra.Command, args []string) error {
 
 	results, err := internal.InspectFile(args[0], passwords)
 	if err != nil {
-		return err
+		return fmt.Errorf("inspecting %s: %w", args[0], err)
 	}
 
 	if !allowExpired {
@@ -52,7 +52,7 @@ func runInspect(cmd *cobra.Command, args []string) error {
 
 	output, err := internal.FormatInspectResults(results, inspectFormat)
 	if err != nil {
-		return err
+		return fmt.Errorf("formatting inspect results: %w", err)
 	}
 
 	fmt.Print(output)

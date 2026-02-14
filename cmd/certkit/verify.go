@@ -78,7 +78,7 @@ func runVerify(cmd *cobra.Command, args []string) error {
 	// Parse the input file (handles p12, jks, p7b, pem, der)
 	contents, err := internal.LoadContainerFile(args[0], passwords)
 	if err != nil {
-		return err
+		return fmt.Errorf("loading %s: %w", args[0], err)
 	}
 
 	if !allowExpired && contents.Leaf != nil && time.Now().After(contents.Leaf.NotAfter) {
@@ -112,7 +112,7 @@ func runVerify(cmd *cobra.Command, args []string) error {
 
 	result, err := internal.VerifyCert(cmd.Context(), input)
 	if err != nil {
-		return err
+		return fmt.Errorf("verifying certificate: %w", err)
 	}
 
 	switch verifyFormat {

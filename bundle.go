@@ -213,9 +213,9 @@ func checkExpiryWarnings(chain []*x509.Certificate) []string {
 	thirtyDays := 30 * 24 * time.Hour
 	for _, cert := range chain {
 		if now.After(cert.NotAfter) {
-			warnings = append(warnings, fmt.Sprintf("certificate %q has expired (not after: %s)", cert.Subject.CommonName, cert.NotAfter.UTC().Format("2006-01-02")))
+			warnings = append(warnings, fmt.Sprintf("certificate %q has expired (not after: %s)", cert.Subject.CommonName, cert.NotAfter.UTC().Format(time.RFC3339)))
 		} else if CertExpiresWithin(cert, thirtyDays) {
-			warnings = append(warnings, fmt.Sprintf("certificate %q expires within 30 days (not after: %s)", cert.Subject.CommonName, cert.NotAfter.UTC().Format("2006-01-02")))
+			warnings = append(warnings, fmt.Sprintf("certificate %q expires within 30 days (not after: %s)", cert.Subject.CommonName, cert.NotAfter.UTC().Format(time.RFC3339)))
 		}
 	}
 	return warnings
