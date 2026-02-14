@@ -82,7 +82,7 @@ func runBundle(cmd *cobra.Command, args []string) error {
 	}
 
 	if !allowExpired && leaf != nil && time.Now().After(leaf.NotAfter) {
-		return fmt.Errorf("certificate expired on %s (use --allow-expired to proceed)", leaf.NotAfter.UTC().Format(time.RFC3339))
+		return &ValidationError{Message: fmt.Sprintf("certificate expired on %s (use --allow-expired to proceed)", leaf.NotAfter.UTC().Format(time.RFC3339))}
 	}
 
 	opts := certkit.DefaultOptions()

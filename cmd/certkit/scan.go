@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"io/fs"
@@ -25,6 +26,7 @@ var (
 	scanDumpKeys    string
 	scanDumpCerts   string
 	scanMaxFileSize int64
+	scanFormat      string
 )
 
 var scanCmd = &cobra.Command{
@@ -48,6 +50,7 @@ func init() {
 	scanCmd.Flags().StringVar(&scanDumpKeys, "dump-keys", "", "Dump all discovered keys to a single PEM file")
 	scanCmd.Flags().StringVar(&scanDumpCerts, "dump-certs", "", "Dump all discovered certificates to a single PEM file")
 	scanCmd.Flags().Int64Var(&scanMaxFileSize, "max-file-size", 10*1024*1024, "Skip files larger than this size in bytes (0 to disable)")
+	scanCmd.Flags().StringVar(&scanFormat, "format", "text", "Output format: text or json")
 }
 
 func runScan(cmd *cobra.Command, args []string) error {
@@ -170,8 +173,8 @@ func runScan(cmd *cobra.Command, args []string) error {
 				header := fmt.Sprintf("# Subject: %s\n# Issuer: %s\n# Not Before: %s\n# Not After : %s\n",
 					formatDN(cert.Subject),
 					formatDN(cert.Issuer),
-					cert.NotBefore.UTC().Format(time.RFC1123Z),
-					cert.NotAfter.UTC().Format(time.RFC1123Z))
+					cert.NotBefore.UTC().Format(time.RFC3339),
+					cert.NotAfter.UTC().Format(time.RFC3339))
 				data = append(data, header...)
 				data = append(data, c.PEM...)
 				count++
@@ -212,15 +215,26 @@ func runScan(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("generating summary: %w", err)
 		}
-		total := summary.Roots + summary.Intermediates + summary.Leaves
-		fmt.Printf("\nFound %d certificate(s) and %d key(s)\n", total, summary.Keys)
-		if total > 0 {
-			fmt.Printf("  Roots:         %d\n", summary.Roots)
-			fmt.Printf("  Intermediates: %d\n", summary.Intermediates)
-			fmt.Printf("  Leaves:        %d\n", summary.Leaves)
-		}
-		if summary.Keys > 0 {
-			fmt.Printf("  Key-cert pairs: %d\n", summary.Matched)
+		switch scanFormat {
+		case "json":
+			data, err := json.MarshalIndent(summary, "", "  ")
+			if err != nil {
+				return fmt.Errorf("marshaling JSON: %w", err)
+			}
+			fmt.Println(string(data))
+		case "text":
+			total := summary.Roots + summary.Intermediates + summary.Leaves
+			fmt.Printf("\nFound %d certificate(s) and %d key(s)\n", total, summary.Keys)
+			if total > 0 {
+				fmt.Printf("  Roots:         %d\n", summary.Roots)
+				fmt.Printf("  Intermediates: %d\n", summary.Intermediates)
+				fmt.Printf("  Leaves:        %d\n", summary.Leaves)
+			}
+			if summary.Keys > 0 {
+				fmt.Printf("  Key-cert pairs: %d\n", summary.Matched)
+			}
+		default:
+			return fmt.Errorf("unsupported output format %q (use text or json)", scanFormat)
 		}
 	}
 

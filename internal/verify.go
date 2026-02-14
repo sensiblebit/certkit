@@ -26,10 +26,10 @@ type VerifyInput struct {
 
 // ChainCert holds display information for one certificate in the chain.
 type ChainCert struct {
-	Subject string
-	Expiry  string
-	SKI     string
-	IsRoot  bool
+	Subject string `json:"subject"`
+	Expiry  string `json:"expiry"`
+	SKI     string `json:"subject_key_id,omitempty"`
+	IsRoot  bool   `json:"is_root,omitempty"`
 }
 
 // VerifyResult holds the results of certificate verification checks.
@@ -37,7 +37,7 @@ type VerifyResult struct {
 	Subject     string   `json:"subject"`
 	SANs        []string `json:"sans,omitempty"`
 	NotAfter    string   `json:"not_after"`
-	SKI         string   `json:"ski,omitempty"`
+	SKI         string   `json:"subject_key_id,omitempty"`
 	KeyMatch    *bool    `json:"key_match,omitempty"`
 	KeyMatchErr string   `json:"key_match_error,omitempty"`
 	KeyInfo     string   `json:"key_info,omitempty"`

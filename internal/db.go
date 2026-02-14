@@ -269,12 +269,13 @@ func (db *DB) ResolveAKIs() error {
 }
 
 // ScanSummary holds aggregate counts from a scan.
+// ScanSummary holds aggregate counts from a scan operation.
 type ScanSummary struct {
-	Roots         int
-	Intermediates int
-	Leaves        int
-	Keys          int
-	Matched       int // keys that have a matching certificate
+	Roots         int `json:"roots"`
+	Intermediates int `json:"intermediates"`
+	Leaves        int `json:"leaves"`
+	Keys          int `json:"keys"`
+	Matched       int `json:"key_cert_pairs"`
 }
 
 // GetScanSummary queries the database for aggregate counts.

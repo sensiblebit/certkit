@@ -2,7 +2,7 @@ package main
 
 import (
 	"crypto"
-	"errors"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strconv"
@@ -18,6 +18,7 @@ var (
 	verifyKeyPath    string
 	verifyExpiry     string
 	verifyTrustStore string
+	verifyFormat     string
 )
 
 var verifyCmd = &cobra.Command{
@@ -44,6 +45,7 @@ func init() {
 	verifyCmd.Flags().StringVar(&verifyKeyPath, "key", "", "Private key file to check against the certificate")
 	verifyCmd.Flags().StringVarP(&verifyExpiry, "expiry", "e", "", "Check if cert expires within duration (e.g., 30d, 720h)")
 	verifyCmd.Flags().StringVar(&verifyTrustStore, "trust-store", "mozilla", "Trust store for chain validation: system, mozilla")
+	verifyCmd.Flags().StringVar(&verifyFormat, "format", "text", "Output format: text or json")
 }
 
 // parseDuration extends time.ParseDuration to support a "d" suffix for days.
@@ -80,7 +82,7 @@ func runVerify(cmd *cobra.Command, args []string) error {
 	}
 
 	if !allowExpired && contents.Leaf != nil && time.Now().After(contents.Leaf.NotAfter) {
-		return fmt.Errorf("certificate expired on %s (use --allow-expired to proceed)", contents.Leaf.NotAfter.UTC().Format(time.RFC3339))
+		return &ValidationError{Message: fmt.Sprintf("certificate expired on %s (use --allow-expired to proceed)", contents.Leaf.NotAfter.UTC().Format(time.RFC3339))}
 	}
 
 	// Load explicit key from --key flag (overrides embedded key)
@@ -113,10 +115,21 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	fmt.Print(internal.FormatVerifyResult(result))
+	switch verifyFormat {
+	case "json":
+		data, err := json.MarshalIndent(result, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshaling JSON: %w", err)
+		}
+		fmt.Println(string(data))
+	case "text":
+		fmt.Print(internal.FormatVerifyResult(result))
+	default:
+		return fmt.Errorf("unsupported output format %q (use text or json)", verifyFormat)
+	}
 
 	if len(result.Errors) > 0 {
-		return errors.New("verification failed")
+		return &ValidationError{Message: "verification failed"}
 	}
 	return nil
 }
