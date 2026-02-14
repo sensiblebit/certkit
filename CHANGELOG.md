@@ -7,17 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-02-14
+
 ### Added
 
-- Add `--load-db` flag to scan command to load an existing database before scanning ([`pending`])
-- Add `--save-db` flag to scan command to save the in-memory database after scanning ([`pending`])
+- Add `--load-db` flag to scan command to load an existing database before scanning ([`ee2749b`])
+- Add `--save-db` flag to scan command to save the in-memory database after scanning ([`ee2749b`])
 - Scan inside ZIP, TAR, and TAR.GZ archives for certificates and keys with zip bomb protection ([`ee2749b`])
 
 ### Changed
 
-- **Breaking:** Remove `--db` flag from scan command; database is always in-memory ([`pending`])
-- Skip `.git`, `.hg`, `.svn`, `node_modules`, `__pycache__`, `.tox`, `.venv`, and `vendor` directories during scan to reduce I/O ([`pending`])
-- Add SQLite performance PRAGMAs and pin to single connection for in-memory DB ([`pending`])
+- **Breaking:** Remove `--db` flag from scan command; database is always in-memory ([`ee2749b`])
+- Skip `.git`, `.hg`, `.svn`, `node_modules`, `__pycache__`, `.tox`, `.venv`, and `vendor` directories during scan to reduce I/O ([`ee2749b`])
+- Add SQLite performance PRAGMAs and pin to single connection for in-memory DB ([`ee2749b`])
 - Restructure CLAUDE.md with numbered sections, rule severity IDs, and Ralph Loop protocol ([`5702af2`])
 - Add pre-commit hooks: goimports, go vet, go build, go test, markdownlint ([`f8477ae`])
 
@@ -187,7 +189,8 @@ Initial release.
 - PKCS#12, PKCS#7, and JKS encode/decode support
 - Homebrew distribution via GoReleaser
 
-[Unreleased]: https://github.com/sensiblebit/certkit/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/sensiblebit/certkit/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/sensiblebit/certkit/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/sensiblebit/certkit/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/sensiblebit/certkit/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/sensiblebit/certkit/compare/v0.3.9...v0.4.0
