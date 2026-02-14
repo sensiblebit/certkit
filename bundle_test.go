@@ -17,6 +17,7 @@ import (
 )
 
 func TestDefaultOptions(t *testing.T) {
+	// WHY: Default options define the contract for callers who omit configuration; wrong defaults silently break verification or AIA fetching.
 	opts := DefaultOptions()
 	if !opts.FetchAIA {
 		t.Error("FetchAIA should default to true")
@@ -39,6 +40,7 @@ func TestDefaultOptions(t *testing.T) {
 }
 
 func TestBundle_customRoots(t *testing.T) {
+	// WHY: Custom trust stores are the primary offline testing path; this verifies a full 3-tier chain resolves correctly without network access.
 	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	caTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
@@ -104,6 +106,7 @@ func TestBundle_customRoots(t *testing.T) {
 }
 
 func TestBundle_mozillaRoots(t *testing.T) {
+	// WHY: Verifies the embedded Mozilla trust store works for real-world chains; catches root cert staleness or AIA resolution bugs.
 	leaf, err := FetchLeafFromURL(context.Background(), "https://google.com", 5*time.Second)
 	if err != nil {
 		t.Skipf("cannot connect to google.com: %v", err)
@@ -149,6 +152,7 @@ func TestBundle_mozillaRoots(t *testing.T) {
 }
 
 func TestBundle_verifyFails(t *testing.T) {
+	// WHY: An orphan cert (no trusted root) must fail verification; silently passing would produce bundles that TLS clients reject.
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
@@ -170,6 +174,8 @@ func TestBundle_verifyFails(t *testing.T) {
 }
 
 func TestBundle_twoCertChain(t *testing.T) {
+	// WHY: Two-tier chain (leaf+root, no intermediate) is the simplest valid chain;
+	// verifies Bundle works without intermediates.
 	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	caTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
@@ -217,6 +223,7 @@ func TestBundle_twoCertChain(t *testing.T) {
 }
 
 func TestBundle_unknownTrustStore(t *testing.T) {
+	// WHY: Invalid trust store names must produce a clear error; silently falling back to system roots would mask configuration mistakes.
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
@@ -241,6 +248,8 @@ func TestBundle_unknownTrustStore(t *testing.T) {
 }
 
 func TestBundle_verifyFalsePassthrough(t *testing.T) {
+	// WHY: When Verify=false, all supplied intermediates must pass through even if
+	// chain is incomplete -- callers may handle verification themselves.
 	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	caTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
@@ -283,6 +292,7 @@ func TestBundle_verifyFalsePassthrough(t *testing.T) {
 }
 
 func TestFetchLeafFromURL(t *testing.T) {
+	// WHY: FetchLeafFromURL is the entry point for remote cert inspection; must return the leaf (not a CA) with a populated CN.
 	cert, err := FetchLeafFromURL(context.Background(), "https://google.com", 5*time.Second)
 	if err != nil {
 		t.Skipf("cannot connect to google.com: %v", err)
@@ -296,6 +306,7 @@ func TestFetchLeafFromURL(t *testing.T) {
 }
 
 func TestFetchLeafFromURL_withPort(t *testing.T) {
+	// WHY: URLs with explicit port must work; naive URL parsing could double-append :443 or fail to extract the host.
 	cert, err := FetchLeafFromURL(context.Background(), "https://google.com:443", 5*time.Second)
 	if err != nil {
 		t.Skipf("cannot connect to google.com:443: %v", err)
@@ -306,6 +317,7 @@ func TestFetchLeafFromURL_withPort(t *testing.T) {
 }
 
 func TestFetchLeafFromURL_badHost(t *testing.T) {
+	// WHY: Non-existent hosts must return an error, not hang or panic; callers depend on error return to report unreachable servers.
 	_, err := FetchLeafFromURL(context.Background(), "https://this-does-not-exist.invalid", 2*time.Second)
 	if err == nil {
 		t.Error("expected error for non-existent host")
@@ -313,6 +325,7 @@ func TestFetchLeafFromURL_badHost(t *testing.T) {
 }
 
 func TestFetchLeafFromURL_invalidURL(t *testing.T) {
+	// WHY: Malformed URLs must produce a "parsing URL" error, not a confusing network error downstream.
 	_, err := FetchLeafFromURL(context.Background(), "://bad", 2*time.Second)
 	if err == nil {
 		t.Error("expected error for invalid URL")
@@ -323,6 +336,7 @@ func TestFetchLeafFromURL_invalidURL(t *testing.T) {
 }
 
 func TestFetchCertFromURL_http404(t *testing.T) {
+	// WHY: AIA URLs that return HTTP 404 must produce a clear error; silently ignoring would leave chains incomplete.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
@@ -339,6 +353,7 @@ func TestFetchCertFromURL_http404(t *testing.T) {
 }
 
 func TestFetchCertFromURL_DER(t *testing.T) {
+	// WHY: AIA endpoints commonly serve raw DER; the fetcher must auto-detect DER vs PEM format to work with real CAs.
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
@@ -364,6 +379,7 @@ func TestFetchCertFromURL_DER(t *testing.T) {
 }
 
 func TestFetchCertFromURL_PEM(t *testing.T) {
+	// WHY: Some AIA endpoints serve PEM-encoded certs; the fetcher must handle both PEM and DER transparently.
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
@@ -390,6 +406,7 @@ func TestFetchCertFromURL_PEM(t *testing.T) {
 }
 
 func TestFetchCertFromURL_garbage(t *testing.T) {
+	// WHY: Non-certificate responses from AIA endpoints must produce a clear parse error, not return a corrupt certificate object.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("this is not a certificate"))
 	}))
@@ -406,6 +423,7 @@ func TestFetchCertFromURL_garbage(t *testing.T) {
 }
 
 func TestFetchAIACertificates_maxDepthZero(t *testing.T) {
+	// WHY: maxDepth=0 must prevent all AIA fetches; without this guard, deep chains could cause infinite recursion or excessive network calls.
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
@@ -429,6 +447,7 @@ func TestFetchAIACertificates_maxDepthZero(t *testing.T) {
 // --- Bundle warning tests ---
 
 func TestDetectAndSwapLeaf_ReversedChain(t *testing.T) {
+	// WHY: Users sometimes pass certs in reversed order (CA first); the swap heuristic must detect this and reorder to produce a valid chain.
 	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	caTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
@@ -481,7 +500,60 @@ func TestDetectAndSwapLeaf_ReversedChain(t *testing.T) {
 	}
 }
 
+func TestDetectAndSwapLeaf_MultipleNonCACerts(t *testing.T) {
+	// WHY: detectAndSwapLeaf should NOT swap when multiple non-CA certs exist
+	// in extras — the heuristic only fires for exactly one candidate.
+	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Multi-NonCA CA"},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	caBytes, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	caCert, _ := x509.ParseCertificate(caBytes)
+
+	// Create two non-CA leaf certs
+	leafKey1, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	leafTemplate1 := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "leaf1.example.com"},
+		NotBefore:    time.Now().Add(-1 * time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+	}
+	leafBytes1, _ := x509.CreateCertificate(rand.Reader, leafTemplate1, caCert, &leafKey1.PublicKey, caKey)
+	leafCert1, _ := x509.ParseCertificate(leafBytes1)
+
+	leafKey2, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	leafTemplate2 := &x509.Certificate{
+		SerialNumber: big.NewInt(3),
+		Subject:      pkix.Name{CommonName: "leaf2.example.com"},
+		NotBefore:    time.Now().Add(-1 * time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+	}
+	leafBytes2, _ := x509.CreateCertificate(rand.Reader, leafTemplate2, caCert, &leafKey2.PublicKey, caKey)
+	leafCert2, _ := x509.ParseCertificate(leafBytes2)
+
+	// Pass CA as "leaf" with two non-CA certs as extras
+	newLeaf, newExtras, warnings := detectAndSwapLeaf(caCert, []*x509.Certificate{leafCert1, leafCert2})
+
+	// Should NOT swap — ambiguous which leaf to pick
+	if newLeaf.Subject.CommonName != "Multi-NonCA CA" {
+		t.Errorf("should not swap when multiple non-CA certs exist, leaf CN=%q", newLeaf.Subject.CommonName)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("should not produce warnings, got %v", warnings)
+	}
+	if len(newExtras) != 2 {
+		t.Errorf("extras should be unchanged, got %d", len(newExtras))
+	}
+}
+
 func TestDetectAndSwapLeaf_NoSwapWhenLeafIsCorrect(t *testing.T) {
+	// WHY: When the leaf is already correctly positioned, no swap should occur; a false swap would put the CA cert as the leaf.
 	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	caTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
@@ -527,6 +599,7 @@ func TestDetectAndSwapLeaf_NoSwapWhenLeafIsCorrect(t *testing.T) {
 }
 
 func TestCheckSHA1Signatures(t *testing.T) {
+	// WHY: SHA-1 signed certs are deprecated and insecure; the warning system must detect them so users know to replace affected certs.
 	// Test the helper directly with hand-set SignatureAlgorithm
 	certs := []*x509.Certificate{
 		{Subject: pkix.Name{CommonName: "sha1-cert"}, SignatureAlgorithm: x509.SHA1WithRSA},
@@ -546,6 +619,7 @@ func TestCheckSHA1Signatures(t *testing.T) {
 }
 
 func TestCheckSHA1Signatures_NoWarning(t *testing.T) {
+	// WHY: Modern SHA-256 certs must not trigger false SHA-1 warnings; false positives would cause unnecessary alarm.
 	certs := []*x509.Certificate{
 		{Subject: pkix.Name{CommonName: "modern"}, SignatureAlgorithm: x509.SHA256WithRSA},
 		{Subject: pkix.Name{CommonName: "ecdsa"}, SignatureAlgorithm: x509.ECDSAWithSHA256},
@@ -558,6 +632,7 @@ func TestCheckSHA1Signatures_NoWarning(t *testing.T) {
 }
 
 func TestCheckExpiryWarnings(t *testing.T) {
+	// WHY: Expiry warnings must fire for expired and soon-expiring certs but not for far-future certs; wrong thresholds cause missed or false alerts.
 	tests := []struct {
 		name         string
 		notAfter     time.Duration
@@ -588,6 +663,7 @@ func TestCheckExpiryWarnings(t *testing.T) {
 }
 
 func TestFetchAIACertificates_duplicateURLs(t *testing.T) {
+	// WHY: Duplicate AIA URLs in a cert must be deduplicated to avoid redundant HTTP fetches and duplicate certs in the chain.
 	issuerKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	issuerTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),

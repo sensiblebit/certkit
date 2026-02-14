@@ -12,6 +12,7 @@ import (
 // --- Group 1: Certificate Issue Detection ---
 
 func TestBadSSL_Expired(t *testing.T) {
+	// WHY: Validates certkit behavior against a real expired certificate: CertExpiresWithin must detect it, Bundle must reject it, and basic operations (fingerprint, SKI) must still work.
 	chain := fetchBadSSLChain(t, "expired.badssl.com")
 	leaf := chain.leaf
 
@@ -54,6 +55,7 @@ func TestBadSSL_Expired(t *testing.T) {
 }
 
 func TestBadSSL_SelfSigned(t *testing.T) {
+	// WHY: Self-signed certs must fail mozilla trust but succeed with custom roots; also validates PEM round-trip and fingerprint stability.
 	chain := fetchBadSSLChain(t, "self-signed.badssl.com")
 	leaf := chain.leaf
 
@@ -108,6 +110,7 @@ func TestBadSSL_SelfSigned(t *testing.T) {
 }
 
 func TestBadSSL_UntrustedRoot(t *testing.T) {
+	// WHY: A cert signed by an untrusted root must fail verification against mozilla; basic operations must still work on the leaf.
 	chain := fetchBadSSLChain(t, "untrusted-root.badssl.com")
 	leaf := chain.leaf
 
@@ -132,6 +135,7 @@ func TestBadSSL_UntrustedRoot(t *testing.T) {
 }
 
 func TestBadSSL_IncompleteChain(t *testing.T) {
+	// WHY: Tests AIA chain completion against a server that sends an incomplete chain; verifies AIA fetch can resolve missing intermediates.
 	chain := fetchBadSSLChain(t, "incomplete-chain.badssl.com")
 	leaf := chain.leaf
 
@@ -176,6 +180,7 @@ func TestBadSSL_IncompleteChain(t *testing.T) {
 }
 
 func TestBadSSL_WrongHost(t *testing.T) {
+	// WHY: A valid cert served on the wrong hostname is still parseable; verifies certkit operations work regardless of hostname mismatch.
 	chain := fetchBadSSLChain(t, "wrong.host.badssl.com")
 	leaf := chain.leaf
 
@@ -202,6 +207,7 @@ func TestBadSSL_WrongHost(t *testing.T) {
 }
 
 func TestBadSSL_NoCommonName(t *testing.T) {
+	// WHY: Modern certs may have empty CN and rely solely on SANs; verifies certkit handles empty CN without errors and SANs are preserved through PEM round-trip.
 	chain := fetchBadSSLChain(t, "no-common-name.badssl.com")
 	leaf := chain.leaf
 
@@ -232,6 +238,7 @@ func TestBadSSL_NoCommonName(t *testing.T) {
 }
 
 func TestBadSSL_NoSubject(t *testing.T) {
+	// WHY: Certs with completely empty subjects are a valid edge case; verifies fingerprint, type detection, and SKI computation don't break on empty subject fields.
 	chain := fetchBadSSLChain(t, "no-subject.badssl.com")
 	leaf := chain.leaf
 
@@ -257,6 +264,7 @@ func TestBadSSL_NoSubject(t *testing.T) {
 // --- Group 2: Key Types & Algorithms ---
 
 func TestBadSSL_KeyTypes(t *testing.T) {
+	// WHY: Tests PublicKeyAlgorithmName, key size detection, and SKI/PEM round-trip across RSA (2048/4096/8192) and ECDSA (P-256/P-384) using real-world certs.
 	skipIfBadSSLUnavailable(t)
 
 	tests := []struct {
@@ -316,6 +324,7 @@ func TestBadSSL_KeyTypes(t *testing.T) {
 }
 
 func TestBadSSL_SignatureAlgorithms(t *testing.T) {
+	// WHY: Verifies certkit handles certs with different signature hash algorithms (SHA-256/384/512) and that fingerprints work regardless of the signing algorithm.
 	skipIfBadSSLUnavailable(t)
 
 	tests := []struct {
@@ -348,6 +357,7 @@ func TestBadSSL_SignatureAlgorithms(t *testing.T) {
 // --- Group 3: Edge Cases ---
 
 func TestBadSSL_1000SANs(t *testing.T) {
+	// WHY: Large SAN lists (~1000) are a stress test for PEM encoding/parsing; verifies no SAN data is lost through round-trip and fingerprints still compute.
 	chain := fetchBadSSLChain(t, "1000-sans.badssl.com")
 	leaf := chain.leaf
 
@@ -373,6 +383,7 @@ func TestBadSSL_1000SANs(t *testing.T) {
 }
 
 func TestBadSSL_10000SANs(t *testing.T) {
+	// WHY: Extreme SAN count (~10000) tests that SKI and fingerprint computations don't degrade or panic on very large certificates.
 	chain := fetchBadSSLChain(t, "10000-sans.badssl.com")
 	leaf := chain.leaf
 

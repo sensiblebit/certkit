@@ -17,40 +17,8 @@ import (
 	gopkcs12 "software.sslmate.com/src/go-pkcs12"
 )
 
-func TestEncodePKCS12_roundTrip(t *testing.T) {
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "pkcs12-test"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	cert, _ := x509.ParseCertificate(certBytes)
-
-	password := "test-password"
-	pfxData, err := EncodePKCS12(key, cert, nil, password)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(pfxData) == 0 {
-		t.Fatal("empty PKCS#12 data")
-	}
-
-	decodedKey, decodedCert, err := gopkcs12.Decode(pfxData, password)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if decodedCert.Subject.CommonName != "pkcs12-test" {
-		t.Errorf("got CN=%q", decodedCert.Subject.CommonName)
-	}
-	if _, ok := decodedKey.(*ecdsa.PrivateKey); !ok {
-		t.Errorf("expected *ecdsa.PrivateKey, got %T", decodedKey)
-	}
-}
-
 func TestEncodePKCS12_withChain(t *testing.T) {
+	// WHY: PKCS#12 bundles with CA chains are the primary export format for Java/Windows; the chain must survive encoding and decode correctly.
 	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	caTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
@@ -93,6 +61,7 @@ func TestEncodePKCS12_withChain(t *testing.T) {
 }
 
 func TestEncodePKCS12_unsupportedKeyType(t *testing.T) {
+	// WHY: Unsupported key types must produce a clear error, not panic; callers pass untyped crypto.PrivateKey from various decoders.
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
@@ -113,6 +82,7 @@ func TestEncodePKCS12_unsupportedKeyType(t *testing.T) {
 }
 
 func TestDecodePKCS12_roundTrip(t *testing.T) {
+	// WHY: Encode-then-decode round-trip proves PKCS#12 encoding preserves key material, cert identity, and produces no CA certs for a standalone bundle.
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
@@ -153,6 +123,7 @@ func TestDecodePKCS12_roundTrip(t *testing.T) {
 }
 
 func TestDecodePKCS12_withChain(t *testing.T) {
+	// WHY: PKCS#12 with CA chain must decode both the leaf and CA certs; missing CA certs would break chain-of-trust verification after import.
 	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	caTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
@@ -195,6 +166,7 @@ func TestDecodePKCS12_withChain(t *testing.T) {
 }
 
 func TestDecodePKCS12_invalidData(t *testing.T) {
+	// WHY: Non-PKCS#12 data must produce a "decoding PKCS#12" error, not a generic ASN.1 message; users need to know the format was wrong.
 	_, _, _, err := DecodePKCS12([]byte("not pkcs12"), "pass")
 	if err == nil {
 		t.Error("expected error for invalid PKCS#12 data")
@@ -205,6 +177,7 @@ func TestDecodePKCS12_invalidData(t *testing.T) {
 }
 
 func TestDecodePKCS12_wrongPassword(t *testing.T) {
+	// WHY: Wrong passwords must produce an error, not silently return garbage or a zero-value key; this guards against data corruption on import.
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
@@ -222,30 +195,8 @@ func TestDecodePKCS12_wrongPassword(t *testing.T) {
 	}
 }
 
-func TestEncodePKCS7_roundTrip(t *testing.T) {
-	caPEM, intPEM, leafPEM := generateTestPKI(t)
-	ca, _ := ParsePEMCertificate([]byte(caPEM))
-	intermediate, _ := ParsePEMCertificate([]byte(intPEM))
-	leaf, _ := ParsePEMCertificate([]byte(leafPEM))
-
-	derData, err := EncodePKCS7([]*x509.Certificate{leaf, intermediate, ca})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(derData) == 0 {
-		t.Fatal("empty PKCS#7 data")
-	}
-
-	p7, err := smPkcs7.Parse(derData)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(p7.Certificates) != 3 {
-		t.Errorf("expected 3 certs, got %d", len(p7.Certificates))
-	}
-}
-
 func TestEncodePKCS7_empty(t *testing.T) {
+	// WHY: Empty cert list must be rejected; producing a PKCS#7 with no certs would create a valid-looking but useless container.
 	_, err := EncodePKCS7(nil)
 	if err == nil {
 		t.Error("expected error for empty cert list")
@@ -253,6 +204,7 @@ func TestEncodePKCS7_empty(t *testing.T) {
 }
 
 func TestDecodePKCS7_roundTrip(t *testing.T) {
+	// WHY: PKCS#7 round-trip must preserve all certs in order with byte-exact equality; any loss breaks chain assembly from .p7b files.
 	caPEM, intPEM, leafPEM := generateTestPKI(t)
 	ca, _ := ParsePEMCertificate([]byte(caPEM))
 	intermediate, _ := ParsePEMCertificate([]byte(intPEM))
@@ -282,6 +234,7 @@ func TestDecodePKCS7_roundTrip(t *testing.T) {
 }
 
 func TestEncodePKCS12Legacy_roundTrip(t *testing.T) {
+	// WHY: Legacy PKCS#12 (RC2 encryption) is needed for older Java/Windows compatibility; round-trip proves the legacy encoder produces decodable output.
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
@@ -319,6 +272,7 @@ func TestEncodePKCS12Legacy_roundTrip(t *testing.T) {
 }
 
 func TestDecodePKCS7_invalidData(t *testing.T) {
+	// WHY: Non-PKCS#7 data must produce a "parsing PKCS#7" error; without this, the ingestion pipeline cannot distinguish format from corruption errors.
 	_, err := DecodePKCS7([]byte("not pkcs7"))
 	if err == nil {
 		t.Error("expected error for invalid PKCS#7 data")
@@ -329,6 +283,7 @@ func TestDecodePKCS7_invalidData(t *testing.T) {
 }
 
 func TestEncodePKCS12_RSA(t *testing.T) {
+	// WHY: PKCS#12 with RSA keys must round-trip correctly; RSA is the most common key type in PKCS#12 files from Windows and Java.
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
@@ -372,6 +327,7 @@ func TestEncodePKCS12_RSA(t *testing.T) {
 }
 
 func TestEncodePKCS12_Ed25519(t *testing.T) {
+	// WHY: PKCS#12 with Ed25519 keys must round-trip correctly; Ed25519 requires PKCS#8 encoding which differs from RSA/ECDSA paths.
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -417,6 +373,7 @@ func TestEncodePKCS12_Ed25519(t *testing.T) {
 }
 
 func TestEncodePKCS12_EmptyPassword(t *testing.T) {
+	// WHY: Empty-password PKCS#12 files are common in development; the encoder must handle the empty string without error.
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
@@ -450,6 +407,7 @@ func TestEncodePKCS12_EmptyPassword(t *testing.T) {
 }
 
 func TestEncodePKCS12_MultiCertChain(t *testing.T) {
+	// WHY: Multi-level chains (root + intermediate + leaf) must all survive PKCS#12 encoding; missing intermediates would break TLS verification.
 	// Create root CA
 	rootKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	rootTemplate := &x509.Certificate{
@@ -509,6 +467,7 @@ func TestEncodePKCS12_MultiCertChain(t *testing.T) {
 }
 
 func TestEncodePKCS12Legacy_UnsupportedKey(t *testing.T) {
+	// WHY: The legacy encoder must reject unsupported key types with a clear error, matching the behavior of the modern encoder.
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
@@ -529,6 +488,7 @@ func TestEncodePKCS12Legacy_UnsupportedKey(t *testing.T) {
 }
 
 func TestDecodePKCS12_TruncatedData(t *testing.T) {
+	// WHY: Truncated PKCS#12 data (e.g., incomplete download) must produce an error, not return partial or corrupt key/cert material.
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
@@ -553,6 +513,7 @@ func TestDecodePKCS12_TruncatedData(t *testing.T) {
 }
 
 func TestEncodePKCS7_SingleCert(t *testing.T) {
+	// WHY: Single-cert PKCS#7 is the simplest case; verifies the encoder works without a chain and the round-trip preserves cert identity.
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
@@ -581,6 +542,7 @@ func TestEncodePKCS7_SingleCert(t *testing.T) {
 }
 
 func TestDecodePKCS7_EmptyPKCS7(t *testing.T) {
+	// WHY: A PKCS#7 container with no certificates must produce a "no certificates" error, not return an empty slice that callers would silently accept.
 	// EncodePKCS7 rejects empty input, so we try to create a degenerate PKCS#7
 	// with no certificates using the underlying library directly.
 	derData, err := smPkcs7.DegenerateCertificate([]byte{})
@@ -595,5 +557,67 @@ func TestDecodePKCS7_EmptyPKCS7(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no certificates") {
 		t.Errorf("error should mention no certificates, got: %v", err)
+	}
+}
+
+func TestEncodePKCS12Legacy_WithCAChain(t *testing.T) {
+	// WHY: EncodePKCS12Legacy with intermediates was untested — only the nil
+	// CA certs path was covered. This ensures the legacy RC2 encoder correctly
+	// includes CA certs in the bundle and they survive a round-trip decode.
+	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Legacy Chain CA"},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	caBytes, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	caCert, _ := x509.ParseCertificate(caBytes)
+
+	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	leafTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "legacy-chain-leaf.example.com"},
+		NotBefore:    time.Now().Add(-1 * time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	leafBytes, _ := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
+	leafCert, _ := x509.ParseCertificate(leafBytes)
+
+	password := "legacy-chain-pass"
+	pfxData, err := EncodePKCS12Legacy(leafKey, leafCert, []*x509.Certificate{caCert}, password)
+	if err != nil {
+		t.Fatalf("EncodePKCS12Legacy with CA chain: %v", err)
+	}
+	if len(pfxData) == 0 {
+		t.Fatal("empty PKCS#12 legacy data")
+	}
+
+	// Decode and verify both the leaf and the CA cert survived the round-trip.
+	decodedKey, decodedCert, decodedCAs, err := DecodePKCS12(pfxData, password)
+	if err != nil {
+		t.Fatalf("DecodePKCS12 round-trip: %v", err)
+	}
+	if decodedCert.Subject.CommonName != "legacy-chain-leaf.example.com" {
+		t.Errorf("leaf CN=%q, want legacy-chain-leaf.example.com", decodedCert.Subject.CommonName)
+	}
+	if len(decodedCAs) != 1 {
+		t.Fatalf("expected 1 CA cert, got %d", len(decodedCAs))
+	}
+	if decodedCAs[0].Subject.CommonName != "Legacy Chain CA" {
+		t.Errorf("CA CN=%q, want Legacy Chain CA", decodedCAs[0].Subject.CommonName)
+	}
+
+	// Verify key round-trip.
+	ecDecoded, ok := decodedKey.(*ecdsa.PrivateKey)
+	if !ok {
+		t.Fatalf("expected *ecdsa.PrivateKey, got %T", decodedKey)
+	}
+	if !leafKey.Equal(ecDecoded) {
+		t.Error("legacy PKCS#12 key round-trip mismatch")
 	}
 }

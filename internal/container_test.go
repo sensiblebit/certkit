@@ -11,6 +11,7 @@ import (
 )
 
 func TestLoadContainerFile_PKCS12(t *testing.T) {
+	// WHY: PKCS#12 is the most common container format for bundled certs+keys; verifies that leaf, key, and CA chain are all extracted from a file on disk.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "p12.example.com", []string{"p12.example.com"}, nil)
 	p12Data := newPKCS12Bundle(t, leaf, ca, "changeit")
@@ -37,6 +38,7 @@ func TestLoadContainerFile_PKCS12(t *testing.T) {
 }
 
 func TestLoadContainerFile_JKS(t *testing.T) {
+	// WHY: JKS keystores are common in Java environments; verifies that the JKS decoder extracts leaf, key, and CA chain correctly from a file.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "jks.example.com", []string{"jks.example.com"}, nil)
 	jksData := newJKSBundle(t, leaf, ca, "changeit")
@@ -63,6 +65,7 @@ func TestLoadContainerFile_JKS(t *testing.T) {
 }
 
 func TestLoadContainerFile_PKCS7(t *testing.T) {
+	// WHY: PKCS#7 bundles contain certificates but no keys; verifies leaf and CA are extracted while Key correctly remains nil.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "p7b.example.com", []string{"p7b.example.com"}, nil)
 
@@ -93,6 +96,7 @@ func TestLoadContainerFile_PKCS7(t *testing.T) {
 }
 
 func TestLoadContainerFile_PEM(t *testing.T) {
+	// WHY: PEM chain files are the most common certificate format; verifies the loader correctly splits leaf from extra CA certs in a multi-cert PEM.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "pem.example.com", []string{"pem.example.com"}, nil)
 
@@ -121,6 +125,7 @@ func TestLoadContainerFile_PEM(t *testing.T) {
 }
 
 func TestLoadContainerFile_DER(t *testing.T) {
+	// WHY: DER is a single-cert binary format with no chain; verifies the loader handles the boundary case of zero extra certs and no key.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "der.example.com", []string{"der.example.com"}, nil)
 
@@ -146,6 +151,7 @@ func TestLoadContainerFile_DER(t *testing.T) {
 }
 
 func TestLoadContainerFile_NotFound(t *testing.T) {
+	// WHY: A nonexistent file must return an error, not panic or return empty contents.
 	_, err := LoadContainerFile("/nonexistent/file.pem", nil)
 	if err == nil {
 		t.Error("expected error for nonexistent file")
@@ -153,6 +159,7 @@ func TestLoadContainerFile_NotFound(t *testing.T) {
 }
 
 func TestLoadContainerFile_InvalidData(t *testing.T) {
+	// WHY: Garbage data must produce an error, not be silently accepted as an empty container or cause a panic in format detection.
 	dir := t.TempDir()
 	badFile := filepath.Join(dir, "garbage.bin")
 	if err := os.WriteFile(badFile, []byte("not a certificate"), 0644); err != nil {
@@ -166,6 +173,7 @@ func TestLoadContainerFile_InvalidData(t *testing.T) {
 }
 
 func TestParseContainerData_PEM(t *testing.T) {
+	// WHY: ParseContainerData operates on raw bytes (no file path); verifies PEM detection and leaf/CA splitting work without filesystem dependencies.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "parse-pem.example.com", []string{"parse-pem.example.com"}, nil)
 
@@ -193,6 +201,7 @@ func TestParseContainerData_PEM(t *testing.T) {
 }
 
 func TestParseContainerData_PKCS12(t *testing.T) {
+	// WHY: Verifies the in-memory PKCS#12 parsing path extracts leaf, key, and CA certs correctly from raw bytes.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "parse-p12.example.com", []string{"parse-p12.example.com"}, nil)
 	p12Data := newPKCS12Bundle(t, leaf, ca, "changeit")
@@ -216,6 +225,7 @@ func TestParseContainerData_PKCS12(t *testing.T) {
 }
 
 func TestParseContainerData_GarbageData(t *testing.T) {
+	// WHY: Deterministic non-format data must produce an error after exhausting all format attempts, not panic or return partial results.
 	garbage := make([]byte, 512)
 	for i := range garbage {
 		garbage[i] = byte(i % 251)
@@ -228,6 +238,7 @@ func TestParseContainerData_GarbageData(t *testing.T) {
 }
 
 func TestParseContainerData_EmptyData(t *testing.T) {
+	// WHY: Zero-length input is a distinct edge case from garbage data; verifies the early-exit guard returns an error before attempting format detection.
 	_, err := ParseContainerData([]byte{}, nil)
 	if err == nil {
 		t.Error("expected error for empty data")
@@ -235,6 +246,7 @@ func TestParseContainerData_EmptyData(t *testing.T) {
 }
 
 func TestParseContainerData_NilData(t *testing.T) {
+	// WHY: Nil input must not cause a nil-pointer panic; verifies the function handles nil gracefully by returning an error.
 	_, err := ParseContainerData(nil, nil)
 	if err == nil {
 		t.Error("expected error for nil data (not panic)")
@@ -242,6 +254,7 @@ func TestParseContainerData_NilData(t *testing.T) {
 }
 
 func TestParseContainerData_PKCS12MultiplePasswords(t *testing.T) {
+	// WHY: The password-iteration logic must try all passwords, not just the first; verifies decryption succeeds when the correct password is not first in the list.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "multi-pw.example.com", []string{"multi-pw.example.com"}, nil)
 	p12Data := newPKCS12Bundle(t, leaf, ca, "correct-password")
@@ -263,6 +276,7 @@ func TestParseContainerData_PKCS12MultiplePasswords(t *testing.T) {
 }
 
 func TestParseContainerData_VerifyLeafIdentity(t *testing.T) {
+	// WHY: After round-tripping through PKCS#12 encode/decode, the leaf's CN, DNSNames, and Organization must survive intact; a serialization bug could silently corrupt certificate metadata.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "identity.example.com", []string{"identity.example.com", "www.identity.example.com"}, nil)
 	p12Data := newPKCS12Bundle(t, leaf, ca, "changeit")
@@ -292,6 +306,7 @@ func TestParseContainerData_VerifyLeafIdentity(t *testing.T) {
 }
 
 func TestLoadContainerFile_VerifyLeafIdentity(t *testing.T) {
+	// WHY: End-to-end file-based PKCS#12 loading must preserve leaf identity and key-cert pairing; also verifies the CA chain appears in ExtraCerts.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "file-identity.example.com", []string{"file-identity.example.com"}, nil)
 	p12Data := newPKCS12Bundle(t, leaf, ca, "changeit")
@@ -335,6 +350,7 @@ func TestLoadContainerFile_VerifyLeafIdentity(t *testing.T) {
 }
 
 func TestParseContainerData_PKCS12WrongPassword(t *testing.T) {
+	// WHY: When all provided passwords are wrong, the function must return an error rather than silently returning empty contents.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "wrongpw.example.com", []string{"wrongpw.example.com"}, nil)
 	p12Data := newPKCS12Bundle(t, leaf, ca, "correct-password")
@@ -343,5 +359,50 @@ func TestParseContainerData_PKCS12WrongPassword(t *testing.T) {
 	_, err := ParseContainerData(p12Data, []string{"wrong1", "wrong2", "wrong3"})
 	if err == nil {
 		t.Error("expected error when all passwords are wrong")
+	}
+}
+
+func TestParseContainerData_JKSWrongPassword(t *testing.T) {
+	// WHY: PKCS#12 wrong-password is tested above but the JKS wrong-password
+	// path is not. JKS stores may fail differently than PKCS#12 when the
+	// password is wrong, so this path needs independent coverage.
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "jks-wrongpw.example.com", []string{"jks-wrongpw.example.com"}, nil)
+	jksData := newJKSBundle(t, leaf, ca, "correct-password")
+
+	// Only provide wrong passwords — JKS decoding should fail
+	_, err := ParseContainerData(jksData, []string{"wrong"})
+	if err == nil {
+		t.Error("expected error when JKS password is wrong")
+	}
+}
+
+func TestParseContainerData_PKCS7SingleCert(t *testing.T) {
+	// WHY: All existing PKCS#7 tests use multi-cert bundles (leaf + CA).
+	// A single-cert PKCS#7 means ExtraCerts should be empty. This exercises
+	// the certs[1:] slicing boundary when len(certs) == 1.
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "p7-single.example.com", []string{"p7-single.example.com"}, nil)
+
+	p7Data, err := certkit.EncodePKCS7([]*x509.Certificate{leaf.cert})
+	if err != nil {
+		t.Fatalf("encode PKCS7: %v", err)
+	}
+
+	contents, err := ParseContainerData(p7Data, nil)
+	if err != nil {
+		t.Fatalf("ParseContainerData PKCS7 single cert: %v", err)
+	}
+	if contents.Leaf == nil {
+		t.Fatal("expected leaf certificate")
+	}
+	if contents.Leaf.Subject.CommonName != "p7-single.example.com" {
+		t.Errorf("leaf CN = %q, want p7-single.example.com", contents.Leaf.Subject.CommonName)
+	}
+	if len(contents.ExtraCerts) != 0 {
+		t.Errorf("expected 0 extra certs for single-cert PKCS#7, got %d", len(contents.ExtraCerts))
+	}
+	if contents.Key != nil {
+		t.Error("expected no key from PKCS#7")
 	}
 }

@@ -23,6 +23,7 @@ import (
 )
 
 func TestFormatIPAddresses(t *testing.T) {
+	// WHY: IP SANs must be formatted as strings for JSON/YAML output; verifies IPv4, IPv4-mapped IPv6, and native IPv6 are all represented correctly.
 	ips := []net.IP{
 		net.ParseIP("10.0.0.1"),
 		net.ParseIP("192.168.1.1"),
@@ -41,6 +42,7 @@ func TestFormatIPAddresses(t *testing.T) {
 }
 
 func TestFormatIPAddresses_Empty(t *testing.T) {
+	// WHY: Nil IP list must return an empty slice, not nil; downstream JSON marshaling would produce "null" instead of "[]" for nil slices.
 	result := formatIPAddresses(nil)
 	if len(result) != 0 {
 		t.Errorf("expected empty result for nil input, got %v", result)
@@ -48,6 +50,7 @@ func TestFormatIPAddresses_Empty(t *testing.T) {
 }
 
 func TestPublicKeyAlgorithmName(t *testing.T) {
+	// WHY: The algorithm name string is used in JSON output and display; verifies correct names for RSA, ECDSA, Ed25519, and the "unknown" fallback.
 	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
 	ca := newECDSACA(t)
 	rsaCA := newRSACA(t)
@@ -81,58 +84,8 @@ func newTestBundle(t *testing.T, leaf testLeaf, ca testCA) *certkit.BundleResult
 	}
 }
 
-func TestGenerateJSON_ValidOutput(t *testing.T) {
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "json.example.com", []string{"json.example.com", "www.json.example.com"}, nil)
-	bundle := newTestBundle(t, leaf, ca)
-
-	data, err := generateJSON(bundle)
-	if err != nil {
-		t.Fatalf("generateJSON: %v", err)
-	}
-
-	var parsed map[string]any
-	if err := json.Unmarshal(data, &parsed); err != nil {
-		t.Fatalf("unmarshal JSON: %v", err)
-	}
-
-	for _, field := range []string{"serial_number", "subject_key_id", "sans", "pem", "issuer", "not_before", "not_after"} {
-		if _, ok := parsed[field]; !ok {
-			t.Errorf("expected %q field in JSON", field)
-		}
-	}
-}
-
-func TestGenerateYAML_ValidOutput(t *testing.T) {
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "yaml.example.com", []string{"yaml.example.com"}, nil)
-	bundle := newTestBundle(t, leaf, ca)
-
-	keyRecord := &KeyRecord{
-		SubjectKeyIdentifier: "test-ski",
-		KeyType:              "rsa",
-		BitLength:            2048,
-		KeyData:              leaf.keyPEM,
-	}
-
-	data, err := generateYAML(keyRecord, bundle)
-	if err != nil {
-		t.Fatalf("generateYAML: %v", err)
-	}
-
-	var parsed map[string]any
-	if err := yaml.Unmarshal(data, &parsed); err != nil {
-		t.Fatalf("unmarshal YAML: %v", err)
-	}
-
-	for _, field := range []string{"crt", "key", "bundle", "root", "key_type", "expires"} {
-		if _, ok := parsed[field]; !ok {
-			t.Errorf("expected %q field in YAML output", field)
-		}
-	}
-}
-
 func TestGenerateCSR_ValidOutput(t *testing.T) {
+	// WHY: CSR generation is part of every bundle export; verifies the output is a valid CERTIFICATE REQUEST PEM and JSON contains required fields.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "csr.example.com", []string{"csr.example.com", "www.csr.example.com"}, nil)
 
@@ -182,6 +135,7 @@ func TestGenerateCSR_ValidOutput(t *testing.T) {
 }
 
 func TestGenerateCSR_WildcardSANFiltering(t *testing.T) {
+	// WHY: When a wildcard SAN (*.example.com) is present, the bare domain (example.com) must be filtered to avoid duplicate coverage; CAs may reject CSRs with redundant SANs.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "*.example.com", []string{"*.example.com", "example.com"}, nil)
 
@@ -216,6 +170,7 @@ func TestGenerateCSR_WildcardSANFiltering(t *testing.T) {
 }
 
 func TestGenerateCSR_WWWCNFiltering(t *testing.T) {
+	// WHY: The www.CN SAN is redundant when exactly two SANs match the CN + www.CN pattern; verifies the dedup logic removes it to produce cleaner CSRs.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "example.com", []string{"example.com", "www.example.com"}, nil)
 
@@ -241,6 +196,7 @@ func TestGenerateCSR_WWWCNFiltering(t *testing.T) {
 }
 
 func TestGenerateCSR_BundleConfigSubjectOverride(t *testing.T) {
+	// WHY: Bundle config subject overrides replace the cert's own subject in the CSR; verifies the override takes precedence over the certificate's embedded subject.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "override.example.com", []string{"override.example.com"}, nil)
 
@@ -274,6 +230,7 @@ func TestGenerateCSR_BundleConfigSubjectOverride(t *testing.T) {
 }
 
 func TestGenerateCSR_FallbackToCertSubject(t *testing.T) {
+	// WHY: When no bundle config subject is provided, the CSR must inherit the certificate's own subject fields; verifies the fallback path.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "fallback.example.com", []string{"fallback.example.com"}, nil)
 
@@ -300,6 +257,7 @@ func TestGenerateCSR_FallbackToCertSubject(t *testing.T) {
 }
 
 func TestGenerateCSR_EmptyOUDefaultsToNone(t *testing.T) {
+	// WHY: Some CAs require a non-empty OU field; verifies the "None" default is applied when the cert has no OrganizationalUnit set.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "noou.example.com", []string{"noou.example.com"}, nil)
 
@@ -323,6 +281,7 @@ func TestGenerateCSR_EmptyOUDefaultsToNone(t *testing.T) {
 }
 
 func TestWriteBundleFiles_CreatesAllFiles(t *testing.T) {
+	// WHY: A full bundle export produces up to 12 output files; verifies all expected files are created on disk for a standard cert+key+chain bundle.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "bundle.example.com", []string{"bundle.example.com"}, nil)
 
@@ -368,6 +327,7 @@ func TestWriteBundleFiles_CreatesAllFiles(t *testing.T) {
 }
 
 func TestWriteBundleFiles_WildcardPrefix(t *testing.T) {
+	// WHY: Wildcard CNs (*.example.com) contain filesystem-unsafe characters; verifies the asterisk is replaced with underscore in output filenames.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "*.wildcard.com", []string{"*.wildcard.com"}, nil)
 
@@ -391,6 +351,7 @@ func TestWriteBundleFiles_WildcardPrefix(t *testing.T) {
 }
 
 func TestGenerateJSON_RoundTrip(t *testing.T) {
+	// WHY: JSON output is the machine-readable contract; verifies all fields (subject, SANs, serial, sigalg, dates, PEM, SKI/AKI) survive encode/decode round-trip.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "json-rt.example.com", []string{"json-rt.example.com", "www.json-rt.example.com"}, []net.IP{net.ParseIP("10.0.0.1")})
 	bundle := newTestBundle(t, leaf, ca)
@@ -493,6 +454,7 @@ func TestGenerateJSON_RoundTrip(t *testing.T) {
 }
 
 func TestGenerateYAML_RoundTrip(t *testing.T) {
+	// WHY: YAML output bundles all cert/key/chain data into a single file; verifies PEM round-trip fidelity, RFC 3339 dates, and hostname inclusion for all SAN types.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "yaml-rt.example.com", []string{"yaml-rt.example.com"}, []net.IP{net.ParseIP("192.168.1.1")})
 	bundle := newTestBundle(t, leaf, ca)
@@ -596,6 +558,7 @@ func TestGenerateYAML_RoundTrip(t *testing.T) {
 }
 
 func TestWriteBundleFiles_K8sYAMLDecode(t *testing.T) {
+	// WHY: K8s TLS secrets must have correct apiVersion, kind, type, and base64-encoded tls.crt/tls.key; verifies the secret is deployable and the key matches the cert.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "k8s.example.com", []string{"k8s.example.com"}, nil)
 
@@ -688,6 +651,7 @@ func TestWriteBundleFiles_K8sYAMLDecode(t *testing.T) {
 }
 
 func TestWriteBundleFiles_K8sYAMLDecode_Wildcard(t *testing.T) {
+	// WHY: K8s secret names cannot contain wildcards; verifies the "_." prefix is stripped from metadata.name for wildcard certificates.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "*.k8s-wild.com", []string{"*.k8s-wild.com"}, nil)
 
@@ -722,6 +686,7 @@ func TestWriteBundleFiles_K8sYAMLDecode_Wildcard(t *testing.T) {
 }
 
 func TestWriteBundleFiles_JSONDecode(t *testing.T) {
+	// WHY: The .json output file must be valid JSON with correct subject and parseable PEM; verifies the file-based output matches in-memory generation.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "json-file.example.com", []string{"json-file.example.com"}, nil)
 
@@ -766,6 +731,7 @@ func TestWriteBundleFiles_JSONDecode(t *testing.T) {
 }
 
 func TestWriteBundleFiles_YAMLDecode(t *testing.T) {
+	// WHY: The .yaml output file must be valid YAML with parseable cert and key PEM; verifies the file-based output matches in-memory generation.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "yaml-file.example.com", []string{"yaml-file.example.com"}, nil)
 
@@ -816,6 +782,7 @@ func TestWriteBundleFiles_YAMLDecode(t *testing.T) {
 }
 
 func TestWriteBundleFiles_ChainExcludesRoot(t *testing.T) {
+	// WHY: chain.pem must exclude the root CA (servers should not send roots), while fullchain.pem includes it; verifies the critical distinction between the two files.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "chain.example.com", []string{"chain.example.com"}, nil)
 
@@ -869,6 +836,7 @@ func TestWriteBundleFiles_ChainExcludesRoot(t *testing.T) {
 }
 
 func TestWriteBundleFiles_SensitiveFilePermissions(t *testing.T) {
+	// WHY: Private key, PKCS#12, and K8s secret files contain sensitive material; verifies they are written with 0600 permissions to prevent unauthorized access.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "perms.example.com", []string{"perms.example.com"}, nil)
 
@@ -906,6 +874,7 @@ func TestWriteBundleFiles_SensitiveFilePermissions(t *testing.T) {
 }
 
 func TestWriteBundleFiles_PKCS12Password(t *testing.T) {
+	// WHY: Exported PKCS#12 files must use the "changeit" password convention; verifies decoding succeeds with correct password, fails with wrong password, and key matches cert.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "p12pass.example.com", []string{"p12pass.example.com"}, nil)
 
@@ -954,6 +923,7 @@ func TestWriteBundleFiles_PKCS12Password(t *testing.T) {
 }
 
 func TestWriteBundleFiles_NoIntermediates(t *testing.T) {
+	// WHY: Bundles without intermediates must not create an intermediates.pem file; verifies the conditional file creation logic and that other files are still produced.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "no-int.example.com", []string{"no-int.example.com"}, nil)
 
@@ -1001,6 +971,7 @@ func TestWriteBundleFiles_NoIntermediates(t *testing.T) {
 }
 
 func TestWriteBundleFiles_NoRoot(t *testing.T) {
+	// WHY: Bundles without a root CA must not create a root.pem file; verifies the conditional file creation logic for the root-absent case.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "no-root.example.com", []string{"no-root.example.com"}, nil)
 
@@ -1048,6 +1019,7 @@ func TestWriteBundleFiles_NoRoot(t *testing.T) {
 }
 
 func TestWriteBundleFiles_K8sTlsCrtExcludesRoot(t *testing.T) {
+	// WHY: K8s tls.crt must contain leaf + intermediates only (not the root); including the root wastes space and violates TLS best practices.
 	// Build a proper 3-tier PKI: root → intermediate → leaf
 	rootCA := newRSACA(t)
 
@@ -1127,6 +1099,7 @@ func TestWriteBundleFiles_K8sTlsCrtExcludesRoot(t *testing.T) {
 }
 
 func TestGenerateJSON_PEMExcludesRoot(t *testing.T) {
+	// WHY: The JSON "pem" field must contain leaf + intermediates only, not the root; consumers use this PEM for server configuration where root inclusion is incorrect.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "json-noroot.example.com", []string{"json-noroot.example.com"}, nil)
 	bundle := newTestBundle(t, leaf, ca)
@@ -1159,7 +1132,47 @@ func TestGenerateJSON_PEMExcludesRoot(t *testing.T) {
 	}
 }
 
+func TestDetermineBundleName_AllBranches(t *testing.T) {
+	// WHY: determineBundleName has three distinct code paths that control output
+	// directory naming. This table-driven test explicitly covers each branch:
+	// config match with BundleName, config match without BundleName, and no match.
+	tests := []struct {
+		name    string
+		cn      string
+		configs []BundleConfig
+		want    string
+	}{
+		{
+			name:    "config match with BundleName set",
+			cn:      "app.example.com",
+			configs: []BundleConfig{{CommonNames: []string{"app.example.com"}, BundleName: "my-app"}},
+			want:    "my-app",
+		},
+		{
+			name:    "config match with empty BundleName uses sanitized CN",
+			cn:      "*.example.com",
+			configs: []BundleConfig{{CommonNames: []string{"*.example.com"}}},
+			want:    "_.example.com",
+		},
+		{
+			name:    "no config match uses sanitized CN",
+			cn:      "*.nomatch.com",
+			configs: []BundleConfig{{CommonNames: []string{"other.com"}, BundleName: "other"}},
+			want:    "_.nomatch.com",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := determineBundleName(tt.cn, tt.configs)
+			if got != tt.want {
+				t.Errorf("determineBundleName(%q) = %q, want %q", tt.cn, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestExportBundles_EndToEnd(t *testing.T) {
+	// WHY: Integration test for the full export pipeline (DB -> chain resolution -> file writing); verifies the bundle directory is created and populated.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "e2e.example.com", []string{"e2e.example.com"}, nil)
 
@@ -1212,5 +1225,58 @@ func TestExportBundles_EndToEnd(t *testing.T) {
 	bundleDir := filepath.Join(outDir, "e2e-bundle")
 	if _, err := os.Stat(bundleDir); os.IsNotExist(err) {
 		t.Errorf("expected bundle directory %s to exist", bundleDir)
+	}
+}
+
+func TestExportBundles_EmptyBundleNameSkipped(t *testing.T) {
+	// WHY: Keys matched to certs with empty BundleName must be silently skipped,
+	// not cause errors or write to empty-named directories.
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "no-bundle.example.com", []string{"no-bundle.example.com"}, nil)
+
+	cfg := newTestConfig(t)
+	defer cfg.DB.Close()
+
+	now := time.Now()
+	certRecord := CertificateRecord{
+		SerialNumber:           leaf.cert.SerialNumber.String(),
+		SubjectKeyIdentifier:   "empty-bundle-ski",
+		AuthorityKeyIdentifier: "empty-bundle-aki",
+		CertType:               "leaf",
+		KeyType:                getKeyType(leaf.cert),
+		PEM:                    string(leaf.certPEM),
+		Expiry:                 leaf.cert.NotAfter,
+		NotBefore:              &now,
+		SANsJSON:               types.JSONText(`["no-bundle.example.com"]`),
+		CommonName:             sql.NullString{String: "no-bundle.example.com", Valid: true},
+		BundleName:             "", // empty — should be skipped
+	}
+	if err := cfg.DB.InsertCertificate(certRecord); err != nil {
+		t.Fatalf("insert cert: %v", err)
+	}
+
+	keyRecord := KeyRecord{
+		SubjectKeyIdentifier: "empty-bundle-ski",
+		KeyType:              "rsa",
+		BitLength:            2048,
+		KeyData:              leaf.keyPEM,
+	}
+	if err := cfg.DB.InsertKey(keyRecord); err != nil {
+		t.Fatalf("insert key: %v", err)
+	}
+
+	outDir := t.TempDir()
+	err := ExportBundles(context.Background(), nil, outDir, cfg.DB, true, false)
+	if err != nil {
+		t.Fatalf("ExportBundles should not error: %v", err)
+	}
+
+	// Verify no directories were created in outDir
+	entries, err := os.ReadDir(outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Errorf("expected empty output dir (cert has no bundle name), got %d entries", len(entries))
 	}
 }

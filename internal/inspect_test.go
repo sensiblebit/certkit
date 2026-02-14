@@ -13,6 +13,7 @@ import (
 )
 
 func TestInspectFile_Certificate(t *testing.T) {
+	// WHY: Core inspect path for PEM certificates; verifies subject, SHA-256 fingerprint, and type are correctly extracted and match independent computation.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "inspect.example.com", []string{"inspect.example.com"}, nil)
 
@@ -47,6 +48,7 @@ func TestInspectFile_Certificate(t *testing.T) {
 }
 
 func TestInspectFile_PrivateKey(t *testing.T) {
+	// WHY: InspectFile must identify standalone private keys; verifies the result type is "private_key" with correct algorithm name.
 	dir := t.TempDir()
 	keyFile := filepath.Join(dir, "key.pem")
 	if err := os.WriteFile(keyFile, rsaKeyPEM(t), 0600); err != nil {
@@ -71,29 +73,8 @@ func TestInspectFile_PrivateKey(t *testing.T) {
 	}
 }
 
-func TestInspectFile_DERCert(t *testing.T) {
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "der.example.com", []string{"der.example.com"}, nil)
-
-	dir := t.TempDir()
-	derFile := filepath.Join(dir, "cert.der")
-	if err := os.WriteFile(derFile, leaf.certDER, 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	results, err := InspectFile(derFile, []string{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(results) == 0 {
-		t.Fatal("expected at least one result")
-	}
-	if results[0].Type != "certificate" {
-		t.Errorf("expected type=certificate, got %s", results[0].Type)
-	}
-}
-
 func TestInspectFile_NotFound(t *testing.T) {
+	// WHY: A nonexistent file path must return an error, not panic or return empty results.
 	_, err := InspectFile("/nonexistent/path", []string{})
 	if err == nil {
 		t.Error("expected error for nonexistent file")
@@ -101,6 +82,7 @@ func TestInspectFile_NotFound(t *testing.T) {
 }
 
 func TestInspectFile_PKCS12(t *testing.T) {
+	// WHY: PKCS#12 files contain certs and keys; verifies InspectFile extracts and reports both object types with correct leaf CN.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "p12.example.com", []string{"p12.example.com"}, nil)
 	p12 := newPKCS12Bundle(t, leaf, ca, "changeit")
@@ -145,6 +127,7 @@ func TestInspectFile_PKCS12(t *testing.T) {
 }
 
 func TestInspectFile_JKS(t *testing.T) {
+	// WHY: JKS is a Java-specific format; verifies InspectFile can decode it and report both certificate and key entries.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "jks.example.com", []string{"jks.example.com"}, nil)
 	jks := newJKSBundle(t, leaf, ca, "changeit")
@@ -178,6 +161,7 @@ func TestInspectFile_JKS(t *testing.T) {
 }
 
 func TestInspectFile_CSR(t *testing.T) {
+	// WHY: CSR inspection is a distinct code path from cert/key; verifies subject and DNS names are extracted from a dynamically generated CSR.
 	dir := t.TempDir()
 
 	// Generate a key and CSR using GenerateKeyFiles
@@ -223,6 +207,7 @@ func TestInspectFile_CSR(t *testing.T) {
 }
 
 func TestInspectFile_ECDSAKey(t *testing.T) {
+	// WHY: ECDSA keys report curve name instead of bit length; verifies the KeySize field shows "P-256" and SKI is populated for key matching.
 	dir := t.TempDir()
 	keyFile := filepath.Join(dir, "ec-key.pem")
 	if err := os.WriteFile(keyFile, ecdsaKeyPEM(t), 0600); err != nil {
@@ -256,6 +241,7 @@ func TestInspectFile_ECDSAKey(t *testing.T) {
 }
 
 func TestInspectFile_CertWithIPSANs(t *testing.T) {
+	// WHY: IP SANs must appear alongside DNS SANs in inspect output; without this, users would not see IP addresses when diagnosing certificate issues.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "ip.example.com", []string{"ip.example.com"}, []net.IP{net.ParseIP("10.0.0.1"), net.ParseIP("192.168.1.1")})
 
@@ -291,6 +277,7 @@ func TestInspectFile_CertWithIPSANs(t *testing.T) {
 }
 
 func TestInspectFile_Ed25519Key(t *testing.T) {
+	// WHY: Ed25519 keys have fixed 256-bit size and no curve; verifies the inspect result correctly reports type, size, and both SKI variants.
 	dir := t.TempDir()
 	keyFile := filepath.Join(dir, "ed25519-key.pem")
 	if err := os.WriteFile(keyFile, ed25519KeyPEM(t), 0600); err != nil {
@@ -327,6 +314,8 @@ func TestInspectFile_Ed25519Key(t *testing.T) {
 }
 
 func TestInspectFile_MultiplePEMObjects(t *testing.T) {
+	// WHY: A single PEM file can contain certs and keys in any order; this verifies
+	// InspectFile finds all objects regardless of ordering.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "multi-pem.example.com", []string{"multi-pem.example.com"}, nil)
 
@@ -370,6 +359,7 @@ func TestInspectFile_MultiplePEMObjects(t *testing.T) {
 }
 
 func TestInspectFile_GarbageData(t *testing.T) {
+	// WHY: Garbage data must produce a descriptive "no certificates, keys, or CSRs found" error, not a cryptic parsing failure or panic.
 	dir := t.TempDir()
 	garbageFile := filepath.Join(dir, "garbage.bin")
 	garbage := make([]byte, 512)
@@ -390,6 +380,7 @@ func TestInspectFile_GarbageData(t *testing.T) {
 }
 
 func TestFormatInspectResults_UnsupportedFormat(t *testing.T) {
+	// WHY: Only "text" and "json" formats are supported; an unsupported format must return an error, not silently produce empty output.
 	results := []InspectResult{
 		{Type: "certificate", Subject: "CN=test"},
 	}
@@ -404,6 +395,7 @@ func TestFormatInspectResults_UnsupportedFormat(t *testing.T) {
 }
 
 func TestInspectFile_DERCertificate(t *testing.T) {
+	// WHY: DER certificates lack PEM headers; verifies the DER detection fallback in InspectFile produces correct subject, fingerprints, key algorithm, and size.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "der-inspect.example.com", []string{"der-inspect.example.com"}, nil)
 
@@ -441,6 +433,7 @@ func TestInspectFile_DERCertificate(t *testing.T) {
 }
 
 func TestFormatInspectResults_JSON_ValidJSON(t *testing.T) {
+	// WHY: JSON format is the machine-readable contract for inspect output; verifies valid JSON with trailing newline, and round-trip fidelity for all fields.
 	results := []InspectResult{
 		{
 			Type:    "certificate",
@@ -510,23 +503,35 @@ func TestFormatInspectResults_JSON_ValidJSON(t *testing.T) {
 	}
 }
 
-func TestFormatInspectResults_JSON(t *testing.T) {
-	results := []InspectResult{
-		{Type: "certificate", Subject: "CN=test", SHA256: "AA:BB"},
+func TestInspectFile_ExpiredCert(t *testing.T) {
+	// WHY: InspectFile is a diagnostic tool — it must always show expired
+	// certificates, unlike ProcessFile which filters them by default.
+	ca := newRSACA(t)
+	leaf := newExpiredLeaf(t, ca)
+
+	dir := t.TempDir()
+	certFile := filepath.Join(dir, "expired.pem")
+	if err := os.WriteFile(certFile, leaf.certPEM, 0644); err != nil {
+		t.Fatal(err)
 	}
-	output, err := FormatInspectResults(results, "json")
+
+	results, err := InspectFile(certFile, []string{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(output, "certificate") {
-		t.Error("JSON should contain type")
+	if len(results) == 0 {
+		t.Fatal("InspectFile should return results for expired certificates")
 	}
-	if !strings.Contains(output, "AA:BB") {
-		t.Error("JSON should contain fingerprint")
+	if results[0].Type != "certificate" {
+		t.Errorf("expected type=certificate, got %s", results[0].Type)
+	}
+	if !strings.Contains(results[0].Subject, "expired") {
+		t.Errorf("subject should contain 'expired', got %s", results[0].Subject)
 	}
 }
 
 func TestFormatInspectResults_Text(t *testing.T) {
+	// WHY: Text format is the default human-readable output; verifies that both certificate and private key sections are rendered with appropriate headers.
 	results := []InspectResult{
 		{Type: "certificate", Subject: "CN=test", SHA256: "AA:BB", KeyAlgo: "RSA", KeySize: "2048"},
 		{Type: "private_key", KeyType: "RSA", KeySize: "2048"},

@@ -20,6 +20,7 @@ import (
 )
 
 func TestNewDB_InMemory(t *testing.T) {
+	// WHY: The in-memory SQLite DB is used for all tests and CLI operations; verifies the schema creates both required tables on initialization.
 	db, err := NewDB("")
 	if err != nil {
 		t.Fatalf("NewDB in-memory: %v", err)
@@ -37,6 +38,7 @@ func TestNewDB_InMemory(t *testing.T) {
 }
 
 func TestInsertAndGetCertificate(t *testing.T) {
+	// WHY: Core CRUD test for certificates; verifies insert and retrieval by composite primary key (serial + AKI) preserves all essential fields.
 	db, err := NewDB("")
 	if err != nil {
 		t.Fatalf("NewDB: %v", err)
@@ -81,6 +83,7 @@ func TestInsertAndGetCertificate(t *testing.T) {
 }
 
 func TestInsertAndGetKey(t *testing.T) {
+	// WHY: Core CRUD test for keys; verifies insert and retrieval by SKI preserves key type and bit length.
 	db, err := NewDB("")
 	if err != nil {
 		t.Fatalf("NewDB: %v", err)
@@ -115,62 +118,8 @@ func TestInsertAndGetKey(t *testing.T) {
 	}
 }
 
-func TestInsertDuplicateCertificate_NilError(t *testing.T) {
-	db, err := NewDB("")
-	if err != nil {
-		t.Fatalf("NewDB: %v", err)
-	}
-	defer db.Close()
-
-	now := time.Now()
-	cert := CertificateRecord{
-		SerialNumber:           "dup-serial",
-		SubjectKeyIdentifier:   "dup-ski",
-		AuthorityKeyIdentifier: "dup-aki",
-		CertType:               "leaf",
-		KeyType:                "RSA 2048 bits",
-		Expiry:                 now.Add(365 * 24 * time.Hour),
-		PEM:                    "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
-		NotBefore:              &now,
-		SANsJSON:               types.JSONText(`[]`),
-		CommonName:             sql.NullString{String: "dup.example.com", Valid: true},
-		BundleName:             "dup-bundle",
-	}
-
-	if err := db.InsertCertificate(cert); err != nil {
-		t.Fatalf("first insert: %v", err)
-	}
-
-	// Second insert with same PK should be silently ignored
-	if err := db.InsertCertificate(cert); err != nil {
-		t.Errorf("duplicate certificate insert should return nil, got: %v", err)
-	}
-}
-
-func TestInsertDuplicateKey_NilError(t *testing.T) {
-	db, err := NewDB("")
-	if err != nil {
-		t.Fatalf("NewDB: %v", err)
-	}
-	defer db.Close()
-
-	key := KeyRecord{
-		SubjectKeyIdentifier: "dup-key-ski",
-		KeyType:              "rsa",
-		KeyData:              []byte("keydata"),
-	}
-
-	if err := db.InsertKey(key); err != nil {
-		t.Fatalf("first insert: %v", err)
-	}
-
-	// Second insert with same PK should be silently ignored
-	if err := db.InsertKey(key); err != nil {
-		t.Errorf("duplicate key insert should return nil, got: %v", err)
-	}
-}
-
 func TestGetCertBySKI_NotFound(t *testing.T) {
+	// WHY: A missing SKI lookup must return (nil, nil), not an error; callers rely on nil-cert to distinguish "not found" from "DB error."
 	db, err := NewDB("")
 	if err != nil {
 		t.Fatalf("NewDB: %v", err)
@@ -187,6 +136,7 @@ func TestGetCertBySKI_NotFound(t *testing.T) {
 }
 
 func TestGetKey_NotFound(t *testing.T) {
+	// WHY: A missing key lookup must return (nil, nil); callers use nil-key to determine whether a cert has a matching private key.
 	db, err := NewDB("")
 	if err != nil {
 		t.Fatalf("NewDB: %v", err)
@@ -203,6 +153,7 @@ func TestGetKey_NotFound(t *testing.T) {
 }
 
 func TestGetCert_NotFound(t *testing.T) {
+	// WHY: GetCert uses the composite key (serial + AKI); must return (nil, nil) for a miss, not an sql.ErrNoRows error.
 	db, err := NewDB("")
 	if err != nil {
 		t.Fatalf("NewDB: %v", err)
@@ -219,6 +170,7 @@ func TestGetCert_NotFound(t *testing.T) {
 }
 
 func TestGetAllKeys(t *testing.T) {
+	// WHY: GetAllKeys drives the export pipeline; verifies it returns all inserted keys regardless of key type.
 	db, err := NewDB("")
 	if err != nil {
 		t.Fatalf("NewDB: %v", err)
@@ -246,6 +198,7 @@ func TestGetAllKeys(t *testing.T) {
 }
 
 func TestDumpDB_NoError(t *testing.T) {
+	// WHY: DumpDB prints diagnostic output to stderr; verifies it does not error or panic when the DB contains certs and keys.
 	db, err := NewDB("")
 	if err != nil {
 		t.Fatalf("NewDB: %v", err)
@@ -285,6 +238,7 @@ func TestDumpDB_NoError(t *testing.T) {
 }
 
 func TestGetScanSummary(t *testing.T) {
+	// WHY: The scan summary counts drive CLI output; verifies correct tallying of roots, intermediates, leaves, keys, and matched pairs including empty DB baseline.
 	db, err := NewDB("")
 	if err != nil {
 		t.Fatalf("NewDB: %v", err)
@@ -381,6 +335,7 @@ func TestGetScanSummary(t *testing.T) {
 }
 
 func TestResolveAKIs_AlreadyResolved(t *testing.T) {
+	// WHY: When a leaf's AKI already matches the issuer's RFC 7093 SKI, ResolveAKIs must not corrupt it; verifies the no-op path.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "resolve.example.com", []string{"resolve.example.com"}, nil)
 
@@ -452,6 +407,7 @@ func TestResolveAKIs_AlreadyResolved(t *testing.T) {
 }
 
 func TestResolveAKIs_CrossHash(t *testing.T) {
+	// WHY: Legacy CAs embed SHA-1-based AKIs while certkit stores RFC 7093 SKIs; ResolveAKIs must cross-match and update the AKI to enable chain building.
 	// Simulate: leaf's embedded AKI is SHA-1 of issuer's public key (legacy CA),
 	// but issuer is stored with RFC 7093 M1 SKI. ResolveAKIs should cross-match.
 	ca := newRSACA(t)
@@ -533,6 +489,7 @@ func TestResolveAKIs_CrossHash(t *testing.T) {
 }
 
 func TestResolveAKIs_NoIssuerFound(t *testing.T) {
+	// WHY: Orphan certificates (issuer not in DB) must survive AKI resolution unchanged; a bug here could delete or corrupt their AKI.
 	db, err := NewDB("")
 	if err != nil {
 		t.Fatalf("NewDB: %v", err)
@@ -572,6 +529,7 @@ func TestResolveAKIs_NoIssuerFound(t *testing.T) {
 }
 
 func TestInsertAndGetCertificate_AllFields(t *testing.T) {
+	// WHY: Comprehensive round-trip test for every CertificateRecord field including MetadataJSON, SANsJSON, and timestamps; catches silent data loss in schema or mapping.
 	db, err := NewDB("")
 	if err != nil {
 		t.Fatalf("NewDB: %v", err)
@@ -655,6 +613,7 @@ func TestInsertAndGetCertificate_AllFields(t *testing.T) {
 }
 
 func TestInsertAndGetKey_AllFields(t *testing.T) {
+	// WHY: Comprehensive round-trip test for every KeyRecord field including Curve, Modulus, and KeyData bytes; catches silent data loss in schema or mapping.
 	db, err := NewDB("")
 	if err != nil {
 		t.Fatalf("NewDB: %v", err)
@@ -742,6 +701,7 @@ func newIntermediateCA(t *testing.T, root testCA) testCA {
 }
 
 func TestResolveAKIs_ThreeLevelChain(t *testing.T) {
+	// WHY: Real-world PKI typically has 3+ levels; verifies that AKI resolution correctly updates both leaf->intermediate and intermediate->root AKI links via cross-hash matching.
 	// Create 3-level PKI: Root -> Intermediate -> Leaf
 	root := newRSACA(t)
 	intermediate := newIntermediateCA(t, root)
@@ -883,6 +843,7 @@ func TestResolveAKIs_ThreeLevelChain(t *testing.T) {
 }
 
 func TestResolveAKIs_MultipleLeaves(t *testing.T) {
+	// WHY: Multiple leaves sharing the same issuer must all have their AKIs updated; verifies the UPDATE query handles multiple matching rows correctly.
 	root := newRSACA(t)
 
 	// Create two leaves signed by the same root
@@ -1004,6 +965,7 @@ func TestResolveAKIs_MultipleLeaves(t *testing.T) {
 }
 
 func TestGetAllCerts_ReturnsAll(t *testing.T) {
+	// WHY: GetAllCerts is used for dump and summary; verifies it returns all inserted certs with correct serial numbers and common names.
 	db, err := NewDB("")
 	if err != nil {
 		t.Fatalf("NewDB: %v", err)
@@ -1088,82 +1050,8 @@ func TestGetAllCerts_ReturnsAll(t *testing.T) {
 	}
 }
 
-func TestDuplicateCertInsert_PreservesOriginal(t *testing.T) {
-	db, err := NewDB("")
-	if err != nil {
-		t.Fatalf("NewDB: %v", err)
-	}
-	defer db.Close()
-
-	now := time.Now()
-	originalPEM := "-----BEGIN CERTIFICATE-----\nORIGINAL-PEM-DATA\n-----END CERTIFICATE-----"
-	differentPEM := "-----BEGIN CERTIFICATE-----\nDIFFERENT-PEM-DATA\n-----END CERTIFICATE-----"
-
-	original := CertificateRecord{
-		SerialNumber:           "preserve-serial",
-		SubjectKeyIdentifier:   "preserve-ski-orig",
-		AuthorityKeyIdentifier: "preserve-aki",
-		CertType:               "leaf",
-		KeyType:                "RSA 2048 bits",
-		Expiry:                 now.Add(365 * 24 * time.Hour),
-		PEM:                    originalPEM,
-		NotBefore:              &now,
-		SANsJSON:               types.JSONText(`["orig.example.com"]`),
-		CommonName:             sql.NullString{String: "orig.example.com", Valid: true},
-		BundleName:             "orig-bundle",
-		MetadataJSON:           types.JSONText(`{"version":"first"}`),
-	}
-
-	if err := db.InsertCertificate(original); err != nil {
-		t.Fatalf("first insert: %v", err)
-	}
-
-	// Insert a different record with the same primary key (serial + AKI)
-	duplicate := CertificateRecord{
-		SerialNumber:           "preserve-serial",
-		SubjectKeyIdentifier:   "preserve-ski-dup",
-		AuthorityKeyIdentifier: "preserve-aki",
-		CertType:               "intermediate",
-		KeyType:                "ECDSA P-256",
-		Expiry:                 now.Add(730 * 24 * time.Hour),
-		PEM:                    differentPEM,
-		NotBefore:              &now,
-		SANsJSON:               types.JSONText(`["dup.example.com"]`),
-		CommonName:             sql.NullString{String: "dup.example.com", Valid: true},
-		BundleName:             "dup-bundle",
-		MetadataJSON:           types.JSONText(`{"version":"second"}`),
-	}
-
-	if err := db.InsertCertificate(duplicate); err != nil {
-		t.Fatalf("second insert (duplicate PK): %v", err)
-	}
-
-	// Retrieve and verify the original data is preserved (INSERT OR IGNORE semantics)
-	got, err := db.GetCert("preserve-serial", "preserve-aki")
-	if err != nil {
-		t.Fatalf("GetCert: %v", err)
-	}
-	if got == nil {
-		t.Fatal("GetCert returned nil")
-	}
-	if got.PEM != originalPEM {
-		t.Errorf("PEM: got %q, want %q (original should be preserved)", got.PEM, originalPEM)
-	}
-	if got.SubjectKeyIdentifier != "preserve-ski-orig" {
-		t.Errorf("SKI: got %q, want %q (original should be preserved)", got.SubjectKeyIdentifier, "preserve-ski-orig")
-	}
-	if got.CertType != "leaf" {
-		t.Errorf("CertType: got %q, want %q (original should be preserved)", got.CertType, "leaf")
-	}
-	if got.CommonName.String != "orig.example.com" {
-		t.Errorf("CommonName: got %q, want %q (original should be preserved)", got.CommonName.String, "orig.example.com")
-	}
-	if got.BundleName != "orig-bundle" {
-		t.Errorf("BundleName: got %q, want %q (original should be preserved)", got.BundleName, "orig-bundle")
-	}
-}
-
 func TestGetCertBySKI_Found(t *testing.T) {
+	// WHY: GetCertBySKI is the primary lookup used for cert-key matching; verifies all fields are returned correctly for an existing SKI.
 	db, err := NewDB("")
 	if err != nil {
 		t.Fatalf("NewDB: %v", err)
@@ -1232,6 +1120,7 @@ func TestGetCertBySKI_Found(t *testing.T) {
 }
 
 func TestInsertKey_DuplicateSKI(t *testing.T) {
+	// WHY: INSERT OR IGNORE must preserve the original key when a duplicate SKI is inserted; a bug here could silently overwrite key material.
 	db, err := NewDB("")
 	if err != nil {
 		t.Fatalf("NewDB: %v", err)
@@ -1288,6 +1177,7 @@ func TestInsertKey_DuplicateSKI(t *testing.T) {
 }
 
 func TestInsertCertificate_DuplicatePrimaryKey(t *testing.T) {
+	// WHY: INSERT OR IGNORE must preserve the original cert when a duplicate (serial + AKI) is inserted; a bug here could silently overwrite certificate data during re-scans.
 	db, err := NewDB("")
 	if err != nil {
 		t.Fatalf("NewDB: %v", err)
@@ -1355,6 +1245,7 @@ func TestInsertCertificate_DuplicatePrimaryKey(t *testing.T) {
 }
 
 func TestGetAllCerts_EmptyDB(t *testing.T) {
+	// WHY: An empty DB must return a zero-length slice (not nil) without error; callers iterate the result without nil checks.
 	db, err := NewDB("")
 	if err != nil {
 		t.Fatalf("NewDB: %v", err)
@@ -1372,6 +1263,7 @@ func TestGetAllCerts_EmptyDB(t *testing.T) {
 }
 
 func TestGetAllKeys_EmptyDB(t *testing.T) {
+	// WHY: An empty DB must return a zero-length slice without error; the export pipeline iterates keys and must not fail on an empty set.
 	db, err := NewDB("")
 	if err != nil {
 		t.Fatalf("NewDB: %v", err)
@@ -1389,6 +1281,7 @@ func TestGetAllKeys_EmptyDB(t *testing.T) {
 }
 
 func TestDumpDB_EmptyDB(t *testing.T) {
+	// WHY: DumpDB must not error or panic on an empty database; users may run dump before scanning any files.
 	db, err := NewDB("")
 	if err != nil {
 		t.Fatalf("NewDB: %v", err)
@@ -1401,6 +1294,7 @@ func TestDumpDB_EmptyDB(t *testing.T) {
 }
 
 func TestResolveAKIs_EmptyDB(t *testing.T) {
+	// WHY: ResolveAKIs must be a safe no-op on an empty DB; it runs unconditionally after every scan.
 	db, err := NewDB("")
 	if err != nil {
 		t.Fatalf("NewDB: %v", err)
@@ -1413,6 +1307,7 @@ func TestResolveAKIs_EmptyDB(t *testing.T) {
 }
 
 func TestCompositePrimaryKey_SameSerialDifferentAKI(t *testing.T) {
+	// WHY: Different CAs can issue certs with the same serial number; the composite PK (serial + AKI) must allow both to coexist without conflict.
 	db, err := NewDB("")
 	if err != nil {
 		t.Fatalf("NewDB: %v", err)

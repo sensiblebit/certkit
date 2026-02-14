@@ -13,6 +13,7 @@ import (
 )
 
 func TestGenerateKey(t *testing.T) {
+	// WHY: Core key generation must succeed for all three supported algorithms; a failure here would break the entire keygen command.
 	tests := []struct {
 		name      string
 		algorithm string
@@ -37,6 +38,7 @@ func TestGenerateKey(t *testing.T) {
 }
 
 func TestGenerateKey_UnsupportedAlgorithm(t *testing.T) {
+	// WHY: Unsupported algorithms must return a clear error; silently returning nil would cause nil-pointer panics downstream.
 	_, err := GenerateKey("dsa", 0, "")
 	if err == nil {
 		t.Error("expected error for unsupported algorithm")
@@ -44,6 +46,7 @@ func TestGenerateKey_UnsupportedAlgorithm(t *testing.T) {
 }
 
 func TestGenerateKey_InvalidCurve(t *testing.T) {
+	// WHY: An invalid ECDSA curve name must return an error; silently defaulting to a curve would surprise users with unexpected key parameters.
 	_, err := GenerateKey("ecdsa", 0, "invalid-curve")
 	if err == nil {
 		t.Error("expected error for invalid curve")
@@ -51,6 +54,7 @@ func TestGenerateKey_InvalidCurve(t *testing.T) {
 }
 
 func TestGenerateKeyFiles(t *testing.T) {
+	// WHY: Verifies the file-writing path for all algorithms creates key.pem and pub.pem with correct PEM headers, and does not create a CSR without CN/SANs.
 	tests := []struct {
 		name string
 		opts KeygenOptions
@@ -93,6 +97,7 @@ func TestGenerateKeyFiles(t *testing.T) {
 }
 
 func TestGenerateKeyFiles_WithCSR(t *testing.T) {
+	// WHY: When CN and SANs are provided, a CSR must be generated alongside the key; verifies the CSR has correct subject, DNS names, and valid signature.
 	dir := t.TempDir()
 	_, err := GenerateKeyFiles(KeygenOptions{
 		Algorithm: "ecdsa",
@@ -143,6 +148,7 @@ func TestGenerateKeyFiles_WithCSR(t *testing.T) {
 }
 
 func TestGenerateKeyFiles_KeyPermissions(t *testing.T) {
+	// WHY: Private keys must be written with 0600 permissions and public keys with 0644; incorrect permissions would be a security vulnerability.
 	dir := t.TempDir()
 	_, err := GenerateKeyFiles(KeygenOptions{
 		Algorithm: "ecdsa",
@@ -175,6 +181,7 @@ func TestGenerateKeyFiles_KeyPermissions(t *testing.T) {
 }
 
 func TestGenerateKeyFiles_Stdout(t *testing.T) {
+	// WHY: When no OutPath is set, key material must be returned in-memory (for stdout) with no files written; verifies the stdout mode path.
 	result, err := GenerateKeyFiles(KeygenOptions{
 		Algorithm: "ecdsa",
 		Curve:     "P-256",
@@ -208,6 +215,7 @@ func TestGenerateKeyFiles_Stdout(t *testing.T) {
 }
 
 func TestGenerateKeyFiles_UnsupportedAlgorithm(t *testing.T) {
+	// WHY: GenerateKeyFiles must propagate the GenerateKey error for unsupported algorithms; verifies the error path does not leave partial files on disk.
 	dir := t.TempDir()
 	_, err := GenerateKeyFiles(KeygenOptions{
 		Algorithm: "dsa",
@@ -219,6 +227,8 @@ func TestGenerateKeyFiles_UnsupportedAlgorithm(t *testing.T) {
 }
 
 func TestParseCurve(t *testing.T) {
+	// WHY: Users may specify curves by OpenSSL-compatible aliases (p256, prime256v1,
+	// secp384r1) rather than Go names (P-256, P-384); validates all aliases resolve correctly.
 	tests := []struct {
 		input string
 		ok    bool
@@ -239,6 +249,7 @@ func TestParseCurve(t *testing.T) {
 }
 
 func TestGenerateKeyFiles_RoundTrip(t *testing.T) {
+	// WHY: Generated RSA key PEM must be parseable back to a valid *rsa.PrivateKey with the requested bit length; a serialization bug would produce unusable keys.
 	dir := t.TempDir()
 	_, err := GenerateKeyFiles(KeygenOptions{
 		Algorithm: "rsa",
@@ -270,6 +281,7 @@ func TestGenerateKeyFiles_RoundTrip(t *testing.T) {
 }
 
 func TestGenerateKey_RSA4096(t *testing.T) {
+	// WHY: RSA 4096 is a common production key size; verifies the bits parameter is honored and produces a key with the exact requested modulus length.
 	signer, err := GenerateKey("rsa", 4096, "")
 	if err != nil {
 		t.Fatal(err)
@@ -288,6 +300,7 @@ func TestGenerateKey_RSA4096(t *testing.T) {
 }
 
 func TestGenerateKey_ECDSAP384(t *testing.T) {
+	// WHY: P-384 is a distinct curve from the default P-256; verifies the curve parameter is correctly passed through to ecdsa.GenerateKey.
 	signer, err := GenerateKey("ecdsa", 0, "P-384")
 	if err != nil {
 		t.Fatal(err)
@@ -306,6 +319,7 @@ func TestGenerateKey_ECDSAP384(t *testing.T) {
 }
 
 func TestGenerateKeyFiles_ECDSARoundTrip(t *testing.T) {
+	// WHY: Generated ECDSA key PEM must round-trip back to the correct curve; a PEM encoding bug could produce keys with the wrong curve parameters.
 	dir := t.TempDir()
 	_, err := GenerateKeyFiles(KeygenOptions{
 		Algorithm: "ecdsa",
@@ -345,6 +359,7 @@ func TestGenerateKeyFiles_ECDSARoundTrip(t *testing.T) {
 }
 
 func TestGenerateKeyFiles_Ed25519RoundTrip(t *testing.T) {
+	// WHY: Ed25519 uses PKCS#8 encoding; verifies the generated key PEM round-trips back to the correct algorithm and public key file is valid.
 	dir := t.TempDir()
 	_, err := GenerateKeyFiles(KeygenOptions{
 		Algorithm: "ed25519",
@@ -379,6 +394,7 @@ func TestGenerateKeyFiles_Ed25519RoundTrip(t *testing.T) {
 }
 
 func TestParseCurve_AllAlternateNames(t *testing.T) {
+	// WHY: Exhaustive test for all OpenSSL-compatible curve aliases (p384, secp384r1, etc.); verifies each resolves to the correct Go elliptic.Curve.
 	tests := []struct {
 		input    string
 		wantName string
@@ -404,6 +420,7 @@ func TestParseCurve_AllAlternateNames(t *testing.T) {
 }
 
 func TestGenerateKeyFiles_WithCSR_KeyMatchesCSR(t *testing.T) {
+	// WHY: The generated CSR must be signed by the corresponding private key; a key-CSR mismatch would produce a CSR that CAs reject as invalid.
 	dir := t.TempDir()
 	_, err := GenerateKeyFiles(KeygenOptions{
 		Algorithm: "rsa",

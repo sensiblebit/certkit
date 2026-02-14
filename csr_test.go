@@ -15,7 +15,47 @@ import (
 	"time"
 )
 
+func TestGenerateCSR_DoesNotCopyEmailAddresses(t *testing.T) {
+	// WHY: GenerateCSR intentionally does NOT copy EmailAddresses from the source
+	// cert (unlike GenerateCSRFromCSR which does). This documents that design choice.
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	template := &x509.Certificate{
+		SerialNumber:   big.NewInt(1),
+		Subject:        pkix.Name{CommonName: "email-test.example.com"},
+		DNSNames:       []string{"email-test.example.com"},
+		EmailAddresses: []string{"admin@example.com", "security@example.com"},
+		NotBefore:      time.Now().Add(-1 * time.Hour),
+		NotAfter:       time.Now().Add(24 * time.Hour),
+	}
+	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	cert, _ := x509.ParseCertificate(certBytes)
+
+	csrPEM, _, err := GenerateCSR(cert, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	block, _ := pem.Decode([]byte(csrPEM))
+	csr, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(csr.EmailAddresses) != 0 {
+		t.Errorf("GenerateCSR should not copy EmailAddresses, got %v", csr.EmailAddresses)
+	}
+	// Verify other fields ARE copied
+	if csr.Subject.CommonName != "email-test.example.com" {
+		t.Errorf("CN should be copied, got %q", csr.Subject.CommonName)
+	}
+	if len(csr.DNSNames) != 1 {
+		t.Errorf("DNSNames should be copied, got %d", len(csr.DNSNames))
+	}
+}
+
 func TestGenerateCSR_withKey(t *testing.T) {
+	// WHY: Verifies that GenerateCSR copies Subject, DNS SANs, IP SANs, and URIs
+	// from the source certificate to the CSR template.
 	leaf, key := generateLeafWithSANs(t)
 
 	csrPEM, keyPEM, err := GenerateCSR(leaf, key)
@@ -57,6 +97,7 @@ func TestGenerateCSR_withKey(t *testing.T) {
 }
 
 func TestGenerateCSR_autoGenerate(t *testing.T) {
+	// WHY: When no key is provided, GenerateCSR must auto-generate an ECDSA P-256 key and return it; callers depend on this for key+CSR generation in one step.
 	leaf, _ := generateLeafWithSANs(t)
 
 	csrPEM, keyPEM, err := GenerateCSR(leaf, nil)
@@ -105,6 +146,7 @@ func TestGenerateCSR_autoGenerate(t *testing.T) {
 }
 
 func TestGenerateCSR_nonSignerKey(t *testing.T) {
+	// WHY: Keys that do not implement crypto.Signer must be rejected with a clear error, not panic during CSR signing.
 	leaf, _ := generateLeafWithSANs(t)
 	_, _, err := GenerateCSR(leaf, struct{}{})
 	if err == nil {
@@ -118,6 +160,7 @@ func TestGenerateCSR_nonSignerKey(t *testing.T) {
 // --- ClassifyHosts tests ---
 
 func TestClassifyHosts(t *testing.T) {
+	// WHY: ClassifyHosts routes host strings to DNS, IP, URI, or email SANs; misclassification puts values in the wrong X.509 extension.
 	tests := []struct {
 		name       string
 		hosts      []string
@@ -205,9 +248,33 @@ func TestClassifyHosts(t *testing.T) {
 	}
 }
 
+func TestClassifyHosts_URLWithoutScheme(t *testing.T) {
+	// WHY: url.Parse("example.com/path") produces an empty Scheme and Host, so
+	// ClassifyHosts must fall through to DNS classification instead of URI.
+	// A bug here would put bare hostnames with paths into the URI SAN extension.
+	dns, ips, uris, emails := ClassifyHosts([]string{"example.com/path"})
+
+	if len(uris) != 0 {
+		t.Errorf("expected 0 URIs for schemeless URL, got %d: %v", len(uris), uris)
+	}
+	if len(ips) != 0 {
+		t.Errorf("expected 0 IPs, got %d", len(ips))
+	}
+	if len(emails) != 0 {
+		t.Errorf("expected 0 emails, got %d", len(emails))
+	}
+	if len(dns) != 1 {
+		t.Fatalf("expected 1 DNS name, got %d", len(dns))
+	}
+	if dns[0] != "example.com/path" {
+		t.Errorf("DNS[0]=%q, want %q", dns[0], "example.com/path")
+	}
+}
+
 // --- ParseCSRTemplate tests ---
 
 func TestParseCSRTemplate_Valid(t *testing.T) {
+	// WHY: CSR templates drive programmatic CSR generation; subject and host fields must parse correctly from JSON or the generated CSR will be wrong.
 	data := []byte(`{
 		"subject": {
 			"common_name": "example.com",
@@ -232,6 +299,7 @@ func TestParseCSRTemplate_Valid(t *testing.T) {
 }
 
 func TestParseCSRTemplate_Invalid(t *testing.T) {
+	// WHY: Invalid JSON must produce a "parsing CSR template" error, not a generic unmarshal message; users need to know which file is broken.
 	_, err := ParseCSRTemplate([]byte("not json"))
 	if err == nil {
 		t.Error("expected error for invalid JSON")
@@ -244,6 +312,7 @@ func TestParseCSRTemplate_Invalid(t *testing.T) {
 // --- GenerateCSRFromTemplate tests ---
 
 func TestGenerateCSRFromTemplate_Basic(t *testing.T) {
+	// WHY: Template-based CSR generation must correctly map subject, DNS names, and IPs into the CSR; this is the primary programmatic CSR creation path.
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	tmpl := &CSRTemplate{
 		Subject: CSRSubject{
@@ -282,6 +351,7 @@ func TestGenerateCSRFromTemplate_Basic(t *testing.T) {
 }
 
 func TestGenerateCSRFromTemplate_AutoCN(t *testing.T) {
+	// WHY: When CN is empty, the first DNS host should be used as CN; without this auto-fill, CAs may reject the CSR for missing CN.
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	tmpl := &CSRTemplate{
 		Subject: CSRSubject{},
@@ -303,7 +373,51 @@ func TestGenerateCSRFromTemplate_AutoCN(t *testing.T) {
 	}
 }
 
+func TestGenerateCSRFromTemplate_EmptyCNWithIPOnly(t *testing.T) {
+	// WHY: When CommonName is empty and only IP hosts are provided (no DNS names),
+	// the CN auto-fill logic (which uses the first DNS name) must leave CN empty.
+	// A bug here would panic on an empty dnsNames slice or set CN to an IP string.
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tmpl := &CSRTemplate{
+		Subject: CSRSubject{},
+		Hosts:   []string{"10.0.0.1", "192.168.1.1"},
+	}
+
+	csrPEM, err := GenerateCSRFromTemplate(tmpl, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	block, _ := pem.Decode([]byte(csrPEM))
+	if block == nil {
+		t.Fatal("failed to decode CSR PEM")
+	}
+	csr, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := csr.CheckSignature(); err != nil {
+		t.Fatalf("CSR signature invalid: %v", err)
+	}
+
+	// CN should remain empty since there are no DNS names to auto-fill from
+	if csr.Subject.CommonName != "" {
+		t.Errorf("expected empty CN when only IPs provided, got %q", csr.Subject.CommonName)
+	}
+
+	// DNS names should be empty
+	if len(csr.DNSNames) != 0 {
+		t.Errorf("expected 0 DNS names, got %d: %v", len(csr.DNSNames), csr.DNSNames)
+	}
+
+	// IPs should be present
+	if len(csr.IPAddresses) != 2 {
+		t.Errorf("expected 2 IP addresses, got %d", len(csr.IPAddresses))
+	}
+}
+
 func TestGenerateCSRFromTemplate_WithEmailAndURI(t *testing.T) {
+	// WHY: Templates with mixed host types (DNS, URI, email) must classify each correctly; wrong classification puts values in the wrong SAN extension.
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	tmpl := &CSRTemplate{
 		Subject: CSRSubject{CommonName: "test.example.com"},
@@ -334,6 +448,7 @@ func TestGenerateCSRFromTemplate_WithEmailAndURI(t *testing.T) {
 // --- GenerateCSRFromCSR tests ---
 
 func TestGenerateCSRFromCSR_CopiesFields(t *testing.T) {
+	// WHY: Regenerating a CSR from an existing one must preserve all subject and SAN fields; dropped fields would change the cert's identity on renewal.
 	// Create source CSR
 	srcKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	leaf, _ := generateLeafWithSANs(t)
@@ -374,6 +489,7 @@ func TestGenerateCSRFromCSR_CopiesFields(t *testing.T) {
 }
 
 func TestGenerateCSRFromCSR_DifferentKey(t *testing.T) {
+	// WHY: The new CSR must use the new key's public key, not the source's; reusing the source's key would defeat the purpose of key rotation.
 	// The new CSR should be signed by a different key than the source
 	srcKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	leaf, _ := generateLeafWithSANs(t)
@@ -399,6 +515,7 @@ func TestGenerateCSRFromCSR_DifferentKey(t *testing.T) {
 }
 
 func TestGenerateCSR_RSA(t *testing.T) {
+	// WHY: CSR generation must work with RSA keys, not just ECDSA; RSA is still the most common key type in enterprise PKI.
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
@@ -456,6 +573,7 @@ func TestGenerateCSR_RSA(t *testing.T) {
 }
 
 func TestGenerateCSR_Ed25519(t *testing.T) {
+	// WHY: CSR generation must work with Ed25519 keys; Ed25519 uses a different signing interface that could break the crypto.Signer path.
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -506,6 +624,7 @@ func TestGenerateCSR_Ed25519(t *testing.T) {
 }
 
 func TestGenerateCSRFromCSR_PreservesEmailAddresses(t *testing.T) {
+	// WHY: Email SAN addresses must survive CSR-to-CSR regeneration; dropping them would break S/MIME or client-auth cert renewals.
 	// Create a source CSR with email addresses via GenerateCSRFromTemplate
 	srcKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {

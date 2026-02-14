@@ -9,6 +9,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"fmt"
 	"math/big"
 	"strings"
 	"testing"
@@ -185,6 +186,7 @@ func buildJKSMixed(t *testing.T, password string) []byte {
 }
 
 func TestDecodeJKS_TrustedCertEntry(t *testing.T) {
+	// WHY: JKS TrustedCertificateEntry is a cert-only entry (no key); must decode to exactly one cert and zero keys.
 	data := buildJKSTrustedCert(t, "changeit")
 
 	certs, keys, err := DecodeJKS(data, []string{"changeit"})
@@ -203,6 +205,7 @@ func TestDecodeJKS_TrustedCertEntry(t *testing.T) {
 }
 
 func TestDecodeJKS_PrivateKeyEntry(t *testing.T) {
+	// WHY: JKS PrivateKeyEntry bundles a key with its cert chain; must extract both the key and all chain certs.
 	data := buildJKSPrivateKey(t, "changeit")
 
 	certs, keys, err := DecodeJKS(data, []string{"changeit"})
@@ -222,6 +225,7 @@ func TestDecodeJKS_PrivateKeyEntry(t *testing.T) {
 }
 
 func TestDecodeJKS_MixedEntries(t *testing.T) {
+	// WHY: Real JKS files often mix trusted certs and private key entries; the decoder must aggregate certs from both entry types.
 	data := buildJKSMixed(t, "changeit")
 
 	certs, keys, err := DecodeJKS(data, []string{"changeit"})
@@ -238,6 +242,7 @@ func TestDecodeJKS_MixedEntries(t *testing.T) {
 }
 
 func TestDecodeJKS_WrongPassword(t *testing.T) {
+	// WHY: Wrong store passwords must produce an error, not silently return corrupt or empty results.
 	data := buildJKSTrustedCert(t, "changeit")
 
 	_, _, err := DecodeJKS(data, []string{"wrong"})
@@ -247,6 +252,7 @@ func TestDecodeJKS_WrongPassword(t *testing.T) {
 }
 
 func TestDecodeJKS_DifferentKeyPassword(t *testing.T) {
+	// WHY: JKS supports separate store and key passwords; the decoder must try all provided passwords against both the store and key entries.
 	// Build a JKS where the store password differs from the key entry password
 	storePassword := "storepass"
 	keyPassword := "keypass"
@@ -310,14 +316,19 @@ func TestDecodeJKS_DifferentKeyPassword(t *testing.T) {
 	}
 	data := buf.Bytes()
 
-	// Should fail with only the store password (can't decrypt key)
-	certs, keys, err := DecodeJKS(data, []string{storePassword})
-	if err == nil && len(keys) > 0 {
-		t.Error("expected no keys with only store password")
+	// Store password alone opens the store but cannot decrypt the private key
+	// entry. Since the cert chain is embedded inside the PrivateKeyEntry, both
+	// certs and keys are inaccessible, yielding a "no usable" error.
+	_, _, err = DecodeJKS(data, []string{storePassword})
+	if err == nil {
+		t.Fatal("expected error with only store password (key password differs)")
+	}
+	if !strings.Contains(err.Error(), "no usable") {
+		t.Errorf("error should mention 'no usable', got: %v", err)
 	}
 
 	// Should succeed with both passwords
-	certs, keys, err = DecodeJKS(data, []string{storePassword, keyPassword})
+	certs, keys, err := DecodeJKS(data, []string{storePassword, keyPassword})
 	if err != nil {
 		t.Fatalf("DecodeJKS with both passwords: %v", err)
 	}
@@ -329,7 +340,95 @@ func TestDecodeJKS_DifferentKeyPassword(t *testing.T) {
 	}
 }
 
+func TestDecodeJKS_CorruptedKeyData(t *testing.T) {
+	// WHY: When a JKS private key entry has correct password but corrupted PKCS#8
+	// key bytes, x509.ParsePKCS8PrivateKey fails. The decoder must skip the bad key
+	// (and its cert chain) but still return certs from other entries (e.g. trusted
+	// cert entries). This covers the `break` path on line 63 of jks.go.
+	password := "changeit"
+
+	// Create a valid CA cert for the TrustedCertificateEntry
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Corrupt Key Test CA"},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a leaf cert for the PrivateKeyEntry chain
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caCert, _ := x509.ParseCertificate(caDER)
+	leafTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(100),
+		Subject:      pkix.Name{CommonName: "corrupt-key-leaf.example.com"},
+		NotBefore:    time.Now().Add(-1 * time.Hour),
+		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Build JKS with a trusted cert entry + a private key entry with corrupt key bytes
+	ks := keystore.New()
+	ks.SetTrustedCertificateEntry("ca", keystore.TrustedCertificateEntry{
+		CreationTime: time.Now(),
+		Certificate:  keystore.Certificate{Type: "X.509", Content: caDER},
+	})
+	if err := ks.SetPrivateKeyEntry("server", keystore.PrivateKeyEntry{
+		CreationTime: time.Now(),
+		PrivateKey:   []byte("this-is-not-valid-pkcs8-data"), // corrupted key bytes
+		CertificateChain: []keystore.Certificate{
+			{Type: "X.509", Content: leafDER},
+		},
+	}, []byte(password)); err != nil {
+		t.Fatalf("set private key entry: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := ks.Store(&buf, []byte(password)); err != nil {
+		t.Fatalf("store JKS: %v", err)
+	}
+	data := buf.Bytes()
+
+	// Decode should succeed: the trusted cert entry provides 1 cert,
+	// but the private key entry's bad key data causes it to be skipped entirely
+	certs, keys, err := DecodeJKS(data, []string{password})
+	if err != nil {
+		t.Fatalf("DecodeJKS: %v", err)
+	}
+
+	// Trusted cert entry should yield the CA cert
+	if len(certs) != 1 {
+		t.Errorf("expected 1 cert (from trusted entry), got %d", len(certs))
+	}
+	if len(certs) > 0 && certs[0].Subject.CommonName != "Corrupt Key Test CA" {
+		t.Errorf("CN=%q, want Corrupt Key Test CA", certs[0].Subject.CommonName)
+	}
+
+	// No usable keys since the private key data was corrupted
+	if len(keys) != 0 {
+		t.Errorf("expected 0 keys (corrupted key data), got %d", len(keys))
+	}
+}
+
 func TestDecodeJKS_InvalidData(t *testing.T) {
+	// WHY: Non-JKS data must produce a "loading JKS" error, not a generic parse failure; helps users distinguish format errors from password errors.
 	_, _, err := DecodeJKS([]byte("not a keystore"), []string{"changeit"})
 	if err == nil {
 		t.Error("expected error for invalid data")
@@ -339,7 +438,8 @@ func TestDecodeJKS_InvalidData(t *testing.T) {
 	}
 }
 
-func TestEncodeJKS(t *testing.T) {
+func TestEncodeJKS_MagicBytes(t *testing.T) {
+	// WHY: JKS files must start with the magic bytes 0xFEEDFEED; wrong magic means Java's KeyStore.load() will reject the file.
 	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
@@ -377,156 +477,162 @@ func TestEncodeJKS(t *testing.T) {
 	if len(data) < 4 || data[0] != 0xFE || data[1] != 0xED || data[2] != 0xFE || data[3] != 0xED {
 		t.Error("expected JKS magic bytes 0xFEEDFEED")
 	}
-
-	// Round-trip: decode what we encoded
-	certs, keys, err := DecodeJKS(data, []string{"changeit"})
-	if err != nil {
-		t.Fatalf("DecodeJKS round-trip: %v", err)
-	}
-	if len(keys) != 1 {
-		t.Fatalf("expected 1 key, got %d", len(keys))
-	}
-	if len(certs) != 2 {
-		t.Fatalf("expected 2 certs (leaf + CA), got %d", len(certs))
-	}
-
-	// Verify the key matches the leaf
-	match, err := KeyMatchesCert(keys[0], certs[0])
-	if err != nil {
-		t.Fatalf("KeyMatchesCert: %v", err)
-	}
-	if !match {
-		t.Error("round-trip key should match leaf certificate")
-	}
-	if certs[0].Subject.CommonName != "encode-leaf.example.com" {
-		t.Errorf("leaf CN=%q, want encode-leaf.example.com", certs[0].Subject.CommonName)
-	}
 }
 
 func TestEncodeJKS_NoKey(t *testing.T) {
+	// WHY: Unsupported key types must be rejected at encode time, not produce a JKS file that fails on decode.
 	_, err := EncodeJKS(struct{}{}, &x509.Certificate{}, nil, "changeit")
 	if err == nil {
 		t.Error("expected error for unsupported key type")
 	}
 }
 
-func TestEncodeDecodeJKS_ECDSA(t *testing.T) {
-	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	caTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "JKS ECDSA CA"},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-	}
-	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	caCert, _ := x509.ParseCertificate(caDER)
+// TestEncodeDecodeJKS_KeyTypes proves JKS encode/decode round-trips preserve
+// key material and certificate identity across all supported key algorithms
+// (RSA, ECDSA, Ed25519).
+func TestEncodeDecodeJKS_KeyTypes(t *testing.T) {
+	// WHY: JKS round-trip must work for all key types (RSA, ECDSA, Ed25519); a failure means exported JKS files would be unusable in Java applications.
+	tests := []struct {
+		name     string
+		setup    func(t *testing.T) (leafKey any, leafCert *x509.Certificate, caCerts []*x509.Certificate, wantCN string, wantCerts int)
+		wantType string // e.g. "*rsa.PrivateKey"
+	}{
+		{
+			name: "RSA",
+			setup: func(t *testing.T) (any, *x509.Certificate, []*x509.Certificate, string, int) {
+				t.Helper()
+				caKey, err := rsa.GenerateKey(rand.Reader, 2048)
+				if err != nil {
+					t.Fatal(err)
+				}
+				caTmpl := &x509.Certificate{
+					SerialNumber:          big.NewInt(1),
+					Subject:               pkix.Name{CommonName: "JKS RSA CA"},
+					NotBefore:             time.Now().Add(-1 * time.Hour),
+					NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
+					KeyUsage:              x509.KeyUsageCertSign,
+					BasicConstraintsValid: true,
+					IsCA:                  true,
+				}
+				caDER, _ := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+				caCert, _ := x509.ParseCertificate(caDER)
 
-	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leafTmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(100),
-		Subject:      pkix.Name{CommonName: "jks-ecdsa-leaf.example.com"},
-		DNSNames:     []string{"jks-ecdsa-leaf.example.com"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leafCert, _ := x509.ParseCertificate(leafDER)
+				leafKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+				leafTmpl := &x509.Certificate{
+					SerialNumber: big.NewInt(100),
+					Subject:      pkix.Name{CommonName: "jks-rsa-leaf.example.com"},
+					DNSNames:     []string{"jks-rsa-leaf.example.com"},
+					NotBefore:    time.Now().Add(-1 * time.Hour),
+					NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+					KeyUsage:     x509.KeyUsageDigitalSignature,
+				}
+				leafDER, _ := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
+				leafCert, _ := x509.ParseCertificate(leafDER)
+				return leafKey, leafCert, []*x509.Certificate{caCert}, "jks-rsa-leaf.example.com", 2
+			},
+			wantType: "*rsa.PrivateKey",
+		},
+		{
+			name: "ECDSA",
+			setup: func(t *testing.T) (any, *x509.Certificate, []*x509.Certificate, string, int) {
+				t.Helper()
+				caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				caTmpl := &x509.Certificate{
+					SerialNumber:          big.NewInt(1),
+					Subject:               pkix.Name{CommonName: "JKS ECDSA CA"},
+					NotBefore:             time.Now().Add(-1 * time.Hour),
+					NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
+					KeyUsage:              x509.KeyUsageCertSign,
+					BasicConstraintsValid: true,
+					IsCA:                  true,
+				}
+				caDER, _ := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+				caCert, _ := x509.ParseCertificate(caDER)
 
-	data, err := EncodeJKS(leafKey, leafCert, []*x509.Certificate{caCert}, "changeit")
-	if err != nil {
-		t.Fatalf("EncodeJKS with ECDSA key: %v", err)
-	}
+				leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				leafTmpl := &x509.Certificate{
+					SerialNumber: big.NewInt(100),
+					Subject:      pkix.Name{CommonName: "jks-ecdsa-leaf.example.com"},
+					DNSNames:     []string{"jks-ecdsa-leaf.example.com"},
+					NotBefore:    time.Now().Add(-1 * time.Hour),
+					NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+					KeyUsage:     x509.KeyUsageDigitalSignature,
+				}
+				leafDER, _ := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
+				leafCert, _ := x509.ParseCertificate(leafDER)
+				return leafKey, leafCert, []*x509.Certificate{caCert}, "jks-ecdsa-leaf.example.com", 2
+			},
+			wantType: "*ecdsa.PrivateKey",
+		},
+		{
+			name: "Ed25519",
+			setup: func(t *testing.T) (any, *x509.Certificate, []*x509.Certificate, string, int) {
+				t.Helper()
+				_, priv, err := ed25519.GenerateKey(rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				pub := priv.Public().(ed25519.PublicKey)
 
-	certs, keys, err := DecodeJKS(data, []string{"changeit"})
-	if err != nil {
-		t.Fatalf("DecodeJKS round-trip: %v", err)
+				leafTmpl := &x509.Certificate{
+					SerialNumber: big.NewInt(1),
+					Subject:      pkix.Name{CommonName: "jks-ed25519.example.com"},
+					DNSNames:     []string{"jks-ed25519.example.com"},
+					NotBefore:    time.Now().Add(-1 * time.Hour),
+					NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+					KeyUsage:     x509.KeyUsageDigitalSignature,
+				}
+				leafDER, _ := x509.CreateCertificate(rand.Reader, leafTmpl, leafTmpl, pub, priv)
+				leafCert, _ := x509.ParseCertificate(leafDER)
+				return priv, leafCert, nil, "jks-ed25519.example.com", 1
+			},
+			wantType: "ed25519.PrivateKey",
+		},
 	}
-	if len(keys) != 1 {
-		t.Fatalf("expected 1 key, got %d", len(keys))
-	}
-	if len(certs) != 2 {
-		t.Fatalf("expected 2 certs (leaf + CA), got %d", len(certs))
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			leafKey, leafCert, caCerts, wantCN, wantCerts := tt.setup(t)
 
-	ecDecoded, ok := keys[0].(*ecdsa.PrivateKey)
-	if !ok {
-		t.Fatalf("expected *ecdsa.PrivateKey, got %T", keys[0])
-	}
-	if !leafKey.Equal(ecDecoded) {
-		t.Error("ECDSA key round-trip mismatch")
-	}
-	if certs[0].Subject.CommonName != "jks-ecdsa-leaf.example.com" {
-		t.Errorf("leaf CN=%q, want jks-ecdsa-leaf.example.com", certs[0].Subject.CommonName)
-	}
-}
+			data, err := EncodeJKS(leafKey, leafCert, caCerts, "changeit")
+			if err != nil {
+				t.Fatalf("EncodeJKS: %v", err)
+			}
 
-func TestEncodeDecodeJKS_Ed25519(t *testing.T) {
-	// Ed25519 self-signed cert as both CA and leaf for simplicity
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pub := priv.Public().(ed25519.PublicKey)
+			certs, keys, err := DecodeJKS(data, []string{"changeit"})
+			if err != nil {
+				t.Fatalf("DecodeJKS round-trip: %v", err)
+			}
+			if len(keys) != 1 {
+				t.Fatalf("expected 1 key, got %d", len(keys))
+			}
+			if len(certs) != wantCerts {
+				t.Fatalf("expected %d certs, got %d", wantCerts, len(certs))
+			}
 
-	leafTmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "jks-ed25519.example.com"},
-		DNSNames:     []string{"jks-ed25519.example.com"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, leafTmpl, pub, priv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leafCert, _ := x509.ParseCertificate(leafDER)
+			gotType := fmt.Sprintf("%T", keys[0])
+			if gotType != tt.wantType {
+				t.Fatalf("expected %s, got %s", tt.wantType, gotType)
+			}
 
-	data, err := EncodeJKS(priv, leafCert, nil, "changeit")
-	if err != nil {
-		t.Fatalf("EncodeJKS with Ed25519 key: %v", err)
-	}
-
-	certs, keys, err := DecodeJKS(data, []string{"changeit"})
-	if err != nil {
-		t.Fatalf("DecodeJKS round-trip: %v", err)
-	}
-	if len(keys) != 1 {
-		t.Fatalf("expected 1 key, got %d", len(keys))
-	}
-	if len(certs) != 1 {
-		t.Fatalf("expected 1 cert, got %d", len(certs))
-	}
-
-	edDecoded, ok := keys[0].(ed25519.PrivateKey)
-	if !ok {
-		t.Fatalf("expected ed25519.PrivateKey, got %T", keys[0])
-	}
-	if !priv.Equal(edDecoded) {
-		t.Error("Ed25519 key round-trip mismatch")
-	}
-	if certs[0].Subject.CommonName != "jks-ed25519.example.com" {
-		t.Errorf("leaf CN=%q, want jks-ed25519.example.com", certs[0].Subject.CommonName)
+			match, err := KeyMatchesCert(keys[0], certs[0])
+			if err != nil {
+				t.Fatalf("KeyMatchesCert: %v", err)
+			}
+			if !match {
+				t.Error("round-trip key should match leaf certificate")
+			}
+			if certs[0].Subject.CommonName != wantCN {
+				t.Errorf("leaf CN=%q, want %q", certs[0].Subject.CommonName, wantCN)
+			}
+		})
 	}
 }
 
 func TestEncodeJKS_NilCACerts(t *testing.T) {
+	// WHY: Encoding with nil CA certs must produce a valid JKS containing only the leaf; nil must not cause a panic or add phantom entries.
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
@@ -562,6 +668,7 @@ func TestEncodeJKS_NilCACerts(t *testing.T) {
 }
 
 func TestEncodeJKS_EmptyPassword(t *testing.T) {
+	// WHY: Empty-password JKS files are valid and used in development; the encoder must not reject or mishandle an empty string password.
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
@@ -594,6 +701,7 @@ func TestEncodeJKS_EmptyPassword(t *testing.T) {
 }
 
 func TestDecodeJKS_EmptyPasswords(t *testing.T) {
+	// WHY: Nil or empty password lists must produce a clear error, not panic or silently return empty results.
 	data := buildJKSTrustedCert(t, "changeit")
 
 	_, _, err := DecodeJKS(data, nil)
@@ -610,5 +718,27 @@ func TestDecodeJKS_EmptyPasswords(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "loading JKS") {
 		t.Errorf("error should mention loading JKS, got: %v", err)
+	}
+}
+
+func TestDecodeJKS_TruncatedWithCorrectMagic(t *testing.T) {
+	// WHY: A JKS file that starts with the correct magic bytes (0xFEEDFEED)
+	// but is truncated is a real scenario (e.g., incomplete download, disk
+	// corruption). DecodeJKS must return an error, not panic or hang.
+	data := buildJKSPrivateKey(t, "changeit")
+
+	// Verify the data actually starts with JKS magic bytes.
+	if len(data) < 20 {
+		t.Fatalf("valid JKS too short to truncate: %d bytes", len(data))
+	}
+	if data[0] != 0xFE || data[1] != 0xED || data[2] != 0xFE || data[3] != 0xED {
+		t.Fatal("expected JKS magic bytes 0xFEEDFEED at start of valid JKS data")
+	}
+
+	// Truncate to only 20 bytes — magic is intact but everything else is cut off.
+	truncated := data[:20]
+	_, _, err := DecodeJKS(truncated, []string{"changeit"})
+	if err == nil {
+		t.Error("expected error for truncated JKS with correct magic bytes")
 	}
 }
