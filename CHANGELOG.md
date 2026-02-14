@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add `--load-db` flag to scan command to load an existing database before scanning ([`pending`])
 - Add `--save-db` flag to scan command to save the in-memory database after scanning ([`pending`])
-- Scan inside ZIP, TAR, and TAR.GZ archives for certificates and keys with zip bomb protection ([`pending`])
+- Scan inside ZIP, TAR, and TAR.GZ archives for certificates and keys with zip bomb protection ([`ee2749b`])
 
 ### Changed
 
@@ -23,6 +23,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fix `filepath.Ext` returning garbage for archive virtual paths without directory separators ([`390217d`])
+- Fix `io.LimitReader` int64 overflow when `MaxEntrySize` is near `math.MaxInt64` ([`390217d`])
 - Remove password from PKCS#12 debug log output (SEC-2) ([`9188c94`])
 - Wrap all bare `return err` with `fmt.Errorf` context in CLI commands (ERR-1) ([`9188c94`])
 - Standardize all date output to RFC 3339 format (CLI-5) ([`9188c94`])
@@ -206,6 +208,8 @@ Initial release.
 [0.1.1]: https://github.com/sensiblebit/certkit/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/sensiblebit/certkit/releases/tag/v0.1.0
 
+[`ee2749b`]: https://github.com/sensiblebit/certkit/commit/ee2749b
+[`390217d`]: https://github.com/sensiblebit/certkit/commit/390217d
 [`9188c94`]: https://github.com/sensiblebit/certkit/commit/9188c94
 [`def2ada`]: https://github.com/sensiblebit/certkit/commit/def2ada
 [`5702af2`]: https://github.com/sensiblebit/certkit/commit/5702af2
