@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
+	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -814,6 +815,334 @@ func TestProcessFile_PEMCertificateWithIP(t *testing.T) {
 	cert, _ := cfg.DB.GetCertBySKI(expectedSKI)
 	if cert == nil {
 		t.Error("expected cert with IP SAN to be inserted")
+	}
+}
+
+func TestProcessFile_MixedCertAndKeyPEM(t *testing.T) {
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "mixed.example.com", []string{"mixed.example.com"}, nil)
+	cfg := newTestConfig(t)
+	defer cfg.DB.Close()
+
+	// Combine cert and key PEM blocks into a single file
+	combined := append(leaf.certPEM, leaf.keyPEM...)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mixed.pem")
+	if err := os.WriteFile(path, combined, 0644); err != nil {
+		t.Fatalf("write mixed PEM: %v", err)
+	}
+
+	if err := ProcessFile(path, cfg); err != nil {
+		t.Fatalf("ProcessFile: %v", err)
+	}
+
+	// Verify certificate was ingested
+	expectedSKI := computeSKIHex(t, leaf.cert.PublicKey)
+	cert, err := cfg.DB.GetCertBySKI(expectedSKI)
+	if err != nil {
+		t.Fatalf("GetCertBySKI: %v", err)
+	}
+	if cert == nil {
+		t.Fatal("expected certificate to be inserted into DB")
+	}
+	if cert.CommonName.String != "mixed.example.com" {
+		t.Errorf("cert CN = %q, want mixed.example.com", cert.CommonName.String)
+	}
+	if cert.CertType != "leaf" {
+		t.Errorf("cert type = %q, want leaf", cert.CertType)
+	}
+	if cert.KeyType != "RSA 2048 bits" {
+		t.Errorf("cert key type = %q, want \"RSA 2048 bits\"", cert.KeyType)
+	}
+
+	// Verify key was also ingested
+	keys, err := cfg.DB.GetAllKeys()
+	if err != nil {
+		t.Fatalf("GetAllKeys: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key in DB, got %d", len(keys))
+	}
+	if keys[0].KeyType != "rsa" {
+		t.Errorf("key type = %q, want rsa", keys[0].KeyType)
+	}
+	if keys[0].BitLength != 2048 {
+		t.Errorf("key bit length = %d, want 2048", keys[0].BitLength)
+	}
+
+	// Verify cert and key share the same SKI (matched pair)
+	if keys[0].SubjectKeyIdentifier != expectedSKI {
+		t.Errorf("key SKI = %q, cert SKI = %q, want matching pair", keys[0].SubjectKeyIdentifier, expectedSKI)
+	}
+}
+
+func TestProcessFile_ECDSAKey(t *testing.T) {
+	cfg := newTestConfig(t)
+	defer cfg.DB.Close()
+
+	keyData := ecdsaKeyPEM(t)
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ecdsa.pem")
+	if err := os.WriteFile(path, keyData, 0600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+
+	if err := ProcessFile(path, cfg); err != nil {
+		t.Fatalf("ProcessFile: %v", err)
+	}
+
+	keys, err := cfg.DB.GetAllKeys()
+	if err != nil {
+		t.Fatalf("GetAllKeys: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key in DB, got %d", len(keys))
+	}
+	if keys[0].KeyType != "ecdsa" {
+		t.Errorf("key type = %q, want ecdsa", keys[0].KeyType)
+	}
+	if keys[0].Curve != "P-256" {
+		t.Errorf("key curve = %q, want P-256", keys[0].Curve)
+	}
+	if keys[0].BitLength != 256 {
+		t.Errorf("key bit length = %d, want 256", keys[0].BitLength)
+	}
+
+	// Verify stored key data is parseable
+	_, err = certkit.ParsePEMPrivateKey(keys[0].KeyData)
+	if err != nil {
+		t.Errorf("stored ECDSA key data is not parseable: %v", err)
+	}
+}
+
+func TestProcessFile_IncludeExpired(t *testing.T) {
+	ca := newRSACA(t)
+	expired := newExpiredLeaf(t, ca)
+	cfg := newTestConfig(t)
+	defer cfg.DB.Close()
+	cfg.IncludeExpired = true
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "expired.pem")
+	if err := os.WriteFile(path, expired.certPEM, 0644); err != nil {
+		t.Fatalf("write cert: %v", err)
+	}
+
+	if err := ProcessFile(path, cfg); err != nil {
+		t.Fatalf("ProcessFile: %v", err)
+	}
+
+	expectedSKI := computeSKIHex(t, expired.cert.PublicKey)
+	cert, err := cfg.DB.GetCertBySKI(expectedSKI)
+	if err != nil {
+		t.Fatalf("GetCertBySKI: %v", err)
+	}
+	if cert == nil {
+		t.Fatal("expected expired certificate to be inserted when IncludeExpired=true")
+	}
+	if cert.CommonName.String != "expired.example.com" {
+		t.Errorf("cert CN = %q, want expired.example.com", cert.CommonName.String)
+	}
+}
+
+func TestProcessFile_DERCertificate_VerifyFields(t *testing.T) {
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "der-fields.example.com", []string{"der-fields.example.com"}, nil)
+	cfg := newTestConfig(t)
+	defer cfg.DB.Close()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cert.der")
+	if err := os.WriteFile(path, leaf.certDER, 0644); err != nil {
+		t.Fatalf("write cert: %v", err)
+	}
+
+	if err := ProcessFile(path, cfg); err != nil {
+		t.Fatalf("ProcessFile: %v", err)
+	}
+
+	expectedSKI := computeSKIHex(t, leaf.cert.PublicKey)
+	cert, err := cfg.DB.GetCertBySKI(expectedSKI)
+	if err != nil {
+		t.Fatalf("GetCertBySKI: %v", err)
+	}
+	if cert == nil {
+		t.Fatal("expected DER certificate to be inserted into DB")
+	}
+	if cert.CommonName.String != "der-fields.example.com" {
+		t.Errorf("CN = %q, want der-fields.example.com", cert.CommonName.String)
+	}
+	if cert.CertType != "leaf" {
+		t.Errorf("cert type = %q, want leaf", cert.CertType)
+	}
+	if cert.KeyType != "RSA 2048 bits" {
+		t.Errorf("key type = %q, want \"RSA 2048 bits\"", cert.KeyType)
+	}
+}
+
+func TestProcessFile_DERPrivateKey_VerifyFields(t *testing.T) {
+	cfg := newTestConfig(t)
+	defer cfg.DB.Close()
+
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	keyDER, _ := x509.MarshalPKCS8PrivateKey(key)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "key.der")
+	if err := os.WriteFile(path, keyDER, 0600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
+
+	if err := ProcessFile(path, cfg); err != nil {
+		t.Fatalf("ProcessFile: %v", err)
+	}
+
+	keys, err := cfg.DB.GetAllKeys()
+	if err != nil {
+		t.Fatalf("GetAllKeys: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key in DB, got %d", len(keys))
+	}
+	if keys[0].KeyType != "rsa" {
+		t.Errorf("key type = %q, want rsa", keys[0].KeyType)
+	}
+	if keys[0].BitLength != 2048 {
+		t.Errorf("key bit length = %d, want 2048", keys[0].BitLength)
+	}
+
+	// Verify stored key data is parseable
+	_, err = certkit.ParsePEMPrivateKey(keys[0].KeyData)
+	if err != nil {
+		t.Errorf("stored DER key data is not parseable: %v", err)
+	}
+}
+
+func TestProcessFile_IPSANVerification(t *testing.T) {
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "ipsan.example.com", []string{"ipsan.example.com"}, []net.IP{net.ParseIP("10.0.0.1")})
+	cfg := newTestConfig(t)
+	defer cfg.DB.Close()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cert-ip.pem")
+	if err := os.WriteFile(path, leaf.certPEM, 0644); err != nil {
+		t.Fatalf("write cert: %v", err)
+	}
+
+	if err := ProcessFile(path, cfg); err != nil {
+		t.Fatalf("ProcessFile: %v", err)
+	}
+
+	expectedSKI := computeSKIHex(t, leaf.cert.PublicKey)
+	cert, err := cfg.DB.GetCertBySKI(expectedSKI)
+	if err != nil {
+		t.Fatalf("GetCertBySKI: %v", err)
+	}
+	if cert == nil {
+		t.Fatal("expected cert with IP SAN to be inserted")
+	}
+
+	// Parse SANsJSON and verify the IP address is present
+	sansStr := string(cert.SANsJSON)
+	var sans []string
+	if err := json.Unmarshal([]byte(sansStr), &sans); err != nil {
+		t.Fatalf("parsing SANsJSON %q: %v", sansStr, err)
+	}
+
+	foundIP := false
+	for _, san := range sans {
+		if san == "10.0.0.1" {
+			foundIP = true
+			break
+		}
+	}
+	if !foundIP {
+		t.Errorf("expected IP SAN 10.0.0.1 in SANsJSON, got %v", sans)
+	}
+
+	// Also verify the DNS SAN is present
+	foundDNS := false
+	for _, san := range sans {
+		if san == "ipsan.example.com" {
+			foundDNS = true
+			break
+		}
+	}
+	if !foundDNS {
+		t.Errorf("expected DNS SAN ipsan.example.com in SANsJSON, got %v", sans)
+	}
+}
+
+func TestProcessFile_EmptyFile(t *testing.T) {
+	cfg := newTestConfig(t)
+	defer cfg.DB.Close()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "empty.pem")
+	if err := os.WriteFile(path, []byte{}, 0644); err != nil {
+		t.Fatalf("write empty file: %v", err)
+	}
+
+	if err := ProcessFile(path, cfg); err != nil {
+		t.Fatalf("ProcessFile on empty file should not error, got: %v", err)
+	}
+
+	// Nothing should be inserted
+	certs, err := cfg.DB.GetAllCerts()
+	if err != nil {
+		t.Fatalf("GetAllCerts: %v", err)
+	}
+	if len(certs) != 0 {
+		t.Errorf("expected 0 certs from empty file, got %d", len(certs))
+	}
+
+	keys, err := cfg.DB.GetAllKeys()
+	if err != nil {
+		t.Fatalf("GetAllKeys: %v", err)
+	}
+	if len(keys) != 0 {
+		t.Errorf("expected 0 keys from empty file, got %d", len(keys))
+	}
+}
+
+func TestProcessFile_GarbageData(t *testing.T) {
+	cfg := newTestConfig(t)
+	defer cfg.DB.Close()
+
+	// Write random-looking garbage that is not PEM, DER, or any known format
+	garbage := make([]byte, 512)
+	for i := range garbage {
+		garbage[i] = byte(i % 251) // deterministic "random" data
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "garbage.bin")
+	if err := os.WriteFile(path, garbage, 0644); err != nil {
+		t.Fatalf("write garbage file: %v", err)
+	}
+
+	// Should not panic or return error
+	if err := ProcessFile(path, cfg); err != nil {
+		t.Fatalf("ProcessFile on garbage data should not error, got: %v", err)
+	}
+
+	// Nothing should be inserted
+	certs, err := cfg.DB.GetAllCerts()
+	if err != nil {
+		t.Fatalf("GetAllCerts: %v", err)
+	}
+	if len(certs) != 0 {
+		t.Errorf("expected 0 certs from garbage data, got %d", len(certs))
+	}
+
+	keys, err := cfg.DB.GetAllKeys()
+	if err != nil {
+		t.Fatalf("GetAllKeys: %v", err)
+	}
+	if len(keys) != 0 {
+		t.Errorf("expected 0 keys from garbage data, got %d", len(keys))
 	}
 }
 

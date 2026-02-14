@@ -953,6 +953,100 @@ func TestWriteBundleFiles_PKCS12Password(t *testing.T) {
 	}
 }
 
+func TestWriteBundleFiles_NoIntermediates(t *testing.T) {
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "no-int.example.com", []string{"no-int.example.com"}, nil)
+
+	certRecord := &CertificateRecord{
+		CommonName: sql.NullString{String: "no-int.example.com", Valid: true},
+		PEM:        string(leaf.certPEM),
+	}
+	keyRecord := &KeyRecord{KeyData: leaf.keyPEM}
+
+	// Bundle with NO intermediates
+	bundle := &certkit.BundleResult{
+		Leaf:          leaf.cert,
+		Intermediates: nil,
+		Roots:         []*x509.Certificate{ca.cert},
+	}
+
+	outDir := t.TempDir()
+	err := writeBundleFiles(outDir, "no-int-bundle", certRecord, keyRecord, bundle, nil)
+	if err != nil {
+		t.Fatalf("writeBundleFiles: %v", err)
+	}
+
+	folderPath := filepath.Join(outDir, "no-int-bundle")
+	prefix := "no-int.example.com"
+
+	// intermediates.pem should NOT exist
+	intPath := filepath.Join(folderPath, prefix+".intermediates.pem")
+	if _, err := os.Stat(intPath); err == nil {
+		t.Errorf("expected %s to NOT exist when there are no intermediates", prefix+".intermediates.pem")
+	}
+
+	// root.pem SHOULD exist since we have a root
+	rootPath := filepath.Join(folderPath, prefix+".root.pem")
+	if _, err := os.Stat(rootPath); os.IsNotExist(err) {
+		t.Errorf("expected %s to exist since root is present", prefix+".root.pem")
+	}
+
+	// leaf.pem and chain.pem should still exist
+	if _, err := os.Stat(filepath.Join(folderPath, prefix+".pem")); os.IsNotExist(err) {
+		t.Error("leaf .pem should exist")
+	}
+	if _, err := os.Stat(filepath.Join(folderPath, prefix+".chain.pem")); os.IsNotExist(err) {
+		t.Error("chain .chain.pem should exist")
+	}
+}
+
+func TestWriteBundleFiles_NoRoot(t *testing.T) {
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "no-root.example.com", []string{"no-root.example.com"}, nil)
+
+	certRecord := &CertificateRecord{
+		CommonName: sql.NullString{String: "no-root.example.com", Valid: true},
+		PEM:        string(leaf.certPEM),
+	}
+	keyRecord := &KeyRecord{KeyData: leaf.keyPEM}
+
+	// Bundle with intermediates but NO root
+	bundle := &certkit.BundleResult{
+		Leaf:          leaf.cert,
+		Intermediates: []*x509.Certificate{ca.cert},
+		Roots:         nil,
+	}
+
+	outDir := t.TempDir()
+	err := writeBundleFiles(outDir, "no-root-bundle", certRecord, keyRecord, bundle, nil)
+	if err != nil {
+		t.Fatalf("writeBundleFiles: %v", err)
+	}
+
+	folderPath := filepath.Join(outDir, "no-root-bundle")
+	prefix := "no-root.example.com"
+
+	// root.pem should NOT exist
+	rootPath := filepath.Join(folderPath, prefix+".root.pem")
+	if _, err := os.Stat(rootPath); err == nil {
+		t.Errorf("expected %s to NOT exist when there is no root", prefix+".root.pem")
+	}
+
+	// intermediates.pem SHOULD exist since we have intermediates
+	intPath := filepath.Join(folderPath, prefix+".intermediates.pem")
+	if _, err := os.Stat(intPath); os.IsNotExist(err) {
+		t.Errorf("expected %s to exist since intermediates are present", prefix+".intermediates.pem")
+	}
+
+	// leaf.pem and chain.pem should still exist
+	if _, err := os.Stat(filepath.Join(folderPath, prefix+".pem")); os.IsNotExist(err) {
+		t.Error("leaf .pem should exist")
+	}
+	if _, err := os.Stat(filepath.Join(folderPath, prefix+".chain.pem")); os.IsNotExist(err) {
+		t.Error("chain .chain.pem should exist")
+	}
+}
+
 func TestWriteBundleFiles_K8sTlsCrtExcludesRoot(t *testing.T) {
 	// Build a proper 3-tier PKI: root → intermediate → leaf
 	rootCA := newRSACA(t)

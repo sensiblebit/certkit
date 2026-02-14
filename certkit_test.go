@@ -1422,3 +1422,392 @@ func TestVerifyCSR_Tampered(t *testing.T) {
 		t.Error("expected error for tampered CSR")
 	}
 }
+
+func TestComputeSKI_RSA(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ski1, err := ComputeSKI(&key.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// RFC 7093 Method 1: 160 bits = 20 bytes = 40 hex chars
+	hexStr := fmt.Sprintf("%x", ski1)
+	if len(hexStr) != 40 {
+		t.Errorf("SKI hex length %d, want 40", len(hexStr))
+	}
+
+	// Verify deterministic
+	ski2, err := ComputeSKI(&key.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(ski1) != string(ski2) {
+		t.Error("ComputeSKI should be deterministic for RSA keys")
+	}
+}
+
+func TestComputeSKI_Ed25519(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ski1, err := ComputeSKI(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// RFC 7093 Method 1: 160 bits = 20 bytes = 40 hex chars
+	hexStr := fmt.Sprintf("%x", ski1)
+	if len(hexStr) != 40 {
+		t.Errorf("SKI hex length %d, want 40", len(hexStr))
+	}
+
+	// Verify deterministic
+	ski2, err := ComputeSKI(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(ski1) != string(ski2) {
+		t.Error("ComputeSKI should be deterministic for Ed25519 keys")
+	}
+}
+
+func TestCertFingerprint_CorrectHash(t *testing.T) {
+	_, _, leafPEM := generateTestPKI(t)
+	cert, err := ParsePEMCertificate([]byte(leafPEM))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fp := CertFingerprint(cert)
+
+	// Independently compute the expected SHA-256 fingerprint
+	hash := sha256.Sum256(cert.Raw)
+	expected := fmt.Sprintf("%x", hash[:])
+
+	if fp != expected {
+		t.Errorf("CertFingerprint mismatch:\n  got:  %s\n  want: %s", fp, expected)
+	}
+}
+
+func TestMarshalPublicKeyToPEM_RoundTrip_VerifyEquality(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pemStr, err := MarshalPublicKeyToPEM(&key.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	block, _ := pem.Decode([]byte(pemStr))
+	if block == nil {
+		t.Fatal("failed to decode PEM")
+	}
+	parsed, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		t.Fatalf("round-trip parse failed: %v", err)
+	}
+
+	rsaPub, ok := parsed.(*rsa.PublicKey)
+	if !ok {
+		t.Fatalf("expected *rsa.PublicKey, got %T", parsed)
+	}
+	if !key.PublicKey.Equal(rsaPub) {
+		t.Error("round-trip RSA public key does not equal original")
+	}
+}
+
+func TestCertToPEM_RoundTrip_ByteEquality(t *testing.T) {
+	_, _, leafPEM := generateTestPKI(t)
+	cert, err := ParsePEMCertificate([]byte(leafPEM))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pemStr := CertToPEM(cert)
+	cert2, err := ParsePEMCertificate([]byte(pemStr))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !cert.Equal(cert2) {
+		t.Error("round-trip cert.Equal returned false; raw bytes differ")
+	}
+}
+
+func TestGetCertificateType_Intermediate(t *testing.T) {
+	// Create a root CA
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Root CA"},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	caBytes, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caCert, err := x509.ParseCertificate(caBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create an intermediate CA signed by root (IsCA=true, RawIssuer != RawSubject)
+	intKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(2),
+		Subject:               pkix.Name{CommonName: "Intermediate CA"},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	intBytes, err := x509.CreateCertificate(rand.Reader, intTemplate, caCert, &intKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intCert, err := x509.ParseCertificate(intBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := GetCertificateType(intCert)
+	if got != "intermediate" {
+		t.Errorf("GetCertificateType() = %q, want %q", got, "intermediate")
+	}
+
+	// Verify root is still "root" and not confused
+	if rootType := GetCertificateType(caCert); rootType != "root" {
+		t.Errorf("GetCertificateType(root) = %q, want %q", rootType, "root")
+	}
+}
+
+func TestIsPEM_EdgeCases(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+		want bool
+	}{
+		{"empty bytes", []byte{}, false},
+		{"nil", nil, false},
+		{"valid PEM", []byte("-----BEGIN CERTIFICATE-----\nfoo\n-----END CERTIFICATE-----"), true},
+		{"DER bytes", []byte{0x30, 0x82, 0x01, 0x00}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsPEM(tt.data); got != tt.want {
+				t.Errorf("IsPEM(%v) = %v, want %v", tt.data, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParsePEMCertificates_NilInput(t *testing.T) {
+	_, err := ParsePEMCertificates(nil)
+	if err == nil {
+		t.Fatal("expected error for nil input")
+	}
+	if !strings.Contains(err.Error(), "no certificates found") {
+		t.Errorf("expected 'no certificates found' error, got: %v", err)
+	}
+}
+
+func TestParsePEMCertificates_OnlyNonCertBlocks(t *testing.T) {
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	der, _ := x509.MarshalPKCS8PrivateKey(key)
+
+	pemData := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+
+	_, err := ParsePEMCertificates(pemData)
+	if err == nil {
+		t.Fatal("expected error when PEM contains only PRIVATE KEY blocks")
+	}
+	if !strings.Contains(err.Error(), "no certificates found") {
+		t.Errorf("expected 'no certificates found' error, got: %v", err)
+	}
+}
+
+func TestParsePEMCertificates_TrailingGarbage(t *testing.T) {
+	_, _, leafPEM := generateTestPKI(t)
+
+	// Append random garbage bytes after valid PEM
+	dataWithGarbage := append([]byte(leafPEM), []byte("\nsome random trailing garbage bytes\x00\x01\x02")...)
+
+	certs, err := ParsePEMCertificates(dataWithGarbage)
+	if err != nil {
+		t.Fatalf("expected valid cert to parse despite trailing garbage: %v", err)
+	}
+	if len(certs) != 1 {
+		t.Fatalf("expected 1 cert, got %d", len(certs))
+	}
+	if certs[0].Subject.CommonName != "test.example.com" {
+		t.Errorf("CN=%q, want test.example.com", certs[0].Subject.CommonName)
+	}
+}
+
+func TestDefaultPasswords_MutationSafety(t *testing.T) {
+	pw1 := DefaultPasswords()
+	pw1[0] = "MUTATED"
+
+	pw2 := DefaultPasswords()
+	if pw2[0] == "MUTATED" {
+		t.Error("mutating returned slice should not affect future DefaultPasswords() calls")
+	}
+}
+
+func TestParsePEMPrivateKeyWithPasswords_NilPasswordsEncryptedKey(t *testing.T) {
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	block := &pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	}
+
+	//nolint:staticcheck // x509.EncryptPEMBlock is deprecated but needed for test
+	encBlock, err := x509.EncryptPEMBlock(rand.Reader, block.Type, block.Bytes, []byte("secret"), x509.PEMCipherAES256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encPEM := pem.EncodeToMemory(encBlock)
+
+	_, err = ParsePEMPrivateKeyWithPasswords(encPEM, nil)
+	if err == nil {
+		t.Error("expected error when password list is nil for encrypted key")
+	}
+}
+
+func TestParsePEMPrivateKeyWithPasswords_EmptyPasswordsEncryptedKey(t *testing.T) {
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	block := &pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	}
+
+	//nolint:staticcheck // x509.EncryptPEMBlock is deprecated but needed for test
+	encBlock, err := x509.EncryptPEMBlock(rand.Reader, block.Type, block.Bytes, []byte("secret"), x509.PEMCipherAES256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encPEM := pem.EncodeToMemory(encBlock)
+
+	_, err = ParsePEMPrivateKeyWithPasswords(encPEM, []string{})
+	if err == nil {
+		t.Error("expected error when password list is empty for encrypted key")
+	}
+}
+
+func TestParsePEMPrivateKey_Ed25519PKCS8(t *testing.T) {
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+
+	parsed, err := ParsePEMPrivateKey(pemBytes)
+	if err != nil {
+		t.Fatalf("expected Ed25519 PKCS#8 key to parse: %v", err)
+	}
+	edParsed, ok := parsed.(ed25519.PrivateKey)
+	if !ok {
+		t.Fatalf("expected ed25519.PrivateKey, got %T", parsed)
+	}
+	if !priv.Equal(edParsed) {
+		t.Error("Ed25519 PKCS#8 round-trip key mismatch")
+	}
+}
+
+func TestColonHex_EmptySlice(t *testing.T) {
+	got := ColonHex([]byte{})
+	if got != "" {
+		t.Errorf("ColonHex([]byte{}) = %q, want empty string", got)
+	}
+}
+
+func TestMarshalPublicKeyToPEM_Unsupported(t *testing.T) {
+	_, err := MarshalPublicKeyToPEM(struct{}{})
+	if err == nil {
+		t.Error("expected error for unsupported public key type")
+	}
+	if !strings.Contains(err.Error(), "marshaling public key") {
+		t.Errorf("error should mention marshaling public key, got: %v", err)
+	}
+}
+
+func TestMarshalPublicKeyToPEM_RoundTrip_ECDSAEquality(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pemStr, err := MarshalPublicKeyToPEM(&key.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	block, _ := pem.Decode([]byte(pemStr))
+	if block == nil {
+		t.Fatal("failed to decode PEM")
+	}
+	parsed, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		t.Fatalf("round-trip parse failed: %v", err)
+	}
+
+	ecPub, ok := parsed.(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatalf("expected *ecdsa.PublicKey, got %T", parsed)
+	}
+	if !key.PublicKey.Equal(ecPub) {
+		t.Error("round-trip ECDSA public key does not equal original")
+	}
+}
+
+func TestMarshalPublicKeyToPEM_RoundTrip_Ed25519Equality(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pemStr, err := MarshalPublicKeyToPEM(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	block, _ := pem.Decode([]byte(pemStr))
+	if block == nil {
+		t.Fatal("failed to decode PEM")
+	}
+	parsed, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		t.Fatalf("round-trip parse failed: %v", err)
+	}
+
+	edPub, ok := parsed.(ed25519.PublicKey)
+	if !ok {
+		t.Fatalf("expected ed25519.PublicKey, got %T", parsed)
+	}
+	if !pub.Equal(edPub) {
+		t.Error("round-trip Ed25519 public key does not equal original")
+	}
+}

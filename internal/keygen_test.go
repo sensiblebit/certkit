@@ -1,6 +1,9 @@
 package internal
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rsa"
 	"os"
 	"path/filepath"
 	"strings"
@@ -232,5 +235,224 @@ func TestParseCurve(t *testing.T) {
 		if (err == nil) != tt.ok {
 			t.Errorf("parseCurve(%q): err=%v, wantOK=%v", tt.input, err, tt.ok)
 		}
+	}
+}
+
+func TestGenerateKeyFiles_RoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	_, err := GenerateKeyFiles(KeygenOptions{
+		Algorithm: "rsa",
+		Bits:      2048,
+		OutPath:   dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Read the key file back and parse it
+	keyData, err := os.ReadFile(filepath.Join(dir, "key.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	parsedKey, err := certkit.ParsePEMPrivateKey(keyData)
+	if err != nil {
+		t.Fatalf("parsing generated key PEM: %v", err)
+	}
+
+	rsaKey, ok := parsedKey.(*rsa.PrivateKey)
+	if !ok {
+		t.Fatalf("expected *rsa.PrivateKey, got %T", parsedKey)
+	}
+	if rsaKey.N.BitLen() != 2048 {
+		t.Errorf("RSA key bit length = %d, want 2048", rsaKey.N.BitLen())
+	}
+}
+
+func TestGenerateKey_RSA4096(t *testing.T) {
+	signer, err := GenerateKey("rsa", 4096, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if signer == nil {
+		t.Fatal("expected non-nil signer")
+	}
+
+	rsaKey, ok := signer.(*rsa.PrivateKey)
+	if !ok {
+		t.Fatalf("expected *rsa.PrivateKey, got %T", signer)
+	}
+	if rsaKey.N.BitLen() != 4096 {
+		t.Errorf("RSA key bit length = %d, want 4096", rsaKey.N.BitLen())
+	}
+}
+
+func TestGenerateKey_ECDSAP384(t *testing.T) {
+	signer, err := GenerateKey("ecdsa", 0, "P-384")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if signer == nil {
+		t.Fatal("expected non-nil signer")
+	}
+
+	ecKey, ok := signer.(*ecdsa.PrivateKey)
+	if !ok {
+		t.Fatalf("expected *ecdsa.PrivateKey, got %T", signer)
+	}
+	if ecKey.Curve != elliptic.P384() {
+		t.Errorf("ECDSA curve = %v, want P-384", ecKey.Curve.Params().Name)
+	}
+}
+
+func TestGenerateKeyFiles_ECDSARoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	_, err := GenerateKeyFiles(KeygenOptions{
+		Algorithm: "ecdsa",
+		Curve:     "P-256",
+		OutPath:   dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	keyData, err := os.ReadFile(filepath.Join(dir, "key.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	parsedKey, err := certkit.ParsePEMPrivateKey(keyData)
+	if err != nil {
+		t.Fatalf("parsing generated ECDSA key PEM: %v", err)
+	}
+
+	ecKey, ok := parsedKey.(*ecdsa.PrivateKey)
+	if !ok {
+		t.Fatalf("expected *ecdsa.PrivateKey, got %T", parsedKey)
+	}
+	if ecKey.Curve != elliptic.P256() {
+		t.Errorf("ECDSA curve = %v, want P-256", ecKey.Curve.Params().Name)
+	}
+
+	// Verify public key round-trip
+	pubData, err := os.ReadFile(filepath.Join(dir, "pub.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(pubData), "PUBLIC KEY") {
+		t.Error("pub file should contain PUBLIC KEY")
+	}
+}
+
+func TestGenerateKeyFiles_Ed25519RoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	_, err := GenerateKeyFiles(KeygenOptions{
+		Algorithm: "ed25519",
+		OutPath:   dir,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	keyData, err := os.ReadFile(filepath.Join(dir, "key.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	parsedKey, err := certkit.ParsePEMPrivateKey(keyData)
+	if err != nil {
+		t.Fatalf("parsing generated Ed25519 key PEM: %v", err)
+	}
+
+	if certkit.KeyAlgorithmName(parsedKey) != "Ed25519" {
+		t.Errorf("expected Ed25519, got %s", certkit.KeyAlgorithmName(parsedKey))
+	}
+
+	// Verify public key round-trip
+	pubData, err := os.ReadFile(filepath.Join(dir, "pub.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(pubData), "PUBLIC KEY") {
+		t.Error("pub file should contain PUBLIC KEY")
+	}
+}
+
+func TestParseCurve_AllAlternateNames(t *testing.T) {
+	tests := []struct {
+		input    string
+		wantName string
+	}{
+		{"p384", "P-384"},
+		{"secp384r1", "P-384"},
+		{"P-384", "P-384"},
+		{"p521", "P-521"},
+		{"secp521r1", "P-521"},
+		{"P-521", "P-521"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			curve, err := parseCurve(tt.input)
+			if err != nil {
+				t.Fatalf("parseCurve(%q): %v", tt.input, err)
+			}
+			if curve.Params().Name != tt.wantName {
+				t.Errorf("parseCurve(%q) = %s, want %s", tt.input, curve.Params().Name, tt.wantName)
+			}
+		})
+	}
+}
+
+func TestGenerateKeyFiles_WithCSR_KeyMatchesCSR(t *testing.T) {
+	dir := t.TempDir()
+	_, err := GenerateKeyFiles(KeygenOptions{
+		Algorithm: "rsa",
+		Bits:      2048,
+		OutPath:   dir,
+		CN:        "keymatch.example.com",
+		SANs:      []string{"keymatch.example.com"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Parse the private key
+	keyData, err := os.ReadFile(filepath.Join(dir, "key.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsedKey, err := certkit.ParsePEMPrivateKey(keyData)
+	if err != nil {
+		t.Fatalf("parsing private key: %v", err)
+	}
+
+	// Parse the CSR
+	csrData, err := os.ReadFile(filepath.Join(dir, "csr.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	csr, err := certkit.ParsePEMCertificateRequest(csrData)
+	if err != nil {
+		t.Fatalf("parsing CSR: %v", err)
+	}
+
+	// Extract the public key from the CSR and compare with the private key's public key
+	rsaKey, ok := parsedKey.(*rsa.PrivateKey)
+	if !ok {
+		t.Fatalf("expected *rsa.PrivateKey, got %T", parsedKey)
+	}
+
+	csrPubKey, ok := csr.PublicKey.(*rsa.PublicKey)
+	if !ok {
+		t.Fatalf("expected CSR public key to be *rsa.PublicKey, got %T", csr.PublicKey)
+	}
+
+	if !rsaKey.PublicKey.Equal(csrPubKey) {
+		t.Error("CSR public key does not match private key's public key")
+	}
+
+	// Verify the CSR signature is valid
+	if err := certkit.VerifyCSR(csr); err != nil {
+		t.Errorf("CSR verification failed: %v", err)
 	}
 }

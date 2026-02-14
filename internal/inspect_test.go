@@ -1,8 +1,11 @@
 package internal
 
 import (
+	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -171,6 +174,339 @@ func TestInspectFile_JKS(t *testing.T) {
 	}
 	if keys != 1 {
 		t.Errorf("expected 1 private key, got %d", keys)
+	}
+}
+
+func TestInspectFile_CSR(t *testing.T) {
+	dir := t.TempDir()
+
+	// Generate a key and CSR using GenerateKeyFiles
+	result, err := GenerateKeyFiles(KeygenOptions{
+		Algorithm: "ecdsa",
+		Curve:     "P-256",
+		OutPath:   dir,
+		CN:        "csr.example.com",
+		SANs:      []string{"csr.example.com", "www.csr.example.com"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := InspectFile(result.CSRFile, []string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Find the CSR result
+	var csrResult *InspectResult
+	for i, r := range results {
+		if r.Type == "csr" {
+			csrResult = &results[i]
+			break
+		}
+	}
+	if csrResult == nil {
+		t.Fatal("expected to find a csr result")
+	}
+	if !strings.Contains(csrResult.CSRSubject, "csr.example.com") {
+		t.Errorf("CSR subject should contain CN, got %s", csrResult.CSRSubject)
+	}
+	if len(csrResult.CSRDNSNames) != 2 {
+		t.Fatalf("expected 2 DNS names, got %d", len(csrResult.CSRDNSNames))
+	}
+	if !slices.Contains(csrResult.CSRDNSNames, "csr.example.com") {
+		t.Error("CSR DNS names should contain csr.example.com")
+	}
+	if !slices.Contains(csrResult.CSRDNSNames, "www.csr.example.com") {
+		t.Error("CSR DNS names should contain www.csr.example.com")
+	}
+}
+
+func TestInspectFile_ECDSAKey(t *testing.T) {
+	dir := t.TempDir()
+	keyFile := filepath.Join(dir, "ec-key.pem")
+	if err := os.WriteFile(keyFile, ecdsaKeyPEM(t), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := InspectFile(keyFile, []string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var keyResult *InspectResult
+	for i, r := range results {
+		if r.Type == "private_key" {
+			keyResult = &results[i]
+			break
+		}
+	}
+	if keyResult == nil {
+		t.Fatal("expected to find a private_key result")
+	}
+	if keyResult.KeyType != "ECDSA" {
+		t.Errorf("expected key type ECDSA, got %s", keyResult.KeyType)
+	}
+	if keyResult.KeySize != "P-256" {
+		t.Errorf("expected key size P-256, got %s", keyResult.KeySize)
+	}
+	if keyResult.SKI == "" {
+		t.Error("expected SKI to be populated for ECDSA key")
+	}
+}
+
+func TestInspectFile_CertWithIPSANs(t *testing.T) {
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "ip.example.com", []string{"ip.example.com"}, []net.IP{net.ParseIP("10.0.0.1"), net.ParseIP("192.168.1.1")})
+
+	dir := t.TempDir()
+	certFile := filepath.Join(dir, "cert-ip.pem")
+	if err := os.WriteFile(certFile, leaf.certPEM, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := InspectFile(certFile, []string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected at least one result")
+	}
+
+	certResult := results[0]
+	if certResult.Type != "certificate" {
+		t.Fatalf("expected type=certificate, got %s", certResult.Type)
+	}
+
+	// The SANs should include both DNS names and IP addresses
+	if !slices.Contains(certResult.SANs, "ip.example.com") {
+		t.Errorf("SANs should contain DNS name ip.example.com, got %v", certResult.SANs)
+	}
+	if !slices.Contains(certResult.SANs, "10.0.0.1") {
+		t.Errorf("SANs should contain IP address 10.0.0.1, got %v", certResult.SANs)
+	}
+	if !slices.Contains(certResult.SANs, "192.168.1.1") {
+		t.Errorf("SANs should contain IP address 192.168.1.1, got %v", certResult.SANs)
+	}
+}
+
+func TestInspectFile_Ed25519Key(t *testing.T) {
+	dir := t.TempDir()
+	keyFile := filepath.Join(dir, "ed25519-key.pem")
+	if err := os.WriteFile(keyFile, ed25519KeyPEM(t), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := InspectFile(keyFile, []string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var keyResult *InspectResult
+	for i, r := range results {
+		if r.Type == "private_key" {
+			keyResult = &results[i]
+			break
+		}
+	}
+	if keyResult == nil {
+		t.Fatal("expected to find a private_key result")
+	}
+	if keyResult.KeyType != "Ed25519" {
+		t.Errorf("expected key type Ed25519, got %s", keyResult.KeyType)
+	}
+	if keyResult.KeySize != "256" {
+		t.Errorf("expected key size 256, got %s", keyResult.KeySize)
+	}
+	if keyResult.SKI == "" {
+		t.Error("expected SKI to be populated for Ed25519 key")
+	}
+	if keyResult.SKILegacy == "" {
+		t.Error("expected SKILegacy to be populated for Ed25519 key")
+	}
+}
+
+func TestInspectFile_MultiplePEMObjects(t *testing.T) {
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "multi-pem.example.com", []string{"multi-pem.example.com"}, nil)
+
+	// Put the key PEM BEFORE the cert PEM so ParsePEMPrivateKey finds the key
+	// (it only parses the first PEM block). ParsePEMCertificates iterates all blocks
+	// and will find the cert block.
+	combined := slices.Concat(leaf.keyPEM, leaf.certPEM)
+
+	dir := t.TempDir()
+	mixedFile := filepath.Join(dir, "mixed.pem")
+	if err := os.WriteFile(mixedFile, combined, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := InspectFile(mixedFile, []string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var foundCert, foundKey bool
+	for _, r := range results {
+		switch r.Type {
+		case "certificate":
+			foundCert = true
+			if !strings.Contains(r.Subject, "multi-pem.example.com") {
+				t.Errorf("certificate subject should contain CN, got %s", r.Subject)
+			}
+		case "private_key":
+			foundKey = true
+			if r.KeyType != "RSA" {
+				t.Errorf("expected key type RSA, got %s", r.KeyType)
+			}
+		}
+	}
+	if !foundCert {
+		t.Error("expected to find a certificate result in mixed PEM")
+	}
+	if !foundKey {
+		t.Error("expected to find a private_key result in mixed PEM")
+	}
+}
+
+func TestInspectFile_GarbageData(t *testing.T) {
+	dir := t.TempDir()
+	garbageFile := filepath.Join(dir, "garbage.bin")
+	garbage := make([]byte, 512)
+	for i := range garbage {
+		garbage[i] = byte(i % 251)
+	}
+	if err := os.WriteFile(garbageFile, garbage, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := InspectFile(garbageFile, []string{})
+	if err == nil {
+		t.Error("expected error for garbage data")
+	}
+	if !strings.Contains(err.Error(), "no certificates, keys, or CSRs found") {
+		t.Errorf("expected 'no certificates, keys, or CSRs found' error, got: %v", err)
+	}
+}
+
+func TestFormatInspectResults_UnsupportedFormat(t *testing.T) {
+	results := []InspectResult{
+		{Type: "certificate", Subject: "CN=test"},
+	}
+
+	_, err := FormatInspectResults(results, "yaml")
+	if err == nil {
+		t.Error("expected error for unsupported format 'yaml'")
+	}
+	if !strings.Contains(err.Error(), "unsupported output format") {
+		t.Errorf("expected 'unsupported output format' error, got: %v", err)
+	}
+}
+
+func TestInspectFile_DERCertificate(t *testing.T) {
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "der-inspect.example.com", []string{"der-inspect.example.com"}, nil)
+
+	dir := t.TempDir()
+	derFile := filepath.Join(dir, "cert.der")
+	if err := os.WriteFile(derFile, leaf.certDER, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := InspectFile(derFile, []string{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) == 0 {
+		t.Fatal("expected at least one result")
+	}
+	if results[0].Type != "certificate" {
+		t.Errorf("expected type=certificate, got %s", results[0].Type)
+	}
+	if !strings.Contains(results[0].Subject, "der-inspect.example.com") {
+		t.Errorf("subject should contain CN, got %s", results[0].Subject)
+	}
+	if results[0].SHA256 == "" {
+		t.Error("expected SHA-256 fingerprint to be populated")
+	}
+	if results[0].SHA1 == "" {
+		t.Error("expected SHA-1 fingerprint to be populated")
+	}
+	if results[0].KeyAlgo != "RSA" {
+		t.Errorf("expected key algorithm RSA, got %s", results[0].KeyAlgo)
+	}
+	if results[0].KeySize != "2048" {
+		t.Errorf("expected key size 2048, got %s", results[0].KeySize)
+	}
+}
+
+func TestFormatInspectResults_JSON_ValidJSON(t *testing.T) {
+	results := []InspectResult{
+		{
+			Type:    "certificate",
+			Subject: "CN=json-test.example.com,O=TestOrg",
+			Issuer:  "CN=Test CA",
+			Serial:  "12345",
+			SHA256:  "AA:BB:CC:DD",
+			SHA1:    "11:22:33:44",
+			SANs:    []string{"json-test.example.com", "www.json-test.example.com"},
+			KeyAlgo: "RSA",
+			KeySize: "2048",
+			SKI:     "aabbccdd",
+		},
+		{
+			Type:    "private_key",
+			KeyType: "RSA",
+			KeySize: "2048",
+			SKI:     "eeff0011",
+		},
+	}
+	output, err := FormatInspectResults(results, "json")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify output ends with newline (JSON output convention)
+	if !strings.HasSuffix(output, "\n") {
+		t.Error("JSON output should end with newline")
+	}
+
+	// Unmarshal back and verify round-trip fidelity
+	var parsed []InspectResult
+	if err := json.Unmarshal([]byte(output), &parsed); err != nil {
+		t.Fatalf("JSON output is not valid JSON: %v", err)
+	}
+
+	if len(parsed) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(parsed))
+	}
+
+	// Verify first result (certificate)
+	if parsed[0].Type != "certificate" {
+		t.Errorf("parsed[0].Type = %q, want %q", parsed[0].Type, "certificate")
+	}
+	if parsed[0].Subject != "CN=json-test.example.com,O=TestOrg" {
+		t.Errorf("parsed[0].Subject = %q, want %q", parsed[0].Subject, "CN=json-test.example.com,O=TestOrg")
+	}
+	if parsed[0].SHA256 != "AA:BB:CC:DD" {
+		t.Errorf("parsed[0].SHA256 = %q, want %q", parsed[0].SHA256, "AA:BB:CC:DD")
+	}
+	if len(parsed[0].SANs) != 2 {
+		t.Fatalf("parsed[0].SANs count = %d, want 2", len(parsed[0].SANs))
+	}
+	if parsed[0].SANs[0] != "json-test.example.com" {
+		t.Errorf("parsed[0].SANs[0] = %q, want %q", parsed[0].SANs[0], "json-test.example.com")
+	}
+	if parsed[0].SKI != "aabbccdd" {
+		t.Errorf("parsed[0].SKI = %q, want %q", parsed[0].SKI, "aabbccdd")
+	}
+
+	// Verify second result (private_key)
+	if parsed[1].Type != "private_key" {
+		t.Errorf("parsed[1].Type = %q, want %q", parsed[1].Type, "private_key")
+	}
+	if parsed[1].KeyType != "RSA" {
+		t.Errorf("parsed[1].KeyType = %q, want %q", parsed[1].KeyType, "RSA")
 	}
 }
 
