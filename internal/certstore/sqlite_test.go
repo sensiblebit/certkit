@@ -1,0 +1,199 @@
+//go:build !js
+
+package certstore
+
+import (
+	"encoding/hex"
+	"path/filepath"
+	"testing"
+
+	"github.com/sensiblebit/certkit"
+)
+
+func TestSaveToSQLite_RoundTrip(t *testing.T) {
+	// WHY: Verifies that certificates and keys survive a MemStore → SQLite → MemStore
+	// round-trip, preserving bundle names, cert types, and key data.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "roundtrip.example.com", []string{"roundtrip.example.com"})
+
+	store := NewMemStore()
+	if err := store.HandleCertificate(ca.cert, "test"); err != nil {
+		t.Fatalf("store CA cert: %v", err)
+	}
+	if err := store.HandleCertificate(leaf.cert, "test"); err != nil {
+		t.Fatalf("store leaf cert: %v", err)
+	}
+	if err := store.HandleKey(leaf.key, leaf.keyPEM, "test"); err != nil {
+		t.Fatalf("store key: %v", err)
+	}
+
+	// Set bundle name on the leaf
+	leafSKI, err := certkit.ComputeSKI(leaf.cert.PublicKey)
+	if err != nil {
+		t.Fatalf("compute leaf SKI: %v", err)
+	}
+	store.SetBundleName(hex.EncodeToString(leafSKI), "roundtrip-bundle")
+
+	// Save to SQLite
+	dbPath := filepath.Join(t.TempDir(), "roundtrip.db")
+	if err := SaveToSQLite(store, dbPath); err != nil {
+		t.Fatalf("SaveToSQLite: %v", err)
+	}
+
+	// Load into a fresh MemStore
+	store2 := NewMemStore()
+	if err := LoadFromSQLite(store2, dbPath); err != nil {
+		t.Fatalf("LoadFromSQLite: %v", err)
+	}
+
+	// Verify certificates were loaded
+	certs := store2.AllCertsFlat()
+	if len(certs) != 2 {
+		t.Fatalf("expected 2 certs after round-trip, got %d", len(certs))
+	}
+
+	// Verify the leaf cert has the correct bundle name
+	leafRec := store2.GetCert(hex.EncodeToString(leafSKI))
+	if leafRec == nil {
+		t.Fatal("leaf cert not found after round-trip")
+	}
+	if leafRec.BundleName != "roundtrip-bundle" {
+		t.Errorf("bundle name: got %q, want %q", leafRec.BundleName, "roundtrip-bundle")
+	}
+	if leafRec.Cert.Subject.CommonName != "roundtrip.example.com" {
+		t.Errorf("CN: got %q, want %q", leafRec.Cert.Subject.CommonName, "roundtrip.example.com")
+	}
+
+	// Verify key was loaded
+	keys := store2.AllKeysFlat()
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key after round-trip, got %d", len(keys))
+	}
+	if keys[0].KeyType != "RSA" {
+		t.Errorf("key type: got %q, want %q", keys[0].KeyType, "RSA")
+	}
+
+	// Verify summary is consistent
+	summary := store2.ScanSummary()
+	if summary.Roots != 1 {
+		t.Errorf("roots: got %d, want 1", summary.Roots)
+	}
+	if summary.Leaves != 1 {
+		t.Errorf("leaves: got %d, want 1", summary.Leaves)
+	}
+	if summary.Keys != 1 {
+		t.Errorf("keys: got %d, want 1", summary.Keys)
+	}
+	if summary.Matched != 1 {
+		t.Errorf("matched: got %d, want 1", summary.Matched)
+	}
+}
+
+func TestSaveToSQLite_ExistingFileErrors(t *testing.T) {
+	// WHY: VACUUM INTO fails if the target file already exists; verifies
+	// the error is propagated clearly instead of silently corrupting data.
+	t.Parallel()
+
+	store := NewMemStore()
+	dbPath := filepath.Join(t.TempDir(), "existing.db")
+
+	// First save should succeed
+	if err := SaveToSQLite(store, dbPath); err != nil {
+		t.Fatalf("first SaveToSQLite: %v", err)
+	}
+
+	// Second save to same path should fail
+	err := SaveToSQLite(store, dbPath)
+	if err == nil {
+		t.Fatal("expected error when saving to existing file, got nil")
+	}
+}
+
+func TestLoadFromSQLite_NonexistentFile(t *testing.T) {
+	// WHY: Loading from a missing file must return a clear error, not panic
+	// or leave the MemStore in a corrupted state.
+	t.Parallel()
+
+	store := NewMemStore()
+	err := LoadFromSQLite(store, "/nonexistent/path/to/db.sqlite")
+	if err == nil {
+		t.Fatal("expected error for nonexistent file, got nil")
+	}
+}
+
+func TestLoadFromSQLite_EmptyDB(t *testing.T) {
+	// WHY: Loading an empty database must be a safe no-op, not cause errors.
+	t.Parallel()
+
+	// Create empty DB file
+	emptyStore := NewMemStore()
+	dbPath := filepath.Join(t.TempDir(), "empty.db")
+	if err := SaveToSQLite(emptyStore, dbPath); err != nil {
+		t.Fatalf("SaveToSQLite: %v", err)
+	}
+
+	store := NewMemStore()
+	if err := LoadFromSQLite(store, dbPath); err != nil {
+		t.Fatalf("LoadFromSQLite on empty DB: %v", err)
+	}
+
+	certs := store.AllCertsFlat()
+	if len(certs) != 0 {
+		t.Errorf("expected 0 certs from empty DB, got %d", len(certs))
+	}
+	keys := store.AllKeysFlat()
+	if len(keys) != 0 {
+		t.Errorf("expected 0 keys from empty DB, got %d", len(keys))
+	}
+}
+
+func TestLoadFromSQLite_MergesWithExisting(t *testing.T) {
+	// WHY: Loading from a DB file must merge with existing MemStore data,
+	// not overwrite it. This supports scanning multiple directories with
+	// --load-db between scans.
+	t.Parallel()
+
+	// Use an RSA CA and an ECDSA CA so the two certs have different
+	// serial/AKI composite keys and don't collide in the store.
+	caA := newRSACA(t)
+	caB := newECDSACA(t)
+
+	// Save the RSA CA cert to a DB file
+	storeA := NewMemStore()
+	if err := storeA.HandleCertificate(caA.cert, "test"); err != nil {
+		t.Fatalf("store cert A: %v", err)
+	}
+	dbPath := filepath.Join(t.TempDir(), "merge.db")
+	if err := SaveToSQLite(storeA, dbPath); err != nil {
+		t.Fatalf("SaveToSQLite: %v", err)
+	}
+
+	// Create a store with the ECDSA CA cert, then load the DB with the RSA CA cert
+	storeB := NewMemStore()
+	if err := storeB.HandleCertificate(caB.cert, "test"); err != nil {
+		t.Fatalf("store cert B: %v", err)
+	}
+
+	if err := LoadFromSQLite(storeB, dbPath); err != nil {
+		t.Fatalf("LoadFromSQLite: %v", err)
+	}
+
+	// Both certs should exist
+	certs := storeB.AllCertsFlat()
+	if len(certs) != 2 {
+		t.Fatalf("expected 2 certs after merge, got %d", len(certs))
+	}
+
+	cns := make(map[string]bool)
+	for _, c := range certs {
+		cns[c.Cert.Subject.CommonName] = true
+	}
+	if !cns["Test RSA Root CA"] {
+		t.Error("RSA CA cert missing after merge")
+	}
+	if !cns["Test ECDSA Root CA"] {
+		t.Error("ECDSA CA cert missing after merge")
+	}
+}

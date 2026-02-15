@@ -6,8 +6,8 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"math/big"
@@ -17,8 +17,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jmoiron/sqlx/types"
 	"github.com/sensiblebit/certkit"
+	"github.com/sensiblebit/certkit/internal/certstore"
 	"gopkg.in/yaml.v3"
 )
 
@@ -89,17 +89,10 @@ func TestGenerateCSR_ValidOutput(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "csr.example.com", []string{"csr.example.com", "www.csr.example.com"}, nil)
 
-	certRecord := &CertificateRecord{
-		SerialNumber:         leaf.cert.SerialNumber.String(),
-		SubjectKeyIdentifier: "test-ski",
-		PEM:                  string(leaf.certPEM),
-		CommonName:           sql.NullString{String: "csr.example.com", Valid: true},
+	certRecord := &certstore.CertRecord{
+		Cert: leaf.cert,
 	}
-	keyRecord := &KeyRecord{
-		SubjectKeyIdentifier: "test-ski",
-		KeyType:              "rsa",
-		KeyData:              leaf.keyPEM,
-	}
+	keyRecord := &certstore.KeyRecord{PEM: leaf.keyPEM}
 
 	csrPEM, csrJSON, err := generateCSR(certRecord, keyRecord, nil)
 	if err != nil {
@@ -139,11 +132,10 @@ func TestGenerateCSR_WildcardSANFiltering(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "*.example.com", []string{"*.example.com", "example.com"}, nil)
 
-	certRecord := &CertificateRecord{
-		PEM:        string(leaf.certPEM),
-		CommonName: sql.NullString{String: "*.example.com", Valid: true},
+	certRecord := &certstore.CertRecord{
+		Cert: leaf.cert,
 	}
-	keyRecord := &KeyRecord{KeyData: leaf.keyPEM}
+	keyRecord := &certstore.KeyRecord{PEM: leaf.keyPEM}
 
 	csrPEM, _, err := generateCSR(certRecord, keyRecord, nil)
 	if err != nil {
@@ -174,11 +166,10 @@ func TestGenerateCSR_WWWCNFiltering(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "example.com", []string{"example.com", "www.example.com"}, nil)
 
-	certRecord := &CertificateRecord{
-		PEM:        string(leaf.certPEM),
-		CommonName: sql.NullString{String: "example.com", Valid: true},
+	certRecord := &certstore.CertRecord{
+		Cert: leaf.cert,
 	}
-	keyRecord := &KeyRecord{KeyData: leaf.keyPEM}
+	keyRecord := &certstore.KeyRecord{PEM: leaf.keyPEM}
 
 	csrPEM, _, err := generateCSR(certRecord, keyRecord, nil)
 	if err != nil {
@@ -200,11 +191,10 @@ func TestGenerateCSR_BundleConfigSubjectOverride(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "override.example.com", []string{"override.example.com"}, nil)
 
-	certRecord := &CertificateRecord{
-		PEM:        string(leaf.certPEM),
-		CommonName: sql.NullString{String: "override.example.com", Valid: true},
+	certRecord := &certstore.CertRecord{
+		Cert: leaf.cert,
 	}
-	keyRecord := &KeyRecord{KeyData: leaf.keyPEM}
+	keyRecord := &certstore.KeyRecord{PEM: leaf.keyPEM}
 
 	bundleConfig := &BundleConfig{
 		Subject: &SubjectConfig{
@@ -234,11 +224,10 @@ func TestGenerateCSR_FallbackToCertSubject(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "fallback.example.com", []string{"fallback.example.com"}, nil)
 
-	certRecord := &CertificateRecord{
-		PEM:        string(leaf.certPEM),
-		CommonName: sql.NullString{String: "fallback.example.com", Valid: true},
+	certRecord := &certstore.CertRecord{
+		Cert: leaf.cert,
 	}
-	keyRecord := &KeyRecord{KeyData: leaf.keyPEM}
+	keyRecord := &certstore.KeyRecord{PEM: leaf.keyPEM}
 
 	csrPEM, _, err := generateCSR(certRecord, keyRecord, nil)
 	if err != nil {
@@ -261,11 +250,10 @@ func TestGenerateCSR_EmptyOUDefaultsToNone(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "noou.example.com", []string{"noou.example.com"}, nil)
 
-	certRecord := &CertificateRecord{
-		PEM:        string(leaf.certPEM),
-		CommonName: sql.NullString{String: "noou.example.com", Valid: true},
+	certRecord := &certstore.CertRecord{
+		Cert: leaf.cert,
 	}
-	keyRecord := &KeyRecord{KeyData: leaf.keyPEM}
+	keyRecord := &certstore.KeyRecord{PEM: leaf.keyPEM}
 
 	csrPEM, _, err := generateCSR(certRecord, keyRecord, nil)
 	if err != nil {
@@ -285,11 +273,10 @@ func TestWriteBundleFiles_CreatesAllFiles(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "bundle.example.com", []string{"bundle.example.com"}, nil)
 
-	certRecord := &CertificateRecord{
-		CommonName: sql.NullString{String: "bundle.example.com", Valid: true},
-		PEM:        string(leaf.certPEM),
+	certRecord := &certstore.CertRecord{
+		Cert: leaf.cert,
 	}
-	keyRecord := &KeyRecord{KeyData: leaf.keyPEM}
+	keyRecord := &certstore.KeyRecord{PEM: leaf.keyPEM}
 	bundle := newTestBundle(t, leaf, ca)
 
 	outDir := t.TempDir()
@@ -331,11 +318,10 @@ func TestWriteBundleFiles_WildcardPrefix(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "*.wildcard.com", []string{"*.wildcard.com"}, nil)
 
-	certRecord := &CertificateRecord{
-		CommonName: sql.NullString{String: "*.wildcard.com", Valid: true},
-		PEM:        string(leaf.certPEM),
+	certRecord := &certstore.CertRecord{
+		Cert: leaf.cert,
 	}
-	keyRecord := &KeyRecord{KeyData: leaf.keyPEM}
+	keyRecord := &certstore.KeyRecord{PEM: leaf.keyPEM}
 	bundle := newTestBundle(t, leaf, ca)
 
 	outDir := t.TempDir()
@@ -459,11 +445,11 @@ func TestGenerateYAML_RoundTrip(t *testing.T) {
 	leaf := newRSALeaf(t, ca, "yaml-rt.example.com", []string{"yaml-rt.example.com"}, []net.IP{net.ParseIP("192.168.1.1")})
 	bundle := newTestBundle(t, leaf, ca)
 
-	keyRecord := &KeyRecord{
-		SubjectKeyIdentifier: "test-ski",
-		KeyType:              "rsa",
-		BitLength:            2048,
-		KeyData:              leaf.keyPEM,
+	keyRecord := &certstore.KeyRecord{
+		SKI:       "test-ski",
+		KeyType:   "RSA",
+		BitLength: 2048,
+		PEM:       leaf.keyPEM,
 	}
 
 	data, err := generateYAML(keyRecord, bundle)
@@ -514,8 +500,8 @@ func TestGenerateYAML_RoundTrip(t *testing.T) {
 	}
 
 	// Validate key_type and key_size
-	if kt, _ := parsed["key_type"].(string); kt != "rsa" {
-		t.Errorf("key_type = %q, want rsa", kt)
+	if kt, _ := parsed["key_type"].(string); kt != "RSA" {
+		t.Errorf("key_type = %q, want RSA", kt)
 	}
 	if ks, _ := parsed["key_size"].(int); ks != 2048 {
 		t.Errorf("key_size = %v, want 2048", parsed["key_size"])
@@ -562,11 +548,10 @@ func TestWriteBundleFiles_K8sYAMLDecode(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "k8s.example.com", []string{"k8s.example.com"}, nil)
 
-	certRecord := &CertificateRecord{
-		CommonName: sql.NullString{String: "k8s.example.com", Valid: true},
-		PEM:        string(leaf.certPEM),
+	certRecord := &certstore.CertRecord{
+		Cert: leaf.cert,
 	}
-	keyRecord := &KeyRecord{KeyData: leaf.keyPEM}
+	keyRecord := &certstore.KeyRecord{PEM: leaf.keyPEM}
 	bundle := newTestBundle(t, leaf, ca)
 
 	outDir := t.TempDir()
@@ -655,11 +640,10 @@ func TestWriteBundleFiles_K8sYAMLDecode_Wildcard(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "*.k8s-wild.com", []string{"*.k8s-wild.com"}, nil)
 
-	certRecord := &CertificateRecord{
-		CommonName: sql.NullString{String: "*.k8s-wild.com", Valid: true},
-		PEM:        string(leaf.certPEM),
+	certRecord := &certstore.CertRecord{
+		Cert: leaf.cert,
 	}
-	keyRecord := &KeyRecord{KeyData: leaf.keyPEM}
+	keyRecord := &certstore.KeyRecord{PEM: leaf.keyPEM}
 	bundle := newTestBundle(t, leaf, ca)
 
 	outDir := t.TempDir()
@@ -690,11 +674,10 @@ func TestWriteBundleFiles_JSONDecode(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "json-file.example.com", []string{"json-file.example.com"}, nil)
 
-	certRecord := &CertificateRecord{
-		CommonName: sql.NullString{String: "json-file.example.com", Valid: true},
-		PEM:        string(leaf.certPEM),
+	certRecord := &certstore.CertRecord{
+		Cert: leaf.cert,
 	}
-	keyRecord := &KeyRecord{KeyData: leaf.keyPEM}
+	keyRecord := &certstore.KeyRecord{PEM: leaf.keyPEM}
 	bundle := newTestBundle(t, leaf, ca)
 
 	outDir := t.TempDir()
@@ -735,15 +718,14 @@ func TestWriteBundleFiles_YAMLDecode(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "yaml-file.example.com", []string{"yaml-file.example.com"}, nil)
 
-	certRecord := &CertificateRecord{
-		CommonName: sql.NullString{String: "yaml-file.example.com", Valid: true},
-		PEM:        string(leaf.certPEM),
+	certRecord := &certstore.CertRecord{
+		Cert: leaf.cert,
 	}
-	keyRecord := &KeyRecord{
-		SubjectKeyIdentifier: "test-ski",
-		KeyType:              "rsa",
-		BitLength:            2048,
-		KeyData:              leaf.keyPEM,
+	keyRecord := &certstore.KeyRecord{
+		SKI:       "test-ski",
+		KeyType:   "RSA",
+		BitLength: 2048,
+		PEM:       leaf.keyPEM,
 	}
 	bundle := newTestBundle(t, leaf, ca)
 
@@ -786,11 +768,10 @@ func TestWriteBundleFiles_ChainExcludesRoot(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "chain.example.com", []string{"chain.example.com"}, nil)
 
-	certRecord := &CertificateRecord{
-		CommonName: sql.NullString{String: "chain.example.com", Valid: true},
-		PEM:        string(leaf.certPEM),
+	certRecord := &certstore.CertRecord{
+		Cert: leaf.cert,
 	}
-	keyRecord := &KeyRecord{KeyData: leaf.keyPEM}
+	keyRecord := &certstore.KeyRecord{PEM: leaf.keyPEM}
 	bundle := newTestBundle(t, leaf, ca)
 
 	outDir := t.TempDir()
@@ -840,11 +821,10 @@ func TestWriteBundleFiles_SensitiveFilePermissions(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "perms.example.com", []string{"perms.example.com"}, nil)
 
-	certRecord := &CertificateRecord{
-		CommonName: sql.NullString{String: "perms.example.com", Valid: true},
-		PEM:        string(leaf.certPEM),
+	certRecord := &certstore.CertRecord{
+		Cert: leaf.cert,
 	}
-	keyRecord := &KeyRecord{KeyData: leaf.keyPEM}
+	keyRecord := &certstore.KeyRecord{PEM: leaf.keyPEM}
 	bundle := newTestBundle(t, leaf, ca)
 
 	outDir := t.TempDir()
@@ -878,11 +858,10 @@ func TestWriteBundleFiles_PKCS12Password(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "p12pass.example.com", []string{"p12pass.example.com"}, nil)
 
-	certRecord := &CertificateRecord{
-		CommonName: sql.NullString{String: "p12pass.example.com", Valid: true},
-		PEM:        string(leaf.certPEM),
+	certRecord := &certstore.CertRecord{
+		Cert: leaf.cert,
 	}
-	keyRecord := &KeyRecord{KeyData: leaf.keyPEM}
+	keyRecord := &certstore.KeyRecord{PEM: leaf.keyPEM}
 	bundle := newTestBundle(t, leaf, ca)
 
 	outDir := t.TempDir()
@@ -927,11 +906,10 @@ func TestWriteBundleFiles_NoIntermediates(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "no-int.example.com", []string{"no-int.example.com"}, nil)
 
-	certRecord := &CertificateRecord{
-		CommonName: sql.NullString{String: "no-int.example.com", Valid: true},
-		PEM:        string(leaf.certPEM),
+	certRecord := &certstore.CertRecord{
+		Cert: leaf.cert,
 	}
-	keyRecord := &KeyRecord{KeyData: leaf.keyPEM}
+	keyRecord := &certstore.KeyRecord{PEM: leaf.keyPEM}
 
 	// Bundle with NO intermediates
 	bundle := &certkit.BundleResult{
@@ -975,11 +953,10 @@ func TestWriteBundleFiles_NoRoot(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "no-root.example.com", []string{"no-root.example.com"}, nil)
 
-	certRecord := &CertificateRecord{
-		CommonName: sql.NullString{String: "no-root.example.com", Valid: true},
-		PEM:        string(leaf.certPEM),
+	certRecord := &certstore.CertRecord{
+		Cert: leaf.cert,
 	}
-	keyRecord := &KeyRecord{KeyData: leaf.keyPEM}
+	keyRecord := &certstore.KeyRecord{PEM: leaf.keyPEM}
 
 	// Bundle with intermediates but NO root
 	bundle := &certkit.BundleResult{
@@ -1048,11 +1025,10 @@ func TestWriteBundleFiles_K8sTlsCrtExcludesRoot(t *testing.T) {
 		Roots:         []*x509.Certificate{rootCA.cert},
 	}
 
-	certRecord := &CertificateRecord{
-		CommonName: sql.NullString{String: "k8s-noroot.example.com", Valid: true},
-		PEM:        string(leaf.certPEM),
+	certRecord := &certstore.CertRecord{
+		Cert: leaf.cert,
 	}
-	keyRecord := &KeyRecord{KeyData: leaf.keyPEM}
+	keyRecord := &certstore.KeyRecord{PEM: leaf.keyPEM}
 
 	outDir := t.TempDir()
 	err = writeBundleFiles(outDir, "k8s-noroot", certRecord, keyRecord, bundle, nil)
@@ -1172,39 +1148,28 @@ func TestDetermineBundleName_AllBranches(t *testing.T) {
 }
 
 func TestExportBundles_EndToEnd(t *testing.T) {
-	// WHY: Integration test for the full export pipeline (DB -> chain resolution -> file writing); verifies the bundle directory is created and populated.
+	// WHY: Integration test for the full export pipeline (store -> chain resolution -> file writing); verifies the bundle directory is created and populated.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "e2e.example.com", []string{"e2e.example.com"}, nil)
 
-	cfg := newTestConfig(t)
-	defer cfg.DB.Close()
+	store := certstore.NewMemStore()
 
-	now := time.Now()
-	certRecord := CertificateRecord{
-		SerialNumber:           leaf.cert.SerialNumber.String(),
-		SubjectKeyIdentifier:   "e2e-ski",
-		AuthorityKeyIdentifier: "e2e-aki",
-		CertType:               "leaf",
-		KeyType:                getKeyType(leaf.cert),
-		PEM:                    string(leaf.certPEM),
-		Expiry:                 leaf.cert.NotAfter,
-		NotBefore:              &now,
-		SANsJSON:               types.JSONText(`["e2e.example.com"]`),
-		CommonName:             sql.NullString{String: "e2e.example.com", Valid: true},
-		BundleName:             "e2e-bundle",
-	}
-	if err := cfg.DB.InsertCertificate(certRecord); err != nil {
-		t.Fatalf("insert cert: %v", err)
+	// Add certificate to store
+	if err := store.HandleCertificate(leaf.cert, "test"); err != nil {
+		t.Fatalf("store cert: %v", err)
 	}
 
-	keyRecord := KeyRecord{
-		SubjectKeyIdentifier: "e2e-ski",
-		KeyType:              "rsa",
-		BitLength:            2048,
-		KeyData:              leaf.keyPEM,
+	// Compute SKI and set bundle name
+	rawSKI, err := certkit.ComputeSKI(leaf.cert.PublicKey)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if err := cfg.DB.InsertKey(keyRecord); err != nil {
-		t.Fatalf("insert key: %v", err)
+	ski := hex.EncodeToString(rawSKI)
+	store.SetBundleName(ski, "e2e-bundle")
+
+	// Add key to store
+	if err := store.HandleKey(leaf.key, leaf.keyPEM, "test"); err != nil {
+		t.Fatalf("store key: %v", err)
 	}
 
 	bundleConfigs := []BundleConfig{
@@ -1217,7 +1182,7 @@ func TestExportBundles_EndToEnd(t *testing.T) {
 	outDir := t.TempDir()
 
 	// Use force=true to allow untrusted certs
-	err := ExportBundles(context.Background(), bundleConfigs, outDir, cfg.DB, true, false)
+	err = ExportBundles(context.Background(), bundleConfigs, outDir, store, true, false)
 	if err != nil {
 		t.Fatalf("ExportBundles: %v", err)
 	}
@@ -1234,39 +1199,20 @@ func TestExportBundles_EmptyBundleNameSkipped(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "no-bundle.example.com", []string{"no-bundle.example.com"}, nil)
 
-	cfg := newTestConfig(t)
-	defer cfg.DB.Close()
+	store := certstore.NewMemStore()
 
-	now := time.Now()
-	certRecord := CertificateRecord{
-		SerialNumber:           leaf.cert.SerialNumber.String(),
-		SubjectKeyIdentifier:   "empty-bundle-ski",
-		AuthorityKeyIdentifier: "empty-bundle-aki",
-		CertType:               "leaf",
-		KeyType:                getKeyType(leaf.cert),
-		PEM:                    string(leaf.certPEM),
-		Expiry:                 leaf.cert.NotAfter,
-		NotBefore:              &now,
-		SANsJSON:               types.JSONText(`["no-bundle.example.com"]`),
-		CommonName:             sql.NullString{String: "no-bundle.example.com", Valid: true},
-		BundleName:             "", // empty — should be skipped
-	}
-	if err := cfg.DB.InsertCertificate(certRecord); err != nil {
-		t.Fatalf("insert cert: %v", err)
+	// Add certificate to store without setting a bundle name
+	if err := store.HandleCertificate(leaf.cert, "test"); err != nil {
+		t.Fatalf("store cert: %v", err)
 	}
 
-	keyRecord := KeyRecord{
-		SubjectKeyIdentifier: "empty-bundle-ski",
-		KeyType:              "rsa",
-		BitLength:            2048,
-		KeyData:              leaf.keyPEM,
-	}
-	if err := cfg.DB.InsertKey(keyRecord); err != nil {
-		t.Fatalf("insert key: %v", err)
+	// Add key to store
+	if err := store.HandleKey(leaf.key, leaf.keyPEM, "test"); err != nil {
+		t.Fatalf("store key: %v", err)
 	}
 
 	outDir := t.TempDir()
-	err := ExportBundles(context.Background(), nil, outDir, cfg.DB, true, false)
+	err := ExportBundles(context.Background(), nil, outDir, store, true, false)
 	if err != nil {
 		t.Fatalf("ExportBundles should not error: %v", err)
 	}

@@ -10,9 +10,9 @@
 
 Go module: `github.com/sensiblebit/certkit`
 Go version: 1.25+
-Pure Go build — no CGO required (uses `modernc.org/sqlite`).
+Pure Go build — no CGO required (uses `modernc.org/sqlite` for optional `--save-db`/`--load-db` persistence).
 
-Certificate management tool: ingest certs/keys in many formats, catalog in SQLite, export organized bundles. Also a reusable Go library.
+Certificate management tool: ingest certs/keys in many formats, catalog in memory, export organized bundles. Also a reusable Go library.
 
 ## 1 — Before Coding
 
@@ -41,13 +41,24 @@ Stateless utility functions. No database, no file I/O. This is the public librar
 - `pkcs.go` — PKCS#12 and PKCS#7 encode/decode
 - `jks.go` — Java KeyStore encode/decode
 
+### `internal/certstore/`
+
+Certificate/key processing, in-memory storage, and persistence. Used by both CLI and WASM builds (except `sqlite.go` which is excluded from WASM via build tag).
+
+- `certstore.go` — `CertHandler` interface (`HandleCertificate`, `HandleKey`), `ProcessInput` struct.
+- `process.go` — `ProcessData()`: format detection and parsing pipeline (PEM → DER → PKCS#7 → PKCS#8 → SEC1 → Ed25519 → JKS → PKCS#12). Calls `CertHandler` for each parsed item.
+- `memstore.go` — `MemStore`: in-memory `CertHandler` implementation and primary runtime store. `CertRecord`/`KeyRecord` types. Stores multiple certs per SKI via composite key (serial + AKI). Provides `ScanSummary()`, `AllCertsFlat()`, `AllKeysFlat()`, `CertsByBundleName()`, `BundleNames()`, `DumpDebug()`.
+- `summary.go` — `ScanSummary` struct (roots, intermediates, leaves, keys, matched pairs).
+- `export.go` — `GenerateBundleFiles()`: creates all output files for a bundle (PEM variants, key, P12, K8s YAML, JSON, YAML, CSR). `GenerateJSON`, `GenerateYAML`, `GenerateCSR` also exported individually.
+- `helpers.go` — `GetKeyType`, `HasBinaryExtension`, `FormatCN`, `SanitizeFileName`, `FormatIPAddresses`.
+- `sqlite.go` — SQLite persistence (`//go:build !js`). `SaveToSQLite(store, path)` and `LoadFromSQLite(store, path)` for `--save-db`/`--load-db` flags. Self-contained: opens in-memory SQLite, transfers data, uses `VACUUM INTO` to write.
+
 ### `internal/`
 
-Stateful operations: database, file I/O, CLI business logic.
+CLI business logic and file I/O. Delegates to `internal/certstore/` for processing, storage, and export. No SQLite dependency at this layer.
 
-- `db.go` — SQLite via sqlx + modernc.org/sqlite (pure Go). `DB` struct wraps `*sqlx.DB`. Schema: `certificates` and `keys` tables indexed by SKI. Key methods: `InsertCertificate`, `InsertKey`, `GetCert`, `GetKey`, `GetCertBySKI`, `GetAllCerts`, `GetAllKeys`, `GetScanSummary`, `ResolveAKIs`, `DumpDB`.
-- `crypto.go` — File ingestion pipeline. `ProcessFile()` is the main entry point. Detects PEM vs DER, tries all formats (PEM, DER, PKCS#12, PKCS#7, JKS, PKCS#8, SEC1, Ed25519).
-- `exporter.go` — Bundle export. `ExportBundles()` iterates keys, finds matching certs, builds chains, writes all output formats. `writeBundleFiles()` produces up to 12 output files per bundle (intermediates and root files are conditional).
+- `crypto.go` — File ingestion pipeline. `ProcessFile()` is the main entry point. `cliHandler` adapter implements `certstore.CertHandler` with CLI-specific concerns (expired filtering, bundle name determination).
+- `exporter.go` — Bundle export. `ExportBundles()` iterates `MemStore` bundle names, finds matching certs/keys, builds chains. `writeBundleFiles()` delegates to `certstore.GenerateBundleFiles()` and writes the results to disk with appropriate permissions.
 - `bundleconfig.go` — YAML config parsing. Supports `defaultSubject` inheritance.
 - `inspect.go` — Certificate/key/CSR inspection with text and JSON output.
 - `verify.go` — Chain validation, key-cert matching, expiry checking.
@@ -56,7 +67,7 @@ Stateful operations: database, file I/O, CLI business logic.
 - `passwords.go` — Password aggregation and deduplication.
 - `logger.go` — slog setup.
 - `container.go` — Container file parsing. `LoadContainerFile()` and `ParseContainerData()` extract leaf certs, keys, and extra certs from PKCS#12, JKS, PKCS#7, PEM, or DER input.
-- `types.go` — Shared types: `Config`, `CertificateRecord`, `KeyRecord`, `K8sSecret`.
+- `types.go` — Shared types: `Config`. `K8sSecret`/`K8sMetadata` are type aliases for `certstore.K8sSecret`/`certstore.K8sMetadata`.
 
 ### `cmd/certkit/`
 
@@ -361,8 +372,9 @@ Configured hooks: `goimports`, `go vet`, `go build`, `go test`, `markdownlint`.
 
 ## 17 — Key Design Decisions
 
+- **MemStore is the primary runtime store.** All scan operations use `certstore.MemStore` — no SQLite at runtime. SQLite (`certstore/sqlite.go`) is only used for `--save-db` / `--load-db` serialization. The `sqlite.go` file has a `//go:build !js` constraint to exclude it from WASM builds.
 - **SKI computation uses RFC 7093 Method 1** (SHA-256 truncated to 160 bits), not the legacy SHA-1 method. `ComputeSKILegacy()` exists only for cross-matching with older certificates.
-- **AKI resolution** happens post-ingestion (`db.ResolveAKIs()`): builds a multi-hash lookup (RFC 7093 + legacy SHA-1) from all CA certs, then updates non-root cert AKIs to the computed SKI.
+- **AKI resolution** is handled by MemStore's `HasIssuer()` method which matches raw ASN.1 subject/issuer bytes directly — no post-ingestion SQL transaction needed.
 - **Bundle matching** is exact CN string comparison, not glob. `*.example.com` in config matches a cert whose CN is literally `*.example.com`.
 - **Expired certificates are rejected by default** across all commands: skipped during scan ingestion, filtered from inspect output, and blocked in verify/bundle. The global `--allow-expired` flag overrides this.
 - **`x509.IsEncryptedPEMBlock` / `x509.DecryptPEMBlock`** are deprecated but intentionally used for legacy encrypted PEM support. Suppressed with `//nolint:staticcheck`.

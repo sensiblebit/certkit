@@ -11,6 +11,7 @@ import (
 
 	"github.com/breml/rootcerts/embedded"
 	"github.com/sensiblebit/certkit"
+	"github.com/sensiblebit/certkit/internal/certstore"
 )
 
 // mozillaRootSubjects is a lazily-built set of RawSubject bytes from Mozilla
@@ -56,18 +57,18 @@ func issuedByMozillaRoot(cert *x509.Certificate) bool {
 //
 // Skips certificates whose issuer is already in the store or is a Mozilla root.
 // Only fetches intermediates — never roots.
-func resolveAIA(ctx context.Context, s *store) []string {
+func resolveAIA(ctx context.Context, s *certstore.MemStore) []string {
 	var warnings []string
 	seen := make(map[string]bool)
 
 	const maxDepth = 5
 	for range maxDepth {
 		var queue []*x509.Certificate
-		for _, rec := range s.certs {
+		for _, rec := range s.AllCerts() {
 			if rec.CertType == "root" {
 				continue
 			}
-			if s.hasIssuer(rec.Cert) {
+			if s.HasIssuer(rec.Cert) {
 				continue
 			}
 			if issuedByMozillaRoot(rec.Cert) {
@@ -107,7 +108,7 @@ func resolveAIA(ctx context.Context, s *store) []string {
 					continue
 				}
 
-				if err := s.addCertificate(issuer, "AIA: "+aiaURL); err != nil {
+				if err := s.HandleCertificate(issuer, "AIA: "+aiaURL); err != nil {
 					continue
 				}
 				fetched++
@@ -120,19 +121,6 @@ func resolveAIA(ctx context.Context, s *store) []string {
 	}
 
 	return warnings
-}
-
-// hasIssuer reports whether the store contains the issuer for the given cert.
-func (s *store) hasIssuer(cert *x509.Certificate) bool {
-	for _, rec := range s.certs {
-		if rec.Cert == cert {
-			continue
-		}
-		if string(rec.Cert.RawSubject) == string(cert.RawIssuer) {
-			return true
-		}
-	}
-	return false
 }
 
 // jsFetchURL calls the JavaScript certkitFetchURL function which handles

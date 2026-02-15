@@ -15,6 +15,7 @@ import (
 
 	"github.com/breml/rootcerts/embedded"
 	"github.com/sensiblebit/certkit"
+	"github.com/sensiblebit/certkit/internal/certstore"
 )
 
 // version is set at build time via -ldflags "-X main.version=v0.6.1".
@@ -34,8 +35,6 @@ func getMozillaRoots() *x509.CertPool {
 	}
 	return mozillaRoots
 }
-
-var globalStore = newStore()
 
 func main() {
 	js.Global().Set("certkitVersion", version)
@@ -81,7 +80,12 @@ func addFiles(_ js.Value, args []js.Value) any {
 				data := make([]byte, dataJS.Length())
 				js.CopyBytesToGo(data, dataJS)
 
-				err := processFileData(data, name, passwords, globalStore)
+				err := certstore.ProcessData(certstore.ProcessInput{
+					Data:      data,
+					Path:      name,
+					Passwords: passwords,
+					Handler:   globalStore,
+				})
 				status := "ok"
 				errMsg := ""
 				if err != nil {
@@ -167,14 +171,17 @@ func getState(_ js.Value, _ []js.Value) any {
 	// Build pools for chain verification.
 	roots := getMozillaRoots()
 	intermediatePool := x509.NewCertPool()
-	for _, rec := range globalStore.certs {
+	allCerts := globalStore.AllCerts()
+	allKeys := globalStore.AllKeys()
+
+	for _, rec := range allCerts {
 		if rec.CertType == "intermediate" || rec.CertType == "root" {
 			intermediatePool.AddCert(rec.Cert)
 		}
 	}
 
-	for ski, rec := range globalStore.certs {
-		_, hasKey := globalStore.keys[ski]
+	for ski, rec := range allCerts {
+		_, hasKey := allKeys[ski]
 
 		// Check if cert chains to a Mozilla root.
 		trusted := false
@@ -189,7 +196,7 @@ func getState(_ js.Value, _ []js.Value) any {
 
 		ci := certInfo{
 			SKI:       certkit.ColonHex(hexToBytes(ski)),
-			CN:        formatCN(rec.Cert),
+			CN:        certstore.FormatCN(rec.Cert),
 			CertType:  rec.CertType,
 			KeyType:   rec.KeyType,
 			NotBefore: rec.NotBefore.UTC().Format(time.RFC3339),
@@ -204,8 +211,8 @@ func getState(_ js.Value, _ []js.Value) any {
 		resp.Certs = append(resp.Certs, ci)
 	}
 
-	for ski, rec := range globalStore.keys {
-		_, hasCert := globalStore.certs[ski]
+	for ski, rec := range allKeys {
+		_, hasCert := allCerts[ski]
 		ki := keyInfo{
 			SKI:       certkit.ColonHex(hexToBytes(ski)),
 			KeyType:   rec.KeyType,
@@ -216,7 +223,7 @@ func getState(_ js.Value, _ []js.Value) any {
 		resp.Keys = append(resp.Keys, ki)
 	}
 
-	resp.MatchedPairs = len(globalStore.matchedPairs())
+	resp.MatchedPairs = len(globalStore.MatchedPairs())
 
 	jsonBytes, _ := json.Marshal(resp)
 	return string(jsonBytes)
@@ -261,7 +268,7 @@ func exportBundlesJS(_ js.Value, args []js.Value) any {
 // resetStore clears all stored certificates and keys.
 // JS signature: certkitReset() → void
 func resetStore(_ js.Value, _ []js.Value) any {
-	globalStore.reset()
+	globalStore.Reset()
 	return nil
 }
 

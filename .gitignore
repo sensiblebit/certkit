@@ -26,5 +26,5 @@ changes.md
 *.local.*
 
 # WASM build artifacts
-web/public/certkit.wasm
+*.wasm
 web/public/wasm_exec.js

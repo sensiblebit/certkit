@@ -16,6 +16,7 @@ import (
 
 	"github.com/breml/rootcerts/embedded"
 	"github.com/sensiblebit/certkit/internal"
+	"github.com/sensiblebit/certkit/internal/certstore"
 	"github.com/spf13/cobra"
 )
 
@@ -62,14 +63,10 @@ func runScan(cmd *cobra.Command, args []string) error {
 
 	scanExport := scanBundlePath != ""
 
-	db, err := internal.NewDB()
-	if err != nil {
-		return fmt.Errorf("initializing database: %w", err)
-	}
-	defer db.Close()
+	store := certstore.NewMemStore()
 
 	if scanLoadDB != "" {
-		if err := db.LoadFromDisk(scanLoadDB); err != nil {
+		if err := certstore.LoadFromSQLite(store, scanLoadDB); err != nil {
 			return fmt.Errorf("loading database: %w", err)
 		}
 	}
@@ -92,7 +89,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	cfg := &internal.Config{
 		InputPath:      inputPath,
 		Passwords:      passwords,
-		DB:             db,
+		Store:          store,
 		ExportBundles:  scanExport,
 		ForceExport:    scanForceExport,
 		BundleConfigs:  bundleConfigs,
@@ -173,14 +170,11 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 
 	if scanDumpKeys != "" {
-		keys, err := db.GetAllKeys()
-		if err != nil {
-			return fmt.Errorf("getting keys: %w", err)
-		}
+		keys := store.AllKeysFlat()
 		if len(keys) > 0 {
 			var data []byte
 			for _, k := range keys {
-				data = append(data, k.KeyData...)
+				data = append(data, k.PEM...)
 			}
 			if err := os.WriteFile(scanDumpKeys, data, 0600); err != nil {
 				return fmt.Errorf("writing keys to %s: %w", scanDumpKeys, err)
@@ -192,10 +186,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 
 	if scanDumpCerts != "" {
-		certs, err := db.GetAllCerts()
-		if err != nil {
-			return fmt.Errorf("getting certificates: %w", err)
-		}
+		certs := store.AllCertsFlat()
 		if len(certs) > 0 {
 			// Build mozilla root pool for verification (consistent with other commands)
 			mozillaPool := x509.NewCertPool()
@@ -206,16 +197,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 			var data []byte
 			var count, skipped int
 			for _, c := range certs {
-				block, _ := pem.Decode([]byte(c.PEM))
-				if block == nil {
-					slog.Debug("skipping certificate with unparseable PEM", "serial", c.SerialNumber)
-					continue
-				}
-				cert, err := x509.ParseCertificate(block.Bytes)
-				if err != nil {
-					slog.Debug("skipping certificate with invalid DER", "serial", c.SerialNumber, "error", err)
-					continue
-				}
+				cert := c.Cert
 
 				// Validate chain unless --force is set
 				if !scanForceExport {
@@ -237,8 +219,9 @@ func runScan(cmd *cobra.Command, args []string) error {
 					formatDN(cert.Issuer),
 					cert.NotBefore.UTC().Format(time.RFC3339),
 					cert.NotAfter.UTC().Format(time.RFC3339))
+				certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
 				data = append(data, header...)
-				data = append(data, c.PEM...)
+				data = append(data, certPEM...)
 				count++
 			}
 			if skipped > 0 {
@@ -258,25 +241,17 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 
 	if scanExport {
-		// Full export workflow
-		if err := db.ResolveAKIs(); err != nil {
-			slog.Warn("resolving AKIs", "error", err)
-		}
+		// Full export workflow — MemStore handles chain resolution via raw ASN.1 matching
 		if err := os.MkdirAll(scanBundlePath, 0755); err != nil {
 			return fmt.Errorf("creating output directory %s: %w", scanBundlePath, err)
 		}
-		if err := internal.ExportBundles(cmd.Context(), bundleConfigs, scanBundlePath, db, scanForceExport, scanDuplicates); err != nil {
+		if err := internal.ExportBundles(cmd.Context(), bundleConfigs, scanBundlePath, store, scanForceExport, scanDuplicates); err != nil {
 			return fmt.Errorf("exporting bundles: %w", err)
 		}
-		if err := db.DumpDB(); err != nil {
-			return fmt.Errorf("dumping database: %w", err)
-		}
+		store.DumpDebug()
 	} else {
 		// Print summary
-		summary, err := db.GetScanSummary()
-		if err != nil {
-			return fmt.Errorf("generating summary: %w", err)
-		}
+		summary := store.ScanSummary()
 		switch scanFormat {
 		case "json":
 			data, err := json.MarshalIndent(summary, "", "  ")
@@ -301,7 +276,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 
 	if scanSaveDB != "" {
-		if err := db.SaveToDisk(scanSaveDB); err != nil {
+		if err := certstore.SaveToSQLite(store, scanSaveDB); err != nil {
 			return fmt.Errorf("saving database: %w", err)
 		}
 	}

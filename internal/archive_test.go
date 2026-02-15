@@ -91,15 +91,12 @@ func TestProcessArchive_PEMCertAllFormats(t *testing.T) {
 				t.Errorf("processed %d entries, want 1", n)
 			}
 
-			certs, err := cfg.DB.GetAllCerts()
-			if err != nil {
-				t.Fatalf("GetAllCerts: %v", err)
-			}
+			certs := cfg.Store.AllCertsFlat()
 			if len(certs) != 1 {
-				t.Fatalf("got %d certs in DB, want 1", len(certs))
+				t.Fatalf("got %d certs in store, want 1", len(certs))
 			}
-			if !certs[0].CommonName.Valid || certs[0].CommonName.String != cn {
-				t.Errorf("cert CN = %q, want %q", certs[0].CommonName.String, cn)
+			if certs[0].Cert.Subject.CommonName != cn {
+				t.Errorf("cert CN = %q, want %q", certs[0].Cert.Subject.CommonName, cn)
 			}
 		})
 	}
@@ -132,15 +129,12 @@ func TestProcessArchive_ZipWithDERCert(t *testing.T) {
 		t.Errorf("processed %d entries, want 1", n)
 	}
 
-	certs, err := cfg.DB.GetAllCerts()
-	if err != nil {
-		t.Fatalf("GetAllCerts: %v", err)
-	}
+	certs := cfg.Store.AllCertsFlat()
 	if len(certs) != 1 {
-		t.Fatalf("got %d certs in DB, want 1", len(certs))
+		t.Fatalf("got %d certs in store, want 1", len(certs))
 	}
-	if !certs[0].CommonName.Valid || certs[0].CommonName.String != "der-zip.example.com" {
-		t.Errorf("cert CN = %q, want %q", certs[0].CommonName.String, "der-zip.example.com")
+	if certs[0].Cert.Subject.CommonName != "der-zip.example.com" {
+		t.Errorf("cert CN = %q, want %q", certs[0].Cert.Subject.CommonName, "der-zip.example.com")
 	}
 }
 
@@ -172,15 +166,12 @@ func TestProcessArchive_DERCertNoDirectoryPrefix(t *testing.T) {
 		t.Errorf("processed %d entries, want 1", n)
 	}
 
-	certs, err := cfg.DB.GetAllCerts()
-	if err != nil {
-		t.Fatalf("GetAllCerts: %v", err)
-	}
+	certs := cfg.Store.AllCertsFlat()
 	if len(certs) != 1 {
-		t.Fatalf("got %d certs in DB, want 1 (DER cert with flat entry name)", len(certs))
+		t.Fatalf("got %d certs in store, want 1 (DER cert with flat entry name)", len(certs))
 	}
-	if !certs[0].CommonName.Valid || certs[0].CommonName.String != "flat-der.example.com" {
-		t.Errorf("cert CN = %q, want %q", certs[0].CommonName.String, "flat-der.example.com")
+	if certs[0].Cert.Subject.CommonName != "flat-der.example.com" {
+		t.Errorf("cert CN = %q, want %q", certs[0].Cert.Subject.CommonName, "flat-der.example.com")
 	}
 }
 
@@ -211,15 +202,12 @@ func TestProcessArchive_PEMCertNoExtension(t *testing.T) {
 		t.Errorf("processed %d entries, want 1", n)
 	}
 
-	certs, err := cfg.DB.GetAllCerts()
-	if err != nil {
-		t.Fatalf("GetAllCerts: %v", err)
-	}
+	certs := cfg.Store.AllCertsFlat()
 	if len(certs) != 1 {
-		t.Fatalf("got %d certs in DB, want 1", len(certs))
+		t.Fatalf("got %d certs in store, want 1", len(certs))
 	}
-	if !certs[0].CommonName.Valid || certs[0].CommonName.String != "noext.example.com" {
-		t.Errorf("cert CN = %q, want %q", certs[0].CommonName.String, "noext.example.com")
+	if certs[0].Cert.Subject.CommonName != "noext.example.com" {
+		t.Errorf("cert CN = %q, want %q", certs[0].Cert.Subject.CommonName, "noext.example.com")
 	}
 }
 
@@ -248,15 +236,12 @@ func TestProcessArchive_ZipWithPrivateKey(t *testing.T) {
 		t.Errorf("processed %d entries, want 1", n)
 	}
 
-	keys, err := cfg.DB.GetAllKeys()
-	if err != nil {
-		t.Fatalf("GetAllKeys: %v", err)
-	}
+	keys := cfg.Store.AllKeysFlat()
 	if len(keys) != 1 {
-		t.Fatalf("got %d keys in DB, want 1", len(keys))
+		t.Fatalf("got %d keys in store, want 1", len(keys))
 	}
-	if keys[0].KeyType != "rsa" {
-		t.Errorf("key type = %q, want %q", keys[0].KeyType, "rsa")
+	if keys[0].KeyType != "RSA" {
+		t.Errorf("key type = %q, want %q", keys[0].KeyType, "RSA")
 	}
 }
 
@@ -288,19 +273,16 @@ func TestProcessArchive_MultipleCertsInArchive(t *testing.T) {
 		t.Errorf("processed %d entries, want 2", n)
 	}
 
-	certs, err := cfg.DB.GetAllCerts()
-	if err != nil {
-		t.Fatalf("GetAllCerts: %v", err)
-	}
+	certs := cfg.Store.AllCertsFlat()
 	if len(certs) != 2 {
-		t.Fatalf("got %d certs in DB, want 2", len(certs))
+		t.Fatalf("got %d certs in store, want 2", len(certs))
 	}
 
 	// Verify both CNs are present (order may vary)
 	cns := map[string]bool{}
 	for _, c := range certs {
-		if c.CommonName.Valid {
-			cns[c.CommonName.String] = true
+		if c.Cert.Subject.CommonName != "" {
+			cns[c.Cert.Subject.CommonName] = true
 		}
 	}
 	if !cns["multi1.example.com"] || !cns["multi2.example.com"] {
@@ -338,12 +320,9 @@ func TestProcessArchive_ChainFileInSingleEntry(t *testing.T) {
 		t.Errorf("processed %d entries, want 1", n)
 	}
 
-	certs, err := cfg.DB.GetAllCerts()
-	if err != nil {
-		t.Fatalf("GetAllCerts: %v", err)
-	}
+	certs := cfg.Store.AllCertsFlat()
 	if len(certs) != 2 {
-		t.Errorf("got %d certs in DB, want 2 (leaf + CA from chain file)", len(certs))
+		t.Errorf("got %d certs in store, want 2 (leaf + CA from chain file)", len(certs))
 	}
 }
 
@@ -377,12 +356,9 @@ func TestProcessArchive_MixedContentIgnoresNonCrypto(t *testing.T) {
 		t.Errorf("processed %d entries, want 4", n)
 	}
 
-	certs, err := cfg.DB.GetAllCerts()
-	if err != nil {
-		t.Fatalf("GetAllCerts: %v", err)
-	}
+	certs := cfg.Store.AllCertsFlat()
 	if len(certs) != 1 {
-		t.Errorf("got %d certs in DB, want 1", len(certs))
+		t.Errorf("got %d certs in store, want 1", len(certs))
 	}
 }
 
@@ -411,12 +387,9 @@ func TestProcessArchive_ZeroByteEntry(t *testing.T) {
 		t.Errorf("processed %d entries, want 2", n)
 	}
 
-	certs, err := cfg.DB.GetAllCerts()
-	if err != nil {
-		t.Fatalf("GetAllCerts: %v", err)
-	}
+	certs := cfg.Store.AllCertsFlat()
 	if len(certs) != 0 {
-		t.Errorf("got %d certs in DB, want 0 (empty entries)", len(certs))
+		t.Errorf("got %d certs in store, want 0 (empty entries)", len(certs))
 	}
 }
 
@@ -449,12 +422,9 @@ func TestProcessArchive_EntryExceedsMaxSize_ZIP(t *testing.T) {
 		t.Errorf("processed %d entries, want 0 (entry should be skipped)", n)
 	}
 
-	certs, err := cfg.DB.GetAllCerts()
-	if err != nil {
-		t.Fatalf("GetAllCerts: %v", err)
-	}
+	certs := cfg.Store.AllCertsFlat()
 	if len(certs) != 0 {
-		t.Errorf("got %d certs in DB, want 0", len(certs))
+		t.Errorf("got %d certs in store, want 0", len(certs))
 	}
 }
 
@@ -503,15 +473,12 @@ func TestProcessArchive_TarEntryExceedsMaxSize(t *testing.T) {
 		t.Errorf("processed %d entries, want 1 (big.bin skipped, cert processed)", n)
 	}
 
-	certs, err := cfg.DB.GetAllCerts()
-	if err != nil {
-		t.Fatalf("GetAllCerts: %v", err)
-	}
+	certs := cfg.Store.AllCertsFlat()
 	if len(certs) != 1 {
-		t.Fatalf("got %d certs in DB, want 1", len(certs))
+		t.Fatalf("got %d certs in store, want 1", len(certs))
 	}
-	if !certs[0].CommonName.Valid || certs[0].CommonName.String != "after-big.example.com" {
-		t.Errorf("cert CN = %q, want %q", certs[0].CommonName.String, "after-big.example.com")
+	if certs[0].Cert.Subject.CommonName != "after-big.example.com" {
+		t.Errorf("cert CN = %q, want %q", certs[0].Cert.Subject.CommonName, "after-big.example.com")
 	}
 }
 
@@ -683,12 +650,9 @@ func TestProcessArchive_NestedArchiveNotRecursed(t *testing.T) {
 		t.Errorf("processed %d entries, want 1 (nested archives should be skipped)", n)
 	}
 
-	certs, err := cfg.DB.GetAllCerts()
-	if err != nil {
-		t.Fatalf("GetAllCerts: %v", err)
-	}
+	certs := cfg.Store.AllCertsFlat()
 	if len(certs) != 1 {
-		t.Errorf("got %d certs in DB, want 1", len(certs))
+		t.Errorf("got %d certs in store, want 1", len(certs))
 	}
 }
 
@@ -720,12 +684,9 @@ func TestProcessArchive_ExpiredCertRejectedByDefault(t *testing.T) {
 		t.Errorf("processed %d entries, want 1 (entry processed, cert filtered)", n)
 	}
 
-	certs, err := cfg.DB.GetAllCerts()
-	if err != nil {
-		t.Fatalf("GetAllCerts: %v", err)
-	}
+	certs := cfg.Store.AllCertsFlat()
 	if len(certs) != 0 {
-		t.Errorf("got %d certs in DB, want 0 (expired should be filtered)", len(certs))
+		t.Errorf("got %d certs in store, want 0 (expired should be filtered)", len(certs))
 	}
 }
 
@@ -757,12 +718,9 @@ func TestProcessArchive_ExpiredCertIncludedWhenAllowed(t *testing.T) {
 		t.Errorf("processed %d entries, want 1", n)
 	}
 
-	certs, err := cfg.DB.GetAllCerts()
-	if err != nil {
-		t.Fatalf("GetAllCerts: %v", err)
-	}
+	certs := cfg.Store.AllCertsFlat()
 	if len(certs) != 1 {
-		t.Errorf("got %d certs in DB, want 1 (expired should be included)", len(certs))
+		t.Errorf("got %d certs in store, want 1 (expired should be included)", len(certs))
 	}
 }
 
@@ -988,12 +946,9 @@ func TestProcessArchive_TarPartialCorruption(t *testing.T) {
 		t.Errorf("processed %d entries, want 1 (valid entry before corruption)", n)
 	}
 
-	certs, err := cfg.DB.GetAllCerts()
-	if err != nil {
-		t.Fatalf("GetAllCerts: %v", err)
-	}
+	certs := cfg.Store.AllCertsFlat()
 	if len(certs) != 1 {
-		t.Errorf("got %d certs in DB, want 1", len(certs))
+		t.Errorf("got %d certs in store, want 1", len(certs))
 	}
 }
 

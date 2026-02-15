@@ -10,7 +10,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
-	"encoding/json"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -349,7 +348,6 @@ func TestProcessFile_PEMCertificate(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "test.example.com", []string{"test.example.com"}, nil)
 	cfg := newTestConfig(t)
-	defer cfg.DB.Close()
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "cert.pem")
@@ -365,15 +363,12 @@ func TestProcessFile_PEMCertificate(t *testing.T) {
 	expectedSKI := computeSKIHex(t, leaf.cert.PublicKey)
 
 	// Verify certificate was inserted with computed SKI and correct metadata
-	cert, err := cfg.DB.GetCertBySKI(expectedSKI)
-	if err != nil {
-		t.Fatalf("GetCertBySKI: %v", err)
-	}
+	cert := cfg.Store.GetCert(expectedSKI)
 	if cert == nil {
 		t.Fatal("expected certificate to be inserted into DB")
 	}
-	if cert.CommonName.String != "test.example.com" {
-		t.Errorf("CN = %q, want test.example.com", cert.CommonName.String)
+	if cert.Cert.Subject.CommonName != "test.example.com" {
+		t.Errorf("CN = %q, want test.example.com", cert.Cert.Subject.CommonName)
 	}
 	if cert.CertType != "leaf" {
 		t.Errorf("cert type = %q, want leaf", cert.CertType)
@@ -386,7 +381,6 @@ func TestProcessFile_PEMCertificate(t *testing.T) {
 func TestProcessFile_PEMPrivateKey(t *testing.T) {
 	// WHY: Verifies standalone PEM private key ingestion stores the key with correct type, bit length, and parseable key data in the DB.
 	cfg := newTestConfig(t)
-	defer cfg.DB.Close()
 
 	keyData := rsaKeyPEM(t)
 	dir := t.TempDir()
@@ -400,22 +394,19 @@ func TestProcessFile_PEMPrivateKey(t *testing.T) {
 	}
 
 	// Verify key was inserted with correct metadata
-	keys, err := cfg.DB.GetAllKeys()
-	if err != nil {
-		t.Fatalf("GetAllKeys: %v", err)
-	}
+	keys := cfg.Store.AllKeysFlat()
 	if len(keys) != 1 {
 		t.Fatalf("expected 1 key in DB, got %d", len(keys))
 	}
-	if keys[0].KeyType != "rsa" {
-		t.Errorf("key type = %q, want rsa", keys[0].KeyType)
+	if keys[0].KeyType != "RSA" {
+		t.Errorf("key type = %q, want RSA", keys[0].KeyType)
 	}
 	if keys[0].BitLength != 2048 {
 		t.Errorf("key bit length = %d, want 2048", keys[0].BitLength)
 	}
 
 	// Verify the stored key data is parseable
-	_, err = certkit.ParsePEMPrivateKey(keys[0].KeyData)
+	_, err := certkit.ParsePEMPrivateKey(keys[0].PEM)
 	if err != nil {
 		t.Errorf("stored key data is not parseable: %v", err)
 	}
@@ -426,7 +417,6 @@ func TestProcessFile_PKCS12(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "p12.example.com", []string{"p12.example.com"}, nil)
 	cfg := newTestConfig(t)
-	defer cfg.DB.Close()
 
 	p12Data := newPKCS12Bundle(t, leaf, ca, "changeit")
 
@@ -441,15 +431,12 @@ func TestProcessFile_PKCS12(t *testing.T) {
 	}
 
 	// Verify key was extracted
-	keys, err := cfg.DB.GetAllKeys()
-	if err != nil {
-		t.Fatalf("GetAllKeys: %v", err)
-	}
+	keys := cfg.Store.AllKeysFlat()
 	if len(keys) != 1 {
 		t.Fatalf("expected 1 key from PKCS12, got %d", len(keys))
 	}
-	if keys[0].KeyType != "rsa" {
-		t.Errorf("key type = %q, want rsa", keys[0].KeyType)
+	if keys[0].KeyType != "RSA" {
+		t.Errorf("key type = %q, want RSA", keys[0].KeyType)
 	}
 	if keys[0].BitLength != 2048 {
 		t.Errorf("key bit length = %d, want 2048", keys[0].BitLength)
@@ -457,15 +444,12 @@ func TestProcessFile_PKCS12(t *testing.T) {
 
 	// Verify certificate was extracted with correct metadata
 	expectedSKI := computeSKIHex(t, leaf.cert.PublicKey)
-	cert, err := cfg.DB.GetCertBySKI(expectedSKI)
-	if err != nil {
-		t.Fatalf("GetCertBySKI: %v", err)
-	}
+	cert := cfg.Store.GetCert(expectedSKI)
 	if cert == nil {
 		t.Fatal("expected leaf certificate from PKCS12 to be in DB")
 	}
-	if cert.CommonName.String != "p12.example.com" {
-		t.Errorf("cert CN = %q, want p12.example.com", cert.CommonName.String)
+	if cert.Cert.Subject.CommonName != "p12.example.com" {
+		t.Errorf("cert CN = %q, want p12.example.com", cert.Cert.Subject.CommonName)
 	}
 	if cert.CertType != "leaf" {
 		t.Errorf("cert type = %q, want leaf", cert.CertType)
@@ -477,7 +461,6 @@ func TestProcessFile_JKS(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "jks.example.com", []string{"jks.example.com"}, nil)
 	cfg := newTestConfig(t)
-	defer cfg.DB.Close()
 
 	jksData := newJKSBundle(t, leaf, ca, "changeit")
 
@@ -492,19 +475,13 @@ func TestProcessFile_JKS(t *testing.T) {
 	}
 
 	// JKS should extract both cert and key
-	keys, err := cfg.DB.GetAllKeys()
-	if err != nil {
-		t.Fatalf("GetAllKeys: %v", err)
-	}
+	keys := cfg.Store.AllKeysFlat()
 	if len(keys) != 1 {
 		t.Fatalf("expected 1 key from JKS, got %d", len(keys))
 	}
 
 	expectedSKI := computeSKIHex(t, leaf.cert.PublicKey)
-	cert, err := cfg.DB.GetCertBySKI(expectedSKI)
-	if err != nil {
-		t.Fatalf("GetCertBySKID: %v", err)
-	}
+	cert := cfg.Store.GetCert(expectedSKI)
 	if cert == nil {
 		t.Error("expected leaf certificate from JKS to be inserted into DB")
 	}
@@ -515,7 +492,6 @@ func TestProcessFile_ExpiredCertSkipped(t *testing.T) {
 	ca := newRSACA(t)
 	expired := newExpiredLeaf(t, ca)
 	cfg := newTestConfig(t)
-	defer cfg.DB.Close()
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "expired.pem")
@@ -528,7 +504,7 @@ func TestProcessFile_ExpiredCertSkipped(t *testing.T) {
 	}
 
 	expectedSKI := computeSKIHex(t, expired.cert.PublicKey)
-	cert, _ := cfg.DB.GetCertBySKI(expectedSKI)
+	cert := cfg.Store.GetCert(expectedSKI)
 	if cert != nil {
 		t.Error("expired certificate should not be inserted into DB")
 	}
@@ -548,7 +524,6 @@ func TestProcessFile_CSR(t *testing.T) {
 	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
 
 	cfg := newTestConfig(t)
-	defer cfg.DB.Close()
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "test.csr")
@@ -588,7 +563,6 @@ func TestProcessFile_MultipleCertsInOneFile(t *testing.T) {
 	combined := append(leaf1.certPEM, cert2PEM...)
 
 	cfg := newTestConfig(t)
-	defer cfg.DB.Close()
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "multi.pem")
@@ -602,7 +576,7 @@ func TestProcessFile_MultipleCertsInOneFile(t *testing.T) {
 
 	// Both certs should be in DB - look up by computed SKI from public key
 	ski1 := computeSKIHex(t, leaf1.cert.PublicKey)
-	c1, _ := cfg.DB.GetCertBySKI(ski1)
+	c1 := cfg.Store.GetCert(ski1)
 	if c1 == nil {
 		t.Error("expected first certificate to be in DB")
 	}
@@ -610,7 +584,7 @@ func TestProcessFile_MultipleCertsInOneFile(t *testing.T) {
 	// For the second cert, compute SKI from its public key
 	cert2, _ := x509.ParseCertificate(cert2DER)
 	ski2 := computeSKIHex(t, cert2.PublicKey)
-	c2, _ := cfg.DB.GetCertBySKI(ski2)
+	c2 := cfg.Store.GetCert(ski2)
 	if c2 == nil {
 		t.Error("expected second certificate to be in DB")
 	}
@@ -621,7 +595,6 @@ func TestProcessFile_PKCS7(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "p7.example.com", []string{"p7.example.com"}, nil)
 	cfg := newTestConfig(t)
-	defer cfg.DB.Close()
 
 	p7Data, err := certkit.EncodePKCS7([]*x509.Certificate{leaf.cert, ca.cert})
 	if err != nil {
@@ -640,23 +613,17 @@ func TestProcessFile_PKCS7(t *testing.T) {
 
 	// Verify leaf cert was extracted
 	expectedSKI := computeSKIHex(t, leaf.cert.PublicKey)
-	cert, err := cfg.DB.GetCertBySKI(expectedSKI)
-	if err != nil {
-		t.Fatalf("GetCertBySKI: %v", err)
-	}
+	cert := cfg.Store.GetCert(expectedSKI)
 	if cert == nil {
 		t.Fatal("expected leaf certificate from PKCS7 to be in DB")
 	}
-	if cert.CommonName.String != "p7.example.com" {
-		t.Errorf("cert CN = %q, want p7.example.com", cert.CommonName.String)
+	if cert.Cert.Subject.CommonName != "p7.example.com" {
+		t.Errorf("cert CN = %q, want p7.example.com", cert.Cert.Subject.CommonName)
 	}
 
 	// Verify CA cert was also extracted
 	caSKI := computeSKIHex(t, ca.cert.PublicKey)
-	caCert, err := cfg.DB.GetCertBySKI(caSKI)
-	if err != nil {
-		t.Fatalf("GetCertBySKI (CA): %v", err)
-	}
+	caCert := cfg.Store.GetCert(caSKI)
 	if caCert == nil {
 		t.Fatal("expected CA certificate from PKCS7 to be in DB")
 	}
@@ -668,7 +635,6 @@ func TestProcessFile_PKCS7(t *testing.T) {
 func TestProcessFile_Ed25519Key(t *testing.T) {
 	// WHY: Ed25519 keys use a different PKCS#8 encoding than RSA/ECDSA; verifies the DER detection and PKCS#8 parsing path stores the correct key type.
 	cfg := newTestConfig(t)
-	defer cfg.DB.Close()
 
 	keyData := ed25519KeyPEM(t)
 	dir := t.TempDir()
@@ -681,19 +647,16 @@ func TestProcessFile_Ed25519Key(t *testing.T) {
 		t.Fatalf("ProcessFile: %v", err)
 	}
 
-	keys, err := cfg.DB.GetAllKeys()
-	if err != nil {
-		t.Fatalf("GetAllKeys: %v", err)
-	}
+	keys := cfg.Store.AllKeysFlat()
 	if len(keys) != 1 {
 		t.Fatalf("expected 1 key in DB, got %d", len(keys))
 	}
-	if keys[0].KeyType != "ed25519" {
-		t.Errorf("key type = %q, want ed25519", keys[0].KeyType)
+	if keys[0].KeyType != "Ed25519" {
+		t.Errorf("key type = %q, want Ed25519", keys[0].KeyType)
 	}
 
 	// Verify the stored key data is parseable
-	_, err = certkit.ParsePEMPrivateKey(keys[0].KeyData)
+	_, err := certkit.ParsePEMPrivateKey(keys[0].PEM)
 	if err != nil {
 		t.Errorf("stored Ed25519 key data is not parseable: %v", err)
 	}
@@ -708,7 +671,6 @@ func TestProcessFile_WrongPassword(t *testing.T) {
 	p12Data := newPKCS12Bundle(t, leaf, ca, "secretpassword")
 
 	cfg := newTestConfig(t)
-	defer cfg.DB.Close()
 	// Config only has default passwords: "", "password", "changeit"
 	// "secretpassword" is not in the list
 
@@ -724,18 +686,12 @@ func TestProcessFile_WrongPassword(t *testing.T) {
 	}
 
 	// No certs or keys should be extracted with wrong password
-	keys, err := cfg.DB.GetAllKeys()
-	if err != nil {
-		t.Fatalf("GetAllKeys: %v", err)
-	}
+	keys := cfg.Store.AllKeysFlat()
 	if len(keys) != 0 {
 		t.Errorf("expected 0 keys with wrong password, got %d", len(keys))
 	}
 
-	certs, err := cfg.DB.GetAllCerts()
-	if err != nil {
-		t.Fatalf("GetAllCerts: %v", err)
-	}
+	certs := cfg.Store.AllCertsFlat()
 	if len(certs) != 0 {
 		t.Errorf("expected 0 certs with wrong password, got %d", len(certs))
 	}
@@ -746,7 +702,6 @@ func TestProcessFile_MixedCertAndKeyPEM(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "mixed.example.com", []string{"mixed.example.com"}, nil)
 	cfg := newTestConfig(t)
-	defer cfg.DB.Close()
 
 	// Combine cert and key PEM blocks into a single file
 	combined := append(leaf.certPEM, leaf.keyPEM...)
@@ -763,15 +718,12 @@ func TestProcessFile_MixedCertAndKeyPEM(t *testing.T) {
 
 	// Verify certificate was ingested
 	expectedSKI := computeSKIHex(t, leaf.cert.PublicKey)
-	cert, err := cfg.DB.GetCertBySKI(expectedSKI)
-	if err != nil {
-		t.Fatalf("GetCertBySKI: %v", err)
-	}
+	cert := cfg.Store.GetCert(expectedSKI)
 	if cert == nil {
 		t.Fatal("expected certificate to be inserted into DB")
 	}
-	if cert.CommonName.String != "mixed.example.com" {
-		t.Errorf("cert CN = %q, want mixed.example.com", cert.CommonName.String)
+	if cert.Cert.Subject.CommonName != "mixed.example.com" {
+		t.Errorf("cert CN = %q, want mixed.example.com", cert.Cert.Subject.CommonName)
 	}
 	if cert.CertType != "leaf" {
 		t.Errorf("cert type = %q, want leaf", cert.CertType)
@@ -781,30 +733,26 @@ func TestProcessFile_MixedCertAndKeyPEM(t *testing.T) {
 	}
 
 	// Verify key was also ingested
-	keys, err := cfg.DB.GetAllKeys()
-	if err != nil {
-		t.Fatalf("GetAllKeys: %v", err)
-	}
+	keys := cfg.Store.AllKeysFlat()
 	if len(keys) != 1 {
 		t.Fatalf("expected 1 key in DB, got %d", len(keys))
 	}
-	if keys[0].KeyType != "rsa" {
-		t.Errorf("key type = %q, want rsa", keys[0].KeyType)
+	if keys[0].KeyType != "RSA" {
+		t.Errorf("key type = %q, want RSA", keys[0].KeyType)
 	}
 	if keys[0].BitLength != 2048 {
 		t.Errorf("key bit length = %d, want 2048", keys[0].BitLength)
 	}
 
 	// Verify cert and key share the same SKI (matched pair)
-	if keys[0].SubjectKeyIdentifier != expectedSKI {
-		t.Errorf("key SKI = %q, cert SKI = %q, want matching pair", keys[0].SubjectKeyIdentifier, expectedSKI)
+	if keys[0].SKI != expectedSKI {
+		t.Errorf("key SKI = %q, cert SKI = %q, want matching pair", keys[0].SKI, expectedSKI)
 	}
 }
 
 func TestProcessFile_ECDSAKey(t *testing.T) {
 	// WHY: ECDSA keys use SEC1 or PKCS#8 encoding; verifies the parser detects the correct key type, curve name, and bit length for DB storage.
 	cfg := newTestConfig(t)
-	defer cfg.DB.Close()
 
 	keyData := ecdsaKeyPEM(t)
 	dir := t.TempDir()
@@ -817,25 +765,27 @@ func TestProcessFile_ECDSAKey(t *testing.T) {
 		t.Fatalf("ProcessFile: %v", err)
 	}
 
-	keys, err := cfg.DB.GetAllKeys()
-	if err != nil {
-		t.Fatalf("GetAllKeys: %v", err)
-	}
+	keys := cfg.Store.AllKeysFlat()
 	if len(keys) != 1 {
 		t.Fatalf("expected 1 key in DB, got %d", len(keys))
 	}
-	if keys[0].KeyType != "ecdsa" {
-		t.Errorf("key type = %q, want ecdsa", keys[0].KeyType)
+	if keys[0].KeyType != "ECDSA" {
+		t.Errorf("key type = %q, want ECDSA", keys[0].KeyType)
 	}
-	if keys[0].Curve != "P-256" {
-		t.Errorf("key curve = %q, want P-256", keys[0].Curve)
+	// Check the curve from the key directly since certstore.KeyRecord has no Curve field
+	ecKey, ok := keys[0].Key.(*ecdsa.PrivateKey)
+	if !ok {
+		t.Fatal("expected *ecdsa.PrivateKey")
+	}
+	if ecKey.Curve.Params().Name != "P-256" {
+		t.Errorf("key curve = %q, want P-256", ecKey.Curve.Params().Name)
 	}
 	if keys[0].BitLength != 256 {
 		t.Errorf("key bit length = %d, want 256", keys[0].BitLength)
 	}
 
 	// Verify stored key data is parseable
-	_, err = certkit.ParsePEMPrivateKey(keys[0].KeyData)
+	_, err := certkit.ParsePEMPrivateKey(keys[0].PEM)
 	if err != nil {
 		t.Errorf("stored ECDSA key data is not parseable: %v", err)
 	}
@@ -846,7 +796,6 @@ func TestProcessFile_IncludeExpired(t *testing.T) {
 	ca := newRSACA(t)
 	expired := newExpiredLeaf(t, ca)
 	cfg := newTestConfig(t)
-	defer cfg.DB.Close()
 	cfg.IncludeExpired = true
 
 	dir := t.TempDir()
@@ -860,15 +809,12 @@ func TestProcessFile_IncludeExpired(t *testing.T) {
 	}
 
 	expectedSKI := computeSKIHex(t, expired.cert.PublicKey)
-	cert, err := cfg.DB.GetCertBySKI(expectedSKI)
-	if err != nil {
-		t.Fatalf("GetCertBySKI: %v", err)
-	}
+	cert := cfg.Store.GetCert(expectedSKI)
 	if cert == nil {
 		t.Fatal("expected expired certificate to be inserted when IncludeExpired=true")
 	}
-	if cert.CommonName.String != "expired.example.com" {
-		t.Errorf("cert CN = %q, want expired.example.com", cert.CommonName.String)
+	if cert.Cert.Subject.CommonName != "expired.example.com" {
+		t.Errorf("cert CN = %q, want expired.example.com", cert.Cert.Subject.CommonName)
 	}
 }
 
@@ -877,7 +823,6 @@ func TestProcessFile_DERCertificate_VerifyFields(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "der-fields.example.com", []string{"der-fields.example.com"}, nil)
 	cfg := newTestConfig(t)
-	defer cfg.DB.Close()
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "cert.der")
@@ -890,15 +835,12 @@ func TestProcessFile_DERCertificate_VerifyFields(t *testing.T) {
 	}
 
 	expectedSKI := computeSKIHex(t, leaf.cert.PublicKey)
-	cert, err := cfg.DB.GetCertBySKI(expectedSKI)
-	if err != nil {
-		t.Fatalf("GetCertBySKI: %v", err)
-	}
+	cert := cfg.Store.GetCert(expectedSKI)
 	if cert == nil {
 		t.Fatal("expected DER certificate to be inserted into DB")
 	}
-	if cert.CommonName.String != "der-fields.example.com" {
-		t.Errorf("CN = %q, want der-fields.example.com", cert.CommonName.String)
+	if cert.Cert.Subject.CommonName != "der-fields.example.com" {
+		t.Errorf("CN = %q, want der-fields.example.com", cert.Cert.Subject.CommonName)
 	}
 	if cert.CertType != "leaf" {
 		t.Errorf("cert type = %q, want leaf", cert.CertType)
@@ -911,7 +853,6 @@ func TestProcessFile_DERCertificate_VerifyFields(t *testing.T) {
 func TestProcessFile_DERPrivateKey_VerifyFields(t *testing.T) {
 	// WHY: DER-encoded PKCS#8 private keys are common in automated tooling; verifies the DER key detection path stores correct metadata and parseable key data.
 	cfg := newTestConfig(t)
-	defer cfg.DB.Close()
 
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
 	keyDER, _ := x509.MarshalPKCS8PrivateKey(key)
@@ -926,33 +867,29 @@ func TestProcessFile_DERPrivateKey_VerifyFields(t *testing.T) {
 		t.Fatalf("ProcessFile: %v", err)
 	}
 
-	keys, err := cfg.DB.GetAllKeys()
-	if err != nil {
-		t.Fatalf("GetAllKeys: %v", err)
-	}
+	keys := cfg.Store.AllKeysFlat()
 	if len(keys) != 1 {
 		t.Fatalf("expected 1 key in DB, got %d", len(keys))
 	}
-	if keys[0].KeyType != "rsa" {
-		t.Errorf("key type = %q, want rsa", keys[0].KeyType)
+	if keys[0].KeyType != "RSA" {
+		t.Errorf("key type = %q, want RSA", keys[0].KeyType)
 	}
 	if keys[0].BitLength != 2048 {
 		t.Errorf("key bit length = %d, want 2048", keys[0].BitLength)
 	}
 
 	// Verify stored key data is parseable
-	_, err = certkit.ParsePEMPrivateKey(keys[0].KeyData)
+	_, err := certkit.ParsePEMPrivateKey(keys[0].PEM)
 	if err != nil {
 		t.Errorf("stored DER key data is not parseable: %v", err)
 	}
 }
 
 func TestProcessFile_IPSANVerification(t *testing.T) {
-	// WHY: IP SANs must be included alongside DNS SANs in the SANsJSON field; without this, certs for IP-based services would lose their IP addresses during ingestion.
+	// WHY: IP SANs must be included alongside DNS SANs in the stored certificate; without this, certs for IP-based services would lose their IP addresses during ingestion.
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "ipsan.example.com", []string{"ipsan.example.com"}, []net.IP{net.ParseIP("10.0.0.1")})
 	cfg := newTestConfig(t)
-	defer cfg.DB.Close()
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "cert-ip.pem")
@@ -965,49 +902,39 @@ func TestProcessFile_IPSANVerification(t *testing.T) {
 	}
 
 	expectedSKI := computeSKIHex(t, leaf.cert.PublicKey)
-	cert, err := cfg.DB.GetCertBySKI(expectedSKI)
-	if err != nil {
-		t.Fatalf("GetCertBySKI: %v", err)
-	}
+	cert := cfg.Store.GetCert(expectedSKI)
 	if cert == nil {
 		t.Fatal("expected cert with IP SAN to be inserted")
 	}
 
-	// Parse SANsJSON and verify the IP address is present
-	sansStr := string(cert.SANsJSON)
-	var sans []string
-	if err := json.Unmarshal([]byte(sansStr), &sans); err != nil {
-		t.Fatalf("parsing SANsJSON %q: %v", sansStr, err)
-	}
-
-	foundIP := false
-	for _, san := range sans {
-		if san == "10.0.0.1" {
-			foundIP = true
-			break
-		}
-	}
-	if !foundIP {
-		t.Errorf("expected IP SAN 10.0.0.1 in SANsJSON, got %v", sans)
-	}
-
-	// Also verify the DNS SAN is present
+	// Verify the DNS SAN is present
 	foundDNS := false
-	for _, san := range sans {
-		if san == "ipsan.example.com" {
+	for _, dns := range cert.Cert.DNSNames {
+		if dns == "ipsan.example.com" {
 			foundDNS = true
 			break
 		}
 	}
 	if !foundDNS {
-		t.Errorf("expected DNS SAN ipsan.example.com in SANsJSON, got %v", sans)
+		t.Errorf("expected DNS SAN ipsan.example.com in cert.DNSNames, got %v", cert.Cert.DNSNames)
+	}
+
+	// Verify the IP SAN is present
+	foundIP := false
+	for _, ip := range cert.Cert.IPAddresses {
+		if ip.Equal(net.ParseIP("10.0.0.1")) {
+			foundIP = true
+			break
+		}
+	}
+	if !foundIP {
+		t.Errorf("expected IP SAN 10.0.0.1 in cert.IPAddresses, got %v", cert.Cert.IPAddresses)
 	}
 }
 
 func TestProcessFile_EmptyFile(t *testing.T) {
 	// WHY: Empty files are encountered during directory scans; ProcessFile must handle them gracefully without error or inserting phantom records.
 	cfg := newTestConfig(t)
-	defer cfg.DB.Close()
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "empty.pem")
@@ -1020,18 +947,12 @@ func TestProcessFile_EmptyFile(t *testing.T) {
 	}
 
 	// Nothing should be inserted
-	certs, err := cfg.DB.GetAllCerts()
-	if err != nil {
-		t.Fatalf("GetAllCerts: %v", err)
-	}
+	certs := cfg.Store.AllCertsFlat()
 	if len(certs) != 0 {
 		t.Errorf("expected 0 certs from empty file, got %d", len(certs))
 	}
 
-	keys, err := cfg.DB.GetAllKeys()
-	if err != nil {
-		t.Fatalf("GetAllKeys: %v", err)
-	}
+	keys := cfg.Store.AllKeysFlat()
 	if len(keys) != 0 {
 		t.Errorf("expected 0 keys from empty file, got %d", len(keys))
 	}
@@ -1040,7 +961,6 @@ func TestProcessFile_EmptyFile(t *testing.T) {
 func TestProcessFile_GarbageData(t *testing.T) {
 	// WHY: Non-certificate binary files are common in scanned directories; ProcessFile must skip them without panicking, erroring, or inserting data.
 	cfg := newTestConfig(t)
-	defer cfg.DB.Close()
 
 	// Write random-looking garbage that is not PEM, DER, or any known format
 	garbage := make([]byte, 512)
@@ -1060,18 +980,12 @@ func TestProcessFile_GarbageData(t *testing.T) {
 	}
 
 	// Nothing should be inserted
-	certs, err := cfg.DB.GetAllCerts()
-	if err != nil {
-		t.Fatalf("GetAllCerts: %v", err)
-	}
+	certs := cfg.Store.AllCertsFlat()
 	if len(certs) != 0 {
 		t.Errorf("expected 0 certs from garbage data, got %d", len(certs))
 	}
 
-	keys, err := cfg.DB.GetAllKeys()
-	if err != nil {
-		t.Fatalf("GetAllKeys: %v", err)
-	}
+	keys := cfg.Store.AllKeysFlat()
 	if len(keys) != 0 {
 		t.Errorf("expected 0 keys from garbage data, got %d", len(keys))
 	}
@@ -1081,7 +995,6 @@ func TestProcessFile_NonexistentFile(t *testing.T) {
 	// WHY: The os.ReadFile error path in ProcessFile is completely untested.
 	// Verifies that a descriptive wrapped error is returned for missing files.
 	cfg := newTestConfig(t)
-	defer cfg.DB.Close()
 
 	err := ProcessFile("/nonexistent/path/cert.pem", cfg)
 	if err == nil {
@@ -1094,7 +1007,6 @@ func TestProcessFile_MultiplePrivateKeysInOnePEM(t *testing.T) {
 	// tested with single-key files. This verifies both keys are stored when a
 	// PEM file contains an RSA key and an ECDSA key.
 	cfg := newTestConfig(t)
-	defer cfg.DB.Close()
 
 	rsaKey := rsaKeyPEM(t)
 	ecKey := ecdsaKeyPEM(t)
@@ -1110,10 +1022,7 @@ func TestProcessFile_MultiplePrivateKeysInOnePEM(t *testing.T) {
 		t.Fatalf("ProcessFile: %v", err)
 	}
 
-	keys, err := cfg.DB.GetAllKeys()
-	if err != nil {
-		t.Fatalf("GetAllKeys: %v", err)
-	}
+	keys := cfg.Store.AllKeysFlat()
 	if len(keys) != 2 {
 		t.Fatalf("expected 2 keys in DB, got %d", len(keys))
 	}
@@ -1122,10 +1031,10 @@ func TestProcessFile_MultiplePrivateKeysInOnePEM(t *testing.T) {
 	for _, k := range keys {
 		keyTypes[k.KeyType] = true
 	}
-	if !keyTypes["rsa"] {
+	if !keyTypes["RSA"] {
 		t.Error("expected an RSA key in DB")
 	}
-	if !keyTypes["ecdsa"] {
+	if !keyTypes["ECDSA"] {
 		t.Error("expected an ECDSA key in DB")
 	}
 }
@@ -1137,7 +1046,6 @@ func TestProcessFile_MixedBlockTypesWithIgnoredPEM(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "mixed-blocks.example.com", []string{"mixed-blocks.example.com"}, nil)
 	cfg := newTestConfig(t)
-	defer cfg.DB.Close()
 
 	// Construct a PEM file with cert + DH PARAMETERS block + key
 	dhBlock := pem.EncodeToMemory(&pem.Block{
@@ -1159,27 +1067,21 @@ func TestProcessFile_MixedBlockTypesWithIgnoredPEM(t *testing.T) {
 
 	// Verify certificate was ingested
 	expectedSKI := computeSKIHex(t, leaf.cert.PublicKey)
-	cert, err := cfg.DB.GetCertBySKI(expectedSKI)
-	if err != nil {
-		t.Fatalf("GetCertBySKI: %v", err)
-	}
+	cert := cfg.Store.GetCert(expectedSKI)
 	if cert == nil {
 		t.Fatal("expected certificate to be inserted into DB despite DH PARAMETERS block")
 	}
-	if cert.CommonName.String != "mixed-blocks.example.com" {
-		t.Errorf("cert CN = %q, want mixed-blocks.example.com", cert.CommonName.String)
+	if cert.Cert.Subject.CommonName != "mixed-blocks.example.com" {
+		t.Errorf("cert CN = %q, want mixed-blocks.example.com", cert.Cert.Subject.CommonName)
 	}
 
 	// Verify key was ingested
-	keys, err := cfg.DB.GetAllKeys()
-	if err != nil {
-		t.Fatalf("GetAllKeys: %v", err)
-	}
+	keys := cfg.Store.AllKeysFlat()
 	if len(keys) != 1 {
 		t.Fatalf("expected 1 key in DB, got %d", len(keys))
 	}
-	if keys[0].KeyType != "rsa" {
-		t.Errorf("key type = %q, want rsa", keys[0].KeyType)
+	if keys[0].KeyType != "RSA" {
+		t.Errorf("key type = %q, want RSA", keys[0].KeyType)
 	}
 }
 
@@ -1199,10 +1101,7 @@ func TestProcessData_Ed25519BitLength(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	keys, err := cfg.DB.GetAllKeys()
-	if err != nil {
-		t.Fatal(err)
-	}
+	keys := cfg.Store.AllKeysFlat()
 	if len(keys) != 1 {
 		t.Fatalf("expected 1 key, got %d", len(keys))
 	}
@@ -1235,10 +1134,7 @@ func TestProcessDER_RejectsArbitrary64ByteFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	keys, err := cfg.DB.GetAllKeys()
-	if err != nil {
-		t.Fatal(err)
-	}
+	keys := cfg.Store.AllKeysFlat()
 	if len(keys) != 0 {
 		t.Errorf("expected 0 keys from garbage 64-byte file, got %d", len(keys))
 	}
@@ -1264,15 +1160,12 @@ func TestProcessDER_ValidEd25519RawKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	keys, err := cfg.DB.GetAllKeys()
-	if err != nil {
-		t.Fatal(err)
-	}
+	keys := cfg.Store.AllKeysFlat()
 	if len(keys) != 1 {
 		t.Fatalf("expected 1 key from valid raw Ed25519, got %d", len(keys))
 	}
-	if keys[0].KeyType != "ed25519" {
-		t.Errorf("key type = %q, want ed25519", keys[0].KeyType)
+	if keys[0].KeyType != "Ed25519" {
+		t.Errorf("key type = %q, want Ed25519", keys[0].KeyType)
 	}
 }
 
@@ -1300,15 +1193,12 @@ func TestProcessDER_SEC1ECKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	keys, err := cfg.DB.GetAllKeys()
-	if err != nil {
-		t.Fatal(err)
-	}
+	keys := cfg.Store.AllKeysFlat()
 	if len(keys) != 1 {
 		t.Fatalf("expected 1 key from SEC1 EC DER, got %d", len(keys))
 	}
-	if keys[0].KeyType != "ecdsa" {
-		t.Errorf("key type = %q, want ecdsa", keys[0].KeyType)
+	if keys[0].KeyType != "ECDSA" {
+		t.Errorf("key type = %q, want ECDSA", keys[0].KeyType)
 	}
 }
 

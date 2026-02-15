@@ -1,10 +1,7 @@
-package internal
+package certstore
 
 import (
-	"archive/tar"
-	"archive/zip"
 	"bytes"
-	"compress/gzip"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -14,13 +11,11 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
-	"net"
 	"testing"
 	"time"
 
 	"github.com/pavlo-v-chernykh/keystore-go/v4"
 	"github.com/sensiblebit/certkit"
-	"github.com/sensiblebit/certkit/internal/certstore"
 )
 
 // testCA holds a CA certificate and its private key for signing leaf certs.
@@ -40,7 +35,7 @@ type testLeaf struct {
 	keyPEM  []byte
 }
 
-// newRSACA generates a self-signed RSA root CA.
+// newRSACA generates a self-signed RSA root CA for testing.
 func newRSACA(t *testing.T) testCA {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -51,7 +46,7 @@ func newRSACA(t *testing.T) testCA {
 	tmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "Test RSA Root CA", Organization: []string{"TestOrg"}},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		BasicConstraintsValid: true,
@@ -63,18 +58,15 @@ func newRSACA(t *testing.T) testCA {
 	if err != nil {
 		t.Fatalf("create RSA CA cert: %v", err)
 	}
-
 	cert, err := x509.ParseCertificate(certDER)
 	if err != nil {
 		t.Fatalf("parse RSA CA cert: %v", err)
 	}
-
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-
 	return testCA{cert: cert, certPEM: certPEM, certDER: certDER, key: key}
 }
 
-// newECDSACA generates a self-signed ECDSA root CA.
+// newECDSACA generates a self-signed ECDSA root CA for testing.
 func newECDSACA(t *testing.T) testCA {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -85,7 +77,7 @@ func newECDSACA(t *testing.T) testCA {
 	tmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(2),
 		Subject:               pkix.Name{CommonName: "Test ECDSA Root CA", Organization: []string{"TestOrg"}},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
 		BasicConstraintsValid: true,
@@ -97,19 +89,16 @@ func newECDSACA(t *testing.T) testCA {
 	if err != nil {
 		t.Fatalf("create ECDSA CA cert: %v", err)
 	}
-
 	cert, err := x509.ParseCertificate(certDER)
 	if err != nil {
 		t.Fatalf("parse ECDSA CA cert: %v", err)
 	}
-
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-
 	return testCA{cert: cert, certPEM: certPEM, certDER: certDER, key: key}
 }
 
 // newRSALeaf generates an RSA leaf certificate signed by the given CA.
-func newRSALeaf(t *testing.T, ca testCA, cn string, sans []string, ips []net.IP) testLeaf {
+func newRSALeaf(t *testing.T, ca testCA, cn string, sans []string) testLeaf {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -117,24 +106,13 @@ func newRSALeaf(t *testing.T, ca testCA, cn string, sans []string, ips []net.IP)
 	}
 
 	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(100),
-		Subject: pkix.Name{
-			CommonName:   cn,
-			Organization: []string{"TestOrg"},
-			Country:      []string{"US"},
-			Province:     []string{"California"},
-			Locality:     []string{"San Francisco"},
-		},
-		DNSNames:    sans,
-		IPAddresses: ips,
-		NotBefore:   time.Now().Add(-1 * time.Hour),
-		NotAfter:    time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:    x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		SubjectKeyId: []byte{
-			0xa1, 0xa2, 0xa3, 0xa4, 0xa5, 0xa6, 0xa7, 0xa8, 0xa9, 0xaa,
-			0xab, 0xac, 0xad, 0xae, 0xaf, 0xb0, 0xb1, 0xb2, 0xb3, 0xb4,
-		},
+		SerialNumber:   big.NewInt(100),
+		Subject:        pkix.Name{CommonName: cn, Organization: []string{"TestOrg"}},
+		DNSNames:       sans,
+		NotBefore:      time.Now().Add(-time.Hour),
+		NotAfter:       time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:       x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:    []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		AuthorityKeyId: ca.cert.SubjectKeyId,
 	}
 
@@ -142,7 +120,6 @@ func newRSALeaf(t *testing.T, ca testCA, cn string, sans []string, ips []net.IP)
 	if err != nil {
 		t.Fatalf("create RSA leaf cert: %v", err)
 	}
-
 	cert, err := x509.ParseCertificate(certDER)
 	if err != nil {
 		t.Fatalf("parse RSA leaf cert: %v", err)
@@ -153,7 +130,6 @@ func newRSALeaf(t *testing.T, ca testCA, cn string, sans []string, ips []net.IP)
 		Type:  "RSA PRIVATE KEY",
 		Bytes: x509.MarshalPKCS1PrivateKey(key),
 	})
-
 	return testLeaf{cert: cert, certPEM: certPEM, certDER: certDER, key: key, keyPEM: keyPEM}
 }
 
@@ -166,21 +142,13 @@ func newECDSALeaf(t *testing.T, ca testCA, cn string, sans []string) testLeaf {
 	}
 
 	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(200),
-		Subject: pkix.Name{
-			CommonName:   cn,
-			Organization: []string{"TestOrg"},
-			Country:      []string{"US"},
-		},
-		DNSNames:    sans,
-		NotBefore:   time.Now().Add(-1 * time.Hour),
-		NotAfter:    time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:    x509.KeyUsageDigitalSignature,
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		SubjectKeyId: []byte{
-			0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca,
-			0xcb, 0xcc, 0xcd, 0xce, 0xcf, 0xd0, 0xd1, 0xd2, 0xd3, 0xd4,
-		},
+		SerialNumber:   big.NewInt(200),
+		Subject:        pkix.Name{CommonName: cn, Organization: []string{"TestOrg"}},
+		DNSNames:       sans,
+		NotBefore:      time.Now().Add(-time.Hour),
+		NotAfter:       time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:       x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:    []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		AuthorityKeyId: ca.cert.SubjectKeyId,
 	}
 
@@ -188,7 +156,6 @@ func newECDSALeaf(t *testing.T, ca testCA, cn string, sans []string) testLeaf {
 	if err != nil {
 		t.Fatalf("create ECDSA leaf cert: %v", err)
 	}
-
 	cert, err := x509.ParseCertificate(certDER)
 	if err != nil {
 		t.Fatalf("parse ECDSA leaf cert: %v", err)
@@ -197,7 +164,6 @@ func newECDSALeaf(t *testing.T, ca testCA, cn string, sans []string) testLeaf {
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
 	ecBytes, _ := x509.MarshalECPrivateKey(key)
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: ecBytes})
-
 	return testLeaf{cert: cert, certPEM: certPEM, certDER: certDER, key: key, keyPEM: keyPEM}
 }
 
@@ -210,20 +176,13 @@ func newEd25519Leaf(t *testing.T, ca testCA, cn string, sans []string) testLeaf 
 	}
 
 	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(300),
-		Subject: pkix.Name{
-			CommonName:   cn,
-			Organization: []string{"TestOrg"},
-		},
-		DNSNames:    sans,
-		NotBefore:   time.Now().Add(-1 * time.Hour),
-		NotAfter:    time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:    x509.KeyUsageDigitalSignature,
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		SubjectKeyId: []byte{
-			0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea,
-			0xeb, 0xec, 0xed, 0xee, 0xef, 0xf0, 0xf1, 0xf2, 0xf3, 0xf4,
-		},
+		SerialNumber:   big.NewInt(300),
+		Subject:        pkix.Name{CommonName: cn, Organization: []string{"TestOrg"}},
+		DNSNames:       sans,
+		NotBefore:      time.Now().Add(-time.Hour),
+		NotAfter:       time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:       x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:    []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 		AuthorityKeyId: ca.cert.SubjectKeyId,
 	}
 
@@ -231,7 +190,6 @@ func newEd25519Leaf(t *testing.T, ca testCA, cn string, sans []string) testLeaf 
 	if err != nil {
 		t.Fatalf("create Ed25519 leaf cert: %v", err)
 	}
-
 	cert, err := x509.ParseCertificate(certDER)
 	if err != nil {
 		t.Fatalf("parse Ed25519 leaf cert: %v", err)
@@ -240,7 +198,6 @@ func newEd25519Leaf(t *testing.T, ca testCA, cn string, sans []string) testLeaf 
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
 	keyDER, _ := x509.MarshalPKCS8PrivateKey(priv)
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
-
 	return testLeaf{cert: cert, certPEM: certPEM, certDER: certDER, key: priv, keyPEM: keyPEM}
 }
 
@@ -253,16 +210,12 @@ func newExpiredLeaf(t *testing.T, ca testCA) testLeaf {
 	}
 
 	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(999),
-		Subject:      pkix.Name{CommonName: "expired.example.com"},
-		DNSNames:     []string{"expired.example.com"},
-		NotBefore:    time.Now().Add(-2 * 365 * 24 * time.Hour),
-		NotAfter:     time.Now().Add(-1 * 24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		SubjectKeyId: []byte{
-			0xde, 0xad, 0xbe, 0xef, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06,
-			0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
-		},
+		SerialNumber:   big.NewInt(999),
+		Subject:        pkix.Name{CommonName: "expired.example.com"},
+		DNSNames:       []string{"expired.example.com"},
+		NotBefore:      time.Now().Add(-2 * 365 * 24 * time.Hour),
+		NotAfter:       time.Now().Add(-24 * time.Hour),
+		KeyUsage:       x509.KeyUsageDigitalSignature,
 		AuthorityKeyId: ca.cert.SubjectKeyId,
 	}
 
@@ -270,7 +223,6 @@ func newExpiredLeaf(t *testing.T, ca testCA) testLeaf {
 	if err != nil {
 		t.Fatalf("create expired leaf cert: %v", err)
 	}
-
 	cert, err := x509.ParseCertificate(certDER)
 	if err != nil {
 		t.Fatalf("parse expired leaf cert: %v", err)
@@ -281,8 +233,38 @@ func newExpiredLeaf(t *testing.T, ca testCA) testLeaf {
 		Type:  "RSA PRIVATE KEY",
 		Bytes: x509.MarshalPKCS1PrivateKey(key),
 	})
-
 	return testLeaf{cert: cert, certPEM: certPEM, certDER: certDER, key: key, keyPEM: keyPEM}
+}
+
+// newIntermediateCA generates an intermediate CA signed by the given root CA.
+func newIntermediateCA(t *testing.T, root testCA) testCA {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate intermediate CA key: %v", err)
+	}
+
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(50),
+		Subject:               pkix.Name{CommonName: "Test Intermediate CA", Organization: []string{"TestOrg"}},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(5 * 365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		AuthorityKeyId:        root.cert.SubjectKeyId,
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, root.cert, &key.PublicKey, root.key)
+	if err != nil {
+		t.Fatalf("create intermediate CA cert: %v", err)
+	}
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatalf("parse intermediate CA cert: %v", err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	return testCA{cert: cert, certPEM: certPEM, certDER: certDER, key: key}
 }
 
 // newPKCS12Bundle creates a PKCS#12 bundle from a leaf cert and its key.
@@ -295,13 +277,32 @@ func newPKCS12Bundle(t *testing.T, leaf testLeaf, ca testCA, password string) []
 	return p12
 }
 
-// newTestConfig creates a minimal Config with an in-memory store for testing.
-func newTestConfig(t *testing.T) *Config {
+// newJKSBundle creates a JKS keystore containing a private key entry.
+func newJKSBundle(t *testing.T, leaf testLeaf, ca testCA, password string) []byte {
 	t.Helper()
-	return &Config{
-		Store:     certstore.NewMemStore(),
-		Passwords: []string{"", "password", "changeit"},
+
+	pkcs8Key, err := x509.MarshalPKCS8PrivateKey(leaf.key)
+	if err != nil {
+		t.Fatalf("marshal PKCS8 key for JKS: %v", err)
 	}
+
+	ks := keystore.New()
+	if err := ks.SetPrivateKeyEntry("server", keystore.PrivateKeyEntry{
+		CreationTime: time.Now(),
+		PrivateKey:   pkcs8Key,
+		CertificateChain: []keystore.Certificate{
+			{Type: "X.509", Content: leaf.certDER},
+			{Type: "X.509", Content: ca.certDER},
+		},
+	}, []byte(password)); err != nil {
+		t.Fatalf("set JKS private key entry: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := ks.Store(&buf, []byte(password)); err != nil {
+		t.Fatalf("store JKS: %v", err)
+	}
+	return buf.Bytes()
 }
 
 // rsaKeyPEM returns PEM-encoded RSA private key bytes.
@@ -343,103 +344,4 @@ func ed25519KeyPEM(t *testing.T) []byte {
 		t.Fatalf("marshal Ed25519 key: %v", err)
 	}
 	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
-}
-
-// newJKSBundle creates a JKS keystore containing a private key entry with a leaf
-// cert chain (leaf + CA), protected by the given password.
-func newJKSBundle(t *testing.T, leaf testLeaf, ca testCA, password string) []byte {
-	t.Helper()
-
-	pkcs8Key, err := x509.MarshalPKCS8PrivateKey(leaf.key)
-	if err != nil {
-		t.Fatalf("marshal PKCS8 key for JKS: %v", err)
-	}
-
-	ks := keystore.New()
-	if err := ks.SetPrivateKeyEntry("server", keystore.PrivateKeyEntry{
-		CreationTime: time.Now(),
-		PrivateKey:   pkcs8Key,
-		CertificateChain: []keystore.Certificate{
-			{Type: "X.509", Content: leaf.certDER},
-			{Type: "X.509", Content: ca.certDER},
-		},
-	}, []byte(password)); err != nil {
-		t.Fatalf("set JKS private key entry: %v", err)
-	}
-
-	var buf bytes.Buffer
-	if err := ks.Store(&buf, []byte(password)); err != nil {
-		t.Fatalf("store JKS: %v", err)
-	}
-	return buf.Bytes()
-}
-
-// createTestZip creates a ZIP archive from a map of filename → content.
-func createTestZip(t *testing.T, files map[string][]byte) []byte {
-	t.Helper()
-	var buf bytes.Buffer
-	w := zip.NewWriter(&buf)
-	for name, data := range files {
-		fw, err := w.Create(name)
-		if err != nil {
-			t.Fatalf("create ZIP entry %s: %v", name, err)
-		}
-		if _, err := fw.Write(data); err != nil {
-			t.Fatalf("write ZIP entry %s: %v", name, err)
-		}
-	}
-	if err := w.Close(); err != nil {
-		t.Fatalf("close ZIP writer: %v", err)
-	}
-	return buf.Bytes()
-}
-
-// createTestTar creates a TAR archive from a map of filename → content.
-func createTestTar(t *testing.T, files map[string][]byte) []byte {
-	t.Helper()
-	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
-	for name, data := range files {
-		if err := tw.WriteHeader(&tar.Header{
-			Name: name,
-			Size: int64(len(data)),
-			Mode: 0644,
-		}); err != nil {
-			t.Fatalf("write TAR header %s: %v", name, err)
-		}
-		if _, err := tw.Write(data); err != nil {
-			t.Fatalf("write TAR entry %s: %v", name, err)
-		}
-	}
-	if err := tw.Close(); err != nil {
-		t.Fatalf("close TAR writer: %v", err)
-	}
-	return buf.Bytes()
-}
-
-// createTestTarGz creates a gzip-compressed TAR archive from a map of filename → content.
-func createTestTarGz(t *testing.T, files map[string][]byte) []byte {
-	t.Helper()
-	var buf bytes.Buffer
-	gw := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gw)
-	for name, data := range files {
-		if err := tw.WriteHeader(&tar.Header{
-			Name: name,
-			Size: int64(len(data)),
-			Mode: 0644,
-		}); err != nil {
-			t.Fatalf("write TAR header %s: %v", name, err)
-		}
-		if _, err := tw.Write(data); err != nil {
-			t.Fatalf("write TAR entry %s: %v", name, err)
-		}
-	}
-	if err := tw.Close(); err != nil {
-		t.Fatalf("close TAR writer: %v", err)
-	}
-	if err := gw.Close(); err != nil {
-		t.Fatalf("close gzip writer: %v", err)
-	}
-	return buf.Bytes()
 }

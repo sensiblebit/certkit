@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Replace SQLite with in-memory `MemStore` as runtime store during scan; SQLite is now only used for `--save-db`/`--load-db` serialization
+- Extract shared `internal/certstore` package to eliminate ~500 lines of duplicated business logic between CLI and WASM builds
+- WASM bundle export now produces identical output files to CLI (adds K8s YAML, JSON, YAML, CSR, CSR JSON)
+- Use user-provided password (first non-empty from `--passwords`) for PKCS#12/JKS bundle export instead of hardcoded "changeit"
+
+### Removed
+
+- Remove `internal/db.go` — runtime SQLite queries replaced by `MemStore` methods; persistence moved to `certstore/sqlite.go`
+- Remove `ResolveAKIs` — `MemStore.HasIssuer()` handles issuer matching via raw ASN.1 bytes
+
 ### Fixed
 
 - Fix `ExcludeRoot` option (renamed from `IncludeRoot`) being declared but never checked in `Bundle()`
@@ -20,10 +32,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix original parse error discarded in `LoadContainerFile`
 - Fix database errors silently swallowed in `ExportBundles` key loop
 - Fix `KeyAlgorithmName` and `PublicKeyAlgorithmName` returning "unknown" for `*ed25519.PrivateKey` / `*ed25519.PublicKey` pointer types (from OpenSSH key parsing)
-
-### Changed
-
-- Use user-provided password (first non-empty from `--passwords`) for PKCS#12/JKS bundle export instead of hardcoded "changeit"
 
 ### Tests
 
