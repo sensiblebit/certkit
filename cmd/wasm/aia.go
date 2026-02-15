@@ -7,42 +7,47 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"sync"
 	"syscall/js"
 
-	"github.com/breml/rootcerts/embedded"
 	"github.com/sensiblebit/certkit"
 	"github.com/sensiblebit/certkit/internal/certstore"
 )
 
-// mozillaRootSubjects is a lazily-built set of RawSubject bytes from Mozilla
-// root certificates. Used to skip AIA fetching when the issuer is already a
-// trusted root — we don't need to fetch roots, we already have them embedded.
-var mozillaRootSubjects map[string]bool
+var (
+	mozillaSubjectsOnce sync.Once
+	mozillaSubjects     map[string]bool
+)
 
 // getMozillaRootSubjects returns a set of RawSubject strings from all Mozilla
-// root certificates. Initialized once on first call.
+// root certificates. Initialized once on first call via sync.Once.
 func getMozillaRootSubjects() map[string]bool {
-	if mozillaRootSubjects != nil {
-		return mozillaRootSubjects
-	}
-	mozillaRootSubjects = make(map[string]bool)
-	pemData := []byte(embedded.MozillaCACertificatesPEM())
-	for {
-		var block *pem.Block
-		block, pemData = pem.Decode(pemData)
-		if block == nil {
-			break
+	mozillaSubjectsOnce.Do(func() {
+		mozillaSubjects = make(map[string]bool)
+		pool, err := certkit.MozillaRootPool()
+		if err != nil || pool == nil {
+			return
 		}
-		if block.Type != "CERTIFICATE" {
-			continue
+		// Parse the embedded PEM bundle to extract RawSubject from each root.
+		// MozillaRootPool returns a pool but we need individual subjects.
+		pemData := certkit.MozillaRootPEM()
+		for {
+			var block *pem.Block
+			block, pemData = pem.Decode(pemData)
+			if block == nil {
+				break
+			}
+			if block.Type != "CERTIFICATE" {
+				continue
+			}
+			cert, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				continue
+			}
+			mozillaSubjects[string(cert.RawSubject)] = true
 		}
-		cert, err := x509.ParseCertificate(block.Bytes)
-		if err != nil {
-			continue
-		}
-		mozillaRootSubjects[string(cert.RawSubject)] = true
-	}
-	return mozillaRootSubjects
+	})
+	return mozillaSubjects
 }
 
 // issuedByMozillaRoot reports whether the cert's issuer matches a Mozilla root
@@ -99,7 +104,7 @@ func resolveAIA(ctx context.Context, s *certstore.MemStore) []string {
 					continue
 				}
 
-				issuer, err := parseCertificateBytes(body)
+				issuer, err := certkit.ParseCertificateAny(body)
 				if err != nil {
 					warnings = append(warnings, fmt.Sprintf(
 						"Fetched %s but could not parse: %v",
@@ -160,17 +165,4 @@ func jsFetchURL(url string) ([]byte, error) {
 	thenCb.Release()
 	catchCb.Release()
 	return r.data, r.err
-}
-
-// parseCertificateBytes tries to parse bytes as DER then PEM.
-func parseCertificateBytes(data []byte) (*x509.Certificate, error) {
-	cert, err := x509.ParseCertificate(data)
-	if err == nil {
-		return cert, nil
-	}
-	pemCert, pemErr := certkit.ParsePEMCertificate(data)
-	if pemErr == nil {
-		return pemCert, nil
-	}
-	return nil, fmt.Errorf("not DER (%v) or PEM (%v)", err, pemErr)
 }

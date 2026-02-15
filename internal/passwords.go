@@ -11,7 +11,7 @@ import (
 	"github.com/sensiblebit/certkit"
 )
 
-// LoadPasswordsFromFile loads passwords from a file, one password per line
+// LoadPasswordsFromFile loads passwords from a file, one password per line.
 func LoadPasswordsFromFile(filename string) ([]string, error) {
 	file, err := os.Open(filename)
 	if err != nil {
@@ -33,28 +33,19 @@ func LoadPasswordsFromFile(filename string) ([]string, error) {
 	return passwords, scanner.Err()
 }
 
-// ProcessPasswords handles all password loading logic
+// ProcessPasswords loads passwords from CLI flags and optional file, merges
+// with defaults, and deduplicates. Delegates core logic to
+// certkit.DeduplicatePasswords.
 func ProcessPasswords(passwordList []string, passwordFile string) ([]string, error) {
-	// Combine defaults, CLI list, and file passwords
-	passwords := slices.Concat(certkit.DefaultPasswords(), passwordList)
+	extra := slices.Clone(passwordList)
 
 	if passwordFile != "" {
 		filePasswords, err := LoadPasswordsFromFile(passwordFile)
 		if err != nil {
 			return nil, fmt.Errorf("loading passwords from file: %w", err)
 		}
-		passwords = slices.Concat(passwords, filePasswords)
+		extra = slices.Concat(extra, filePasswords)
 	}
 
-	// Remove duplicates while preserving order
-	seen := make(map[string]bool)
-	var uniquePasswords []string
-	for _, pwd := range passwords {
-		if !seen[pwd] {
-			seen[pwd] = true
-			uniquePasswords = append(uniquePasswords, pwd)
-		}
-	}
-
-	return uniquePasswords, nil
+	return certkit.DeduplicatePasswords(extra), nil
 }

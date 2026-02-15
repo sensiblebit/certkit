@@ -1,6 +1,7 @@
 package certstore
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -8,6 +9,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"log/slog"
 	"net"
 	"slices"
 	"strings"
@@ -296,6 +298,77 @@ func buildCSRSubject(cert *x509.Certificate, override *CSRSubjectOverride) pkix.
 	}
 
 	return subj
+}
+
+// BundleWriter receives generated bundle files for output. CLI writes to the
+// filesystem; WASM writes to a ZIP archive.
+type BundleWriter interface {
+	WriteBundleFiles(folder string, files []BundleFile) error
+}
+
+// ExportMatchedBundleInput holds parameters for ExportMatchedBundles.
+type ExportMatchedBundleInput struct {
+	Store         *MemStore
+	SKIs          []string // matched-pair SKIs to export
+	BundleOpts    certkit.BundleOptions
+	Writer        BundleWriter
+	CSRSubject    *CSRSubjectOverride // optional; nil uses cert's own subject
+	RetryNoVerify bool                // retry bundle without verification on failure
+}
+
+// ExportMatchedBundles builds certificate chains and writes bundle files for
+// each matched key-cert pair. This is the shared orchestration used by both CLI
+// and WASM exports.
+func ExportMatchedBundles(ctx context.Context, input ExportMatchedBundleInput) error {
+	intermediates := input.Store.Intermediates()
+	opts := input.BundleOpts
+	opts.ExtraIntermediates = slices.Concat(opts.ExtraIntermediates, intermediates)
+
+	for _, ski := range input.SKIs {
+		certRec := input.Store.GetCert(ski)
+		keyRec := input.Store.GetKey(ski)
+		if certRec == nil || keyRec == nil {
+			continue
+		}
+
+		bundle, err := certkit.Bundle(ctx, certRec.Cert, opts)
+		if err != nil && input.RetryNoVerify && opts.Verify {
+			retryOpts := opts
+			retryOpts.Verify = false
+			bundle, err = certkit.Bundle(ctx, certRec.Cert, retryOpts)
+		}
+		if err != nil {
+			slog.Warn("bundling cert", "cn", certRec.Cert.Subject.CommonName, "ski", ski, "error", err)
+			continue
+		}
+
+		prefix := SanitizeFileName(FormatCN(certRec.Cert))
+		folder := prefix
+		if certRec.BundleName != "" {
+			folder = certRec.BundleName
+		}
+
+		files, err := GenerateBundleFiles(BundleExportInput{
+			Bundle:     bundle,
+			KeyPEM:     keyRec.PEM,
+			KeyType:    keyRec.KeyType,
+			BitLength:  keyRec.BitLength,
+			Prefix:     prefix,
+			SecretName: strings.TrimPrefix(prefix, "_."),
+			CSRSubject: input.CSRSubject,
+		})
+		if err != nil {
+			slog.Warn("generating bundle files", "cn", certRec.Cert.Subject.CommonName, "error", err)
+			continue
+		}
+
+		if err := input.Writer.WriteBundleFiles(folder, files); err != nil {
+			slog.Warn("writing bundle files", "cn", certRec.Cert.Subject.CommonName, "error", err)
+			continue
+		}
+		slog.Info("exported bundle", "cn", certRec.Cert.Subject.CommonName, "folder", folder)
+	}
+	return nil
 }
 
 // GenerateCSR creates a CSR using the certificate's details and private key.

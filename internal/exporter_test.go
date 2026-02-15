@@ -614,8 +614,8 @@ func TestWriteBundleFiles_K8sYAMLDecode(t *testing.T) {
 	if secret.Type != "kubernetes.io/tls" {
 		t.Errorf("type = %q, want kubernetes.io/tls", secret.Type)
 	}
-	if secret.Metadata.Name != "k8s-test" {
-		t.Errorf("metadata.name = %q, want k8s-test", secret.Metadata.Name)
+	if secret.Metadata.Name != "k8s.example.com" {
+		t.Errorf("metadata.name = %q, want k8s.example.com", secret.Metadata.Name)
 	}
 
 	// Validate tls.crt is valid base64 containing PEM certs

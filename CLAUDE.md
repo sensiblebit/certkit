@@ -36,8 +36,8 @@ internal/                                           # Business logic (not export
 
 Stateless utility functions. No database, no file I/O. This is the public library API.
 
-- `certkit.go` — PEM parsing, key generation, fingerprints, SKI computation
-- `bundle.go` — Certificate chain resolution via AIA, trust store verification. `BundleResult`/`BundleOptions` types, `DefaultOptions()`, `FetchLeafFromURL()`, `FetchAIACertificates()`, `Bundle()`
+- `certkit.go` — PEM parsing, key generation, fingerprints, SKI computation. `DeduplicatePasswords()`, `ParseCertificateAny()`.
+- `bundle.go` — Certificate chain resolution via AIA, trust store verification. `BundleResult`/`BundleOptions` types, `DefaultOptions()`, `FetchLeafFromURL()`, `FetchAIACertificates()`, `Bundle()`. `MozillaRootPool()` (`sync.Once`-cached), `MozillaRootPEM()`.
 - `csr.go` — CSR generation from certs, templates, or existing CSRs
 - `pkcs.go` — PKCS#12 and PKCS#7 encode/decode
 - `jks.go` — Java KeyStore encode/decode
@@ -50,7 +50,7 @@ Certificate/key processing, in-memory storage, and persistence. Used by both CLI
 - `process.go` — `ProcessData()`: format detection and parsing pipeline (PEM → DER → PKCS#7 → PKCS#8 → SEC1 → Ed25519 → JKS → PKCS#12). Calls `CertHandler` for each parsed item.
 - `memstore.go` — `MemStore`: in-memory `CertHandler` implementation and primary runtime store. `CertRecord`/`KeyRecord` types. Stores multiple certs per SKI via composite key (serial + AKI). Provides `ScanSummary()`, `AllCertsFlat()`, `AllKeysFlat()`, `CertsByBundleName()`, `BundleNames()`, `DumpDebug()`.
 - `summary.go` — `ScanSummary` struct (roots, intermediates, leaves, keys, matched pairs).
-- `export.go` — `GenerateBundleFiles()`: creates all output files for a bundle (PEM variants, key, P12, K8s YAML, JSON, YAML, CSR). `GenerateJSON`, `GenerateYAML`, `GenerateCSR` also exported individually.
+- `export.go` — `GenerateBundleFiles()`: creates all output files for a bundle (PEM variants, key, P12, K8s YAML, JSON, YAML, CSR). `GenerateJSON`, `GenerateYAML`, `GenerateCSR` also exported individually. `BundleWriter` interface and `ExportMatchedBundles()` provide shared export orchestration for both CLI and WASM.
 - `helpers.go` — `GetKeyType`, `HasBinaryExtension`, `FormatCN`, `SanitizeFileName`, `FormatIPAddresses`.
 - `container.go` — `ContainerContents` struct and `ParseContainerData()`: extracts leaf cert, key, and extra certs from PKCS#12, JKS, PKCS#7, PEM, or DER input. Shared by CLI and WASM.
 - `sqlite.go` — SQLite persistence (`//go:build !js`). `SaveToSQLite(store, path)` and `LoadFromSQLite(store, path)` for `--save-db`/`--load-db` flags. Self-contained: opens in-memory SQLite, transfers data, uses `VACUUM INTO` to write.
@@ -89,10 +89,10 @@ Thin CLI layer. Each file is one Cobra command. Flag variables are package-level
 
 WASM build target (`//go:build js && wasm`). Exposes certkit as a JavaScript library for browser-based certificate processing.
 
-- `main.go` — WASM entry point. Exposes JS functions: `certkitAddFiles()` (process files with passwords, returns promise), `certkitGetState()` (JSON summary of certs/keys/pairs), `certkitExportBundles(skis)` (export filtered bundles as ZIP `Uint8Array`), `certkitReset()` (clear store). Triggers eager AIA resolution after ingestion via `certkitOnAIAComplete` callback.
+- `main.go` — WASM entry point. Exposes JS functions: `certkitAddFiles()` (process files with passwords, returns promise), `certkitGetState()` (JSON summary of certs/keys/pairs), `certkitExportBundles(skis)` (export filtered bundles as ZIP `Uint8Array`), `certkitReset()` (clear store). Triggers eager AIA resolution after ingestion via `certkitOnAIAComplete` callback. Uses shared `certkit.DeduplicatePasswords()` and `certkit.MozillaRootPool()`.
 - `store.go` — Initializes global in-memory `MemStore` singleton shared across all JS function calls.
-- `aia.go` — Resolves missing intermediates via AIA CA Issuers URLs up to depth 5; delegates fetching to JavaScript `certkitFetchURL()` (handles CORS proxying); skips certs already in store or issued by Mozilla roots.
-- `export.go` — Generates ZIP archive of organized certificate bundles for matched key-cert pairs; supports SKI-based filtering; writes chain files into bundle-named folders.
+- `aia.go` — Resolves missing intermediates via AIA CA Issuers URLs up to depth 5; delegates fetching to JavaScript `certkitFetchURL()` (handles CORS proxying); skips certs already in store or issued by Mozilla roots. Uses `certkit.ParseCertificateAny()` and `sync.Once`-protected Mozilla root subject set.
+- `export.go` — ZIP `BundleWriter` implementation; delegates to shared `certstore.ExportMatchedBundles()` for bundle orchestration; supports SKI-based filtering.
 
 ---
 

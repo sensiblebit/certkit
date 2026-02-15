@@ -13,13 +13,10 @@ import (
 	"github.com/sensiblebit/certkit/internal/certstore"
 )
 
+// writeBundleFiles generates and writes all bundle output files for a single
+// cert-key pair to the filesystem.
 func writeBundleFiles(outDir, bundleFolder string, certRec *certstore.CertRecord, keyRec *certstore.KeyRecord, bundle *certkit.BundleResult, bundleConfig *BundleConfig) error {
 	prefix := certstore.SanitizeFileName(certstore.FormatCN(certRec.Cert))
-
-	folderPath := filepath.Join(outDir, bundleFolder)
-	if err := os.MkdirAll(folderPath, 0755); err != nil {
-		return fmt.Errorf("creating bundle directory %s: %w", folderPath, err)
-	}
 
 	var csrSubject *certstore.CSRSubjectOverride
 	if bundleConfig != nil && bundleConfig.Subject != nil {
@@ -38,11 +35,27 @@ func writeBundleFiles(outDir, bundleFolder string, certRec *certstore.CertRecord
 		KeyType:    keyRec.KeyType,
 		BitLength:  keyRec.BitLength,
 		Prefix:     prefix,
-		SecretName: strings.TrimPrefix(bundleFolder, "_."),
+		SecretName: strings.TrimPrefix(prefix, "_."),
 		CSRSubject: csrSubject,
 	})
 	if err != nil {
 		return err
+	}
+
+	fw := &filesystemWriter{outDir: outDir}
+	return fw.WriteBundleFiles(bundleFolder, files)
+}
+
+// filesystemWriter writes bundle files to the local filesystem under outDir.
+type filesystemWriter struct {
+	outDir string
+}
+
+// WriteBundleFiles creates the folder and writes each file with appropriate permissions.
+func (w *filesystemWriter) WriteBundleFiles(folder string, files []certstore.BundleFile) error {
+	folderPath := filepath.Join(w.outDir, folder)
+	if err := os.MkdirAll(folderPath, 0755); err != nil {
+		return fmt.Errorf("creating bundle directory %s: %w", folderPath, err)
 	}
 
 	for _, f := range files {
@@ -54,7 +67,6 @@ func writeBundleFiles(outDir, bundleFolder string, certRec *certstore.CertRecord
 			return fmt.Errorf("writing %s: %w", f.Name, err)
 		}
 	}
-
 	return nil
 }
 
@@ -93,6 +105,17 @@ func exportBundleCerts(ctx context.Context, store *certstore.MemStore, opts cert
 		}
 	}
 
+	var csrSubject *certstore.CSRSubjectOverride
+	if matchingConfig != nil && matchingConfig.Subject != nil {
+		csrSubject = &certstore.CSRSubjectOverride{
+			Country:            matchingConfig.Subject.Country,
+			Province:           matchingConfig.Subject.Province,
+			Locality:           matchingConfig.Subject.Locality,
+			Organization:       matchingConfig.Subject.Organization,
+			OrganizationalUnit: matchingConfig.Subject.OrganizationalUnit,
+		}
+	}
+
 	for i, certRec := range certs {
 		var bundleFolder string
 		if i == 0 {
@@ -115,19 +138,30 @@ func exportBundleCerts(ctx context.Context, store *certstore.MemStore, opts cert
 			continue
 		}
 
-		bundle, err := certkit.Bundle(ctx, certRec.Cert, opts)
-		if err != nil {
-			slog.Warn("bundling cert", "serial", certRec.Cert.SerialNumber, "error", err)
-			continue
+		if err := certstore.ExportMatchedBundles(ctx, certstore.ExportMatchedBundleInput{
+			Store:         store,
+			SKIs:          []string{certRec.SKI},
+			BundleOpts:    opts,
+			Writer:        &folderOverrideWriter{outDir: outDir, folder: bundleFolder},
+			CSRSubject:    csrSubject,
+			RetryNoVerify: false,
+		}); err != nil {
+			slog.Warn("exporting bundle", "cn", certRec.Cert.Subject.CommonName, "error", err)
 		}
-
-		if err := writeBundleFiles(outDir, bundleFolder, certRec, keyRec, bundle, matchingConfig); err != nil {
-			slog.Warn("writing bundle files", "serial", certRec.Cert.SerialNumber, "error", err)
-			continue
-		}
-		slog.Info("exported bundle", "cn", certRec.Cert.Subject.CommonName, "dir", outDir, "folder", bundleFolder)
-		slog.Debug("exported certificate details", "cn", certRec.Cert.Subject.CommonName, "serial", certRec.Cert.SerialNumber, "expiry", certRec.NotAfter.Format(time.RFC3339))
 	}
+}
+
+// folderOverrideWriter wraps filesystemWriter but forces a specific folder name
+// (from bundle config) instead of the CN-derived default.
+type folderOverrideWriter struct {
+	outDir string
+	folder string
+}
+
+// WriteBundleFiles ignores the passed folder and uses the override.
+func (w *folderOverrideWriter) WriteBundleFiles(_ string, files []certstore.BundleFile) error {
+	fw := &filesystemWriter{outDir: w.outDir}
+	return fw.WriteBundleFiles(w.folder, files)
 }
 
 // AssignBundleNames iterates all certificates in the store and assigns bundle

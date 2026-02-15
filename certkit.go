@@ -60,6 +60,20 @@ func ParsePEMCertificate(pemData []byte) (*x509.Certificate, error) {
 	return certs[0], nil
 }
 
+// ParseCertificateAny attempts to parse a certificate from raw bytes, trying
+// DER encoding first (most common for AIA responses), then PEM.
+func ParseCertificateAny(data []byte) (*x509.Certificate, error) {
+	cert, derErr := x509.ParseCertificate(data)
+	if derErr == nil {
+		return cert, nil
+	}
+	cert, pemErr := ParsePEMCertificate(data)
+	if pemErr == nil {
+		return cert, nil
+	}
+	return nil, fmt.Errorf("not DER (%v) or PEM (%v)", derErr, pemErr)
+}
+
 // ParsePEMPrivateKey parses a PEM-encoded private key (PKCS#1, PKCS#8, or EC).
 // For "PRIVATE KEY" blocks it tries PKCS#8 first, then falls back to PKCS#1
 // and EC parsers to handle mislabeled keys (e.g., from pkcs12.ToPEM).
@@ -102,6 +116,22 @@ func ParsePEMPrivateKey(pemData []byte) (crypto.PrivateKey, error) {
 // password-protected PEM blocks or PKCS#12 files. Returns a fresh copy each call.
 func DefaultPasswords() []string {
 	return []string{"", "password", "changeit", "keypassword"}
+}
+
+// DeduplicatePasswords merges additional passwords with the defaults and removes
+// duplicates while preserving order. Defaults come first, followed by any extra
+// passwords not already in the list.
+func DeduplicatePasswords(extra []string) []string {
+	all := append(DefaultPasswords(), extra...)
+	seen := make(map[string]bool, len(all))
+	result := make([]string, 0, len(all))
+	for _, p := range all {
+		if !seen[p] {
+			seen[p] = true
+			result = append(result, p)
+		}
+	}
+	return result
 }
 
 // ParsePEMPrivateKeyWithPasswords tries to parse a PEM-encoded private key.

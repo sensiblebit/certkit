@@ -415,7 +415,7 @@ func TestFetchCertFromURL_garbage(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for garbage body")
 	}
-	if !strings.Contains(err.Error(), "could not parse as DER") {
+	if !strings.Contains(err.Error(), "not DER") {
 		t.Errorf("error should mention DER/PEM parse failure, got: %v", err)
 	}
 }

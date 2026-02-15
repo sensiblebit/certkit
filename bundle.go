@@ -11,10 +11,38 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"sync"
 	"time"
 
 	"github.com/breml/rootcerts/embedded"
 )
+
+var (
+	mozillaPoolOnce sync.Once
+	mozillaPool     *x509.CertPool
+	mozillaPoolErr  error
+)
+
+// MozillaRootPEM returns the raw PEM-encoded Mozilla root certificate bundle.
+func MozillaRootPEM() []byte {
+	return []byte(embedded.MozillaCACertificatesPEM())
+}
+
+// MozillaRootPool returns a shared x509.CertPool containing the embedded
+// Mozilla root certificates. The pool is initialized once and cached for the
+// lifetime of the process. Returns an error if the embedded PEM bundle cannot
+// be parsed.
+func MozillaRootPool() (*x509.CertPool, error) {
+	mozillaPoolOnce.Do(func() {
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM([]byte(embedded.MozillaCACertificatesPEM())) {
+			mozillaPoolErr = errors.New("parsing embedded Mozilla root certificates")
+			return
+		}
+		mozillaPool = pool
+	})
+	return mozillaPool, mozillaPoolErr
+}
 
 // BundleResult holds the resolved chain and metadata.
 type BundleResult struct {
@@ -148,19 +176,7 @@ func fetchCertFromURL(ctx context.Context, client *http.Client, certURL string) 
 		return nil, err
 	}
 
-	// Try DER first (most AIA URLs serve DER)
-	cert, err := x509.ParseCertificate(body)
-	if err == nil {
-		return cert, nil
-	}
-
-	// Fall back to PEM
-	cert, pemErr := ParsePEMCertificate(body)
-	if pemErr == nil {
-		return cert, nil
-	}
-
-	return nil, fmt.Errorf("could not parse as DER (%v) or PEM (%v)", err, pemErr)
+	return ParseCertificateAny(body)
 }
 
 // detectAndSwapLeaf checks if the first cert is a CA and exactly one non-CA
@@ -257,9 +273,10 @@ func Bundle(ctx context.Context, leaf *x509.Certificate, opts BundleOptions) (*B
 			return nil, fmt.Errorf("loading system cert pool: %w", err)
 		}
 	case "mozilla":
-		rootPool = x509.NewCertPool()
-		if !rootPool.AppendCertsFromPEM([]byte(embedded.MozillaCACertificatesPEM())) {
-			return nil, errors.New("parsing embedded Mozilla root certificates")
+		var err error
+		rootPool, err = MozillaRootPool()
+		if err != nil {
+			return nil, err
 		}
 	case "custom":
 		rootPool = x509.NewCertPool()

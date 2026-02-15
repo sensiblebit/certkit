@@ -7,9 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add `DeduplicatePasswords()` to root `certkit` package — shared by CLI and WASM for password merging and deduplication
+- Add `MozillaRootPool()` with `sync.Once` caching — eliminates redundant PEM parsing across CLI, WASM, and `Bundle()` calls
+- Add `MozillaRootPEM()` to root `certkit` package for access to embedded Mozilla root PEM bundle
+- Add `ParseCertificateAny()` to root `certkit` package — tries DER then PEM, used by AIA resolution in both CLI and WASM
+- Add `BundleWriter` interface and `ExportMatchedBundles()` in `certstore` — shared bundle export orchestration for CLI (filesystem) and WASM (ZIP)
+
 ### Changed
 
 - **Breaking:** Expired certificates are now always ingested into the store during scanning; expiry filtering is output-only
+- **Breaking:** K8s secret `metadata.name` is now consistently derived from the certificate CN (was derived from bundle folder name in CLI)
 - Replace SQLite with in-memory `MemStore` as runtime store during scan; SQLite is now only used for `--save-db`/`--load-db` serialization
 - Extract shared `internal/certstore` package to eliminate ~500 lines of duplicated business logic between CLI and WASM builds
 - WASM bundle export now produces identical output files to CLI (adds K8s YAML, JSON, YAML, CSR, CSR JSON)
@@ -17,6 +26,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Upgrade `golangci-lint run` from SHOULD to MUST in CLAUDE.md tooling gates
 - Move `ParseContainerData` into `internal/certstore` for shared CLI/WASM use
 - Harmonize CLI and WASM bundle file naming via shared `certstore.SanitizeFileName(certstore.FormatCN())`
+- CLI bundle export now passes store intermediates as `ExtraIntermediates` to chain builder (matches WASM behavior, fixes chains when intermediates are uploaded alongside leaf)
+- WASM trust verification now uses `time.Now()` (matches CLI behavior; expired certs show `trusted: false`)
+- WASM `resolveAIA` uses `sync.Once` for Mozilla root subject initialization (was not thread-safe)
 
 ### Removed
 
@@ -25,9 +37,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Remove `Config` god struct and `cliHandler` adapter from `internal/` — processing pipeline uses `certstore.MemStore` directly
 - Remove thin wrapper functions (`generateJSON`, `generateYAML`, `generateCSR`, `formatIPAddresses`) in favor of direct `certstore` calls
 - Remove ingestion-time expired certificate filtering (`expiredFilter`, `RejectExpired` field)
+- Remove duplicated password deduplication from WASM (now uses `certkit.DeduplicatePasswords`)
+- Remove duplicated `parseCertificateBytes` from WASM (now uses `certkit.ParseCertificateAny`)
+- Remove hand-rolled `hexToBytes` from WASM (replaced with `encoding/hex` stdlib in prior commit)
+- Remove per-call Mozilla root pool construction from CLI `--dump-certs` and WASM (now uses shared `certkit.MozillaRootPool`)
+- Remove duplicated bundle export loop from WASM `export.go` (now uses shared `certstore.ExportMatchedBundles`)
 
 ### Fixed
 
+- Fix CLI bundle export not using store intermediates for chain building (could fail when intermediates were uploaded alongside leaf but not discoverable via AIA)
+- Fix WASM `getMozillaRootSubjects` not being thread-safe (missing `sync.Once`)
 - Fix unchecked `Close()` return values in archive, sqlite, and passwords (errcheck)
 - Fix tautological comparison in `safeLimitSize` (`int64 >= math.MaxInt64` → `==`)
 - Fix `ExcludeRoot` option (renamed from `IncludeRoot`) being declared but never checked in `Bundle()`

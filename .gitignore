@@ -26,5 +26,7 @@ changes.md
 *.local.*
 
 # WASM build artifacts
+/wasm
 *.wasm
 web/public/wasm_exec.js
+

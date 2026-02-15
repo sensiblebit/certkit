@@ -14,7 +14,6 @@ import (
 	"syscall/js"
 	"time"
 
-	"github.com/breml/rootcerts/embedded"
 	"github.com/sensiblebit/certkit"
 	"github.com/sensiblebit/certkit/internal/certstore"
 )
@@ -25,16 +24,10 @@ var version = "dev"
 // buildYear is set at build time via -ldflags "-X main.buildYear=2026".
 var buildYear = "2025"
 
-// mozillaRoots is a lazily-initialized Mozilla root certificate pool.
-var mozillaRoots *x509.CertPool
-
-// getMozillaRoots returns the Mozilla root cert pool, initializing it on first call.
+// getMozillaRoots returns the shared Mozilla root cert pool.
 func getMozillaRoots() *x509.CertPool {
-	if mozillaRoots == nil {
-		mozillaRoots = x509.NewCertPool()
-		mozillaRoots.AppendCertsFromPEM([]byte(embedded.MozillaCACertificatesPEM()))
-	}
-	return mozillaRoots
+	pool, _ := certkit.MozillaRootPool()
+	return pool
 }
 
 func main() {
@@ -184,12 +177,12 @@ func getState(_ js.Value, _ []js.Value) any {
 	for ski, rec := range allCerts {
 		_, hasKey := allKeys[ski]
 
-		// Check if cert chains to a Mozilla root.
+		// Check if cert chains to a Mozilla root at the current time.
+		// Expired certs will fail verification (Expired field shown separately).
 		trusted := false
 		_, verifyErr := rec.Cert.Verify(x509.VerifyOptions{
 			Roots:         roots,
 			Intermediates: intermediatePool,
-			CurrentTime:   rec.NotAfter.Add(-time.Second), // verify at cert's own validity period
 		})
 		if verifyErr == nil {
 			trusted = true
@@ -275,17 +268,7 @@ func resetStore(_ js.Value, _ []js.Value) any {
 
 // deduplicatePasswords merges user-provided passwords with defaults and removes duplicates.
 func deduplicatePasswords(userPasswords []string) []string {
-	defaults := certkit.DefaultPasswords()
-	all := append(defaults, userPasswords...)
-	seen := make(map[string]bool, len(all))
-	var result []string
-	for _, p := range all {
-		if !seen[p] {
-			seen[p] = true
-			result = append(result, p)
-		}
-	}
-	return result
+	return certkit.DeduplicatePasswords(userPasswords)
 }
 
 // hexToBytes decodes a hex string to bytes, returning nil on error.

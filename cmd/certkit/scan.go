@@ -5,7 +5,6 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
-	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -14,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/breml/rootcerts/embedded"
+	"github.com/sensiblebit/certkit"
 	"github.com/sensiblebit/certkit/internal"
 	"github.com/sensiblebit/certkit/internal/certstore"
 	"github.com/spf13/cobra"
@@ -184,9 +183,9 @@ func runScan(cmd *cobra.Command, args []string) error {
 		certs := store.AllCertsFlat()
 		if len(certs) > 0 {
 			// Build mozilla root pool for verification (consistent with other commands)
-			mozillaPool := x509.NewCertPool()
-			if !mozillaPool.AppendCertsFromPEM([]byte(embedded.MozillaCACertificatesPEM())) {
-				return errors.New("parsing embedded Mozilla root certificates")
+			mozillaPool, err := certkit.MozillaRootPool()
+			if err != nil {
+				return err
 			}
 
 			var data []byte

@@ -7,7 +7,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/sensiblebit/certkit"
 	"github.com/sensiblebit/certkit/internal/certstore"
@@ -41,38 +40,23 @@ func exportBundles(ctx context.Context, s *certstore.MemStore, filterSKIs []stri
 		}
 	}
 
-	intermediates := s.Intermediates()
-
 	var buf bytes.Buffer
 	zw := zip.NewWriter(&buf)
 
-	for _, ski := range matched {
-		certRec := s.GetCert(ski)
-		keyRec := s.GetKey(ski)
+	opts := certkit.BundleOptions{
+		FetchAIA:   false,
+		TrustStore: "mozilla",
+		Verify:     true,
+	}
 
-		// AIA fetching is disabled at export time — intermediates are
-		// pre-fetched eagerly after file ingestion (see resolveAIA).
-		// ExtraIntermediates already contains everything we fetched.
-		opts := certkit.BundleOptions{
-			ExtraIntermediates: intermediates,
-			FetchAIA:           false,
-			TrustStore:         "mozilla",
-			Verify:             true,
-		}
-
-		bundle, err := certkit.Bundle(ctx, certRec.Cert, opts)
-		if err != nil {
-			// Retry without verification
-			opts.Verify = false
-			bundle, err = certkit.Bundle(ctx, certRec.Cert, opts)
-			if err != nil {
-				continue
-			}
-		}
-
-		if err := writeBundleToZIP(zw, keyRec, bundle); err != nil {
-			continue
-		}
+	if err := certstore.ExportMatchedBundles(ctx, certstore.ExportMatchedBundleInput{
+		Store:         s,
+		SKIs:          matched,
+		BundleOpts:    opts,
+		Writer:        &zipBundleWriter{zw: zw},
+		RetryNoVerify: true,
+	}); err != nil {
+		return nil, err
 	}
 
 	if err := zw.Close(); err != nil {
@@ -82,34 +66,23 @@ func exportBundles(ctx context.Context, s *certstore.MemStore, filterSKIs []stri
 	return buf.Bytes(), nil
 }
 
-// writeBundleToZIP writes all bundle output files for a single key-cert pair
-// into the ZIP archive under a folder named after the certificate's CN.
-func writeBundleToZIP(zw *zip.Writer, keyRec *certstore.KeyRecord, bundle *certkit.BundleResult) error {
-	prefix := certstore.SanitizeFileName(certstore.FormatCN(bundle.Leaf))
-	folder := prefix + "/"
+// zipBundleWriter implements certstore.BundleWriter by writing files into a
+// ZIP archive under a folder named after the bundle.
+type zipBundleWriter struct {
+	zw *zip.Writer
+}
 
-	files, err := certstore.GenerateBundleFiles(certstore.BundleExportInput{
-		Bundle:     bundle,
-		KeyPEM:     keyRec.PEM,
-		KeyType:    keyRec.KeyType,
-		BitLength:  keyRec.BitLength,
-		Prefix:     prefix,
-		SecretName: strings.TrimPrefix(prefix, "_."),
-		CSRSubject: nil,
-	})
-	if err != nil {
-		return err
-	}
-
+// WriteBundleFiles writes each file as a ZIP entry under folder/.
+func (w *zipBundleWriter) WriteBundleFiles(folder string, files []certstore.BundleFile) error {
+	prefix := folder + "/"
 	for _, f := range files {
-		w, err := zw.Create(folder + f.Name)
+		entry, err := w.zw.Create(prefix + f.Name)
 		if err != nil {
 			return fmt.Errorf("creating ZIP entry %s: %w", f.Name, err)
 		}
-		if _, err := w.Write(f.Data); err != nil {
+		if _, err := entry.Write(f.Data); err != nil {
 			return fmt.Errorf("writing ZIP entry %s: %w", f.Name, err)
 		}
 	}
-
 	return nil
 }
