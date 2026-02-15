@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-02-15
+
+### Changed
+
+- Set AIA CORS proxy cache to immutable with 1-year max-age — AIA certificates never change at a given URL ([`847fe95`])
+
 ## [0.7.0] - 2026-02-15
 
 ### Added
@@ -300,7 +306,8 @@ Initial release.
 - PKCS#12, PKCS#7, and JKS encode/decode support
 - Homebrew distribution via GoReleaser
 
-[Unreleased]: https://github.com/sensiblebit/certkit/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/sensiblebit/certkit/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/sensiblebit/certkit/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/sensiblebit/certkit/compare/v0.6.7...v0.7.0
 [0.6.7]: https://github.com/sensiblebit/certkit/compare/v0.6.0...v0.6.7
 [0.6.0]: https://github.com/sensiblebit/certkit/compare/v0.5.0...v0.6.0
@@ -324,6 +331,7 @@ Initial release.
 [0.1.1]: https://github.com/sensiblebit/certkit/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/sensiblebit/certkit/releases/tag/v0.1.0
 
+[`847fe95`]: https://github.com/sensiblebit/certkit/commit/847fe95
 [`ee2749b`]: https://github.com/sensiblebit/certkit/commit/ee2749b
 [`390217d`]: https://github.com/sensiblebit/certkit/commit/390217d
 [`9188c94`]: https://github.com/sensiblebit/certkit/commit/9188c94
