@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fix unchecked `Close()` return values in archive, sqlite, and passwords (errcheck)
 - Fix tautological comparison in `safeLimitSize` (`int64 >= math.MaxInt64` → `==`)
 - Fix `ExcludeRoot` option (renamed from `IncludeRoot`) being declared but never checked in `Bundle()`
 - Fix self-signed certificate verified as root producing nil `BundleResult.Roots`

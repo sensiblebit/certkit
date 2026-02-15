@@ -118,7 +118,11 @@ func LoadFromSQLite(store *MemStore, dbPath string) error {
 	if err != nil {
 		return fmt.Errorf("initializing database: %w", err)
 	}
-	defer db.Close()
+	defer func() {
+		if closeErr := db.Close(); closeErr != nil {
+			slog.Warn("closing database", "error", closeErr)
+		}
+	}()
 
 	// ATTACH the on-disk database and copy data into memory
 	_, err = db.Exec("ATTACH DATABASE ? AS diskdb", dbPath)
@@ -191,7 +195,11 @@ func SaveToSQLite(store *MemStore, dbPath string) error {
 	if err != nil {
 		return fmt.Errorf("initializing database: %w", err)
 	}
-	defer db.Close()
+	defer func() {
+		if closeErr := db.Close(); closeErr != nil {
+			slog.Warn("closing database", "error", closeErr)
+		}
+	}()
 
 	// Insert certificates
 	for _, rec := range store.AllCertsFlat() {

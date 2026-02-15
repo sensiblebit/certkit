@@ -177,7 +177,11 @@ func processTarArchive(input ProcessArchiveInput, gzipped bool) (int, error) {
 		if err != nil {
 			return 0, fmt.Errorf("opening gzip layer for %s: %w", input.ArchivePath, err)
 		}
-		defer gr.Close()
+		defer func() {
+			if closeErr := gr.Close(); closeErr != nil {
+				slog.Warn("closing gzip reader", "archive", input.ArchivePath, "error", closeErr)
+			}
+		}()
 		reader = gr
 	}
 
@@ -273,7 +277,11 @@ func readZipEntry(f *zip.File, maxSize int64) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening ZIP entry %s: %w", f.Name, err)
 	}
-	defer rc.Close()
+	defer func() {
+		if closeErr := rc.Close(); closeErr != nil {
+			slog.Warn("closing ZIP entry", "entry", f.Name, "error", closeErr)
+		}
+	}()
 
 	// Defense-in-depth: LimitReader to maxSize+1 so we can detect overflow.
 	// safeLimitSize prevents int64 overflow when maxSize is near MaxInt64.

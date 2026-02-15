@@ -3,6 +3,7 @@ package internal
 import (
 	"bufio"
 	"fmt"
+	"log/slog"
 	"os"
 	"slices"
 	"strings"
@@ -16,7 +17,11 @@ func LoadPasswordsFromFile(filename string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			slog.Warn("closing password file", "file", filename, "error", closeErr)
+		}
+	}()
 
 	var passwords []string
 	scanner := bufio.NewScanner(file)

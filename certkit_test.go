@@ -125,7 +125,7 @@ func TestCertFingerprint(t *testing.T) {
 			}
 			// Verify hex encoding (lowercase hex chars only)
 			for _, c := range fp {
-				if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+				if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 					t.Errorf("fingerprint contains non-hex char: %c", c)
 					break
 				}
