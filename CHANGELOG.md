@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-02-15
+
+### Changed
+
+- Add `prettier` and `wrangler build` pre-commit hooks
+- Format existing web files (JS, TS, CSS, HTML) with prettier
+
 ## [0.7.2] - 2026-02-15
 
 ### Security
@@ -321,7 +328,8 @@ Initial release.
 - PKCS#12, PKCS#7, and JKS encode/decode support
 - Homebrew distribution via GoReleaser
 
-[Unreleased]: https://github.com/sensiblebit/certkit/compare/v0.7.2...HEAD
+[Unreleased]: https://github.com/sensiblebit/certkit/compare/v0.7.3...HEAD
+[0.7.3]: https://github.com/sensiblebit/certkit/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/sensiblebit/certkit/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/sensiblebit/certkit/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/sensiblebit/certkit/compare/v0.6.7...v0.7.0
