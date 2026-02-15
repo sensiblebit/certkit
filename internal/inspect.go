@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/sensiblebit/certkit"
+	"github.com/sensiblebit/certkit/internal/certstore"
 )
 
 // InspectResult holds the inspection details for a file.
@@ -149,7 +150,7 @@ func inspectDERData(data []byte, passwords []string) []InspectResult {
 }
 
 func inspectCert(cert *x509.Certificate) InspectResult {
-	sans := slices.Concat(cert.DNSNames, formatIPAddresses(cert.IPAddresses))
+	sans := slices.Concat(cert.DNSNames, certstore.FormatIPAddresses(cert.IPAddresses))
 	for _, uri := range cert.URIs {
 		sans = append(sans, uri.String())
 	}

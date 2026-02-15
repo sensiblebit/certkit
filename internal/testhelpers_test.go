@@ -295,10 +295,16 @@ func newPKCS12Bundle(t *testing.T, leaf testLeaf, ca testCA, password string) []
 	return p12
 }
 
-// newTestConfig creates a minimal Config with an in-memory store for testing.
-func newTestConfig(t *testing.T) *Config {
+// testConfig holds the minimal parameters needed for test ingestion.
+type testConfig struct {
+	Store     *certstore.MemStore
+	Passwords []string
+}
+
+// newTestConfig creates a minimal test config with an in-memory store.
+func newTestConfig(t *testing.T) testConfig {
 	t.Helper()
-	return &Config{
+	return testConfig{
 		Store:     certstore.NewMemStore(),
 		Passwords: []string{"", "password", "changeit"},
 	}

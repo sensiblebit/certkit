@@ -13,23 +13,26 @@ import (
 
 // ProcessData ingests certificates and keys from in-memory data, dispatching
 // parsed objects to the handler. It detects PEM vs binary format and tries all
-// known crypto formats in priority order.
+// known crypto formats in priority order. All certificates are ingested
+// regardless of expiry — expired filtering is an output concern.
 func ProcessData(input ProcessInput) error {
 	if len(input.Data) == 0 {
 		return nil
 	}
 
+	handler := input.Handler
+
 	if certkit.IsPEM(input.Data) {
 		slog.Debug("processing as PEM format", "path", input.Path)
-		processPEMCertificates(input.Data, input.Path, input.Handler)
-		processPEMPrivateKeys(input.Data, input.Path, input.Passwords, input.Handler)
+		processPEMCertificates(input.Data, input.Path, handler)
+		processPEMPrivateKeys(input.Data, input.Path, input.Passwords, handler)
 		return nil
 	}
 
 	// Non-PEM: try binary crypto formats only for recognized extensions.
 	if HasBinaryExtension(input.Path) {
 		slog.Debug("processing as binary crypto format", "path", input.Path)
-		processDER(input.Data, input.Path, input.Passwords, input.Handler)
+		processDER(input.Data, input.Path, input.Passwords, handler)
 	}
 
 	return nil

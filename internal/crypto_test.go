@@ -20,6 +20,7 @@ import (
 	"testing"
 
 	"github.com/sensiblebit/certkit"
+	"github.com/sensiblebit/certkit/internal/certstore"
 )
 
 func TestIsPEM(t *testing.T) {
@@ -143,9 +144,9 @@ func TestGetKeyType(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := getKeyType(tt.cert(t))
+			got := certstore.GetKeyType(tt.cert(t))
 			if got != tt.want {
-				t.Errorf("getKeyType() = %q, want %q", got, tt.want)
+				t.Errorf("certstore.GetKeyType() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -161,12 +162,12 @@ func TestGetKeyType_UnknownKeyType(t *testing.T) {
 		PublicKey: "not-a-real-key", // string is not RSA, ECDSA, or Ed25519
 	}
 
-	got := getKeyType(cert)
+	got := certstore.GetKeyType(cert)
 	if !strings.Contains(got, "unknown key type") {
-		t.Errorf("getKeyType() = %q, want substring %q", got, "unknown key type")
+		t.Errorf("certstore.GetKeyType() = %q, want substring %q", got, "unknown key type")
 	}
 	if !strings.Contains(got, "string") {
-		t.Errorf("getKeyType() = %q, should mention the actual type (string)", got)
+		t.Errorf("certstore.GetKeyType() = %q, should mention the actual type (string)", got)
 	}
 }
 
@@ -355,7 +356,7 @@ func TestProcessFile_PEMCertificate(t *testing.T) {
 		t.Fatalf("write cert: %v", err)
 	}
 
-	if err := ProcessFile(path, cfg); err != nil {
+	if err := ProcessFile(path, cfg.Store, cfg.Passwords); err != nil {
 		t.Fatalf("ProcessFile: %v", err)
 	}
 
@@ -389,7 +390,7 @@ func TestProcessFile_PEMPrivateKey(t *testing.T) {
 		t.Fatalf("write key: %v", err)
 	}
 
-	if err := ProcessFile(path, cfg); err != nil {
+	if err := ProcessFile(path, cfg.Store, cfg.Passwords); err != nil {
 		t.Fatalf("ProcessFile: %v", err)
 	}
 
@@ -426,7 +427,7 @@ func TestProcessFile_PKCS12(t *testing.T) {
 		t.Fatalf("write p12: %v", err)
 	}
 
-	if err := ProcessFile(path, cfg); err != nil {
+	if err := ProcessFile(path, cfg.Store, cfg.Passwords); err != nil {
 		t.Fatalf("ProcessFile: %v", err)
 	}
 
@@ -470,7 +471,7 @@ func TestProcessFile_JKS(t *testing.T) {
 		t.Fatalf("write jks: %v", err)
 	}
 
-	if err := ProcessFile(path, cfg); err != nil {
+	if err := ProcessFile(path, cfg.Store, cfg.Passwords); err != nil {
 		t.Fatalf("ProcessFile: %v", err)
 	}
 
@@ -487,8 +488,10 @@ func TestProcessFile_JKS(t *testing.T) {
 	}
 }
 
-func TestProcessFile_ExpiredCertSkipped(t *testing.T) {
-	// WHY: Expired certificates must be silently skipped by default during scanning; ingesting them would pollute the DB and cause export failures.
+func TestProcessFile_ExpiredCertStored(t *testing.T) {
+	// WHY: Expired certificates must be ingested into the store during scanning;
+	// filtering is an output-only concern. This ensures chain building works even
+	// when intermediates are expired.
 	ca := newRSACA(t)
 	expired := newExpiredLeaf(t, ca)
 	cfg := newTestConfig(t)
@@ -499,14 +502,17 @@ func TestProcessFile_ExpiredCertSkipped(t *testing.T) {
 		t.Fatalf("write cert: %v", err)
 	}
 
-	if err := ProcessFile(path, cfg); err != nil {
+	if err := ProcessFile(path, cfg.Store, cfg.Passwords); err != nil {
 		t.Fatalf("ProcessFile: %v", err)
 	}
 
 	expectedSKI := computeSKIHex(t, expired.cert.PublicKey)
 	cert := cfg.Store.GetCert(expectedSKI)
-	if cert != nil {
-		t.Error("expired certificate should not be inserted into DB")
+	if cert == nil {
+		t.Fatal("expired certificate should be stored (filtering is output-only)")
+	}
+	if cert.Cert.Subject.CommonName != "expired.example.com" {
+		t.Errorf("cert CN = %q, want expired.example.com", cert.Cert.Subject.CommonName)
 	}
 }
 
@@ -532,7 +538,7 @@ func TestProcessFile_CSR(t *testing.T) {
 	}
 
 	// ProcessFile should handle CSR without panicking
-	if err := ProcessFile(path, cfg); err != nil {
+	if err := ProcessFile(path, cfg.Store, cfg.Passwords); err != nil {
 		t.Fatalf("ProcessFile CSR: %v", err)
 	}
 }
@@ -570,7 +576,7 @@ func TestProcessFile_MultipleCertsInOneFile(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	if err := ProcessFile(path, cfg); err != nil {
+	if err := ProcessFile(path, cfg.Store, cfg.Passwords); err != nil {
 		t.Fatalf("ProcessFile: %v", err)
 	}
 
@@ -607,7 +613,7 @@ func TestProcessFile_PKCS7(t *testing.T) {
 		t.Fatalf("write p7b: %v", err)
 	}
 
-	if err := ProcessFile(path, cfg); err != nil {
+	if err := ProcessFile(path, cfg.Store, cfg.Passwords); err != nil {
 		t.Fatalf("ProcessFile: %v", err)
 	}
 
@@ -643,7 +649,7 @@ func TestProcessFile_Ed25519Key(t *testing.T) {
 		t.Fatalf("write key: %v", err)
 	}
 
-	if err := ProcessFile(path, cfg); err != nil {
+	if err := ProcessFile(path, cfg.Store, cfg.Passwords); err != nil {
 		t.Fatalf("ProcessFile: %v", err)
 	}
 
@@ -681,7 +687,7 @@ func TestProcessFile_WrongPassword(t *testing.T) {
 	}
 
 	// ProcessFile should not error — it gracefully skips undecodable formats
-	if err := ProcessFile(path, cfg); err != nil {
+	if err := ProcessFile(path, cfg.Store, cfg.Passwords); err != nil {
 		t.Fatalf("ProcessFile: %v", err)
 	}
 
@@ -712,7 +718,7 @@ func TestProcessFile_MixedCertAndKeyPEM(t *testing.T) {
 		t.Fatalf("write mixed PEM: %v", err)
 	}
 
-	if err := ProcessFile(path, cfg); err != nil {
+	if err := ProcessFile(path, cfg.Store, cfg.Passwords); err != nil {
 		t.Fatalf("ProcessFile: %v", err)
 	}
 
@@ -761,7 +767,7 @@ func TestProcessFile_ECDSAKey(t *testing.T) {
 		t.Fatalf("write key: %v", err)
 	}
 
-	if err := ProcessFile(path, cfg); err != nil {
+	if err := ProcessFile(path, cfg.Store, cfg.Passwords); err != nil {
 		t.Fatalf("ProcessFile: %v", err)
 	}
 
@@ -791,33 +797,6 @@ func TestProcessFile_ECDSAKey(t *testing.T) {
 	}
 }
 
-func TestProcessFile_IncludeExpired(t *testing.T) {
-	// WHY: The --allow-expired flag must override the default expiry filter; verifies that IncludeExpired=true causes expired certs to be stored in the DB.
-	ca := newRSACA(t)
-	expired := newExpiredLeaf(t, ca)
-	cfg := newTestConfig(t)
-	cfg.IncludeExpired = true
-
-	dir := t.TempDir()
-	path := filepath.Join(dir, "expired.pem")
-	if err := os.WriteFile(path, expired.certPEM, 0644); err != nil {
-		t.Fatalf("write cert: %v", err)
-	}
-
-	if err := ProcessFile(path, cfg); err != nil {
-		t.Fatalf("ProcessFile: %v", err)
-	}
-
-	expectedSKI := computeSKIHex(t, expired.cert.PublicKey)
-	cert := cfg.Store.GetCert(expectedSKI)
-	if cert == nil {
-		t.Fatal("expected expired certificate to be inserted when IncludeExpired=true")
-	}
-	if cert.Cert.Subject.CommonName != "expired.example.com" {
-		t.Errorf("cert CN = %q, want expired.example.com", cert.Cert.Subject.CommonName)
-	}
-}
-
 func TestProcessFile_DERCertificate_VerifyFields(t *testing.T) {
 	// WHY: DER certificates lack PEM headers; verifies the DER detection fallback correctly parses and stores cert metadata identical to PEM input.
 	ca := newRSACA(t)
@@ -830,7 +809,7 @@ func TestProcessFile_DERCertificate_VerifyFields(t *testing.T) {
 		t.Fatalf("write cert: %v", err)
 	}
 
-	if err := ProcessFile(path, cfg); err != nil {
+	if err := ProcessFile(path, cfg.Store, cfg.Passwords); err != nil {
 		t.Fatalf("ProcessFile: %v", err)
 	}
 
@@ -863,7 +842,7 @@ func TestProcessFile_DERPrivateKey_VerifyFields(t *testing.T) {
 		t.Fatalf("write key: %v", err)
 	}
 
-	if err := ProcessFile(path, cfg); err != nil {
+	if err := ProcessFile(path, cfg.Store, cfg.Passwords); err != nil {
 		t.Fatalf("ProcessFile: %v", err)
 	}
 
@@ -897,7 +876,7 @@ func TestProcessFile_IPSANVerification(t *testing.T) {
 		t.Fatalf("write cert: %v", err)
 	}
 
-	if err := ProcessFile(path, cfg); err != nil {
+	if err := ProcessFile(path, cfg.Store, cfg.Passwords); err != nil {
 		t.Fatalf("ProcessFile: %v", err)
 	}
 
@@ -942,7 +921,7 @@ func TestProcessFile_EmptyFile(t *testing.T) {
 		t.Fatalf("write empty file: %v", err)
 	}
 
-	if err := ProcessFile(path, cfg); err != nil {
+	if err := ProcessFile(path, cfg.Store, cfg.Passwords); err != nil {
 		t.Fatalf("ProcessFile on empty file should not error, got: %v", err)
 	}
 
@@ -975,7 +954,7 @@ func TestProcessFile_GarbageData(t *testing.T) {
 	}
 
 	// Should not panic or return error
-	if err := ProcessFile(path, cfg); err != nil {
+	if err := ProcessFile(path, cfg.Store, cfg.Passwords); err != nil {
 		t.Fatalf("ProcessFile on garbage data should not error, got: %v", err)
 	}
 
@@ -996,7 +975,7 @@ func TestProcessFile_NonexistentFile(t *testing.T) {
 	// Verifies that a descriptive wrapped error is returned for missing files.
 	cfg := newTestConfig(t)
 
-	err := ProcessFile("/nonexistent/path/cert.pem", cfg)
+	err := ProcessFile("/nonexistent/path/cert.pem", cfg.Store, cfg.Passwords)
 	if err == nil {
 		t.Error("expected error for nonexistent file")
 	}
@@ -1018,7 +997,7 @@ func TestProcessFile_MultiplePrivateKeysInOnePEM(t *testing.T) {
 		t.Fatalf("write multi-key file: %v", err)
 	}
 
-	if err := ProcessFile(path, cfg); err != nil {
+	if err := ProcessFile(path, cfg.Store, cfg.Passwords); err != nil {
 		t.Fatalf("ProcessFile: %v", err)
 	}
 
@@ -1061,7 +1040,7 @@ func TestProcessFile_MixedBlockTypesWithIgnoredPEM(t *testing.T) {
 		t.Fatalf("write mixed-blocks file: %v", err)
 	}
 
-	if err := ProcessFile(path, cfg); err != nil {
+	if err := ProcessFile(path, cfg.Store, cfg.Passwords); err != nil {
 		t.Fatalf("ProcessFile: %v", err)
 	}
 
@@ -1097,7 +1076,7 @@ func TestProcessData_Ed25519BitLength(t *testing.T) {
 	keyDER, _ := x509.MarshalPKCS8PrivateKey(priv)
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 
-	if err := ProcessData(keyPEM, "test-ed25519.pem", cfg); err != nil {
+	if err := ProcessData(keyPEM, "test-ed25519.pem", cfg.Store, cfg.Passwords); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1130,7 +1109,7 @@ func TestProcessDER_RejectsArbitrary64ByteFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := ProcessFile(path, cfg); err != nil {
+	if err := ProcessFile(path, cfg.Store, cfg.Passwords); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1156,7 +1135,7 @@ func TestProcessDER_ValidEd25519RawKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := ProcessFile(path, cfg); err != nil {
+	if err := ProcessFile(path, cfg.Store, cfg.Passwords); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1189,7 +1168,7 @@ func TestProcessDER_SEC1ECKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := ProcessFile(path, cfg); err != nil {
+	if err := ProcessFile(path, cfg.Store, cfg.Passwords); err != nil {
 		t.Fatal(err)
 	}
 

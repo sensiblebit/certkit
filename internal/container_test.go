@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/sensiblebit/certkit"
+	"github.com/sensiblebit/certkit/internal/certstore"
 )
 
 func TestLoadContainerFile_PKCS12(t *testing.T) {
@@ -184,7 +185,7 @@ func TestParseContainerData_PEM(t *testing.T) {
 
 	pemData := slices.Concat(leaf.certPEM, ca.certPEM)
 
-	contents, err := ParseContainerData(pemData, nil)
+	contents, err := certstore.ParseContainerData(pemData, nil)
 	if err != nil {
 		t.Fatalf("ParseContainerData PEM: %v", err)
 	}
@@ -211,7 +212,7 @@ func TestParseContainerData_PKCS12(t *testing.T) {
 	leaf := newRSALeaf(t, ca, "parse-p12.example.com", []string{"parse-p12.example.com"}, nil)
 	p12Data := newPKCS12Bundle(t, leaf, ca, "changeit")
 
-	contents, err := ParseContainerData(p12Data, []string{"changeit"})
+	contents, err := certstore.ParseContainerData(p12Data, []string{"changeit"})
 	if err != nil {
 		t.Fatalf("ParseContainerData PKCS12: %v", err)
 	}
@@ -236,7 +237,7 @@ func TestParseContainerData_GarbageData(t *testing.T) {
 		garbage[i] = byte(i % 251)
 	}
 
-	_, err := ParseContainerData(garbage, []string{"", "password", "changeit"})
+	_, err := certstore.ParseContainerData(garbage, []string{"", "password", "changeit"})
 	if err == nil {
 		t.Error("expected error for garbage data")
 	}
@@ -244,7 +245,7 @@ func TestParseContainerData_GarbageData(t *testing.T) {
 
 func TestParseContainerData_EmptyData(t *testing.T) {
 	// WHY: Zero-length input is a distinct edge case from garbage data; verifies the early-exit guard returns an error before attempting format detection.
-	_, err := ParseContainerData([]byte{}, nil)
+	_, err := certstore.ParseContainerData([]byte{}, nil)
 	if err == nil {
 		t.Error("expected error for empty data")
 	}
@@ -252,7 +253,7 @@ func TestParseContainerData_EmptyData(t *testing.T) {
 
 func TestParseContainerData_NilData(t *testing.T) {
 	// WHY: Nil input must not cause a nil-pointer panic; verifies the function handles nil gracefully by returning an error.
-	_, err := ParseContainerData(nil, nil)
+	_, err := certstore.ParseContainerData(nil, nil)
 	if err == nil {
 		t.Error("expected error for nil data (not panic)")
 	}
@@ -265,7 +266,7 @@ func TestParseContainerData_PKCS12MultiplePasswords(t *testing.T) {
 	p12Data := newPKCS12Bundle(t, leaf, ca, "correct-password")
 
 	// Correct password is not the first one in the list
-	contents, err := ParseContainerData(p12Data, []string{"wrong1", "wrong2", "correct-password", "wrong3"})
+	contents, err := certstore.ParseContainerData(p12Data, []string{"wrong1", "wrong2", "correct-password", "wrong3"})
 	if err != nil {
 		t.Fatalf("ParseContainerData with correct password not first: %v", err)
 	}
@@ -286,7 +287,7 @@ func TestParseContainerData_VerifyLeafIdentity(t *testing.T) {
 	leaf := newRSALeaf(t, ca, "identity.example.com", []string{"identity.example.com", "www.identity.example.com"}, nil)
 	p12Data := newPKCS12Bundle(t, leaf, ca, "changeit")
 
-	contents, err := ParseContainerData(p12Data, []string{"changeit"})
+	contents, err := certstore.ParseContainerData(p12Data, []string{"changeit"})
 	if err != nil {
 		t.Fatalf("ParseContainerData: %v", err)
 	}
@@ -361,7 +362,7 @@ func TestParseContainerData_PKCS12WrongPassword(t *testing.T) {
 	p12Data := newPKCS12Bundle(t, leaf, ca, "correct-password")
 
 	// Only provide wrong passwords
-	_, err := ParseContainerData(p12Data, []string{"wrong1", "wrong2", "wrong3"})
+	_, err := certstore.ParseContainerData(p12Data, []string{"wrong1", "wrong2", "wrong3"})
 	if err == nil {
 		t.Error("expected error when all passwords are wrong")
 	}
@@ -376,7 +377,7 @@ func TestParseContainerData_JKSWrongPassword(t *testing.T) {
 	jksData := newJKSBundle(t, leaf, ca, "correct-password")
 
 	// Only provide wrong passwords — JKS decoding should fail
-	_, err := ParseContainerData(jksData, []string{"wrong"})
+	_, err := certstore.ParseContainerData(jksData, []string{"wrong"})
 	if err == nil {
 		t.Error("expected error when JKS password is wrong")
 	}
@@ -394,7 +395,7 @@ func TestParseContainerData_PKCS7SingleCert(t *testing.T) {
 		t.Fatalf("encode PKCS7: %v", err)
 	}
 
-	contents, err := ParseContainerData(p7Data, nil)
+	contents, err := certstore.ParseContainerData(p7Data, nil)
 	if err != nil {
 		t.Fatalf("ParseContainerData PKCS7 single cert: %v", err)
 	}
@@ -421,9 +422,9 @@ func TestParseContainerData_PEMWithKey(t *testing.T) {
 
 	combined := slices.Concat(leaf.certPEM, leaf.keyPEM)
 
-	contents, err := ParseContainerData(combined, []string{""})
+	contents, err := certstore.ParseContainerData(combined, []string{""})
 	if err != nil {
-		t.Fatalf("ParseContainerData(PEM cert+key): %v", err)
+		t.Fatalf("certstore.ParseContainerData(PEM cert+key): %v", err)
 	}
 	if contents.Leaf == nil {
 		t.Fatal("expected leaf certificate")
@@ -442,9 +443,9 @@ func TestParseContainerData_PEMKeyOnly(t *testing.T) {
 	t.Parallel()
 	keyPEM := rsaKeyPEM(t)
 
-	contents, err := ParseContainerData(keyPEM, []string{""})
+	contents, err := certstore.ParseContainerData(keyPEM, []string{""})
 	if err != nil {
-		t.Fatalf("ParseContainerData(PEM key only): %v", err)
+		t.Fatalf("certstore.ParseContainerData(PEM key only): %v", err)
 	}
 	if contents.Key == nil {
 		t.Error("expected private key from PEM-only-key data, got nil")

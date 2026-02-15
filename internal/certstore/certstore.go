@@ -13,8 +13,8 @@ type CertHandler interface {
 
 // ProcessInput holds parameters for ProcessData.
 type ProcessInput struct {
-	Data      []byte   // raw file content
-	Path      string   // virtual path for logging and extension detection
-	Passwords []string // passwords to try for encrypted formats
-	Handler   CertHandler
+	Data      []byte      // raw file content
+	Path      string      // virtual path for logging and extension detection
+	Passwords []string    // passwords to try for encrypted formats
+	Handler   CertHandler // receives parsed items
 }

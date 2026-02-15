@@ -9,16 +9,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** Expired certificates are now always ingested into the store during scanning; expiry filtering is output-only
 - Replace SQLite with in-memory `MemStore` as runtime store during scan; SQLite is now only used for `--save-db`/`--load-db` serialization
 - Extract shared `internal/certstore` package to eliminate ~500 lines of duplicated business logic between CLI and WASM builds
 - WASM bundle export now produces identical output files to CLI (adds K8s YAML, JSON, YAML, CSR, CSR JSON)
 - Use user-provided password (first non-empty from `--passwords`) for PKCS#12/JKS bundle export instead of hardcoded "changeit"
 - Upgrade `golangci-lint run` from SHOULD to MUST in CLAUDE.md tooling gates
+- Move `ParseContainerData` into `internal/certstore` for shared CLI/WASM use
+- Harmonize CLI and WASM bundle file naming via shared `certstore.SanitizeFileName(certstore.FormatCN())`
 
 ### Removed
 
 - Remove `internal/db.go` — runtime SQLite queries replaced by `MemStore` methods; persistence moved to `certstore/sqlite.go`
 - Remove `ResolveAKIs` — `MemStore.HasIssuer()` handles issuer matching via raw ASN.1 bytes
+- Remove `Config` god struct and `cliHandler` adapter from `internal/` — processing pipeline uses `certstore.MemStore` directly
+- Remove thin wrapper functions (`generateJSON`, `generateYAML`, `generateCSR`, `formatIPAddresses`) in favor of direct `certstore` calls
+- Remove ingestion-time expired certificate filtering (`expiredFilter`, `RejectExpired` field)
 
 ### Fixed
 

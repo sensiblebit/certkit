@@ -11,6 +11,8 @@ import (
 	"math"
 	"path/filepath"
 	"strings"
+
+	"github.com/sensiblebit/certkit/internal/certstore"
 )
 
 // ArchiveLimits controls zip bomb protection thresholds.
@@ -51,7 +53,8 @@ type ProcessArchiveInput struct {
 	Data        []byte
 	Format      string
 	Limits      ArchiveLimits
-	Config      *Config
+	Store       *certstore.MemStore
+	Passwords   []string
 }
 
 // archiveExtensions maps file extensions to archive format identifiers.
@@ -158,7 +161,7 @@ func processZipArchive(input ProcessArchiveInput) (int, error) {
 		totalSize += int64(len(data))
 		virtualPath := input.ArchivePath + ":" + f.Name
 
-		if err := ProcessData(data, virtualPath, input.Config); err != nil {
+		if err := ProcessData(data, virtualPath, input.Store, input.Passwords); err != nil {
 			slog.Debug("processing archive entry", "path", virtualPath, "error", err)
 		}
 		processed++
@@ -260,7 +263,7 @@ func processTarArchive(input ProcessArchiveInput, gzipped bool) (int, error) {
 		totalSize += int64(len(data))
 		virtualPath := input.ArchivePath + ":" + header.Name
 
-		if err := ProcessData(data, virtualPath, input.Config); err != nil {
+		if err := ProcessData(data, virtualPath, input.Store, input.Passwords); err != nil {
 			slog.Debug("processing archive entry", "path", virtualPath, "error", err)
 		}
 		processed++

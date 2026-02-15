@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/sensiblebit/certkit"
+	"github.com/sensiblebit/certkit/internal/certstore"
 )
 
 func TestVerifyCert_KeyMatchAlgorithms(t *testing.T) {
@@ -152,7 +153,7 @@ func TestVerifyCert_PKCS12(t *testing.T) {
 	leaf := newRSALeaf(t, ca, "p12.example.com", []string{"p12.example.com"}, nil)
 	p12Data := newPKCS12Bundle(t, leaf, ca, "changeit")
 
-	contents, err := ParseContainerData(p12Data, []string{"changeit"})
+	contents, err := certstore.ParseContainerData(p12Data, []string{"changeit"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -183,7 +184,7 @@ func TestVerifyCert_JKS(t *testing.T) {
 	leaf := newRSALeaf(t, ca, "jks.example.com", []string{"jks.example.com"}, nil)
 	jksData := newJKSBundle(t, leaf, ca, "changeit")
 
-	contents, err := ParseContainerData(jksData, []string{"changeit"})
+	contents, err := certstore.ParseContainerData(jksData, []string{"changeit"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -218,7 +219,7 @@ func TestVerifyCert_PKCS7(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	contents, err := ParseContainerData(p7bData, nil)
+	contents, err := certstore.ParseContainerData(p7bData, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

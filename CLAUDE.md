@@ -52,13 +52,14 @@ Certificate/key processing, in-memory storage, and persistence. Used by both CLI
 - `summary.go` — `ScanSummary` struct (roots, intermediates, leaves, keys, matched pairs).
 - `export.go` — `GenerateBundleFiles()`: creates all output files for a bundle (PEM variants, key, P12, K8s YAML, JSON, YAML, CSR). `GenerateJSON`, `GenerateYAML`, `GenerateCSR` also exported individually.
 - `helpers.go` — `GetKeyType`, `HasBinaryExtension`, `FormatCN`, `SanitizeFileName`, `FormatIPAddresses`.
+- `container.go` — `ContainerContents` struct and `ParseContainerData()`: extracts leaf cert, key, and extra certs from PKCS#12, JKS, PKCS#7, PEM, or DER input. Shared by CLI and WASM.
 - `sqlite.go` — SQLite persistence (`//go:build !js`). `SaveToSQLite(store, path)` and `LoadFromSQLite(store, path)` for `--save-db`/`--load-db` flags. Self-contained: opens in-memory SQLite, transfers data, uses `VACUUM INTO` to write.
 
 ### `internal/`
 
 CLI business logic and file I/O. Delegates to `internal/certstore/` for processing, storage, and export. No SQLite dependency at this layer.
 
-- `crypto.go` — File ingestion pipeline. `ProcessFile()` is the main entry point. `cliHandler` adapter implements `certstore.CertHandler` with CLI-specific concerns (expired filtering, bundle name determination).
+- `crypto.go` — File ingestion pipeline. `ProcessFile()` and `ProcessData()` delegate to `certstore.ProcessData()` with `MemStore` as the handler. Also handles CSR detection for CLI logging.
 - `exporter.go` — Bundle export. `ExportBundles()` iterates `MemStore` bundle names, finds matching certs/keys, builds chains. `writeBundleFiles()` delegates to `certstore.GenerateBundleFiles()` and writes the results to disk with appropriate permissions.
 - `bundleconfig.go` — YAML config parsing. Supports `defaultSubject` inheritance.
 - `inspect.go` — Certificate/key/CSR inspection with text and JSON output.
@@ -67,9 +68,9 @@ CLI business logic and file I/O. Delegates to `internal/certstore/` for processi
 - `csr.go` — CSR generation from templates, certs, or existing CSRs.
 - `passwords.go` — Password aggregation and deduplication.
 - `logger.go` — slog setup.
-- `container.go` — Container file parsing. `LoadContainerFile()` and `ParseContainerData()` extract leaf certs, keys, and extra certs from PKCS#12, JKS, PKCS#7, PEM, or DER input.
+- `container.go` — Container file loading. `LoadContainerFile()` reads a file and delegates to `certstore.ParseContainerData()` for format detection and extraction.
 - `archive.go` — Archive extraction pipeline. Processes ZIP, TAR, and TAR.GZ archives with zip bomb protection (decompression ratio limits, entry size limits, total size budgets); skips nested archives and processes each entry for certificates.
-- `types.go` — Shared types: `Config`. `K8sSecret`/`K8sMetadata` are type aliases for `certstore.K8sSecret`/`certstore.K8sMetadata`.
+- `types.go` — Type aliases: `K8sSecret`/`K8sMetadata` re-export `certstore.K8sSecret`/`certstore.K8sMetadata`.
 
 ### `cmd/certkit/`
 
@@ -396,7 +397,7 @@ Configured hooks: `goimports`, `go vet`, `go build`, `go test`, `markdownlint`.
 - **SKI computation uses RFC 7093 Method 1** (SHA-256 truncated to 160 bits), not the legacy SHA-1 method. `ComputeSKILegacy()` exists only for cross-matching with older certificates.
 - **AKI resolution** is handled by MemStore's `HasIssuer()` method which matches raw ASN.1 subject/issuer bytes directly — no post-ingestion SQL transaction needed.
 - **Bundle matching** is exact CN string comparison, not glob. `*.example.com` in config matches a cert whose CN is literally `*.example.com`.
-- **Expired certificates are rejected by default** across all commands: skipped during scan ingestion, filtered from inspect output, and blocked in verify/bundle. The global `--allow-expired` flag overrides this.
+- **Expired certificates are always ingested** into the store during scanning. Expiry filtering is an output-only concern: expired certs are filtered from inspect output and blocked in verify/bundle/dump-certs by default. The global `--allow-expired` flag overrides output filtering.
 - **`x509.IsEncryptedPEMBlock` / `x509.DecryptPEMBlock`** are deprecated but intentionally used for legacy encrypted PEM support. Suppressed with `//nolint:staticcheck`.
 - **Trust stores**: "system" (OS cert pool), "mozilla" (embedded via `breml/rootcerts`), or "custom" (caller-provided).
 - **Inaccessible directories** are skipped with `filepath.SkipDir` during scan walks, not treated as errors.

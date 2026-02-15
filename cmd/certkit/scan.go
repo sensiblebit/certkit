@@ -86,20 +86,9 @@ func runScan(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	cfg := &internal.Config{
-		InputPath:      inputPath,
-		Passwords:      passwords,
-		Store:          store,
-		ExportBundles:  scanExport,
-		ForceExport:    scanForceExport,
-		BundleConfigs:  bundleConfigs,
-		OutDir:         scanBundlePath,
-		IncludeExpired: allowExpired,
-	}
-
-	// Ingest
+	// Ingest — always store all certs including expired; filtering is output-only.
 	if inputPath == "-" {
-		if err := internal.ProcessFile("-", cfg); err != nil {
+		if err := internal.ProcessFile("-", store, passwords); err != nil {
 			return fmt.Errorf("processing stdin: %w", err)
 		}
 	} else {
@@ -153,13 +142,14 @@ func runScan(cmd *cobra.Command, args []string) error {
 					Data:        data,
 					Format:      archiveFormat,
 					Limits:      limits,
-					Config:      cfg,
+					Store:       store,
+					Passwords:   passwords,
 				}); archiveErr != nil {
 					slog.Warn("processing archive", "path", path, "error", archiveErr)
 				}
 				return nil
 			}
-			if err := internal.ProcessFile(path, cfg); err != nil {
+			if err := internal.ProcessFile(path, store, passwords); err != nil {
 				slog.Warn("processing file", "path", path, "error", err)
 			}
 			return nil
@@ -167,6 +157,11 @@ func runScan(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("walking input path: %w", err)
 		}
+	}
+
+	// Assign bundle names post-ingestion
+	if scanExport {
+		internal.AssignBundleNames(store, bundleConfigs)
 	}
 
 	if scanDumpKeys != "" {

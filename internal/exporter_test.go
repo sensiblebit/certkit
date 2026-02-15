@@ -29,7 +29,7 @@ func TestFormatIPAddresses(t *testing.T) {
 		net.ParseIP("192.168.1.1"),
 		net.ParseIP("::1"),
 	}
-	result := formatIPAddresses(ips)
+	result := certstore.FormatIPAddresses(ips)
 	if len(result) != 3 {
 		t.Fatalf("expected 3 results, got %d", len(result))
 	}
@@ -43,7 +43,7 @@ func TestFormatIPAddresses(t *testing.T) {
 
 func TestFormatIPAddresses_Empty(t *testing.T) {
 	// WHY: Nil IP list must return an empty slice, not nil; downstream JSON marshaling would produce "null" instead of "[]" for nil slices.
-	result := formatIPAddresses(nil)
+	result := certstore.FormatIPAddresses(nil)
 	if len(result) != 0 {
 		t.Errorf("expected empty result for nil input, got %v", result)
 	}
@@ -94,7 +94,7 @@ func TestGenerateCSR_ValidOutput(t *testing.T) {
 	}
 	keyRecord := &certstore.KeyRecord{PEM: leaf.keyPEM}
 
-	csrPEM, csrJSON, err := generateCSR(certRecord, keyRecord, nil)
+	csrPEM, csrJSON, err := certstore.GenerateCSR(certRecord.Cert, keyRecord.PEM, nil)
 	if err != nil {
 		t.Fatalf("generateCSR: %v", err)
 	}
@@ -137,7 +137,7 @@ func TestGenerateCSR_WildcardSANFiltering(t *testing.T) {
 	}
 	keyRecord := &certstore.KeyRecord{PEM: leaf.keyPEM}
 
-	csrPEM, _, err := generateCSR(certRecord, keyRecord, nil)
+	csrPEM, _, err := certstore.GenerateCSR(certRecord.Cert, keyRecord.PEM, nil)
 	if err != nil {
 		t.Fatalf("generateCSR: %v", err)
 	}
@@ -171,7 +171,7 @@ func TestGenerateCSR_WWWCNFiltering(t *testing.T) {
 	}
 	keyRecord := &certstore.KeyRecord{PEM: leaf.keyPEM}
 
-	csrPEM, _, err := generateCSR(certRecord, keyRecord, nil)
+	csrPEM, _, err := certstore.GenerateCSR(certRecord.Cert, keyRecord.PEM, nil)
 	if err != nil {
 		t.Fatalf("generateCSR: %v", err)
 	}
@@ -203,7 +203,10 @@ func TestGenerateCSR_BundleConfigSubjectOverride(t *testing.T) {
 		},
 	}
 
-	csrPEM, _, err := generateCSR(certRecord, keyRecord, bundleConfig)
+	csrPEM, _, err := certstore.GenerateCSR(certRecord.Cert, keyRecord.PEM, &certstore.CSRSubjectOverride{
+		Country:      bundleConfig.Subject.Country,
+		Organization: bundleConfig.Subject.Organization,
+	})
 	if err != nil {
 		t.Fatalf("generateCSR: %v", err)
 	}
@@ -229,7 +232,7 @@ func TestGenerateCSR_FallbackToCertSubject(t *testing.T) {
 	}
 	keyRecord := &certstore.KeyRecord{PEM: leaf.keyPEM}
 
-	csrPEM, _, err := generateCSR(certRecord, keyRecord, nil)
+	csrPEM, _, err := certstore.GenerateCSR(certRecord.Cert, keyRecord.PEM, nil)
 	if err != nil {
 		t.Fatalf("generateCSR: %v", err)
 	}
@@ -255,7 +258,7 @@ func TestGenerateCSR_EmptyOUDefaultsToNone(t *testing.T) {
 	}
 	keyRecord := &certstore.KeyRecord{PEM: leaf.keyPEM}
 
-	csrPEM, _, err := generateCSR(certRecord, keyRecord, nil)
+	csrPEM, _, err := certstore.GenerateCSR(certRecord.Cert, keyRecord.PEM, nil)
 	if err != nil {
 		t.Fatalf("generateCSR: %v", err)
 	}
@@ -371,7 +374,7 @@ func TestGenerateJSON_RoundTrip(t *testing.T) {
 	leaf := newRSALeaf(t, ca, "json-rt.example.com", []string{"json-rt.example.com", "www.json-rt.example.com"}, []net.IP{net.ParseIP("10.0.0.1")})
 	bundle := newTestBundle(t, leaf, ca)
 
-	data, err := generateJSON(bundle)
+	data, err := certstore.GenerateJSON(bundle)
 	if err != nil {
 		t.Fatalf("generateJSON: %v", err)
 	}
@@ -481,7 +484,7 @@ func TestGenerateYAML_RoundTrip(t *testing.T) {
 		PEM:       leaf.keyPEM,
 	}
 
-	data, err := generateYAML(keyRecord, bundle)
+	data, err := certstore.GenerateYAML(bundle, keyRecord.PEM, keyRecord.KeyType, keyRecord.BitLength)
 	if err != nil {
 		t.Fatalf("generateYAML: %v", err)
 	}
@@ -1109,7 +1112,7 @@ func TestGenerateJSON_PEMExcludesRoot(t *testing.T) {
 	leaf := newRSALeaf(t, ca, "json-noroot.example.com", []string{"json-noroot.example.com"}, nil)
 	bundle := newTestBundle(t, leaf, ca)
 
-	data, err := generateJSON(bundle)
+	data, err := certstore.GenerateJSON(bundle)
 	if err != nil {
 		t.Fatalf("generateJSON: %v", err)
 	}

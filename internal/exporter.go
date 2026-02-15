@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,11 +14,7 @@ import (
 )
 
 func writeBundleFiles(outDir, bundleFolder string, certRec *certstore.CertRecord, keyRec *certstore.KeyRecord, bundle *certkit.BundleResult, bundleConfig *BundleConfig) error {
-	prefix := certRec.Cert.Subject.CommonName
-	if prefix == "" {
-		prefix = "unknown"
-	}
-	prefix = strings.ReplaceAll(prefix, "*", "_")
+	prefix := certstore.SanitizeFileName(certstore.FormatCN(certRec.Cert))
 
 	folderPath := filepath.Join(outDir, bundleFolder)
 	if err := os.MkdirAll(folderPath, 0755); err != nil {
@@ -61,36 +56,6 @@ func writeBundleFiles(outDir, bundleFolder string, certRec *certstore.CertRecord
 	}
 
 	return nil
-}
-
-// generateJSON delegates to certstore.GenerateJSON.
-func generateJSON(bundle *certkit.BundleResult) ([]byte, error) {
-	return certstore.GenerateJSON(bundle)
-}
-
-// generateYAML delegates to certstore.GenerateYAML.
-func generateYAML(keyRec *certstore.KeyRecord, bundle *certkit.BundleResult) ([]byte, error) {
-	return certstore.GenerateYAML(bundle, keyRec.PEM, keyRec.KeyType, keyRec.BitLength)
-}
-
-// generateCSR delegates to certstore.GenerateCSR, adapting internal types.
-func generateCSR(leaf *certstore.CertRecord, keyRec *certstore.KeyRecord, bundleConfig *BundleConfig) (csrPEM []byte, csrJSON []byte, err error) {
-	var subject *certstore.CSRSubjectOverride
-	if bundleConfig != nil && bundleConfig.Subject != nil {
-		subject = &certstore.CSRSubjectOverride{
-			Country:            bundleConfig.Subject.Country,
-			Province:           bundleConfig.Subject.Province,
-			Locality:           bundleConfig.Subject.Locality,
-			Organization:       bundleConfig.Subject.Organization,
-			OrganizationalUnit: bundleConfig.Subject.OrganizationalUnit,
-		}
-	}
-	return certstore.GenerateCSR(leaf.Cert, keyRec.PEM, subject)
-}
-
-// formatIPAddresses delegates to certstore.FormatIPAddresses.
-func formatIPAddresses(ips []net.IP) []string {
-	return certstore.FormatIPAddresses(ips)
 }
 
 // ExportBundles iterates over bundle names in the store, finds matching
@@ -162,6 +127,16 @@ func exportBundleCerts(ctx context.Context, store *certstore.MemStore, opts cert
 		}
 		slog.Info("exported bundle", "cn", certRec.Cert.Subject.CommonName, "dir", outDir, "folder", bundleFolder)
 		slog.Debug("exported certificate details", "cn", certRec.Cert.Subject.CommonName, "serial", certRec.Cert.SerialNumber, "expiry", certRec.NotAfter.Format(time.RFC3339))
+	}
+}
+
+// AssignBundleNames iterates all certificates in the store and assigns bundle
+// names based on the provided bundle configurations. Call this after ingestion
+// is complete to avoid per-cert overhead during scanning.
+func AssignBundleNames(store *certstore.MemStore, configs []BundleConfig) {
+	for _, rec := range store.AllCertsFlat() {
+		name := determineBundleName(rec.Cert.Subject.CommonName, configs)
+		store.SetBundleName(rec.SKI, name)
 	}
 }
 

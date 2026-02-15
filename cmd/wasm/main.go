@@ -8,6 +8,7 @@ package main
 import (
 	"context"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"syscall/js"
@@ -289,22 +290,7 @@ func deduplicatePasswords(userPasswords []string) []string {
 
 // hexToBytes decodes a hex string to bytes, returning nil on error.
 func hexToBytes(h string) []byte {
-	b := make([]byte, len(h)/2)
-	for i := 0; i < len(h)-1; i += 2 {
-		var v byte
-		for j := 0; j < 2; j++ {
-			c := h[i+j]
-			switch {
-			case c >= '0' && c <= '9':
-				v = v*16 + c - '0'
-			case c >= 'a' && c <= 'f':
-				v = v*16 + c - 'a' + 10
-			case c >= 'A' && c <= 'F':
-				v = v*16 + c - 'A' + 10
-			}
-		}
-		b[i/2] = v
-	}
+	b, _ := hex.DecodeString(h)
 	return b
 }
 

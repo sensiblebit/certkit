@@ -6,6 +6,8 @@ import (
 	"math"
 	"strings"
 	"testing"
+
+	"github.com/sensiblebit/certkit/internal/certstore"
 )
 
 func TestArchiveFormat(t *testing.T) {
@@ -82,7 +84,7 @@ func TestProcessArchive_PEMCertAllFormats(t *testing.T) {
 				Data:        archiveData,
 				Format:      tt.format,
 				Limits:      DefaultArchiveLimits(),
-				Config:      cfg,
+				Store:       cfg.Store, Passwords: cfg.Passwords,
 			})
 			if err != nil {
 				t.Fatalf("ProcessArchive: %v", err)
@@ -120,7 +122,7 @@ func TestProcessArchive_ZipWithDERCert(t *testing.T) {
 		Data:        zipData,
 		Format:      "zip",
 		Limits:      DefaultArchiveLimits(),
-		Config:      cfg,
+		Store:       cfg.Store, Passwords: cfg.Passwords,
 	})
 	if err != nil {
 		t.Fatalf("ProcessArchive: %v", err)
@@ -157,7 +159,7 @@ func TestProcessArchive_DERCertNoDirectoryPrefix(t *testing.T) {
 		Data:        zipData,
 		Format:      "zip",
 		Limits:      DefaultArchiveLimits(),
-		Config:      cfg,
+		Store:       cfg.Store, Passwords: cfg.Passwords,
 	})
 	if err != nil {
 		t.Fatalf("ProcessArchive: %v", err)
@@ -193,7 +195,7 @@ func TestProcessArchive_PEMCertNoExtension(t *testing.T) {
 		Data:        zipData,
 		Format:      "zip",
 		Limits:      DefaultArchiveLimits(),
-		Config:      cfg,
+		Store:       cfg.Store, Passwords: cfg.Passwords,
 	})
 	if err != nil {
 		t.Fatalf("ProcessArchive: %v", err)
@@ -227,7 +229,7 @@ func TestProcessArchive_ZipWithPrivateKey(t *testing.T) {
 		Data:        zipData,
 		Format:      "zip",
 		Limits:      DefaultArchiveLimits(),
-		Config:      cfg,
+		Store:       cfg.Store, Passwords: cfg.Passwords,
 	})
 	if err != nil {
 		t.Fatalf("ProcessArchive: %v", err)
@@ -264,7 +266,7 @@ func TestProcessArchive_MultipleCertsInArchive(t *testing.T) {
 		Data:        zipData,
 		Format:      "zip",
 		Limits:      DefaultArchiveLimits(),
-		Config:      cfg,
+		Store:       cfg.Store, Passwords: cfg.Passwords,
 	})
 	if err != nil {
 		t.Fatalf("ProcessArchive: %v", err)
@@ -311,7 +313,7 @@ func TestProcessArchive_ChainFileInSingleEntry(t *testing.T) {
 		Data:        zipData,
 		Format:      "zip",
 		Limits:      DefaultArchiveLimits(),
-		Config:      cfg,
+		Store:       cfg.Store, Passwords: cfg.Passwords,
 	})
 	if err != nil {
 		t.Fatalf("ProcessArchive: %v", err)
@@ -346,7 +348,7 @@ func TestProcessArchive_MixedContentIgnoresNonCrypto(t *testing.T) {
 		Data:        zipData,
 		Format:      "zip",
 		Limits:      DefaultArchiveLimits(),
-		Config:      cfg,
+		Store:       cfg.Store, Passwords: cfg.Passwords,
 	})
 	if err != nil {
 		t.Fatalf("ProcessArchive: %v", err)
@@ -378,7 +380,7 @@ func TestProcessArchive_ZeroByteEntry(t *testing.T) {
 		Data:        zipData,
 		Format:      "zip",
 		Limits:      DefaultArchiveLimits(),
-		Config:      cfg,
+		Store:       cfg.Store, Passwords: cfg.Passwords,
 	})
 	if err != nil {
 		t.Fatalf("ProcessArchive: %v", err)
@@ -413,7 +415,7 @@ func TestProcessArchive_EntryExceedsMaxSize_ZIP(t *testing.T) {
 		Data:        zipData,
 		Format:      "zip",
 		Limits:      limits,
-		Config:      cfg,
+		Store:       cfg.Store, Passwords: cfg.Passwords,
 	})
 	if err != nil {
 		t.Fatalf("ProcessArchive: %v", err)
@@ -464,7 +466,7 @@ func TestProcessArchive_TarEntryExceedsMaxSize(t *testing.T) {
 		Data:        tarData,
 		Format:      "tar",
 		Limits:      limits,
-		Config:      cfg,
+		Store:       cfg.Store, Passwords: cfg.Passwords,
 	})
 	if err != nil {
 		t.Fatalf("ProcessArchive: %v", err)
@@ -504,7 +506,7 @@ func TestProcessArchive_EntryCountLimit(t *testing.T) {
 		Data:        zipData,
 		Format:      "zip",
 		Limits:      limits,
-		Config:      cfg,
+		Store:       cfg.Store, Passwords: cfg.Passwords,
 	})
 	if err != nil {
 		t.Fatalf("ProcessArchive: %v", err)
@@ -536,7 +538,7 @@ func TestProcessArchive_TotalSizeLimit(t *testing.T) {
 		Data:        zipData,
 		Format:      "zip",
 		Limits:      limits,
-		Config:      cfg,
+		Store:       cfg.Store, Passwords: cfg.Passwords,
 	})
 	if err != nil {
 		t.Fatalf("ProcessArchive: %v", err)
@@ -572,7 +574,7 @@ func TestProcessArchive_EmptyArchive(t *testing.T) {
 				Data:        archiveData,
 				Format:      tt.format,
 				Limits:      DefaultArchiveLimits(),
-				Config:      cfg,
+				Store:       cfg.Store, Passwords: cfg.Passwords,
 			})
 			if err != nil {
 				t.Fatalf("ProcessArchive: %v", err)
@@ -607,7 +609,7 @@ func TestProcessArchive_CorruptedArchive(t *testing.T) {
 				Data:        []byte("this is not a valid archive"),
 				Format:      tt.format,
 				Limits:      DefaultArchiveLimits(),
-				Config:      cfg,
+				Store:       cfg.Store, Passwords: cfg.Passwords,
 			})
 			if err == nil {
 				t.Errorf("expected error for corrupted %s, got nil", tt.format)
@@ -641,7 +643,7 @@ func TestProcessArchive_NestedArchiveNotRecursed(t *testing.T) {
 		Data:        outerZip,
 		Format:      "zip",
 		Limits:      DefaultArchiveLimits(),
-		Config:      cfg,
+		Store:       cfg.Store, Passwords: cfg.Passwords,
 	})
 	if err != nil {
 		t.Fatalf("ProcessArchive: %v", err)
@@ -656,9 +658,10 @@ func TestProcessArchive_NestedArchiveNotRecursed(t *testing.T) {
 	}
 }
 
-func TestProcessArchive_ExpiredCertRejectedByDefault(t *testing.T) {
-	// WHY: Verifies that expired certificates inside archives are filtered
-	// when IncludeExpired is false, matching non-archive scan behavior.
+func TestProcessArchive_ExpiredCertStored(t *testing.T) {
+	// WHY: Expired certificates inside archives must be ingested into the store;
+	// filtering is an output-only concern. This ensures chain building works even
+	// when intermediates are expired.
 	t.Parallel()
 	ca := newRSACA(t)
 	expired := newExpiredLeaf(t, ca)
@@ -668,48 +671,14 @@ func TestProcessArchive_ExpiredCertRejectedByDefault(t *testing.T) {
 	})
 
 	cfg := newTestConfig(t)
-	cfg.IncludeExpired = false
 
 	n, err := ProcessArchive(ProcessArchiveInput{
 		ArchivePath: "test.zip",
 		Data:        zipData,
 		Format:      "zip",
 		Limits:      DefaultArchiveLimits(),
-		Config:      cfg,
-	})
-	if err != nil {
-		t.Fatalf("ProcessArchive: %v", err)
-	}
-	if n != 1 {
-		t.Errorf("processed %d entries, want 1 (entry processed, cert filtered)", n)
-	}
-
-	certs := cfg.Store.AllCertsFlat()
-	if len(certs) != 0 {
-		t.Errorf("got %d certs in store, want 0 (expired should be filtered)", len(certs))
-	}
-}
-
-func TestProcessArchive_ExpiredCertIncludedWhenAllowed(t *testing.T) {
-	// WHY: Verifies that expired certificates inside archives are included
-	// when IncludeExpired is true.
-	t.Parallel()
-	ca := newRSACA(t)
-	expired := newExpiredLeaf(t, ca)
-
-	zipData := createTestZip(t, map[string][]byte{
-		"expired.pem": expired.certPEM,
-	})
-
-	cfg := newTestConfig(t)
-	cfg.IncludeExpired = true
-
-	n, err := ProcessArchive(ProcessArchiveInput{
-		ArchivePath: "test.zip",
-		Data:        zipData,
-		Format:      "zip",
-		Limits:      DefaultArchiveLimits(),
-		Config:      cfg,
+		Store:       cfg.Store,
+		Passwords:   cfg.Passwords,
 	})
 	if err != nil {
 		t.Fatalf("ProcessArchive: %v", err)
@@ -720,7 +689,7 @@ func TestProcessArchive_ExpiredCertIncludedWhenAllowed(t *testing.T) {
 
 	certs := cfg.Store.AllCertsFlat()
 	if len(certs) != 1 {
-		t.Errorf("got %d certs in store, want 1 (expired should be included)", len(certs))
+		t.Errorf("got %d certs in store, want 1 (expired certs should be stored)", len(certs))
 	}
 }
 
@@ -735,7 +704,7 @@ func TestProcessArchive_UnsupportedFormat(t *testing.T) {
 		Data:        []byte("data"),
 		Format:      "rar",
 		Limits:      DefaultArchiveLimits(),
-		Config:      cfg,
+		Store:       cfg.Store, Passwords: cfg.Passwords,
 	})
 	if err == nil {
 		t.Fatal("expected error for unsupported format, got nil")
@@ -765,7 +734,7 @@ func TestProcessArchive_EntryCountLimitZero(t *testing.T) {
 		Data:        zipData,
 		Format:      "zip",
 		Limits:      limits,
-		Config:      cfg,
+		Store:       cfg.Store, Passwords: cfg.Passwords,
 	})
 	if err != nil {
 		t.Fatalf("ProcessArchive: %v", err)
@@ -816,7 +785,7 @@ func TestProcessArchive_DecompressionRatioLimit(t *testing.T) {
 		Data:        zipData,
 		Format:      "zip",
 		Limits:      limits,
-		Config:      cfg,
+		Store:       cfg.Store, Passwords: cfg.Passwords,
 	})
 	if err != nil {
 		t.Fatalf("ProcessArchive: %v", err)
@@ -858,7 +827,7 @@ func TestProcessArchive_TarEntryCountLimit(t *testing.T) {
 		Data:        buf.Bytes(),
 		Format:      "tar",
 		Limits:      limits,
-		Config:      cfg,
+		Store:       cfg.Store, Passwords: cfg.Passwords,
 	})
 	if err != nil {
 		t.Fatalf("ProcessArchive: %v", err)
@@ -899,7 +868,7 @@ func TestProcessArchive_TarTotalSizeLimit(t *testing.T) {
 		Data:        buf.Bytes(),
 		Format:      "tar",
 		Limits:      limits,
-		Config:      cfg,
+		Store:       cfg.Store, Passwords: cfg.Passwords,
 	})
 	if err != nil {
 		t.Fatalf("ProcessArchive: %v", err)
@@ -936,7 +905,7 @@ func TestProcessArchive_TarPartialCorruption(t *testing.T) {
 		Data:        corruptedTar,
 		Format:      "tar",
 		Limits:      DefaultArchiveLimits(),
-		Config:      cfg,
+		Store:       cfg.Store, Passwords: cfg.Passwords,
 	})
 	// Should not return an error (graceful degradation)
 	if err != nil {
@@ -1009,8 +978,8 @@ func TestHasBinaryExtension_VirtualPaths(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := hasBinaryExtension(tt.path); got != tt.want {
-				t.Errorf("hasBinaryExtension(%q) = %v, want %v", tt.path, got, tt.want)
+			if got := certstore.HasBinaryExtension(tt.path); got != tt.want {
+				t.Errorf("certstore.HasBinaryExtension(%q) = %v, want %v", tt.path, got, tt.want)
 			}
 		})
 	}
