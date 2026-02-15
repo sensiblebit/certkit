@@ -9,8 +9,11 @@ test:
 vet:
 	go vet ./...
 
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+
 wasm:
-	GOOS=js GOARCH=wasm go build -trimpath -ldflags="-s -w" \
+	GOOS=js GOARCH=wasm go build -trimpath \
+		-ldflags="-s -w -X main.version=$(VERSION)" \
 		-o web/public/certkit.wasm ./cmd/wasm/
 	cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" web/public/wasm_exec.js
 

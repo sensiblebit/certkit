@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add certificate trust validation against embedded Mozilla root store in WASM UI
 - Add selectable export: checkboxes to choose which matched bundles to include in ZIP
 - Add UI filters: hide expired, unmatched, non-leaf, and untrusted certificates
+- Show version tag and GitHub repo link in web UI footer
 
 ## [0.6.0] - 2026-02-14
 

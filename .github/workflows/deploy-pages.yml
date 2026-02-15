@@ -21,7 +21,7 @@ jobs:
           cache: true
 
       - name: Build WASM
-        run: make wasm
+        run: make wasm VERSION=${GITHUB_REF_NAME}
 
       - name: Deploy to Cloudflare Pages
         uses: cloudflare/wrangler-action@v3

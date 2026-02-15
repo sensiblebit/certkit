@@ -74,6 +74,12 @@ async function loadWasm() {
     go.run(result.instance);
     wasmReady = true;
     hideStatus();
+
+    // Show version from WASM build.
+    const v = window.certkitVersion;
+    if (v && v !== "dev") {
+        document.getElementById("version").textContent = v;
+    }
 }
 
 loadWasm().catch((err) => {
