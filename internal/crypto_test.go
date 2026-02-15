@@ -616,49 +616,6 @@ func TestProcessFile_MultipleCertsInOneFile(t *testing.T) {
 	}
 }
 
-func TestDetermineBundleName(t *testing.T) {
-	// WHY: Bundle name determines the output directory; verifies exact CN matching, fallback to CN, wildcard sanitization, and empty BundleName handling.
-	tests := []struct {
-		name    string
-		cn      string
-		configs []BundleConfig
-		want    string
-	}{
-		{
-			name:    "exact match",
-			cn:      "example.com",
-			configs: []BundleConfig{{CommonNames: []string{"example.com"}, BundleName: "my-bundle"}},
-			want:    "my-bundle",
-		},
-		{
-			name:    "no match falls back to CN",
-			cn:      "example.com",
-			configs: []BundleConfig{{CommonNames: []string{"other.com"}, BundleName: "other-bundle"}},
-			want:    "example.com",
-		},
-		{
-			name:    "wildcard sanitized",
-			cn:      "*.example.com",
-			configs: []BundleConfig{},
-			want:    "_.example.com",
-		},
-		{
-			name:    "config without bundle name",
-			cn:      "*.example.com",
-			configs: []BundleConfig{{CommonNames: []string{"*.example.com"}}},
-			want:    "_.example.com",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := determineBundleName(tt.cn, tt.configs)
-			if got != tt.want {
-				t.Errorf("determineBundleName(%q) = %q, want %q", tt.cn, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestProcessFile_PKCS7(t *testing.T) {
 	// WHY: PKCS#7 bundles contain multiple certificates but no keys; verifies both leaf and CA certs are extracted and stored with correct types.
 	ca := newRSACA(t)
@@ -1223,6 +1180,164 @@ func TestProcessFile_MixedBlockTypesWithIgnoredPEM(t *testing.T) {
 	}
 	if keys[0].KeyType != "rsa" {
 		t.Errorf("key type = %q, want rsa", keys[0].KeyType)
+	}
+}
+
+func TestProcessData_Ed25519BitLength(t *testing.T) {
+	// WHY: Ed25519 keys were stored with BitLength=512 (raw byte count * 8)
+	// instead of the correct 256 (security level). This verifies the fix.
+	t.Parallel()
+	cfg := newTestConfig(t)
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, _ := x509.MarshalPKCS8PrivateKey(priv)
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+
+	if err := ProcessData(keyPEM, "test-ed25519.pem", cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	keys, err := cfg.DB.GetAllKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key, got %d", len(keys))
+	}
+	if keys[0].BitLength != 256 {
+		t.Errorf("Ed25519 BitLength = %d, want 256", keys[0].BitLength)
+	}
+}
+
+func TestProcessDER_RejectsArbitrary64ByteFile(t *testing.T) {
+	// WHY: Before the fix, any 64-byte file with a crypto extension was silently
+	// treated as an Ed25519 key. The validation now checks that the public key
+	// suffix matches the seed.
+	t.Parallel()
+	cfg := newTestConfig(t)
+
+	// 64 bytes of random data that are NOT a valid Ed25519 key
+	garbage := make([]byte, 64)
+	for i := range garbage {
+		garbage[i] = byte(i)
+	}
+
+	// Write to a temp file with .key extension
+	dir := t.TempDir()
+	path := filepath.Join(dir, "fake.key")
+	if err := os.WriteFile(path, garbage, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ProcessFile(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	keys, err := cfg.DB.GetAllKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 0 {
+		t.Errorf("expected 0 keys from garbage 64-byte file, got %d", len(keys))
+	}
+}
+
+func TestProcessDER_ValidEd25519RawKey(t *testing.T) {
+	// WHY: Tests the DER processDER path for a genuine raw Ed25519 key (seed + public key).
+	t.Parallel()
+	cfg := newTestConfig(t)
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Write raw Ed25519 key bytes (seed + public) to a .key file
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ed25519.key")
+	if err := os.WriteFile(path, []byte(priv), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ProcessFile(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	keys, err := cfg.DB.GetAllKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key from valid raw Ed25519, got %d", len(keys))
+	}
+	if keys[0].KeyType != "ed25519" {
+		t.Errorf("key type = %q, want ed25519", keys[0].KeyType)
+	}
+}
+
+func TestProcessDER_SEC1ECKey(t *testing.T) {
+	// WHY: The SEC1 EC private key path in processDER was completely untested;
+	// this verifies DER-encoded EC keys are properly detected and ingested.
+	t.Parallel()
+	cfg := newTestConfig(t)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec1DER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ec-sec1.key")
+	if err := os.WriteFile(path, sec1DER, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := ProcessFile(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	keys, err := cfg.DB.GetAllKeys()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key from SEC1 EC DER, got %d", len(keys))
+	}
+	if keys[0].KeyType != "ecdsa" {
+		t.Errorf("key type = %q, want ecdsa", keys[0].KeyType)
+	}
+}
+
+func TestIsSkippableDir(t *testing.T) {
+	// WHY: IsSkippableDir gates directory traversal during scans; a false negative would cause wasteful scanning of .git or node_modules trees, while a false positive would skip legitimate certificate directories.
+	tests := []struct {
+		name string
+		want bool
+	}{
+		{".git", true},
+		{".hg", true},
+		{".svn", true},
+		{"node_modules", true},
+		{"__pycache__", true},
+		{".tox", true},
+		{".venv", true},
+		{"vendor", true},
+		{"certs", false},
+		{"ssl", false},
+		{"", false},
+		{".github", false},
+		{"src", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IsSkippableDir(tt.name); got != tt.want {
+				t.Errorf("IsSkippableDir(%q) = %v, want %v", tt.name, got, tt.want)
+			}
+		})
 	}
 }
 

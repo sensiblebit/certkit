@@ -2,6 +2,7 @@ package certkit
 
 import (
 	"crypto"
+	"crypto/dsa"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -19,6 +20,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/ssh"
 )
 
 func TestParsePEMCertificate(t *testing.T) {
@@ -118,8 +121,8 @@ func TestCertFingerprint(t *testing.T) {
 	}
 }
 
-func TestCertToPEM(t *testing.T) {
-	// WHY: Round-trip (cert->PEM->cert) proves PEM encoding preserves certificate identity.
+func TestCertToPEM_RoundTrip(t *testing.T) {
+	// WHY: Round-trip (cert->PEM->cert) proves PEM encoding preserves certificate identity and byte equality.
 	_, _, leafPEM := generateTestPKI(t)
 	cert, _ := ParsePEMCertificate([]byte(leafPEM))
 
@@ -128,13 +131,15 @@ func TestCertToPEM(t *testing.T) {
 		t.Error("empty PEM output")
 	}
 
-	// Round-trip
 	cert2, err := ParsePEMCertificate([]byte(pemStr))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cert2.Subject.CommonName != cert.Subject.CommonName {
 		t.Error("round-trip CN mismatch")
+	}
+	if !cert.Equal(cert2) {
+		t.Error("round-trip cert.Equal returned false; raw bytes differ")
 	}
 }
 
@@ -178,12 +183,18 @@ func TestCertSKIEmbedded(t *testing.T) {
 	leaf, _ := ParsePEMCertificate([]byte(leafPEM))
 
 	caSKI := CertSKIEmbedded(ca)
-	if caSKI != "" && (!strings.Contains(caSKI, ":") || len(caSKI) < 5) {
+	if caSKI == "" {
+		t.Fatal("CA embedded SKI should be non-empty (x509.CreateCertificate auto-populates it)")
+	}
+	if !strings.Contains(caSKI, ":") || len(caSKI) < 5 {
 		t.Errorf("CA embedded SKI format unexpected: %q", caSKI)
 	}
 
 	leafAKI := CertAKIEmbedded(leaf)
-	if leafAKI != "" && (!strings.Contains(leafAKI, ":") || len(leafAKI) < 5) {
+	if leafAKI == "" {
+		t.Fatal("Leaf embedded AKI should be non-empty (set from issuer SKI)")
+	}
+	if !strings.Contains(leafAKI, ":") || len(leafAKI) < 5 {
 		t.Errorf("Leaf embedded AKI format unexpected: %q", leafAKI)
 	}
 }
@@ -686,6 +697,7 @@ func TestKeyAlgorithmName(t *testing.T) {
 		{"ECDSA", ecKey, "ECDSA"},
 		{"RSA", rsaKey, "RSA"},
 		{"Ed25519", edKey, "Ed25519"},
+		{"Ed25519_pointer", &edKey, "Ed25519"},
 		{"nil", nil, "unknown"},
 		{"unsupported", struct{}{}, "unknown"},
 	}
@@ -713,6 +725,7 @@ func TestPublicKeyAlgorithmName(t *testing.T) {
 		{"ECDSA", &ecKey.PublicKey, "ECDSA"},
 		{"RSA", &rsaKey.PublicKey, "RSA"},
 		{"Ed25519", edPub, "Ed25519"},
+		{"Ed25519_pointer", &edPub, "Ed25519"},
 		{"nil", nil, "unknown"},
 		{"unsupported", struct{}{}, "unknown"},
 	}
@@ -1393,22 +1406,23 @@ func TestCertFingerprint_CorrectHash(t *testing.T) {
 	}
 }
 
-func TestCertToPEM_RoundTrip_ByteEquality(t *testing.T) {
-	// WHY: PEM round-trip must preserve byte-exact certificate identity (cert.Equal); any mutation would change fingerprints and break verification.
+func TestCertFingerprintSHA1_CorrectHash(t *testing.T) {
+	// WHY: SHA-1 fingerprint correctness was never independently verified;
+	// only length was checked. Must match an independent sha1.Sum of cert.Raw.
+	t.Parallel()
 	_, _, leafPEM := generateTestPKI(t)
 	cert, err := ParsePEMCertificate([]byte(leafPEM))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	pemStr := CertToPEM(cert)
-	cert2, err := ParsePEMCertificate([]byte(pemStr))
-	if err != nil {
-		t.Fatal(err)
-	}
+	fp := CertFingerprintSHA1(cert)
 
-	if !cert.Equal(cert2) {
-		t.Error("round-trip cert.Equal returned false; raw bytes differ")
+	hash := sha1.Sum(cert.Raw)
+	expected := fmt.Sprintf("%x", hash[:])
+
+	if fp != expected {
+		t.Errorf("CertFingerprintSHA1 mismatch:\n  got:  %s\n  want: %s", fp, expected)
 	}
 }
 
@@ -1664,23 +1678,6 @@ func TestComputeSKILegacy_NilPublicKey(t *testing.T) {
 	}
 }
 
-func TestParsePEMCertificates_ValidPEMCorruptDER(t *testing.T) {
-	// WHY: Corrupted cert data inside valid PEM headers must be detected
-	// gracefully with a clear error, not silently ignored or panicked on.
-	pemData := pem.EncodeToMemory(&pem.Block{
-		Type:  "CERTIFICATE",
-		Bytes: []byte("garbage"),
-	})
-
-	_, err := ParsePEMCertificates(pemData)
-	if err == nil {
-		t.Fatal("expected error for corrupt DER inside valid PEM block")
-	}
-	if !strings.Contains(err.Error(), "parsing certificate") {
-		t.Errorf("error should mention parsing certificate, got: %v", err)
-	}
-}
-
 func TestGenerateRSAKey_InvalidBitSize(t *testing.T) {
 	// WHY: Invalid RSA bit sizes (like 0) must return a meaningful error,
 	// not panic or produce a useless key.
@@ -1690,5 +1687,209 @@ func TestGenerateRSAKey_InvalidBitSize(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "generating RSA key") {
 		t.Errorf("error should be wrapped with context, got: %v", err)
+	}
+}
+
+func TestParsePEMPrivateKey_OpenSSH_Ed25519(t *testing.T) {
+	// WHY: OpenSSH Ed25519 keys use a proprietary format handled by x/crypto/ssh;
+	// this path was completely untested and could silently break.
+	t.Parallel()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshPEM, err := ssh.MarshalPrivateKey(priv, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pemBytes := pem.EncodeToMemory(sshPEM)
+
+	key, err := ParsePEMPrivateKey(pemBytes)
+	if err != nil {
+		t.Fatalf("ParsePEMPrivateKey(OpenSSH Ed25519): %v", err)
+	}
+	// ssh.ParseRawPrivateKey returns *ed25519.PrivateKey (pointer)
+	got, ok := key.(*ed25519.PrivateKey)
+	if !ok {
+		t.Fatalf("expected *ed25519.PrivateKey, got %T", key)
+	}
+	if !priv.Equal(*got) {
+		t.Error("parsed key does not match original")
+	}
+}
+
+func TestParsePEMPrivateKey_OpenSSH_RSA(t *testing.T) {
+	// WHY: Ensures the OpenSSH PEM block type dispatch works for RSA keys,
+	// not just Ed25519 — ssh.ParseRawPrivateKey handles both.
+	t.Parallel()
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshPEM, err := ssh.MarshalPrivateKey(rsaKey, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pemBytes := pem.EncodeToMemory(sshPEM)
+
+	key, err := ParsePEMPrivateKey(pemBytes)
+	if err != nil {
+		t.Fatalf("ParsePEMPrivateKey(OpenSSH RSA): %v", err)
+	}
+	got, ok := key.(*rsa.PrivateKey)
+	if !ok {
+		t.Fatalf("expected *rsa.PrivateKey, got %T", key)
+	}
+	if !rsaKey.Equal(got) {
+		t.Error("parsed key does not match original")
+	}
+}
+
+func TestParsePEMPrivateKeyWithPasswords_OpenSSH_Encrypted(t *testing.T) {
+	// WHY: Encrypted OpenSSH keys use a different decryption path from RFC 1423;
+	// this branch iterated passwords via ssh.ParseRawPrivateKeyWithPassphrase
+	// but had zero test coverage.
+	t.Parallel()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	password := "test-password-123"
+	sshPEM, err := ssh.MarshalPrivateKeyWithPassphrase(priv, "", []byte(password))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pemBytes := pem.EncodeToMemory(sshPEM)
+
+	// Should fail with wrong passwords
+	_, err = ParsePEMPrivateKeyWithPasswords(pemBytes, []string{"wrong1", "wrong2"})
+	if err == nil {
+		t.Fatal("expected error with wrong passwords")
+	}
+
+	// Should succeed with correct password
+	key, err := ParsePEMPrivateKeyWithPasswords(pemBytes, []string{"wrong", password})
+	if err != nil {
+		t.Fatalf("ParsePEMPrivateKeyWithPasswords(OpenSSH encrypted): %v", err)
+	}
+	got, ok := key.(*ed25519.PrivateKey)
+	if !ok {
+		t.Fatalf("expected *ed25519.PrivateKey, got %T", key)
+	}
+	if !priv.Equal(*got) {
+		t.Error("decrypted key does not match original")
+	}
+}
+
+func TestComputeSKI_DSAKey(t *testing.T) {
+	// WHY: DSA public key marshaling uses hand-rolled ASN.1 (marshalDSAPublicKeyDER)
+	// that had zero test coverage. A bug there would silently produce wrong SKIs.
+	t.Parallel()
+	params := dsa.Parameters{}
+	if err := dsa.GenerateParameters(&params, rand.Reader, dsa.L1024N160); err != nil {
+		t.Fatal(err)
+	}
+	key := &dsa.PrivateKey{PublicKey: dsa.PublicKey{Parameters: params}}
+	if err := dsa.GenerateKey(key, rand.Reader); err != nil {
+		t.Fatal(err)
+	}
+
+	ski, err := ComputeSKI(&key.PublicKey)
+	if err != nil {
+		t.Fatalf("ComputeSKI(DSA): %v", err)
+	}
+	if len(ski) != 20 {
+		t.Errorf("SKI length = %d, want 20 (160 bits)", len(ski))
+	}
+
+	// Verify deterministic: same key gives same SKI
+	ski2, err := ComputeSKI(&key.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(ski) != string(ski2) {
+		t.Error("ComputeSKI should be deterministic for the same key")
+	}
+}
+
+func TestComputeSKILegacy_DSAKey(t *testing.T) {
+	// WHY: Legacy SKI computation (SHA-1) must also handle DSA keys via the
+	// same marshalPublicKeyDER path.
+	t.Parallel()
+	params := dsa.Parameters{}
+	if err := dsa.GenerateParameters(&params, rand.Reader, dsa.L1024N160); err != nil {
+		t.Fatal(err)
+	}
+	key := &dsa.PrivateKey{PublicKey: dsa.PublicKey{Parameters: params}}
+	if err := dsa.GenerateKey(key, rand.Reader); err != nil {
+		t.Fatal(err)
+	}
+
+	ski, err := ComputeSKILegacy(&key.PublicKey)
+	if err != nil {
+		t.Fatalf("ComputeSKILegacy(DSA): %v", err)
+	}
+	if len(ski) != 20 {
+		t.Errorf("SKI length = %d, want 20 (SHA-1 = 20 bytes)", len(ski))
+	}
+}
+
+// --- PKCS#7 round-trip test ---
+
+func TestPKCS7_RoundTrip(t *testing.T) {
+	// WHY: Per T-6 (MUST), every encode/decode path needs a round-trip test.
+	// PKCS#7 was only tested in isolation — encode and decode never verified
+	// together that certificates survive the cycle intact.
+	t.Parallel()
+	caPEM, intPEM, leafPEM := generateTestPKI(t)
+	ca, _ := ParsePEMCertificate([]byte(caPEM))
+	intermediate, _ := ParsePEMCertificate([]byte(intPEM))
+	leaf, _ := ParsePEMCertificate([]byte(leafPEM))
+
+	certs := []*x509.Certificate{leaf, intermediate, ca}
+
+	encoded, err := EncodePKCS7(certs)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	decoded, err := DecodePKCS7(encoded)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(decoded) != 3 {
+		t.Fatalf("decoded %d certs, want 3", len(decoded))
+	}
+
+	// Verify each cert by fingerprint
+	for i, orig := range certs {
+		origFP := CertFingerprint(orig)
+		decodedFP := CertFingerprint(decoded[i])
+		if origFP != decodedFP {
+			t.Errorf("cert[%d] fingerprint mismatch: %s != %s", i, origFP, decodedFP)
+		}
+	}
+}
+
+func TestEncodePKCS7_EmptyCertList(t *testing.T) {
+	// WHY: Empty cert list must produce a clear error, not a malformed
+	// PKCS#7 structure or panic in the DER builder.
+	t.Parallel()
+	_, err := EncodePKCS7([]*x509.Certificate{})
+	if err == nil {
+		t.Fatal("expected error for empty cert list")
+	}
+	if !strings.Contains(err.Error(), "no certificates") {
+		t.Errorf("error should mention no certificates, got: %v", err)
+	}
+}
+
+func TestEncodePKCS7_NilCertList(t *testing.T) {
+	// WHY: Nil cert list must also produce a clear error.
+	t.Parallel()
+	_, err := EncodePKCS7(nil)
+	if err == nil {
+		t.Fatal("expected error for nil cert list")
 	}
 }

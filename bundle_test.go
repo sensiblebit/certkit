@@ -34,8 +34,8 @@ func TestDefaultOptions(t *testing.T) {
 	if !opts.Verify {
 		t.Error("Verify should default to true")
 	}
-	if !opts.IncludeRoot {
-		t.Error("IncludeRoot should default to true")
+	if opts.ExcludeRoot {
+		t.Error("ExcludeRoot should default to false")
 	}
 }
 
@@ -85,7 +85,6 @@ func TestBundle_customRoots(t *testing.T) {
 		TrustStore:         "custom",
 		CustomRoots:        []*x509.Certificate{caCert},
 		Verify:             true,
-		IncludeRoot:        true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -118,7 +117,6 @@ func TestBundle_mozillaRoots(t *testing.T) {
 		AIAMaxDepth: 5,
 		TrustStore:  "mozilla",
 		Verify:      true,
-		IncludeRoot: true,
 	})
 	if err != nil {
 		t.Fatalf("Mozilla trust store verification failed: %v", err)
@@ -701,5 +699,188 @@ func TestFetchAIACertificates_duplicateURLs(t *testing.T) {
 	}
 	if fetchCount != 1 {
 		t.Errorf("expected 1 HTTP fetch (deduped), got %d", fetchCount)
+	}
+}
+
+func TestBundle_ExcludeRoot(t *testing.T) {
+	// WHY: ExcludeRoot must suppress root population in BundleResult;
+	// before this fix the option was dead code.
+	t.Parallel()
+	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "ExcludeRoot CA"},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	caBytes, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	caCert, _ := x509.ParseCertificate(caBytes)
+
+	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	leafTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "exclude-root-leaf.example.com"},
+		NotBefore:    time.Now().Add(-1 * time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	leafBytes, _ := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
+	leafCert, _ := x509.ParseCertificate(leafBytes)
+
+	result, err := Bundle(context.Background(), leafCert, BundleOptions{
+		FetchAIA:    false,
+		TrustStore:  "custom",
+		CustomRoots: []*x509.Certificate{caCert},
+		Verify:      true,
+		ExcludeRoot: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Roots) != 0 {
+		t.Errorf("ExcludeRoot=true: expected 0 roots, got %d", len(result.Roots))
+	}
+}
+
+func TestBundle_SelfSignedRoot(t *testing.T) {
+	// WHY: A self-signed cert verified against itself produces a chain of length 1;
+	// before this fix result.Roots was nil, losing the root information.
+	t.Parallel()
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Self-Signed Root"},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	cert, _ := x509.ParseCertificate(certBytes)
+
+	result, err := Bundle(context.Background(), cert, BundleOptions{
+		FetchAIA:    false,
+		TrustStore:  "custom",
+		CustomRoots: []*x509.Certificate{cert},
+		Verify:      true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Roots) != 1 {
+		t.Fatalf("self-signed: expected 1 root, got %d", len(result.Roots))
+	}
+	if result.Roots[0].Subject.CommonName != "Self-Signed Root" {
+		t.Errorf("root CN=%q, want Self-Signed Root", result.Roots[0].Subject.CommonName)
+	}
+}
+
+func TestBundle_CustomTrustStoreNilRoots(t *testing.T) {
+	// WHY: TrustStore="custom" with nil CustomRoots creates an empty root pool,
+	// causing verification to always fail. This must produce a clear verification
+	// error, not a panic or confusing message.
+	t.Parallel()
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "nil-roots-test"},
+		NotBefore:    time.Now().Add(-1 * time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+	}
+	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	cert, _ := x509.ParseCertificate(certBytes)
+
+	_, err := Bundle(context.Background(), cert, BundleOptions{
+		FetchAIA:    false,
+		TrustStore:  "custom",
+		CustomRoots: nil,
+		Verify:      true,
+	})
+	if err == nil {
+		t.Error("expected verification error with nil custom roots")
+	}
+	if !strings.Contains(err.Error(), "chain verification failed") {
+		t.Errorf("error should mention chain verification failed, got: %v", err)
+	}
+}
+
+func TestBundle_FourTierChain(t *testing.T) {
+	// WHY: Real-world PKI often has multiple intermediates (root -> int1 -> int2 -> leaf).
+	// Only a 3-tier chain was tested; this verifies multi-intermediate chains resolve correctly.
+	t.Parallel()
+	rootKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	rootTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "4-Tier Root CA"},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	rootDER, _ := x509.CreateCertificate(rand.Reader, rootTmpl, rootTmpl, &rootKey.PublicKey, rootKey)
+	rootCert, _ := x509.ParseCertificate(rootDER)
+
+	int1Key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	int1Tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(2),
+		Subject:               pkix.Name{CommonName: "Intermediate CA 1"},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	int1DER, _ := x509.CreateCertificate(rand.Reader, int1Tmpl, rootCert, &int1Key.PublicKey, rootKey)
+	int1Cert, _ := x509.ParseCertificate(int1DER)
+
+	int2Key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	int2Tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(3),
+		Subject:               pkix.Name{CommonName: "Intermediate CA 2"},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	int2DER, _ := x509.CreateCertificate(rand.Reader, int2Tmpl, int1Cert, &int2Key.PublicKey, int1Key)
+	int2Cert, _ := x509.ParseCertificate(int2DER)
+
+	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	leafTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(4),
+		Subject:      pkix.Name{CommonName: "four-tier-leaf.example.com"},
+		NotBefore:    time.Now().Add(-1 * time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	leafDER, _ := x509.CreateCertificate(rand.Reader, leafTmpl, int2Cert, &leafKey.PublicKey, int2Key)
+	leafCert, _ := x509.ParseCertificate(leafDER)
+
+	result, err := Bundle(context.Background(), leafCert, BundleOptions{
+		ExtraIntermediates: []*x509.Certificate{int1Cert, int2Cert},
+		FetchAIA:           false,
+		TrustStore:         "custom",
+		CustomRoots:        []*x509.Certificate{rootCert},
+		Verify:             true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Intermediates) != 2 {
+		t.Errorf("expected 2 intermediates, got %d", len(result.Intermediates))
+	}
+	if len(result.Roots) != 1 {
+		t.Errorf("expected 1 root, got %d", len(result.Roots))
+	}
+	if result.Roots[0].Subject.CommonName != "4-Tier Root CA" {
+		t.Errorf("root CN=%q, want 4-Tier Root CA", result.Roots[0].Subject.CommonName)
 	}
 }

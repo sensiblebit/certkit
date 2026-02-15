@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/rsa"
@@ -239,7 +240,7 @@ func processPEMPrivateKeys(data []byte, path string, cfg *Config) {
 				Bytes: keyBytes,
 			})
 			rec.KeyType = "ed25519"
-			rec.BitLength = len(k) * 8
+			rec.BitLength = 256
 		case *ed25519.PrivateKey:
 			// ssh.ParseRawPrivateKey returns *ed25519.PrivateKey (pointer)
 			keyBytes, err := x509.MarshalPKCS8PrivateKey(*k)
@@ -252,7 +253,7 @@ func processPEMPrivateKeys(data []byte, path string, cfg *Config) {
 				Bytes: keyBytes,
 			})
 			rec.KeyType = "ed25519"
-			rec.BitLength = ed25519.PrivateKeySize * 8
+			rec.BitLength = 256
 		}
 
 		if err := cfg.DB.InsertKey(rec); err != nil {
@@ -385,18 +386,23 @@ func processDER(data []byte, path string, cfg *Config) {
 		}
 	}
 
-	// Try parsing directly as ED25519 private key
+	// Try parsing directly as Ed25519 private key (seed || public key).
+	// Validate by deriving the public key from the seed and comparing to
+	// the suffix — prevents misidentifying arbitrary 64-byte files.
 	if len(data) == ed25519.PrivateKeySize {
-		key := ed25519.PrivateKey(data)
-		slog.Debug("parsed Ed25519 private key")
-		keyDER, err := x509.MarshalPKCS8PrivateKey(key)
-		if err == nil {
-			keyPEM := pem.EncodeToMemory(&pem.Block{
-				Type:  "PRIVATE KEY",
-				Bytes: keyDER,
-			})
-			processPEMPrivateKeys(keyPEM, path, cfg)
-			return
+		seed := data[:ed25519.SeedSize]
+		derived := ed25519.NewKeyFromSeed(seed)
+		if bytes.Equal(derived[ed25519.SeedSize:], data[ed25519.SeedSize:]) {
+			slog.Debug("parsed Ed25519 private key")
+			keyDER, err := x509.MarshalPKCS8PrivateKey(derived)
+			if err == nil {
+				keyPEM := pem.EncodeToMemory(&pem.Block{
+					Type:  "PRIVATE KEY",
+					Bytes: keyDER,
+				})
+				processPEMPrivateKeys(keyPEM, path, cfg)
+				return
+			}
 		}
 	}
 

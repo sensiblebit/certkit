@@ -547,3 +547,61 @@ func TestFormatInspectResults_Text(t *testing.T) {
 		t.Error("text should contain Private Key header")
 	}
 }
+
+func TestFormatInspectResults_TextCSR(t *testing.T) {
+	// WHY: The CSR text rendering branch has its own formatting logic distinct from certificates and keys; without a dedicated test, regressions in CSR fields (Subject, Key, Signature, DNS Names) would go undetected.
+	t.Parallel()
+	results := []InspectResult{
+		{
+			Type:        "csr",
+			CSRSubject:  "CN=example.com,O=Test Corp",
+			KeyAlgo:     "ECDSA",
+			KeySize:     "P-256",
+			SigAlg:      "SHA256-RSA",
+			CSRDNSNames: []string{"example.com", "www.example.com"},
+		},
+	}
+	output, err := FormatInspectResults(results, "text")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output, "Certificate Signing Request:") {
+		t.Error("text should contain CSR header")
+	}
+	if !strings.Contains(output, "CN=example.com,O=Test Corp") {
+		t.Error("text should contain CSR subject")
+	}
+	if !strings.Contains(output, "ECDSA P-256") {
+		t.Error("text should contain key algorithm and size")
+	}
+	if !strings.Contains(output, "SHA256-RSA") {
+		t.Error("text should contain signature algorithm")
+	}
+	if !strings.Contains(output, "example.com, www.example.com") {
+		t.Error("text should contain DNS names")
+	}
+}
+
+func TestFormatInspectResults_TextCSRNoDNSNames(t *testing.T) {
+	// WHY: CSR DNS Names line is conditional; verifies it is omitted when no DNS names are present, preventing blank or "DNS Names:" lines in output.
+	t.Parallel()
+	results := []InspectResult{
+		{
+			Type:       "csr",
+			CSRSubject: "CN=test",
+			KeyAlgo:    "RSA",
+			KeySize:    "2048",
+			SigAlg:     "SHA256-RSA",
+		},
+	}
+	output, err := FormatInspectResults(results, "text")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(output, "Certificate Signing Request:") {
+		t.Error("text should contain CSR header")
+	}
+	if strings.Contains(output, "DNS Names:") {
+		t.Error("text should not contain DNS Names line when none are present")
+	}
+}

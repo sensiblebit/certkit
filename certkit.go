@@ -254,7 +254,7 @@ func KeyAlgorithmName(key crypto.PrivateKey) string {
 		return "ECDSA"
 	case *rsa.PrivateKey:
 		return "RSA"
-	case ed25519.PrivateKey:
+	case ed25519.PrivateKey, *ed25519.PrivateKey:
 		return "Ed25519"
 	default:
 		return "unknown"
@@ -268,7 +268,7 @@ func PublicKeyAlgorithmName(key crypto.PublicKey) string {
 		return "ECDSA"
 	case *rsa.PublicKey:
 		return "RSA"
-	case ed25519.PublicKey:
+	case ed25519.PublicKey, *ed25519.PublicKey:
 		return "Ed25519"
 	default:
 		return "unknown"

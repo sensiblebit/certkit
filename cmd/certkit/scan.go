@@ -5,6 +5,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/breml/rootcerts/embedded"
 	"github.com/sensiblebit/certkit/internal"
 	"github.com/spf13/cobra"
 )
@@ -195,21 +197,34 @@ func runScan(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("getting certificates: %w", err)
 		}
 		if len(certs) > 0 {
+			// Build mozilla root pool for verification (consistent with other commands)
+			mozillaPool := x509.NewCertPool()
+			if !mozillaPool.AppendCertsFromPEM([]byte(embedded.MozillaCACertificatesPEM())) {
+				return errors.New("parsing embedded Mozilla root certificates")
+			}
+
 			var data []byte
 			var count, skipped int
 			for _, c := range certs {
 				block, _ := pem.Decode([]byte(c.PEM))
 				if block == nil {
+					slog.Debug("skipping certificate with unparseable PEM", "serial", c.SerialNumber)
 					continue
 				}
 				cert, err := x509.ParseCertificate(block.Bytes)
 				if err != nil {
+					slog.Debug("skipping certificate with invalid DER", "serial", c.SerialNumber, "error", err)
 					continue
 				}
 
 				// Validate chain unless --force is set
 				if !scanForceExport {
-					_, verifyErr := cert.Verify(x509.VerifyOptions{})
+					verifyOpts := x509.VerifyOptions{Roots: mozillaPool}
+					if allowExpired {
+						// Set CurrentTime far in the future to bypass expiry checks
+						verifyOpts.CurrentTime = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
+					}
+					_, verifyErr := cert.Verify(verifyOpts)
 					if verifyErr != nil {
 						slog.Debug("skipping unverified certificate", "subject", cert.Subject, "error", verifyErr)
 						skipped++

@@ -44,8 +44,8 @@ type BundleOptions struct {
 	CustomRoots []*x509.Certificate
 	// Verify enables chain verification against the trust store.
 	Verify bool
-	// IncludeRoot includes the root certificate in the result.
-	IncludeRoot bool
+	// ExcludeRoot omits the root certificate from the result.
+	ExcludeRoot bool
 }
 
 // DefaultOptions returns sensible defaults.
@@ -56,7 +56,6 @@ func DefaultOptions() BundleOptions {
 		AIAMaxDepth: 5,
 		TrustStore:  "system",
 		Verify:      true,
-		IncludeRoot: true,
 	}
 }
 
@@ -295,16 +294,26 @@ func Bundle(ctx context.Context, leaf *x509.Certificate, opts BundleOptions) (*B
 		if len(best) > 2 {
 			result.Intermediates = best[1 : len(best)-1]
 		}
-		if len(best) > 1 {
-			result.Roots = []*x509.Certificate{best[len(best)-1]}
+		if !opts.ExcludeRoot {
+			if len(best) > 1 {
+				result.Roots = []*x509.Certificate{best[len(best)-1]}
+			} else if len(best) == 1 {
+				// Self-signed: the leaf is also the root
+				result.Roots = []*x509.Certificate{best[0]}
+			}
 		}
 	} else {
 		// No verification — just pass through what we have
 		result.Intermediates = allIntermediates
 	}
 
-	// Build full chain for warning checks
-	fullChain := slices.Concat([]*x509.Certificate{result.Leaf}, result.Intermediates, result.Roots)
+	// Build full chain for warning checks, deduplicating self-signed leaf
+	fullChain := slices.Concat([]*x509.Certificate{result.Leaf}, result.Intermediates)
+	for _, r := range result.Roots {
+		if r != result.Leaf {
+			fullChain = append(fullChain, r)
+		}
+	}
 
 	result.Warnings = append(result.Warnings, checkSHA1Signatures(fullChain)...)
 	result.Warnings = append(result.Warnings, checkExpiryWarnings(fullChain)...)

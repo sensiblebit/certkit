@@ -72,6 +72,7 @@ func NewDB() (*DB, error) {
 	dbObj := &DB{DB: db}
 
 	if err := dbObj.initSchema(); err != nil {
+		_ = db.Close()
 		return nil, fmt.Errorf("initializing schema: %w", err)
 	}
 

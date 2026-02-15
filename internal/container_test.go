@@ -406,3 +406,45 @@ func TestParseContainerData_PKCS7SingleCert(t *testing.T) {
 		t.Error("expected no key from PKCS#7")
 	}
 }
+
+func TestParseContainerData_PEMWithKey(t *testing.T) {
+	// WHY: Combined cert+key PEM files are common (e.g., Nginx bundles);
+	// before this fix the PEM path only parsed certs, silently dropping keys.
+	t.Parallel()
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "pem-with-key.example.com", []string{"pem-with-key.example.com"}, nil)
+
+	combined := slices.Concat(leaf.certPEM, leaf.keyPEM)
+
+	contents, err := ParseContainerData(combined, []string{""})
+	if err != nil {
+		t.Fatalf("ParseContainerData(PEM cert+key): %v", err)
+	}
+	if contents.Leaf == nil {
+		t.Fatal("expected leaf certificate")
+	}
+	if contents.Leaf.Subject.CommonName != "pem-with-key.example.com" {
+		t.Errorf("leaf CN = %q, want pem-with-key.example.com", contents.Leaf.Subject.CommonName)
+	}
+	if contents.Key == nil {
+		t.Error("expected private key from combined PEM, got nil")
+	}
+}
+
+func TestParseContainerData_PEMKeyOnly(t *testing.T) {
+	// WHY: A PEM file containing only a private key should return successfully
+	// with Key populated and Leaf nil, not fail with "could not parse".
+	t.Parallel()
+	keyPEM := rsaKeyPEM(t)
+
+	contents, err := ParseContainerData(keyPEM, []string{""})
+	if err != nil {
+		t.Fatalf("ParseContainerData(PEM key only): %v", err)
+	}
+	if contents.Key == nil {
+		t.Error("expected private key from PEM-only-key data, got nil")
+	}
+	if contents.Leaf != nil {
+		t.Error("expected nil leaf for key-only PEM")
+	}
+}

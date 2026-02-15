@@ -152,6 +152,17 @@ func selectLeafByKey(key crypto.PrivateKey, currentLeaf *x509.Certificate, extra
 	return nil, nil, fmt.Errorf("private key does not match any of the %d certificate(s) provided", len(all))
 }
 
+// bundlePassword returns the password to use for PKCS#12/JKS export.
+// Uses the first non-empty user-provided password, falling back to "changeit".
+func bundlePassword(passwords []string) string {
+	for _, pw := range passwords {
+		if pw != "" {
+			return pw
+		}
+	}
+	return "changeit"
+}
+
 func formatBundleOutput(bundle *certkit.BundleResult, key crypto.PrivateKey, format string, passwords []string) ([]byte, error) {
 	switch format {
 	case "pem", "chain":
@@ -179,7 +190,8 @@ func formatBundleOutput(bundle *certkit.BundleResult, key crypto.PrivateKey, for
 		if key == nil {
 			return nil, fmt.Errorf("p12 output requires a private key (use --key)")
 		}
-		p12, err := certkit.EncodePKCS12(key, bundle.Leaf, bundle.Intermediates, "changeit")
+		pw := bundlePassword(passwords)
+		p12, err := certkit.EncodePKCS12(key, bundle.Leaf, bundle.Intermediates, pw)
 		if err != nil {
 			return nil, fmt.Errorf("encoding PKCS#12: %w", err)
 		}
@@ -189,7 +201,8 @@ func formatBundleOutput(bundle *certkit.BundleResult, key crypto.PrivateKey, for
 		if key == nil {
 			return nil, fmt.Errorf("jks output requires a private key (use --key)")
 		}
-		jks, err := certkit.EncodeJKS(key, bundle.Leaf, bundle.Intermediates, "changeit")
+		pw := bundlePassword(passwords)
+		jks, err := certkit.EncodeJKS(key, bundle.Leaf, bundle.Intermediates, pw)
 		if err != nil {
 			return nil, fmt.Errorf("encoding JKS: %w", err)
 		}

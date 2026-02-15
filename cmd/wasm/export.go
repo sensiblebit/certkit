@@ -59,7 +59,6 @@ func exportBundles(ctx context.Context, s *store, filterSKIs []string) ([]byte, 
 			FetchAIA:           false,
 			TrustStore:         "mozilla",
 			Verify:             true,
-			IncludeRoot:        true,
 		}
 
 		bundle, err := certkit.Bundle(ctx, certRec.Cert, opts)

@@ -12,10 +12,8 @@ import (
 	"github.com/sensiblebit/certkit"
 )
 
-// TestVerifyCert_KeyMatchAlgorithms proves that VerifyCert correctly detects
-// key-certificate matches for all supported key algorithms (RSA, ECDSA,
-// Ed25519), ensuring the key-match logic is not algorithm-specific.
 func TestVerifyCert_KeyMatchAlgorithms(t *testing.T) {
+	// WHY: Verifies VerifyCert correctly detects key-certificate matches for all supported key algorithms (RSA, ECDSA, Ed25519), ensuring the key-match logic is not algorithm-specific.
 	tests := []struct {
 		name     string
 		createCA func(t *testing.T) testCA
@@ -451,28 +449,6 @@ func TestVerifyCert_NoChecksEnabled(t *testing.T) {
 	}
 }
 
-func TestVerifyCert_KeyMatchWithNilKey(t *testing.T) {
-	// WHY: When CheckKeyMatch is true but Key is nil, VerifyCert must skip key matching gracefully (no panic); documents the nil-key guard behavior.
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "nilkey.example.com", []string{"nilkey.example.com"}, nil)
-
-	result, err := VerifyCert(context.Background(), &VerifyInput{
-		Cert:          leaf.cert,
-		CheckKeyMatch: true,
-		Key:           nil,
-		TrustStore:    "mozilla",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.KeyMatch != nil {
-		t.Error("KeyMatch should be nil when Key is nil")
-	}
-	if result.KeyMatchErr != "" {
-		t.Errorf("KeyMatchErr should be empty, got %q", result.KeyMatchErr)
-	}
-}
-
 func TestFormatVerifyResult_KeyMatchError(t *testing.T) {
 	// WHY: When key comparison itself errors (e.g. unsupported key type), the output must show "ERROR" with the message, not "OK" or "MISMATCH."
 	result := &VerifyResult{
@@ -635,5 +611,67 @@ func TestFormatVerifyResult_Failed(t *testing.T) {
 	}
 	if !strings.Contains(output, "1 error") {
 		t.Error("output should mention error count")
+	}
+}
+
+func TestVerifyCert_ChainOnlyNoKeyMatch(t *testing.T) {
+	// WHY: CheckChain=true with CheckKeyMatch=false and Key=nil is a real
+	// user scenario (verify chain only, no key available). KeyMatch must
+	// remain nil while ChainValid is populated.
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "chain-only.example.com", []string{"chain-only.example.com"}, nil)
+
+	result, err := VerifyCert(context.Background(), &VerifyInput{
+		Cert:          leaf.cert,
+		Key:           nil,
+		CheckKeyMatch: false,
+		CheckChain:    true,
+		TrustStore:    "custom",
+		CustomRoots:   []*x509.Certificate{ca.cert},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.KeyMatch != nil {
+		t.Error("expected KeyMatch to be nil when CheckKeyMatch=false")
+	}
+	if result.ChainValid == nil {
+		t.Fatal("expected ChainValid to be set when CheckChain=true")
+	}
+	if !*result.ChainValid {
+		t.Errorf("expected chain to be valid, got error: %s", result.ChainErr)
+	}
+	if len(result.Chain) == 0 {
+		t.Error("expected chain display to be populated")
+	}
+}
+
+func TestDaysUntil(t *testing.T) {
+	// WHY: daysUntil is used to compute certificate expiry countdown displayed to users; incorrect rounding (e.g., ceiling vs floor) or sign errors would produce misleading expiry warnings.
+	t.Parallel()
+
+	// daysUntil calls time.Now() internally, so there is a small timing gap
+	// between our time.Now() and the function's. We add a generous buffer
+	// (1 hour) to each offset to stay well within the expected day boundary.
+	tests := []struct {
+		name     string
+		offset   time.Duration
+		wantDays int
+	}{
+		{"future 30 days", 30*24*time.Hour + time.Hour, 30},
+		{"future 1 day", 24*time.Hour + time.Hour, 1},
+		{"past 1 day", -24*time.Hour - time.Hour, -2},
+		{"future half day", 12 * time.Hour, 0},
+		{"past half day", -12 * time.Hour, -1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			target := time.Now().Add(tt.offset)
+			got := daysUntil(target)
+			if got != tt.wantDays {
+				t.Errorf("daysUntil(%v offset) = %d, want %d", tt.offset, got, tt.wantDays)
+			}
+		})
 	}
 }

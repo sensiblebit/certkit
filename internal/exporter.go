@@ -404,7 +404,11 @@ func ExportBundles(ctx context.Context, cfgs []BundleConfig, outDir string, db *
 
 	for _, key := range keys {
 		cert, err := db.GetCertBySKI(key.SubjectKeyIdentifier)
-		if err != nil || cert == nil {
+		if err != nil {
+			slog.Warn("looking up certificate for key", "ski", key.SubjectKeyIdentifier, "error", err)
+			continue
+		}
+		if cert == nil {
 			continue
 		}
 

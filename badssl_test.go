@@ -81,7 +81,6 @@ func TestBadSSL_SelfSigned(t *testing.T) {
 		TrustStore:  "custom",
 		CustomRoots: chain.allCerts,
 		Verify:      true,
-		IncludeRoot: true,
 	})
 	if err != nil {
 		t.Fatalf("Bundle with self as trust anchor should succeed: %v", err)
@@ -161,7 +160,6 @@ func TestBadSSL_IncompleteChain(t *testing.T) {
 		AIAMaxDepth:        5,
 		TrustStore:         "mozilla",
 		Verify:             true,
-		IncludeRoot:        true,
 	})
 	if err != nil {
 		t.Logf("Bundle with AIA also failed (cert may lack AIA URLs): %v", err)

@@ -3,8 +3,10 @@ package internal
 import (
 	"crypto"
 	"crypto/x509"
+	"encoding/pem"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/sensiblebit/certkit"
 )
@@ -26,7 +28,7 @@ func LoadContainerFile(path string, passwords []string) (*ContainerContents, err
 	}
 	contents, err := ParseContainerData(data, passwords)
 	if err != nil {
-		return nil, fmt.Errorf("could not parse %s as PEM, DER, PKCS#12, JKS, or PKCS#7", path)
+		return nil, fmt.Errorf("parsing %s: %w", path, err)
 	}
 	return contents, nil
 }
@@ -65,11 +67,17 @@ func ParseContainerData(data []byte, passwords []string) (*ContainerContents, er
 		return &ContainerContents{Leaf: certs[0], ExtraCerts: certs[1:]}, nil
 	}
 
-	// Try PEM certificates
+	// Try PEM (certificates and optional private key)
 	if certkit.IsPEM(data) {
-		certs, err := certkit.ParsePEMCertificates(data)
-		if err == nil && len(certs) > 0 {
-			return &ContainerContents{Leaf: certs[0], ExtraCerts: certs[1:]}, nil
+		certs, _ := certkit.ParsePEMCertificates(data)
+		key := findPEMPrivateKey(data, passwords)
+		if len(certs) > 0 || key != nil {
+			contents := &ContainerContents{Key: key}
+			if len(certs) > 0 {
+				contents.Leaf = certs[0]
+				contents.ExtraCerts = certs[1:]
+			}
+			return contents, nil
 		}
 	}
 
@@ -80,4 +88,26 @@ func ParseContainerData(data []byte, passwords []string) (*ContainerContents, er
 	}
 
 	return nil, fmt.Errorf("could not parse as PEM, DER, PKCS#12, JKS, or PKCS#7")
+}
+
+// findPEMPrivateKey iterates over PEM blocks in data looking for a private key block.
+// Returns the first successfully parsed key, or nil if none found.
+func findPEMPrivateKey(data []byte, passwords []string) crypto.PrivateKey {
+	rest := data
+	for len(rest) > 0 {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if !strings.Contains(block.Type, "PRIVATE KEY") {
+			continue
+		}
+		singlePEM := pem.EncodeToMemory(block)
+		key, err := certkit.ParsePEMPrivateKeyWithPasswords(singlePEM, passwords)
+		if err == nil && key != nil {
+			return key
+		}
+	}
+	return nil
 }

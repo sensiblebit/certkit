@@ -1601,3 +1601,41 @@ func TestLoadFromDisk_MergesWithExisting(t *testing.T) {
 		t.Fatal("cert B should still exist after load")
 	}
 }
+
+func TestFormatSANs(t *testing.T) {
+	// WHY: formatSANs is used in DumpDB logging; empty SANs must return "none" and non-empty must return the raw JSON string. A regression here would produce confusing diagnostic output.
+	tests := []struct {
+		name  string
+		input types.JSONText
+		want  string
+	}{
+		{"empty", types.JSONText(nil), "none"},
+		{"zero length", types.JSONText([]byte{}), "none"},
+		{"populated", types.JSONText(`["example.com","www.example.com"]`), `["example.com","www.example.com"]`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := formatSANs(tt.input)
+			if got != tt.want {
+				t.Errorf("formatSANs(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatTimePtr(t *testing.T) {
+	// WHY: formatTimePtr is used in DumpDB logging; nil time pointers must return "N/A" and non-nil must return the time's String() output. A nil-pointer panic here would crash dump operations.
+	t.Run("nil", func(t *testing.T) {
+		got := formatTimePtr(nil)
+		if got != "N/A" {
+			t.Errorf("formatTimePtr(nil) = %q, want %q", got, "N/A")
+		}
+	})
+	t.Run("non-nil", func(t *testing.T) {
+		ts := time.Date(2025, 6, 15, 12, 0, 0, 0, time.UTC)
+		got := formatTimePtr(&ts)
+		if got != ts.String() {
+			t.Errorf("formatTimePtr() = %q, want %q", got, ts.String())
+		}
+	})
+}

@@ -7,6 +7,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fix `ExcludeRoot` option (renamed from `IncludeRoot`) being declared but never checked in `Bundle()`
+- Fix self-signed certificate verified as root producing nil `BundleResult.Roots`
+- Fix false Ed25519 key detection where any 64-byte binary file was silently ingested as a key
+- Fix Ed25519 key bit length stored as 512 instead of 256 in database and YAML exports
+- Fix PEM container parsing silently dropping private keys from combined cert+key files
+- Fix `--dump-certs` using system trust store instead of mozilla (inconsistent with other commands)
+- Fix `--dump-certs` ignoring `--allow-expired` flag
+- Fix DB connection leak when schema initialization fails in `NewDB()`
+- Fix original parse error discarded in `LoadContainerFile`
+- Fix database errors silently swallowed in `ExportBundles` key loop
+- Fix `KeyAlgorithmName` and `PublicKeyAlgorithmName` returning "unknown" for `*ed25519.PrivateKey` / `*ed25519.PublicKey` pointer types (from OpenSSH key parsing)
+
+### Changed
+
+- Use user-provided password (first non-empty from `--passwords`) for PKCS#12/JKS bundle export instead of hardcoded "changeit"
+
+### Tests
+
+- Add OpenSSH private key parsing tests (unencrypted Ed25519, unencrypted RSA, encrypted Ed25519)
+- Add DSA public key SKI computation tests (RFC 7093 and legacy SHA-1)
+- Add `ExcludeRoot` option and self-signed root bundle tests
+- Add PEM container with private key and key-only PEM tests
+- Add Ed25519 bit length verification test
+- Add false Ed25519 detection rejection test for arbitrary 64-byte files
+- Add valid raw Ed25519 and SEC1 EC DER key ingestion tests
+- Add `KeyAlgorithmName` / `PublicKeyAlgorithmName` pointer-type Ed25519 test cases
+- Add SHA-1 fingerprint independent correctness verification test
+- Add 4-tier chain (multiple intermediates) bundle resolution test
+- Strengthen `TestCertSKIEmbedded` to assert non-empty values instead of conditional checks
+- Remove duplicate `TestParsePEMCertificates_ValidPEMCorruptDER` (identical to `_invalidDER`)
+- Remove duplicate `TestDetermineBundleName` from crypto_test.go
+- Add PKCS#7 encode/decode round-trip test (T-6 compliance)
+- Add `EncodePKCS7` empty and nil cert list error tests
+- Add `Bundle` with nil `CustomRoots` and `TrustStore="custom"` error test
+- Add `VerifyCert` chain-only validation test (CheckChain=true, CheckKeyMatch=false)
+- Consolidate duplicate `TestCertToPEM` / `TestCertToPEM_RoundTrip_ByteEquality` into single test
+
 ## [0.6.7] - 2026-02-15
 
 ### Added
