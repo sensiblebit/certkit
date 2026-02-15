@@ -17,6 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add UI filters: hide expired, unmatched, non-leaf, and untrusted certificates
 - Show version tag and GitHub repo link in web UI footer
 
+### Fixed
+
+- Fix Cloudflare Pages deploy going to preview instead of production on tag push
+
 ## [0.6.0] - 2026-02-14
 
 ### Added
