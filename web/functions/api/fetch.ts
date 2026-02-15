@@ -142,7 +142,7 @@ const ALLOWED_DOMAINS: string[] = [
   "crt.tbs-x509.com",
 ];
 
-function isAllowedDomain(hostname: string): boolean {
+export function isAllowedDomain(hostname: string): boolean {
   const lower = hostname.toLowerCase();
   return ALLOWED_DOMAINS.some(
     (domain) => lower === domain || lower.endsWith("." + domain),

@@ -11,6 +11,8 @@ bundles/
 *.crt
 *.csr
 *.json
+!package.json
+!package-lock.json
 *.db
 *.log
 *.der
@@ -24,6 +26,8 @@ bundles/
 
 changes.md
 *.local.*
+
+node_modules/
 
 # WASM build artifacts
 /wasm

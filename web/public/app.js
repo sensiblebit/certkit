@@ -1,4 +1,4 @@
-"use strict";
+import { formatDate, escapeHTML } from "./utils.js";
 
 // DOM references
 const dropZone = document.getElementById("drop-zone");
@@ -470,23 +470,6 @@ function showStatus(message, isError = false, isProcessing = false) {
 
 function hideStatus() {
   statusBar.hidden = true;
-}
-
-function formatDate(isoString) {
-  if (!isoString) return "—";
-  const d = new Date(isoString);
-  return d.toLocaleDateString(undefined, {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
-}
-
-function escapeHTML(str) {
-  if (!str) return "";
-  const div = document.createElement("div");
-  div.textContent = str;
-  return div.innerHTML;
 }
 
 function downloadBlob(data, filename, mimeType) {

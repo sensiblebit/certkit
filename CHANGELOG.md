@@ -7,6 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add vitest test infrastructure for web layer (`package.json`, `vitest.config.ts`)
+- Add proxy test suite (53 tests) covering domain validation, URL sanitization, CORS, and redirect handling
+- Add `utils.js` module with `formatDate` and `escapeHTML` extracted from `app.js`, with test suite (13 tests)
+- Add WASM vet and build pre-commit hooks for cross-compilation validation
+- Add vitest pre-commit hook for web test automation
+
+### Changed
+
+- Convert `app.js` to ES module with `type="module"` script loading
+- Export `isAllowedDomain()` from AIA proxy for direct unit testing
+- Update CLAUDE.md with web infrastructure documentation (package structure, dependencies, testing, tooling gates)
+
+### Fixed
+
+- Fix `.gitignore` blocking `package.json` and `package-lock.json` due to `*.json` glob
+
 ## [0.7.3] - 2026-02-15
 
 ### Changed

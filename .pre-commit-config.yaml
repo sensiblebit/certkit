@@ -1,6 +1,7 @@
 repos:
   - repo: local
     hooks:
+      # ── Go ──
       - id: goimports
         name: goimports
         entry: goimports -w
@@ -29,6 +30,22 @@ repos:
         types: [go]
         pass_filenames: false
 
+      # ── WASM ──
+      - id: wasm-vet
+        name: wasm vet
+        entry: bash -c 'GOOS=js GOARCH=wasm go vet ./cmd/wasm/'
+        language: system
+        files: (^cmd/wasm/|^internal/|^certkit\.go|^bundle\.go|^csr\.go|^pkcs\.go|^jks\.go)
+        pass_filenames: false
+
+      - id: wasm-build
+        name: wasm build
+        entry: bash -c 'GOOS=js GOARCH=wasm go build -o /dev/null ./cmd/wasm/'
+        language: system
+        files: (^cmd/wasm/|^internal/|^certkit\.go|^bundle\.go|^csr\.go|^pkcs\.go|^jks\.go)
+        pass_filenames: false
+
+  # ── JS / TS ──
   - repo: https://github.com/pre-commit/mirrors-prettier
     rev: v4.0.0-alpha.8
     hooks:
@@ -38,6 +55,14 @@ repos:
 
   - repo: local
     hooks:
+      - id: vitest
+        name: vitest
+        entry: bash -c 'cd web && npm test'
+        language: system
+        files: ^web/
+        exclude: wasm_exec\.js$
+        pass_filenames: false
+
       - id: wrangler-build
         name: wrangler build
         entry: bash -c 'cd web && wrangler pages functions build --outdir /tmp/certkit-fn-check'
@@ -46,6 +71,7 @@ repos:
         types: [ts]
         pass_filenames: false
 
+  # ── Markdown ──
   - repo: https://github.com/igorshubovych/markdownlint-cli
     rev: v0.43.0
     hooks:

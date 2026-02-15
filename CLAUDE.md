@@ -30,6 +30,7 @@ certkit.go, bundle.go, csr.go, pkcs.go, jks.go   # Root package: exported librar
 cmd/certkit/                                        # CLI (Cobra commands)
 cmd/wasm/                                           # WASM build (browser JS library)
 internal/                                           # Business logic (not exported)
+web/                                                # Cloudflare Pages site + CORS proxy
 ```
 
 ### Root package (`certkit`)
@@ -94,6 +95,23 @@ WASM build target (`//go:build js && wasm`). Exposes certkit as a JavaScript lib
 - `aia.go` — Resolves missing intermediates via AIA CA Issuers URLs up to depth 5; delegates fetching to JavaScript `certkitFetchURL()` (handles CORS proxying); skips certs already in store or issued by Mozilla roots. Uses `certkit.ParseCertificateAny()` and `sync.Once`-protected Mozilla root subject set.
 - `export.go` — ZIP `BundleWriter` implementation; delegates to shared `certstore.ExportMatchedBundles()` for bundle orchestration; supports SKI-based filtering.
 
+### `web/`
+
+Cloudflare Pages deployment. Static site with WASM-powered certificate processing and a serverless CORS proxy for AIA certificate fetching.
+
+- `wrangler.toml` — Cloudflare Pages configuration.
+- `package.json` — NPM config (vitest, jsdom, workers-types dev dependencies).
+- `vitest.config.ts` — Vitest test runner config (node environment by default).
+- `functions/api/fetch.ts` — Cloudflare Pages Function: CORS proxy for AIA certificate fetches from the WASM app. Domain allow list restricts proxying to known CA hostnames (US Gov FPKI, commercial CAs, bridge participants). Security hardening: blocks query strings, URL credentials, non-standard ports, fragments; reconstructs URLs from validated components; validates redirect targets via `safeFetch()` with `redirect: "manual"` and domain re-checking (max 5 hops). Exports `isAllowedDomain()` for direct unit testing.
+- `functions/api/fetch.test.ts` — Proxy test suite (53 tests): domain allow list, CORS/OPTIONS, origin/referer validation, URL sanitization, fetch behavior, redirect handling.
+- `public/index.html` — Web UI HTML. Loads `app.js` as ES module, `wasm_exec.js` (Go-generated, excluded from prettier/tests).
+- `public/app.js` — Web UI logic. ES module; imports utilities from `utils.js`. Drives WASM certificate processing UI.
+- `public/utils.js` — Extracted utility functions (`formatDate`, `escapeHTML`) shared by `app.js`. ES module.
+- `public/utils.test.js` — Utils test suite (13 tests, jsdom environment).
+- `public/style.css` — Web UI styles.
+- `public/wasm_exec.js` — Go-generated WASM glue code. Do not edit manually; excluded from prettier and vitest.
+- `public/certkit.wasm` — Compiled WASM binary (built via `make wasm`).
+
 ---
 
 ## 3 — Modules & Dependencies
@@ -101,7 +119,7 @@ WASM build target (`//go:build js && wasm`). Exposes certkit as a JavaScript lib
 - **MD-1 (SHOULD)** Prefer stdlib; introduce deps only with clear payoff; track transitive size and licenses.
 - **MD-2 (SHOULD)** Use `govulncheck` for dependency audits.
 
-Direct (9 total):
+Go direct (9 total):
 
 - `spf13/cobra` — CLI framework
 - `jmoiron/sqlx` + `modernc.org/sqlite` — Database (pure Go, no CGO)
@@ -111,6 +129,12 @@ Direct (9 total):
 - `keystore-go/v4` — Java KeyStore support
 - `golang.org/x/crypto` — OpenSSH private key parsing
 - `gopkg.in/yaml.v3` — YAML parsing
+
+JS/TS dev dependencies (`web/package.json`):
+
+- `vitest` — Test runner for proxy and utility tests
+- `jsdom` — DOM environment for browser-dependent tests (`escapeHTML`, etc.)
+- `@cloudflare/workers-types` — TypeScript types for Cloudflare Pages Functions
 
 ---
 
@@ -216,6 +240,21 @@ Test helpers are in `testhelpers_test.go` (both root and internal). All use `t.H
 
 - One assertion per logical check — don't bundle unrelated assertions.
 - Test names describe the scenario: `TestDecodeJKS_DifferentKeyPassword`, not `TestDecodeJKS2`.
+
+### JS/TS tests (`web/`)
+
+Tests for the web layer use [vitest](https://vitest.dev/) with jsdom for DOM-dependent tests.
+
+```sh
+cd web && npm test      # Run all JS/TS tests (vitest run)
+cd web && npm run test:watch  # Watch mode
+```
+
+- **Test locations**: `web/functions/api/fetch.test.ts` (proxy, 53 tests), `web/public/utils.test.js` (utilities, 13 tests).
+- **Environment**: Default is `node` (`web/vitest.config.ts`). Files needing DOM APIs use `// @vitest-environment jsdom` per-file directive.
+- **Fetch mocking**: Use `vi.stubGlobal("fetch", vi.fn())` for the proxy tests. Use `mockImplementation(() => Promise.resolve(new Response(...)))` — not `mockResolvedValue` — because `Response` body can only be consumed once.
+- **Date testing**: `formatDate()` uses `toLocaleDateString()` which applies timezone offset. Use midday UTC times (e.g., `2026-06-15T12:00:00Z`) in test fixtures to avoid day-boundary shifts.
+- **No test framework deps in Go**: JS/TS tests are separate from Go tests. vitest is a dev dependency only in `web/package.json`.
 
 ### Ralph Loop — iterative test hardening protocol
 
@@ -381,13 +420,16 @@ pre-commit install
 pre-commit run --all-files  # Manual run against all files
 ```
 
-Configured hooks: `goimports`, `go vet`, `go build`, `go test`, `prettier`, `wrangler build`, `markdownlint`.
+Configured hooks: `goimports`, `go vet`, `go build`, `go test`, `wasm vet`, `wasm build`, `prettier`, `vitest`, `wrangler build`, `markdownlint`.
 
 ### Tooling gates
 
 - **G-1 (MUST)** `go vet ./...` passes.
 - **G-2 (MUST)** `go test -race ./...` passes.
 - **G-3 (MUST)** `golangci-lint run` passes with default linters (errcheck, staticcheck, unused, etc.). No `.golangci.yml` config — uses golangci-lint defaults.
+- **G-4 (MUST)** `GOOS=js GOARCH=wasm go vet ./cmd/wasm/` and `go build` pass.
+- **G-5 (MUST)** `cd web && npm test` passes (vitest).
+- **G-6 (MUST)** `cd web && wrangler pages functions build` compiles (local only, no credentials).
 
 ---
 
