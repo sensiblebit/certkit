@@ -163,7 +163,7 @@ Target the latest stable Go release. Use modern stdlib features freely: `slices`
 
 ### Requirements
 
-- **T-1 (MUST)** All tests must pass before committing. Run `go test ./...` and `go vet ./...`.
+- **T-1 (MUST)** All tests must pass before committing. Run `go test ./...`, `go vet ./...`, and `golangci-lint run`.
 - **T-2 (MUST)** Table-driven tests with descriptive subtest names as the default pattern.
 - **T-3 (MUST)** Run `-race` in CI; add `t.Cleanup` for teardown.
 - **T-4 (SHOULD)** Mark safe tests with `t.Parallel()`.
@@ -173,6 +173,7 @@ Target the latest stable Go release. Use modern stdlib features freely: `slices`
 go test ./...          # Run all tests
 go build ./...         # Verify compilation
 go vet ./...           # Static analysis
+golangci-lint run      # Lint (errcheck, unused, staticcheck, etc.)
 ```
 
 ### Test helpers
@@ -366,7 +367,7 @@ Configured hooks: `goimports`, `go vet`, `go build`, `go test`, `markdownlint`.
 
 - **G-1 (MUST)** `go vet ./...` passes.
 - **G-2 (MUST)** `go test -race ./...` passes.
-- **G-3 (SHOULD)** `golangci-lint run` passes with project config.
+- **G-3 (MUST)** `golangci-lint run` passes with default linters (errcheck, staticcheck, unused, etc.).
 
 ---
 

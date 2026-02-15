@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Extract shared `internal/certstore` package to eliminate ~500 lines of duplicated business logic between CLI and WASM builds
 - WASM bundle export now produces identical output files to CLI (adds K8s YAML, JSON, YAML, CSR, CSR JSON)
 - Use user-provided password (first non-empty from `--passwords`) for PKCS#12/JKS bundle export instead of hardcoded "changeit"
+- Upgrade `golangci-lint run` from SHOULD to MUST in CLAUDE.md tooling gates
 
 ### Removed
 
@@ -21,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fix tautological comparison in `safeLimitSize` (`int64 >= math.MaxInt64` → `==`)
 - Fix `ExcludeRoot` option (renamed from `IncludeRoot`) being declared but never checked in `Bundle()`
 - Fix self-signed certificate verified as root producing nil `BundleResult.Roots`
 - Fix false Ed25519 key detection where any 64-byte binary file was silently ingested as a key

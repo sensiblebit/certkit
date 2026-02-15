@@ -167,40 +167,6 @@ func newECDSALeaf(t *testing.T, ca testCA, cn string, sans []string) testLeaf {
 	return testLeaf{cert: cert, certPEM: certPEM, certDER: certDER, key: key, keyPEM: keyPEM}
 }
 
-// newEd25519Leaf generates an Ed25519 leaf certificate signed by the given CA.
-func newEd25519Leaf(t *testing.T, ca testCA, cn string, sans []string) testLeaf {
-	t.Helper()
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("generate Ed25519 leaf key: %v", err)
-	}
-
-	tmpl := &x509.Certificate{
-		SerialNumber:   big.NewInt(300),
-		Subject:        pkix.Name{CommonName: cn, Organization: []string{"TestOrg"}},
-		DNSNames:       sans,
-		NotBefore:      time.Now().Add(-time.Hour),
-		NotAfter:       time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:       x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:    []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		AuthorityKeyId: ca.cert.SubjectKeyId,
-	}
-
-	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, ca.cert, pub, ca.key)
-	if err != nil {
-		t.Fatalf("create Ed25519 leaf cert: %v", err)
-	}
-	cert, err := x509.ParseCertificate(certDER)
-	if err != nil {
-		t.Fatalf("parse Ed25519 leaf cert: %v", err)
-	}
-
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-	keyDER, _ := x509.MarshalPKCS8PrivateKey(priv)
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
-	return testLeaf{cert: cert, certPEM: certPEM, certDER: certDER, key: priv, keyPEM: keyPEM}
-}
-
 // newExpiredLeaf generates an expired RSA leaf certificate.
 func newExpiredLeaf(t *testing.T, ca testCA) testLeaf {
 	t.Helper()

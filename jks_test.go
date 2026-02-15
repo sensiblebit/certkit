@@ -39,13 +39,15 @@ func buildJKSTrustedCert(t *testing.T, password string) []byte {
 	}
 
 	ks := keystore.New()
-	ks.SetTrustedCertificateEntry("ca", keystore.TrustedCertificateEntry{
+	if err := ks.SetTrustedCertificateEntry("ca", keystore.TrustedCertificateEntry{
 		CreationTime: time.Now(),
 		Certificate: keystore.Certificate{
 			Type:    "X.509",
 			Content: certDER,
 		},
-	})
+	}); err != nil {
+		t.Fatalf("set trusted cert entry: %v", err)
+	}
 
 	var buf bytes.Buffer
 	if err := ks.Store(&buf, []byte(password)); err != nil {
@@ -164,10 +166,12 @@ func buildJKSMixed(t *testing.T, password string) []byte {
 	}
 
 	ks := keystore.New()
-	ks.SetTrustedCertificateEntry("ca", keystore.TrustedCertificateEntry{
+	if err := ks.SetTrustedCertificateEntry("ca", keystore.TrustedCertificateEntry{
 		CreationTime: time.Now(),
 		Certificate:  keystore.Certificate{Type: "X.509", Content: caDER},
-	})
+	}); err != nil {
+		t.Fatalf("set trusted cert entry: %v", err)
+	}
 	if err := ks.SetPrivateKeyEntry("server", keystore.PrivateKeyEntry{
 		CreationTime: time.Now(),
 		PrivateKey:   pkcs8Key,
@@ -386,10 +390,12 @@ func TestDecodeJKS_CorruptedKeyData(t *testing.T) {
 
 	// Build JKS with a trusted cert entry + a private key entry with corrupt key bytes
 	ks := keystore.New()
-	ks.SetTrustedCertificateEntry("ca", keystore.TrustedCertificateEntry{
+	if err := ks.SetTrustedCertificateEntry("ca", keystore.TrustedCertificateEntry{
 		CreationTime: time.Now(),
 		Certificate:  keystore.Certificate{Type: "X.509", Content: caDER},
-	})
+	}); err != nil {
+		t.Fatalf("set trusted cert entry: %v", err)
+	}
 	if err := ks.SetPrivateKeyEntry("server", keystore.PrivateKeyEntry{
 		CreationTime: time.Now(),
 		PrivateKey:   []byte("this-is-not-valid-pkcs8-data"), // corrupted key bytes

@@ -11,7 +11,6 @@ import (
 	"math/big"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestHasBinaryExtension(t *testing.T) {
@@ -232,31 +231,6 @@ func TestSanitizeFileName(t *testing.T) {
 			}
 		})
 	}
-}
-
-// makeTestCert creates a minimal self-signed certificate for testing. Not
-// exported — used only within this test file for simple key-type checks.
-func makeTestCert(t *testing.T) *x509.Certificate {
-	t.Helper()
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "test"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(time.Hour),
-	}
-	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cert, err := x509.ParseCertificate(der)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return cert
 }
 
 func TestGetKeyType_MatchesUnknownSubstring(t *testing.T) {

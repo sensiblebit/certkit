@@ -2,7 +2,7 @@ package certkit
 
 import (
 	"crypto"
-	"crypto/dsa"
+	"crypto/dsa" //nolint:staticcheck // needed for testing legacy DSA key identification
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"

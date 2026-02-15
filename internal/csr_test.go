@@ -31,7 +31,9 @@ func TestGenerateCSRFiles_FromTemplate(t *testing.T) {
 		Hosts: []string{"template.example.com", "10.0.0.1"},
 	}
 	data, _ := json.Marshal(tmpl)
-	os.WriteFile(tmplPath, data, 0644)
+	if err := os.WriteFile(tmplPath, data, 0644); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
 
 	outDir := filepath.Join(dir, "out")
 	_, err := GenerateCSRFiles(CSROptions{
@@ -85,7 +87,9 @@ func TestGenerateCSRFiles_FromCert(t *testing.T) {
 	certPEM := certkit.CertToPEM(cert)
 
 	certPath := filepath.Join(dir, "cert.pem")
-	os.WriteFile(certPath, []byte(certPEM), 0644)
+	if err := os.WriteFile(certPath, []byte(certPEM), 0644); err != nil {
+		t.Fatalf("write cert: %v", err)
+	}
 
 	outDir := filepath.Join(dir, "out")
 	_, err := GenerateCSRFiles(CSROptions{
@@ -122,7 +126,9 @@ func TestGenerateCSRFiles_FromCSR(t *testing.T) {
 	csrPEMBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: srcDER})
 
 	csrPath := filepath.Join(dir, "source.csr")
-	os.WriteFile(csrPath, csrPEMBytes, 0644)
+	if err := os.WriteFile(csrPath, csrPEMBytes, 0644); err != nil {
+		t.Fatalf("write source CSR: %v", err)
+	}
 
 	outDir := filepath.Join(dir, "out")
 	_, err := GenerateCSRFiles(CSROptions{
@@ -152,7 +158,9 @@ func TestGenerateCSRFiles_WithExistingKey(t *testing.T) {
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	keyPEM, _ := certkit.MarshalPrivateKeyToPEM(key)
 	keyPath := filepath.Join(dir, "existing.key")
-	os.WriteFile(keyPath, []byte(keyPEM), 0600)
+	if err := os.WriteFile(keyPath, []byte(keyPEM), 0600); err != nil {
+		t.Fatalf("write key: %v", err)
+	}
 
 	// Create template
 	tmplPath := filepath.Join(dir, "template.json")
@@ -161,7 +169,9 @@ func TestGenerateCSRFiles_WithExistingKey(t *testing.T) {
 		Hosts:   []string{"existing-key.example.com"},
 	}
 	data, _ := json.Marshal(tmpl)
-	os.WriteFile(tmplPath, data, 0644)
+	if err := os.WriteFile(tmplPath, data, 0644); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
 
 	outDir := filepath.Join(dir, "out")
 	_, err := GenerateCSRFiles(CSROptions{
@@ -192,7 +202,9 @@ func TestGenerateCSRFiles_RSAKeyGen(t *testing.T) {
 		Subject: certkit.CSRSubject{CommonName: "rsa.example.com"},
 	}
 	data, _ := json.Marshal(tmpl)
-	os.WriteFile(tmplPath, data, 0644)
+	if err := os.WriteFile(tmplPath, data, 0644); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
 
 	outDir := filepath.Join(dir, "out")
 	_, err := GenerateCSRFiles(CSROptions{
@@ -220,7 +232,9 @@ func TestGenerateCSRFiles_Stdout(t *testing.T) {
 		Hosts:   []string{"stdout.example.com"},
 	}
 	data, _ := json.Marshal(tmpl)
-	os.WriteFile(tmplPath, data, 0644)
+	if err := os.WriteFile(tmplPath, data, 0644); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
 
 	result, err := GenerateCSRFiles(CSROptions{
 		TemplatePath: tmplPath,

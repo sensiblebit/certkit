@@ -293,7 +293,7 @@ func readZipEntry(f *zip.File, maxSize int64) ([]byte, error) {
 // safeLimitSize returns maxSize+1 for overflow detection in io.LimitReader,
 // clamped to math.MaxInt64 to prevent int64 wraparound.
 func safeLimitSize(maxSize int64) int64 {
-	if maxSize >= math.MaxInt64 {
+	if maxSize == math.MaxInt64 {
 		return math.MaxInt64
 	}
 	return maxSize + 1
