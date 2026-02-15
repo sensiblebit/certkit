@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add browser-based WASM build (`cmd/wasm/`) with drag-and-drop certificate/key processing, chain resolution, and ZIP bundle export
+- Add Cloudflare Pages deployment with CORS proxy for AIA certificate fetching (`web/`)
+- Add GitHub Actions workflow to build WASM and deploy to Cloudflare Pages on tag push
+- Add certificate trust validation against embedded Mozilla root store in WASM UI
+- Add selectable export: checkboxes to choose which matched bundles to include in ZIP
+- Add UI filters: hide expired, unmatched, non-leaf, and untrusted certificates
+
 ## [0.6.0] - 2026-02-14
 
 ### Added

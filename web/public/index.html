@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>certkit — Certificate Bundle Tool</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <header>
+        <h1>certkit</h1>
+        <p>Drop certificate and key files to inspect, match, and export organized bundles.</p>
+    </header>
+
+    <main>
+        <section id="drop-zone" class="drop-zone" tabindex="0" role="button" aria-label="Drop files here or click to browse">
+            <div class="drop-zone-content">
+                <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="17 8 12 3 7 8"/>
+                    <line x1="12" y1="3" x2="12" y2="15"/>
+                </svg>
+                <p>Drop files or folders here</p>
+                <p class="hint">PEM, DER, PKCS#12, PKCS#7, JKS — or click to browse</p>
+            </div>
+            <input type="file" id="file-input" multiple hidden>
+        </section>
+
+        <section class="options-section">
+            <div class="option-row">
+                <label for="passwords">Passwords <span class="hint">(comma-separated, for encrypted files)</span></label>
+                <input type="text" id="passwords" placeholder="password1, password2, ...">
+            </div>
+        </section>
+
+        <section id="status-bar" class="status-bar" hidden>
+            <span id="status-text">Loading WASM...</span>
+        </section>
+
+        <section id="results-section" hidden>
+            <div class="results-header">
+                <h2>Results</h2>
+                <div class="results-actions">
+                    <button id="export-btn" class="btn btn-primary" disabled>Export Bundles (ZIP)</button>
+                    <button id="reset-btn" class="btn btn-secondary">Reset</button>
+                </div>
+            </div>
+
+            <div id="summary" class="summary"></div>
+
+            <div id="filters" class="filters" hidden>
+                <label class="filter-label"><input type="checkbox" id="filter-expired" checked> Hide expired</label>
+                <label class="filter-label"><input type="checkbox" id="filter-unmatched" checked> Hide unmatched</label>
+                <label class="filter-label"><input type="checkbox" id="filter-nonleaf" checked> Hide non-leaf</label>
+                <label class="filter-label"><input type="checkbox" id="filter-untrusted" checked> Hide untrusted</label>
+            </div>
+
+            <div class="table-container">
+                <table id="results-table">
+                    <thead>
+                        <tr>
+                            <th class="col-select"><input type="checkbox" id="select-all" title="Select all"></th>
+                            <th>CN / Name</th>
+                            <th>Type</th>
+                            <th>Key Type</th>
+                            <th>Expiry</th>
+                            <th>SKI</th>
+                            <th>Key Match</th>
+                            <th>Source</th>
+                        </tr>
+                    </thead>
+                    <tbody id="results-body"></tbody>
+                </table>
+            </div>
+
+            <div id="keys-section" hidden>
+                <h3>Private Keys</h3>
+                <div class="table-container">
+                    <table id="keys-table">
+                        <thead>
+                            <tr>
+                                <th>Type</th>
+                                <th>Bits</th>
+                                <th>SKI</th>
+                                <th>Cert Match</th>
+                                <th>Source</th>
+                            </tr>
+                        </thead>
+                        <tbody id="keys-body"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div id="warnings-section" hidden>
+                <h3>Warnings</h3>
+                <ul id="warnings-list"></ul>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <p>certkit — All processing happens locally in your browser. No files are uploaded.</p>
+    </footer>
+
+    <script src="wasm_exec.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>
