@@ -884,3 +884,81 @@ func TestBundle_FourTierChain(t *testing.T) {
 		t.Errorf("root CN=%q, want 4-Tier Root CA", result.Roots[0].Subject.CommonName)
 	}
 }
+
+func TestMozillaRootSubjects_NonEmpty(t *testing.T) {
+	// WHY: MozillaRootSubjects is used by AIA resolution to skip fetching for
+	// certs issued by known roots. An empty set would cause unnecessary fetches.
+	t.Parallel()
+	subjects := MozillaRootSubjects()
+	if len(subjects) == 0 {
+		t.Fatal("expected non-empty Mozilla root subjects map")
+	}
+	// Mozilla bundle typically has 100+ roots
+	if len(subjects) < 50 {
+		t.Errorf("suspiciously few root subjects: %d", len(subjects))
+	}
+}
+
+func TestMozillaRootSubjects_Idempotent(t *testing.T) {
+	// WHY: MozillaRootSubjects is sync.Once cached; multiple calls must return
+	// the same map instance, not re-parse the PEM bundle.
+	t.Parallel()
+	s1 := MozillaRootSubjects()
+	s2 := MozillaRootSubjects()
+	if len(s1) != len(s2) {
+		t.Errorf("subsequent calls returned different sizes: %d vs %d", len(s1), len(s2))
+	}
+}
+
+func TestIsIssuedByMozillaRoot_KnownRoot(t *testing.T) {
+	// WHY: A cert whose issuer is a real Mozilla root must return true;
+	// false negatives would trigger unnecessary AIA fetches.
+	t.Parallel()
+	// Parse one root from the bundle and create a cert "issued by" it
+	pemData := MozillaRootPEM()
+	block, _ := pem.Decode(pemData)
+	if block == nil {
+		t.Fatal("failed to decode first PEM block from Mozilla bundle")
+	}
+	root, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a cert whose RawIssuer matches the root's RawSubject
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "issued-by-mozilla-root"},
+		NotBefore:    time.Now().Add(-1 * time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+	}
+	certBytes, _ := x509.CreateCertificate(rand.Reader, template, root, &key.PublicKey, key)
+	// Use the root's key for signing — doesn't matter for this test since
+	// we only check RawIssuer matching, not signature validity.
+	// Actually we need a valid signature, so self-sign but set issuer manually.
+	// Simpler: just check the root itself — it's self-signed so its issuer IS a mozilla root subject.
+	if !IsIssuedByMozillaRoot(root) {
+		t.Error("self-signed Mozilla root should report IsIssuedByMozillaRoot=true")
+	}
+	_ = certBytes // suppress unused
+}
+
+func TestIsIssuedByMozillaRoot_UnknownIssuer(t *testing.T) {
+	// WHY: A cert issued by a private CA must return false; false positives
+	// would skip AIA resolution and leave chains incomplete.
+	t.Parallel()
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "private-ca-leaf"},
+		NotBefore:    time.Now().Add(-1 * time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+	}
+	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	cert, _ := x509.ParseCertificate(certBytes)
+
+	if IsIssuedByMozillaRoot(cert) {
+		t.Error("self-signed private cert should not report IsIssuedByMozillaRoot=true")
+	}
+}

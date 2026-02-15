@@ -24,12 +24,6 @@ var version = "dev"
 // buildYear is set at build time via -ldflags "-X main.buildYear=2026".
 var buildYear = "2025"
 
-// getMozillaRoots returns the shared Mozilla root cert pool.
-func getMozillaRoots() *x509.CertPool {
-	pool, _ := certkit.MozillaRootPool()
-	return pool
-}
-
 func main() {
 	js.Global().Set("certkitVersion", version)
 	js.Global().Set("certkitBuildYear", buildYear)
@@ -61,7 +55,7 @@ func addFiles(_ js.Value, args []js.Value) any {
 			}
 		}
 	}
-	passwords = deduplicatePasswords(passwords)
+	passwords = certkit.DeduplicatePasswords(passwords)
 
 	handler := js.FuncOf(func(_ js.Value, promiseArgs []js.Value) any {
 		resolve := promiseArgs[0]
@@ -163,16 +157,10 @@ func getState(_ js.Value, _ []js.Value) any {
 	resp := stateResponse{}
 
 	// Build pools for chain verification.
-	roots := getMozillaRoots()
-	intermediatePool := x509.NewCertPool()
+	roots, _ := certkit.MozillaRootPool()
+	intermediatePool := globalStore.IntermediatePool()
 	allCerts := globalStore.AllCerts()
 	allKeys := globalStore.AllKeys()
-
-	for _, rec := range allCerts {
-		if rec.CertType == "intermediate" || rec.CertType == "root" {
-			intermediatePool.AddCert(rec.Cert)
-		}
-	}
 
 	for ski, rec := range allCerts {
 		_, hasKey := allKeys[ski]
@@ -264,11 +252,6 @@ func exportBundlesJS(_ js.Value, args []js.Value) any {
 func resetStore(_ js.Value, _ []js.Value) any {
 	globalStore.Reset()
 	return nil
-}
-
-// deduplicatePasswords merges user-provided passwords with defaults and removes duplicates.
-func deduplicatePasswords(userPasswords []string) []string {
-	return certkit.DeduplicatePasswords(userPasswords)
 }
 
 // hexToBytes decodes a hex string to bytes, returning nil on error.

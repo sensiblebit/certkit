@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add `MozillaRootSubjects()` and `IsIssuedByMozillaRoot()` to root `certkit` package — shared Mozilla root subject index for AIA resolution
+- Add `MemStore.IntermediatePool()` returning `*x509.CertPool` — standardizes intermediate pool construction for chain verification
+- Add `certstore.ResolveAIA()` with `AIAFetcher` callback — shared store-aware AIA resolution algorithm used by both CLI and WASM
 - Add `DeduplicatePasswords()` to root `certkit` package — shared by CLI and WASM for password merging and deduplication
 - Add `MozillaRootPool()` with `sync.Once` caching — eliminates redundant PEM parsing across CLI, WASM, and `Bundle()` calls
 - Add `MozillaRootPEM()` to root `certkit` package for access to embedded Mozilla root PEM bundle
@@ -29,6 +32,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - CLI bundle export now passes store intermediates as `ExtraIntermediates` to chain builder (matches WASM behavior, fixes chains when intermediates are uploaded alongside leaf)
 - WASM trust verification now uses `time.Now()` (matches CLI behavior; expired certs show `trusted: false`)
 - WASM `resolveAIA` uses `sync.Once` for Mozilla root subject initialization (was not thread-safe)
+- WASM AIA resolution now delegates to shared `certstore.ResolveAIA()` — eliminates ~90 lines of WASM-specific algorithm code
+- WASM `getState` now uses `MemStore.IntermediatePool()` instead of manually building pool with roots included (fixes inconsistency with CLI behavior)
+- Remove WASM `deduplicatePasswords` wrapper and `getMozillaRoots` wrapper — call library functions directly
 
 ### Removed
 

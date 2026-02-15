@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"io"
@@ -18,9 +19,11 @@ import (
 )
 
 var (
-	mozillaPoolOnce sync.Once
-	mozillaPool     *x509.CertPool
-	mozillaPoolErr  error
+	mozillaPoolOnce     sync.Once
+	mozillaPool         *x509.CertPool
+	mozillaPoolErr      error
+	mozillaSubjectsOnce sync.Once
+	mozillaSubjects     map[string]bool
 )
 
 // MozillaRootPEM returns the raw PEM-encoded Mozilla root certificate bundle.
@@ -42,6 +45,38 @@ func MozillaRootPool() (*x509.CertPool, error) {
 		mozillaPool = pool
 	})
 	return mozillaPool, mozillaPoolErr
+}
+
+// MozillaRootSubjects returns a set of raw ASN.1 subject byte strings from all
+// Mozilla root certificates. The result is initialized once and cached for the
+// lifetime of the process.
+func MozillaRootSubjects() map[string]bool {
+	mozillaSubjectsOnce.Do(func() {
+		mozillaSubjects = make(map[string]bool)
+		pemData := MozillaRootPEM()
+		for {
+			var block *pem.Block
+			block, pemData = pem.Decode(pemData)
+			if block == nil {
+				break
+			}
+			if block.Type != "CERTIFICATE" {
+				continue
+			}
+			cert, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				continue
+			}
+			mozillaSubjects[string(cert.RawSubject)] = true
+		}
+	})
+	return mozillaSubjects
+}
+
+// IsIssuedByMozillaRoot reports whether the certificate's issuer matches a
+// Mozilla root certificate's subject (by raw ASN.1 bytes).
+func IsIssuedByMozillaRoot(cert *x509.Certificate) bool {
+	return MozillaRootSubjects()[string(cert.RawIssuer)]
 }
 
 // BundleResult holds the resolved chain and metadata.

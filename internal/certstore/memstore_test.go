@@ -238,6 +238,49 @@ func TestMemStore_Intermediates(t *testing.T) {
 	}
 }
 
+func TestMemStore_IntermediatePool(t *testing.T) {
+	// WHY: IntermediatePool is used by WASM getState for chain verification;
+	// must include only intermediates, not roots or leaves.
+	t.Parallel()
+	store := NewMemStore()
+	ca := newRSACA(t)
+	inter := newIntermediateCA(t, ca)
+	leaf := newRSALeaf(t, inter, "pool.example.com", []string{"pool.example.com"})
+
+	for _, cert := range []*x509.Certificate{ca.cert, inter.cert, leaf.cert} {
+		if err := store.HandleCertificate(cert, "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	pool := store.IntermediatePool()
+	if pool == nil {
+		t.Fatal("IntermediatePool returned nil")
+	}
+
+	// Verify the leaf can be verified using the pool + root as trust anchor
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(ca.cert)
+	_, err := leaf.cert.Verify(x509.VerifyOptions{
+		Roots:         rootPool,
+		Intermediates: pool,
+	})
+	if err != nil {
+		t.Errorf("leaf should verify with intermediate pool: %v", err)
+	}
+}
+
+func TestMemStore_IntermediatePool_Empty(t *testing.T) {
+	// WHY: An empty store must return a non-nil pool to avoid nil-pointer
+	// panics in callers that pass it to x509.Verify.
+	t.Parallel()
+	store := NewMemStore()
+	pool := store.IntermediatePool()
+	if pool == nil {
+		t.Fatal("IntermediatePool returned nil for empty store")
+	}
+}
+
 func TestMemStore_HasIssuer(t *testing.T) {
 	// WHY: HasIssuer drives AIA fetching decisions; must match by raw ASN.1
 	// subject/issuer bytes and must not match a cert against itself.

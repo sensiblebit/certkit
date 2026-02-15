@@ -222,6 +222,18 @@ func (s *MemStore) Intermediates() []*x509.Certificate {
 	return result
 }
 
+// IntermediatePool returns an x509.CertPool containing all intermediate
+// certificates in the store. Useful for chain verification.
+func (s *MemStore) IntermediatePool() *x509.CertPool {
+	pool := x509.NewCertPool()
+	for _, rec := range s.certsByID {
+		if rec.CertType == "intermediate" {
+			pool.AddCert(rec.Cert)
+		}
+	}
+	return pool
+}
+
 // HasIssuer reports whether the store contains the issuer for the given cert,
 // by comparing raw ASN.1 subject/issuer bytes.
 func (s *MemStore) HasIssuer(cert *x509.Certificate) bool {
