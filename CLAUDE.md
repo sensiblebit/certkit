@@ -28,6 +28,7 @@ Certificate management tool: ingest certs/keys in many formats, catalog in memor
 ```text
 certkit.go, bundle.go, csr.go, pkcs.go, jks.go   # Root package: exported library API
 cmd/certkit/                                        # CLI (Cobra commands)
+cmd/wasm/                                           # WASM build (browser JS library)
 internal/                                           # Business logic (not exported)
 ```
 
@@ -36,7 +37,7 @@ internal/                                           # Business logic (not export
 Stateless utility functions. No database, no file I/O. This is the public library API.
 
 - `certkit.go` — PEM parsing, key generation, fingerprints, SKI computation
-- `bundle.go` — Certificate chain resolution via AIA, trust store verification
+- `bundle.go` — Certificate chain resolution via AIA, trust store verification. `BundleResult`/`BundleOptions` types, `DefaultOptions()`, `FetchLeafFromURL()`, `FetchAIACertificates()`, `Bundle()`
 - `csr.go` — CSR generation from certs, templates, or existing CSRs
 - `pkcs.go` — PKCS#12 and PKCS#7 encode/decode
 - `jks.go` — Java KeyStore encode/decode
@@ -67,13 +68,30 @@ CLI business logic and file I/O. Delegates to `internal/certstore/` for processi
 - `passwords.go` — Password aggregation and deduplication.
 - `logger.go` — slog setup.
 - `container.go` — Container file parsing. `LoadContainerFile()` and `ParseContainerData()` extract leaf certs, keys, and extra certs from PKCS#12, JKS, PKCS#7, PEM, or DER input.
+- `archive.go` — Archive extraction pipeline. Processes ZIP, TAR, and TAR.GZ archives with zip bomb protection (decompression ratio limits, entry size limits, total size budgets); skips nested archives and processes each entry for certificates.
 - `types.go` — Shared types: `Config`. `K8sSecret`/`K8sMetadata` are type aliases for `certstore.K8sSecret`/`certstore.K8sMetadata`.
 
 ### `cmd/certkit/`
 
 Thin CLI layer. Each file is one Cobra command. Flag variables are package-level (standard Cobra pattern). Commands delegate to `internal/` functions.
 
+- `main.go` — Entry point. CLI version string, memory limit enforcement, exit code handling (0 success, 1 general error, 2 `ValidationError`).
+- `root.go` — Root Cobra command with shared flags: `--log-level`, `--passwords`, `--password-file`, `--allow-expired`. Registers all subcommands.
 - `scan.go` — Main scanning command with `--dump-keys`, `--dump-certs`, `--max-file-size`, `--bundle-path` flags. Contains `formatDN()` helper for OpenSSL-style distinguished name formatting.
+- `bundle.go` — Build verified certificate chains from leaf certs; resolves intermediates via AIA; outputs PEM, chain, fullchain, PKCS#12, or JKS with `--key`, `--force`, `--trust-store` flags.
+- `inspect.go` — Display detailed certificate, key, or CSR information with text or JSON output (`--format`); filters expired items unless `--allow-expired`.
+- `verify.go` — Verify certificate chains, key matches, and expiry windows; returns exit code 2 on validation failures; `--key`, `--expiry`, `--trust-store`, `--format` flags.
+- `keygen.go` — Generate RSA, ECDSA, or Ed25519 key pairs with optional CSR and SANs; outputs to stdout or directory with `-o`.
+- `csr.go` — Generate CSRs from JSON templates, existing certificates, or existing CSRs with configurable algorithms; outputs to stdout or directory with `-o`.
+
+### `cmd/wasm/`
+
+WASM build target (`//go:build js && wasm`). Exposes certkit as a JavaScript library for browser-based certificate processing.
+
+- `main.go` — WASM entry point. Exposes JS functions: `certkitAddFiles()` (process files with passwords, returns promise), `certkitGetState()` (JSON summary of certs/keys/pairs), `certkitExportBundles(skis)` (export filtered bundles as ZIP `Uint8Array`), `certkitReset()` (clear store). Triggers eager AIA resolution after ingestion via `certkitOnAIAComplete` callback.
+- `store.go` — Initializes global in-memory `MemStore` singleton shared across all JS function calls.
+- `aia.go` — Resolves missing intermediates via AIA CA Issuers URLs up to depth 5; delegates fetching to JavaScript `certkitFetchURL()` (handles CORS proxying); skips certs already in store or issued by Mozilla roots.
+- `export.go` — Generates ZIP archive of organized certificate bundles for matched key-cert pairs; supports SKI-based filtering; writes chain files into bundle-named folders.
 
 ---
 
@@ -82,7 +100,7 @@ Thin CLI layer. Each file is one Cobra command. Flag variables are package-level
 - **MD-1 (SHOULD)** Prefer stdlib; introduce deps only with clear payoff; track transitive size and licenses.
 - **MD-2 (SHOULD)** Use `govulncheck` for dependency audits.
 
-Direct (8 total):
+Direct (9 total):
 
 - `spf13/cobra` — CLI framework
 - `jmoiron/sqlx` + `modernc.org/sqlite` — Database (pure Go, no CGO)
@@ -90,6 +108,7 @@ Direct (8 total):
 - `smallstep/pkcs7` — PKCS#7 support
 - `go-pkcs12` — PKCS#12 support
 - `keystore-go/v4` — Java KeyStore support
+- `golang.org/x/crypto` — OpenSSH private key parsing
 - `gopkg.in/yaml.v3` — YAML parsing
 
 ---
@@ -367,7 +386,7 @@ Configured hooks: `goimports`, `go vet`, `go build`, `go test`, `markdownlint`.
 
 - **G-1 (MUST)** `go vet ./...` passes.
 - **G-2 (MUST)** `go test -race ./...` passes.
-- **G-3 (MUST)** `golangci-lint run` passes with default linters (errcheck, staticcheck, unused, etc.).
+- **G-3 (MUST)** `golangci-lint run` passes with default linters (errcheck, staticcheck, unused, etc.). No `.golangci.yml` config — uses golangci-lint defaults.
 
 ---
 
