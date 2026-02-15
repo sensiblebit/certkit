@@ -196,8 +196,8 @@ export const onRequestGet: PagesFunction = async ({ request }) => {
       responseHeaders.set("Content-Type", "application/octet-stream");
       responseHeaders.set("Content-Length", body.byteLength.toString());
       responseHeaders.set("X-Content-Type-Options", "nosniff");
-      // Cache certificate responses for 1 hour — they rarely change
-      responseHeaders.set("Cache-Control", "public, max-age=3600");
+      // Cache forever — AIA certificates are immutable (same URL = same cert)
+      responseHeaders.set("Cache-Control", "public, max-age=31536000, immutable");
 
       return new Response(body, { status: 200, headers: responseHeaders });
     } catch {
