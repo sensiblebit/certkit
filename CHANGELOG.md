@@ -7,23 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-02-15
+
 ### Added
 
-- Add vitest test infrastructure for web layer (`package.json`, `vitest.config.ts`)
-- Add proxy test suite (53 tests) covering domain validation, URL sanitization, CORS, and redirect handling
-- Add `utils.js` module with `formatDate` and `escapeHTML` extracted from `app.js`, with test suite (13 tests)
-- Add WASM vet and build pre-commit hooks for cross-compilation validation
-- Add vitest pre-commit hook for web test automation
+- Add vitest test infrastructure for web layer (`package.json`, `vitest.config.ts`) ([`404e1d7`])
+- Add proxy test suite (53 tests) covering domain validation, URL sanitization, CORS, and redirect handling ([`404e1d7`])
+- Add `utils.js` module with `formatDate` and `escapeHTML` extracted from `app.js`, with test suite (13 tests) ([`404e1d7`])
+- Add WASM vet and build pre-commit hooks for cross-compilation validation ([`404e1d7`])
+- Add vitest pre-commit hook for web test automation ([`404e1d7`])
 
 ### Changed
 
-- Convert `app.js` to ES module with `type="module"` script loading
-- Export `isAllowedDomain()` from AIA proxy for direct unit testing
-- Update CLAUDE.md with web infrastructure documentation (package structure, dependencies, testing, tooling gates)
+- Convert `app.js` to ES module with `type="module"` script loading ([`404e1d7`])
+- Export `isAllowedDomain()` from AIA proxy for direct unit testing ([`404e1d7`])
+- Update CLAUDE.md with web infrastructure documentation (package structure, dependencies, testing, tooling gates) ([`404e1d7`])
 
 ### Fixed
 
-- Fix `.gitignore` blocking `package.json` and `package-lock.json` due to `*.json` glob
+- Fix `.gitignore` blocking `package.json` and `package-lock.json` due to `*.json` glob ([`404e1d7`])
 
 ## [0.7.3] - 2026-02-15
 
@@ -346,7 +348,8 @@ Initial release.
 - PKCS#12, PKCS#7, and JKS encode/decode support
 - Homebrew distribution via GoReleaser
 
-[Unreleased]: https://github.com/sensiblebit/certkit/compare/v0.7.3...HEAD
+[Unreleased]: https://github.com/sensiblebit/certkit/compare/v0.7.4...HEAD
+[0.7.4]: https://github.com/sensiblebit/certkit/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/sensiblebit/certkit/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/sensiblebit/certkit/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/sensiblebit/certkit/compare/v0.7.0...v0.7.1
@@ -373,6 +376,7 @@ Initial release.
 [0.1.1]: https://github.com/sensiblebit/certkit/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/sensiblebit/certkit/releases/tag/v0.1.0
 
+[`404e1d7`]: https://github.com/sensiblebit/certkit/commit/404e1d7
 [`847fe95`]: https://github.com/sensiblebit/certkit/commit/847fe95
 [`ee2749b`]: https://github.com/sensiblebit/certkit/commit/ee2749b
 [`390217d`]: https://github.com/sensiblebit/certkit/commit/390217d
