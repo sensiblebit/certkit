@@ -381,7 +381,7 @@ pre-commit install
 pre-commit run --all-files  # Manual run against all files
 ```
 
-Configured hooks: `goimports`, `go vet`, `go build`, `go test`, `markdownlint`.
+Configured hooks: `goimports`, `go vet`, `go build`, `go test`, `prettier`, `wrangler build`, `markdownlint`.
 
 ### Tooling gates
 

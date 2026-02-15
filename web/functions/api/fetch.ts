@@ -10,17 +10,18 @@ const MAX_RESPONSE_SIZE = 256 * 1024; // 256KB — certs are small
 // Allowed origins for CORS. The proxy only serves requests from these origins.
 const ALLOWED_ORIGINS: string[] = [
   "https://certkit.pages.dev",
-  "http://localhost:8080",  // local dev (make wasm-serve)
-  "http://localhost:8788",  // wrangler pages dev
+  "http://localhost:8080", // local dev (make wasm-serve)
+  "http://localhost:8788", // wrangler pages dev
 ];
 
 function corsHeaders(origin: string | null): Record<string, string> {
-  const allowed = origin && ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
+  const allowed =
+    origin && ALLOWED_ORIGINS.includes(origin) ? origin : ALLOWED_ORIGINS[0];
   return {
     "Access-Control-Allow-Origin": allowed,
     "Access-Control-Allow-Methods": "GET, OPTIONS",
     "Access-Control-Allow-Headers": "Content-Type",
-    "Vary": "Origin",
+    Vary: "Origin",
   };
 }
 
@@ -144,7 +145,7 @@ const ALLOWED_DOMAINS: string[] = [
 function isAllowedDomain(hostname: string): boolean {
   const lower = hostname.toLowerCase();
   return ALLOWED_DOMAINS.some(
-    (domain) => lower === domain || lower.endsWith("." + domain)
+    (domain) => lower === domain || lower.endsWith("." + domain),
   );
 }
 
@@ -238,7 +239,11 @@ export const onRequestGet: PagesFunction = async ({ request }) => {
 
   // Block query strings and fragments — AIA URLs are static file paths
   if (parsed.search || parsed.hash) {
-    return errorResponse(400, "Query strings and fragments are not allowed", origin);
+    return errorResponse(
+      400,
+      "Query strings and fragments are not allowed",
+      origin,
+    );
   }
 
   if (!isAllowedDomain(parsed.hostname)) {
@@ -246,7 +251,7 @@ export const onRequestGet: PagesFunction = async ({ request }) => {
       403,
       `Domain '${parsed.hostname}' is not in the allow list. ` +
         "This proxy only fetches from known CA AIA endpoints.",
-      origin
+      origin,
     );
   }
 
@@ -262,7 +267,11 @@ export const onRequestGet: PagesFunction = async ({ request }) => {
     !path.endsWith("/") &&
     !path.endsWith(".crl")
   ) {
-    return errorResponse(403, "URL path does not look like a certificate file", origin);
+    return errorResponse(
+      403,
+      "URL path does not look like a certificate file",
+      origin,
+    );
   }
 
   // Reconstruct from validated components — never forward the raw input URL.
@@ -309,7 +318,10 @@ export const onRequestGet: PagesFunction = async ({ request }) => {
       responseHeaders.set("Content-Length", body.byteLength.toString());
       responseHeaders.set("X-Content-Type-Options", "nosniff");
       // Cache forever — AIA certificates are immutable (same URL = same cert)
-      responseHeaders.set("Cache-Control", "public, max-age=31536000, immutable");
+      responseHeaders.set(
+        "Cache-Control",
+        "public, max-age=31536000, immutable",
+      );
 
       return new Response(body, { status: 200, headers: responseHeaders });
     } catch {
@@ -321,7 +333,11 @@ export const onRequestGet: PagesFunction = async ({ request }) => {
   return errorResponse(lastStatus, lastMessage, origin);
 };
 
-function errorResponse(status: number, message: string, origin: string | null): Response {
+function errorResponse(
+  status: number,
+  message: string,
+  origin: string | null,
+): Response {
   return new Response(JSON.stringify({ error: message }), {
     status,
     headers: { ...corsHeaders(origin), "Content-Type": "application/json" },
