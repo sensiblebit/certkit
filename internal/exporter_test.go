@@ -307,9 +307,38 @@ func TestWriteBundleFiles_CreatesAllFiles(t *testing.T) {
 
 	for _, name := range expectedFiles {
 		path := filepath.Join(folderPath, name)
-		if _, err := os.Stat(path); os.IsNotExist(err) {
+		info, err := os.Stat(path)
+		if os.IsNotExist(err) {
 			t.Errorf("expected file %s to exist", name)
+			continue
 		}
+		if info.Size() == 0 {
+			t.Errorf("file %s is empty", name)
+		}
+	}
+
+	// Validate PEM files are parseable certificates
+	pemFile := filepath.Join(folderPath, prefix+".pem")
+	pemData, err := os.ReadFile(pemFile)
+	if err != nil {
+		t.Fatalf("read PEM file: %v", err)
+	}
+	block, _ := pem.Decode(pemData)
+	if block == nil {
+		t.Error("leaf PEM file does not contain valid PEM")
+	} else if _, parseErr := x509.ParseCertificate(block.Bytes); parseErr != nil {
+		t.Errorf("leaf PEM file contains unparseable certificate: %v", parseErr)
+	}
+
+	// Validate JSON file is parseable
+	jsonFile := filepath.Join(folderPath, prefix+".json")
+	jsonData, err := os.ReadFile(jsonFile)
+	if err != nil {
+		t.Fatalf("read JSON file: %v", err)
+	}
+	var jsonResult map[string]any
+	if err := json.Unmarshal(jsonData, &jsonResult); err != nil {
+		t.Errorf("JSON file is not valid JSON: %v", err)
 	}
 }
 

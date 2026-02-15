@@ -55,6 +55,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `Bundle` with nil `CustomRoots` and `TrustStore="custom"` error test
 - Add `VerifyCert` chain-only validation test (CheckChain=true, CheckKeyMatch=false)
 - Consolidate duplicate `TestCertToPEM` / `TestCertToPEM_RoundTrip_ByteEquality` into single test
+- Add `certstore/export_test.go` with 20 tests for `GenerateBundleFiles`, `GenerateJSON`, `GenerateYAML`, `GenerateCSR`, `FormatIPAddresses` (Ralph Loop: was at zero coverage)
+- Add `logger_test.go` with `ParseLogLevel` tests covering all levels, aliases, and unknown input
+- Add ECDSA and Ed25519 PKCS#8 DER key ingestion tests for `ProcessData` format coverage (T-7)
+- Add multi-cert PEM chain extraction and cert+key combo file tests
+- Add CSR generate→parse round-trip test via `ParsePEMCertificateRequest` (T-6)
+- Add `GenerateCSRFromTemplate` empty hosts edge case test
+- Strengthen `TestCertFingerprint` to verify hex encoding and determinism, not just length
+- Strengthen `TestWriteBundleFiles_CreatesAllFiles` to validate PEM parseability and JSON validity
+- Strengthen `TestProcessData_PKCS7` to verify extracted cert identities, not just count
+- Strengthen `TestLoadContainerFile_PKCS12` to verify leaf and CA cert identity
+- Strengthen `TestProcessData_DERCertificate` to verify cert CN identity
+- Remove duplicate `TestPKCS7_RoundTrip` from certkit_test.go (kept stronger version in pkcs_test.go)
 
 ## [0.6.7] - 2026-02-15
 

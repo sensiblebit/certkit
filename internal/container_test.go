@@ -29,11 +29,16 @@ func TestLoadContainerFile_PKCS12(t *testing.T) {
 	if contents.Leaf == nil {
 		t.Fatal("expected leaf certificate")
 	}
+	if contents.Leaf.Subject.CommonName != "p12.example.com" {
+		t.Errorf("leaf CN = %q, want p12.example.com", contents.Leaf.Subject.CommonName)
+	}
 	if contents.Key == nil {
 		t.Error("expected embedded key")
 	}
 	if len(contents.ExtraCerts) == 0 {
 		t.Error("expected CA cert in extras")
+	} else if contents.ExtraCerts[0].Subject.CommonName != "Test RSA Root CA" {
+		t.Errorf("extra cert CN = %q, want Test RSA Root CA", contents.ExtraCerts[0].Subject.CommonName)
 	}
 }
 

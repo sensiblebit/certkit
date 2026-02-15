@@ -167,7 +167,8 @@ func TestProcessData_PEMEncryptedKey_WrongPassword(t *testing.T) {
 }
 
 func TestProcessData_DERCertificate(t *testing.T) {
-	// WHY: DER certificate parsing through the binary detection path.
+	// WHY: DER certificate parsing through the binary detection path —
+	// verifies both extraction and that the correct cert identity is preserved.
 	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "der.example.com", []string{"der.example.com"})
@@ -181,8 +182,14 @@ func TestProcessData_DERCertificate(t *testing.T) {
 		t.Fatalf("ProcessData: %v", err)
 	}
 
-	if len(store.AllCerts()) != 1 {
-		t.Fatalf("expected 1 cert from DER, got %d", len(store.AllCerts()))
+	allCerts := store.AllCerts()
+	if len(allCerts) != 1 {
+		t.Fatalf("expected 1 cert from DER, got %d", len(allCerts))
+	}
+	for _, rec := range allCerts {
+		if rec.Cert.Subject.CommonName != "der.example.com" {
+			t.Errorf("cert CN = %q, want der.example.com", rec.Cert.Subject.CommonName)
+		}
 	}
 }
 
@@ -206,8 +213,26 @@ func TestProcessData_PKCS7(t *testing.T) {
 		t.Fatalf("ProcessData: %v", err)
 	}
 
-	if len(store.AllCerts()) != 2 {
-		t.Fatalf("expected 2 certs from PKCS#7, got %d", len(store.AllCerts()))
+	allCerts := store.AllCerts()
+	if len(allCerts) != 2 {
+		t.Fatalf("expected 2 certs from PKCS#7, got %d", len(allCerts))
+	}
+
+	// Verify the extracted certs are the ones we put in, not garbage
+	foundLeaf, foundCA := false, false
+	for _, rec := range allCerts {
+		switch rec.Cert.Subject.CommonName {
+		case "p7.example.com":
+			foundLeaf = true
+		case "Test RSA Root CA":
+			foundCA = true
+		}
+	}
+	if !foundLeaf {
+		t.Error("PKCS#7 extraction did not produce the leaf certificate")
+	}
+	if !foundCA {
+		t.Error("PKCS#7 extraction did not produce the CA certificate")
 	}
 }
 
@@ -368,20 +393,33 @@ func TestProcessData_Ed25519RawKey_Invalid64Bytes(t *testing.T) {
 }
 
 func TestProcessData_EmptyData(t *testing.T) {
-	// WHY: Empty data must produce no handler calls and no error.
+	// WHY: Both nil and empty slice data must produce no handler calls and no error —
+	// tests both code paths since nil and []byte{} may be handled differently.
 	t.Parallel()
-	store := NewMemStore()
 
-	if err := ProcessData(ProcessInput{
-		Data:    nil,
-		Path:    "empty.pem",
-		Handler: store,
-	}); err != nil {
-		t.Fatalf("ProcessData should not error on empty data: %v", err)
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{"nil", nil},
+		{"empty_slice", []byte{}},
 	}
 
-	if len(store.AllCerts()) != 0 || len(store.AllKeys()) != 0 {
-		t.Error("expected no handler calls for empty data")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			store := NewMemStore()
+			if err := ProcessData(ProcessInput{
+				Data:    tt.data,
+				Path:    "empty.pem",
+				Handler: store,
+			}); err != nil {
+				t.Fatalf("ProcessData should not error on %s data: %v", tt.name, err)
+			}
+			if len(store.AllCerts()) != 0 || len(store.AllKeys()) != 0 {
+				t.Errorf("expected no handler calls for %s data", tt.name)
+			}
+		})
 	}
 }
 
@@ -521,5 +559,146 @@ func TestProcessData_Ed25519PEMKey(t *testing.T) {
 		if rec.KeyType != "Ed25519" {
 			t.Errorf("KeyType = %q, want Ed25519", rec.KeyType)
 		}
+	}
+}
+
+func TestProcessData_ECDSAPKCS8DER(t *testing.T) {
+	// WHY: ECDSA keys in PKCS#8 DER format must be ingested correctly — the
+	// ProcessData PKCS#8 path was only tested with RSA DER; this fills the
+	// format coverage gap per T-7.
+	t.Parallel()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate ECDSA key: %v", err)
+	}
+	derBytes, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal PKCS#8: %v", err)
+	}
+
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{
+		Data:    derBytes,
+		Path:    "ecdsa.p8",
+		Handler: store,
+	}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	if len(store.AllKeys()) != 1 {
+		t.Fatalf("expected 1 key, got %d", len(store.AllKeys()))
+	}
+	for _, rec := range store.AllKeys() {
+		if rec.KeyType != "ECDSA" {
+			t.Errorf("KeyType = %q, want ECDSA", rec.KeyType)
+		}
+		if rec.BitLength != 256 {
+			t.Errorf("BitLength = %d, want 256", rec.BitLength)
+		}
+	}
+}
+
+func TestProcessData_Ed25519PKCS8DER(t *testing.T) {
+	// WHY: Ed25519 keys in PKCS#8 DER format must be ingested — previously only
+	// tested via PEM encoding; DER path exercises a different ProcessData branch.
+	t.Parallel()
+
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate Ed25519 key: %v", err)
+	}
+	derBytes, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatalf("marshal PKCS#8: %v", err)
+	}
+
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{
+		Data:    derBytes,
+		Path:    "ed25519.p8",
+		Handler: store,
+	}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	if len(store.AllKeys()) != 1 {
+		t.Fatalf("expected 1 key, got %d", len(store.AllKeys()))
+	}
+	for _, rec := range store.AllKeys() {
+		if rec.KeyType != "Ed25519" {
+			t.Errorf("KeyType = %q, want Ed25519", rec.KeyType)
+		}
+	}
+}
+
+func TestProcessData_MultipleCertsInPEM(t *testing.T) {
+	// WHY: PEM files containing multiple certificates (e.g., a chain file) must
+	// have ALL certificates extracted, not just the first one.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	intermediate := newIntermediateCA(t, ca)
+	leaf := newRSALeaf(t, intermediate, "multi.example.com", []string{"multi.example.com"})
+
+	combined := append(leaf.certPEM, intermediate.certPEM...)
+	combined = append(combined, ca.certPEM...)
+
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{
+		Data:    combined,
+		Path:    "chain.pem",
+		Handler: store,
+	}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	allCerts := store.AllCertsFlat()
+	if len(allCerts) != 3 {
+		t.Fatalf("expected 3 certs from chain PEM, got %d", len(allCerts))
+	}
+
+	// Verify each cert type is present
+	types := map[string]bool{}
+	for _, rec := range allCerts {
+		types[rec.CertType] = true
+	}
+	for _, expected := range []string{"root", "intermediate", "leaf"} {
+		if !types[expected] {
+			t.Errorf("missing cert type %q in extracted chain", expected)
+		}
+	}
+}
+
+func TestProcessData_CertAndKeyInSamePEM(t *testing.T) {
+	// WHY: A common pattern is cert+key in a single PEM file; both must be
+	// extracted and the key should match the cert's SKI.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "combo.example.com", []string{"combo.example.com"})
+
+	combined := append(leaf.certPEM, leaf.keyPEM...)
+
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{
+		Data:    combined,
+		Path:    "combo.pem",
+		Handler: store,
+	}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	if len(store.AllCerts()) != 1 {
+		t.Errorf("expected 1 cert, got %d", len(store.AllCerts()))
+	}
+	if len(store.AllKeys()) != 1 {
+		t.Errorf("expected 1 key, got %d", len(store.AllKeys()))
+	}
+
+	// Verify the key and cert share the same SKI (matched pair)
+	matched := store.MatchedPairs()
+	if len(matched) != 1 {
+		t.Errorf("expected 1 matched pair, got %d", len(matched))
 	}
 }

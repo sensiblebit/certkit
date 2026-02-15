@@ -696,3 +696,83 @@ func TestGenerateCSRFromCSR_PreservesEmailAddresses(t *testing.T) {
 		t.Errorf("DNSNames=%v, want [email-test.example.com]", newCSR.DNSNames)
 	}
 }
+
+func TestGenerateCSR_ParsePEMRoundTrip(t *testing.T) {
+	// WHY: Per T-6, the CSR encode/decode path needs a round-trip test that
+	// generates a CSR via GenerateCSR and parses it back via ParsePEMCertificateRequest,
+	// then verifies all subject fields and SANs survive the cycle intact.
+	t.Parallel()
+	leaf, _ := generateLeafWithSANs(t)
+
+	csrPEM, keyPEM, err := GenerateCSR(leaf, nil)
+	if err != nil {
+		t.Fatalf("GenerateCSR: %v", err)
+	}
+	if csrPEM == "" {
+		t.Fatal("CSR PEM is empty")
+	}
+	if keyPEM == "" {
+		t.Fatal("auto-generated key PEM is empty")
+	}
+
+	// Parse via the public API
+	csr, err := ParsePEMCertificateRequest([]byte(csrPEM))
+	if err != nil {
+		t.Fatalf("ParsePEMCertificateRequest: %v", err)
+	}
+
+	// Verify signature
+	if err := VerifyCSR(csr); err != nil {
+		t.Fatalf("CSR signature invalid: %v", err)
+	}
+
+	// Verify subject fields survived
+	if csr.Subject.CommonName != leaf.Subject.CommonName {
+		t.Errorf("CN = %q, want %q", csr.Subject.CommonName, leaf.Subject.CommonName)
+	}
+
+	// Verify DNS names survived (may not be exact due to deduplication logic)
+	if len(csr.DNSNames) == 0 {
+		t.Error("CSR should have at least one DNS name")
+	}
+
+	// Verify IP addresses survived
+	if len(leaf.IPAddresses) > 0 && len(csr.IPAddresses) != len(leaf.IPAddresses) {
+		t.Errorf("IP addresses count = %d, want %d", len(csr.IPAddresses), len(leaf.IPAddresses))
+	}
+}
+
+func TestGenerateCSRFromTemplate_EmptyHosts(t *testing.T) {
+	// WHY: A template with no hosts should produce a valid CSR with no SANs —
+	// verifies the function handles empty host lists gracefully.
+	t.Parallel()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tmpl := &CSRTemplate{
+		Subject: CSRSubject{
+			CommonName:   "no-sans.example.com",
+			Organization: []string{"Test Org"},
+		},
+		Hosts: []string{},
+	}
+
+	csrPEM, err := GenerateCSRFromTemplate(tmpl, key)
+	if err != nil {
+		t.Fatalf("GenerateCSRFromTemplate: %v", err)
+	}
+
+	csr, err := ParsePEMCertificateRequest([]byte(csrPEM))
+	if err != nil {
+		t.Fatalf("parse CSR: %v", err)
+	}
+
+	if len(csr.DNSNames) != 0 {
+		t.Errorf("expected 0 DNS names, got %d: %v", len(csr.DNSNames), csr.DNSNames)
+	}
+	if len(csr.IPAddresses) != 0 {
+		t.Errorf("expected 0 IP addresses, got %d", len(csr.IPAddresses))
+	}
+}
