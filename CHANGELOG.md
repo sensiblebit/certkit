@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-02-15
+
 ### Added
 
 - Add `MozillaRootSubjects()` and `IsIssuedByMozillaRoot()` to root `certkit` package — shared Mozilla root subject index for AIA resolution
@@ -298,7 +300,8 @@ Initial release.
 - PKCS#12, PKCS#7, and JKS encode/decode support
 - Homebrew distribution via GoReleaser
 
-[Unreleased]: https://github.com/sensiblebit/certkit/compare/v0.6.7...HEAD
+[Unreleased]: https://github.com/sensiblebit/certkit/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/sensiblebit/certkit/compare/v0.6.7...v0.7.0
 [0.6.7]: https://github.com/sensiblebit/certkit/compare/v0.6.0...v0.6.7
 [0.6.0]: https://github.com/sensiblebit/certkit/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/sensiblebit/certkit/compare/v0.4.1...v0.5.0
