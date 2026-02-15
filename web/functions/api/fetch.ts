@@ -73,10 +73,69 @@ const ALLOWED_DOMAINS: string[] = [
   "rapidssl-aia.geotrust.com",
   // E-Tugra (Turkish CA)
   "www.e-tugra.com",
-  // US Federal PKI
+  // ── US Federal PKI (.gov / .mil) ──
+  // FPKI repository (GSA)
   "repo.fpki.gov",
+  "http.fpki.gov",
+  // US DoD PKI (DISA) — suffix covers crl.disa.mil, crl.nit.disa.mil,
+  // crl.gds.disa.mil, crl.gds.nit.disa.mil, and future subdomains.
+  "disa.mil",
+  // US Treasury PKI SSP (serves DHS, VA, NASA, SSA, Treasury OCIO)
+  "pki.treas.gov",
+  "pki.treasury.gov",
+  // US Department of State
+  "crls.pki.state.gov",
+  // US Patent and Trademark Office
+  "ipki.uspto.gov",
+  // US Department of Veterans Affairs
+  "crl.pki.va.gov",
+  // ── FPKI Shared Service Providers ──
+  // Entrust Federal SSP — suffix covers sspweb, rootweb, nfimediumsspweb,
+  // fedrootg2crl, feddcsweb, hhspkicrl subdomains.
+  "managed.entrust.com",
+  // WidePoint / ORC PKI
+  "crl-server.orc.com",
+  "eva.orc.com",
+  "eca.orc.com",
+  "crl.xca.xpki.com",
+  // DigiCert Federal SSP
+  "ssp-aia.digicert.com",
+  "ssp-crl.digicert.com",
+  "ssp-sia.digicert.com",
+  "onsite-crl.pki.digicert.com",
+  // DigiCert / Symantec legacy — suffix covers pki-crl, tscp-crl,
+  // tscp-aia, tscp-sia subdomains.
+  "symauth.com",
+  // IdenTrust (FPKI bridge participant)
+  "apps.identrust.com",
+  "validation.identrust.com",
+  // ── FPKI Bridge Participants ──
+  // CertiPath Bridge — suffix covers crl. and aia. subdomains.
+  "certipath.com",
+  // Defense contractors
+  "crl.boeing.com",
+  "crl.external.lmco.com",
+  "certdata.northropgrumman.com",
+  "pki.rtx.com",
+  // Exostar
+  "www.fis.evincible.com",
+  // Carillon (Canadian FPKI bridge partner)
+  "pub.carillon.ca",
+  "pub.carillonfedserv.com",
+  // STRAC / Foundation for Trusted Identity
+  "pki.strac.org",
+  "pki.fti.org",
+  // DirectTrust SAFE Identity Bridge — suffix covers crl. and aia.
+  "makeidentitysafe.com",
+  // Verizon SSP
+  "sia1.ssp-strong-id.net",
+  // DocuSign Federal
+  "crl.dsf.docusign.net",
+  // ── Non-US Government PKI ──
   // Swiss Federal PKI
   "www.pki.admin.ch",
+  // Bavarian State PKI
+  "www.pki.bayern.de",
   // TBS Internet
   "crt.tbs-internet.com",
   "crt.tbs-x509.com",
@@ -87,6 +146,44 @@ function isAllowedDomain(hostname: string): boolean {
   return ALLOWED_DOMAINS.some(
     (domain) => lower === domain || lower.endsWith("." + domain)
   );
+}
+
+// Follows redirects manually, re-validating each target against the domain
+// allow list. Prevents open redirects on allowed domains from bouncing to
+// arbitrary URLs.
+const MAX_REDIRECTS = 5;
+
+async function safeFetch(url: string): Promise<Response> {
+  let currentURL = url;
+  for (let i = 0; i <= MAX_REDIRECTS; i++) {
+    const resp = await fetch(currentURL, {
+      headers: { "User-Agent": "certkit AIA proxy/1.0" },
+      redirect: "manual",
+    });
+
+    // Not a redirect — return as-is.
+    if (resp.status < 300 || resp.status >= 400) {
+      return resp;
+    }
+
+    const location = resp.headers.get("Location");
+    if (!location) {
+      return resp;
+    }
+
+    const target = new URL(location, currentURL);
+    if (target.protocol !== "https:" && target.protocol !== "http:") {
+      throw new Error("Redirect to non-HTTP protocol");
+    }
+    if (!isAllowedDomain(target.hostname)) {
+      throw new Error(`Redirect to disallowed domain '${target.hostname}'`);
+    }
+
+    // Sanitize redirect URL — only keep protocol, host, and path.
+    currentURL = `${target.protocol}//${target.hostname}${target.pathname}`;
+  }
+
+  throw new Error("Too many redirects");
 }
 
 export const onRequestOptions: PagesFunction = async ({ request }) => {
@@ -125,8 +222,23 @@ export const onRequestGet: PagesFunction = async ({ request }) => {
     return errorResponse(400, "Invalid URL", origin);
   }
 
+  // Block credentials in URL
+  if (parsed.username || parsed.password) {
+    return errorResponse(400, "URLs with credentials are not allowed", origin);
+  }
+
+  // Block non-standard ports — CA AIA endpoints use default ports only
+  if (parsed.port) {
+    return errorResponse(400, "Non-standard ports are not allowed", origin);
+  }
+
   if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
     return errorResponse(400, "Only HTTP/HTTPS URLs are allowed", origin);
+  }
+
+  // Block query strings and fragments — AIA URLs are static file paths
+  if (parsed.search || parsed.hash) {
+    return errorResponse(400, "Query strings and fragments are not allowed", origin);
   }
 
   if (!isAllowedDomain(parsed.hostname)) {
@@ -153,11 +265,14 @@ export const onRequestGet: PagesFunction = async ({ request }) => {
     return errorResponse(403, "URL path does not look like a certificate file", origin);
   }
 
+  // Reconstruct from validated components — never forward the raw input URL.
+  const sanitizedURL = `${parsed.protocol}//${parsed.hostname}${parsed.pathname}`;
+
   // Try the URL as given. If HTTPS fails with an SSL error, fall back to HTTP
   // (many CA AIA endpoints only serve plain HTTP).
-  const urlsToTry = [targetURL];
+  const urlsToTry = [sanitizedURL];
   if (parsed.protocol === "https:") {
-    urlsToTry.push(targetURL.replace(/^https:/, "http:"));
+    urlsToTry.push(`http://${parsed.hostname}${parsed.pathname}`);
   }
 
   let lastStatus = 502;
@@ -165,10 +280,7 @@ export const onRequestGet: PagesFunction = async ({ request }) => {
 
   for (const tryURL of urlsToTry) {
     try {
-      const upstream = await fetch(tryURL, {
-        headers: { "User-Agent": "certkit AIA proxy/1.0" },
-        redirect: "follow",
-      });
+      const upstream = await safeFetch(tryURL);
 
       if (!upstream.ok) {
         lastStatus = upstream.status;

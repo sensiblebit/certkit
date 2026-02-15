@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-02-15
+
+### Security
+
+- Harden AIA proxy: block query strings, URL credentials, non-standard ports, and fragments in proxied URLs
+- Harden AIA proxy: validate redirect targets against domain allow list to prevent open redirect abuse
+- Harden AIA proxy: reconstruct URLs from validated components instead of forwarding raw input
+
+### Added
+
+- Add US Government PKI domains to AIA proxy allow list: DoD/DISA, Treasury SSP, State Department, USPTO, Veterans Affairs
+- Add FPKI Shared Service Provider domains to AIA proxy allow list: Entrust Federal, WidePoint/ORC, DigiCert Federal SSP, DigiCert/Symantec legacy, IdenTrust
+- Add FPKI Bridge participant domains to AIA proxy allow list: CertiPath, Boeing, Lockheed Martin, Northrop Grumman, Raytheon/RTX, Exostar, Carillon, STRAC/FTI, DirectTrust SAFE, Verizon SSP, DocuSign Federal
+- Add Bavarian State PKI (`www.pki.bayern.de`) to AIA proxy allow list
+
 ## [0.7.1] - 2026-02-15
 
 ### Changed
@@ -306,7 +321,8 @@ Initial release.
 - PKCS#12, PKCS#7, and JKS encode/decode support
 - Homebrew distribution via GoReleaser
 
-[Unreleased]: https://github.com/sensiblebit/certkit/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/sensiblebit/certkit/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/sensiblebit/certkit/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/sensiblebit/certkit/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/sensiblebit/certkit/compare/v0.6.7...v0.7.0
 [0.6.7]: https://github.com/sensiblebit/certkit/compare/v0.6.0...v0.6.7
