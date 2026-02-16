@@ -10,9 +10,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Tests
 
 - Harden key handling tests: add direct `normalizeKey` unit tests, `validatePKCS12KeyType` coverage for Ed25519 pointer rejection, cross-format PEM round-trips (PKCS#1/SEC1 → PKCS#8), end-to-end ProcessData → export pipeline verification, key deduplication behavior, and container tests for ECDSA/Ed25519 key types ([`39a5ece`])
+- Harden key handling tests with normalization and round-trip coverage: Ed25519 pointer-form marshaling, OpenSSH ECDSA parsing, cross-format OpenSSH→PKCS#12 round-trip, encrypted PKCS#8 error clarity, JKS key equality with separate store/key passwords, corrupted cert chain handling, ECDSA/Ed25519 through PKCS#12 and JKS pipelines, DER key round-trips with equality checks, stored PEM PKCS#8 format verification ([`PENDING`])
 
 ### Fixed
 
+- Fix `MarshalPrivateKeyToPEM` failing with `*ed25519.PrivateKey` pointer form — add `normalizeKey` before PKCS#8 marshaling ([`PENDING`])
+- Fix `EncodeJKS` failing with `*ed25519.PrivateKey` pointer form — add `normalizeKey` before PKCS#8 marshaling ([`PENDING`])
 - Fix WASM export ZIP files having unix epoch (1970-01-01) timestamps — use `CreateHeader` with current time instead of `Create` ([`273e806`])
 - Normalize `*ed25519.PrivateKey` to value form in `ParsePEMPrivateKey` and `HandleKey` — fixes downstream type switches returning "unknown" for OpenSSH Ed25519 keys ([`0acbada`])
 - Normalize private keys at all public entry points (`DecodePKCS12`, `DecodeJKS`) via `normalizeKey` helper — ensures callers always receive canonical Go types ([`b20cfb3`])
@@ -419,6 +422,7 @@ Initial release.
 [0.1.1]: https://github.com/sensiblebit/certkit/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/sensiblebit/certkit/releases/tag/v0.1.0
 
+[`PENDING`]: https://github.com/sensiblebit/certkit/commit/731fcfd
 [`b69caef`]: https://github.com/sensiblebit/certkit/commit/b69caef
 [`404e1d7`]: https://github.com/sensiblebit/certkit/commit/404e1d7
 [`847fe95`]: https://github.com/sensiblebit/certkit/commit/847fe95

@@ -232,9 +232,10 @@ func CertToPEM(cert *x509.Certificate) string {
 }
 
 // MarshalPrivateKeyToPEM marshals a private key to PKCS#8 PEM format.
-// Supports ECDSA, RSA, and Ed25519 keys.
+// Supports ECDSA, RSA, and Ed25519 keys. Normalizes Ed25519 pointer
+// form to value form before marshaling.
 func MarshalPrivateKeyToPEM(key crypto.PrivateKey) (string, error) {
-	der, err := x509.MarshalPKCS8PrivateKey(key)
+	der, err := x509.MarshalPKCS8PrivateKey(normalizeKey(key))
 	if err != nil {
 		return "", fmt.Errorf("marshaling private key to PKCS#8: %w", err)
 	}

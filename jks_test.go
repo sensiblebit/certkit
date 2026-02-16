@@ -770,3 +770,223 @@ func TestDecodeJKS_TruncatedWithCorrectMagic(t *testing.T) {
 		t.Error("expected error for truncated JKS with correct magic bytes")
 	}
 }
+
+func TestDecodeJKS_PrivateKeyEntry_KeyEquality(t *testing.T) {
+	// WHY: TestDecodeJKS_PrivateKeyEntry checks type only; this test verifies
+	// the decoded key material actually matches the original via .Equal(). A
+	// JKS decode bug that returns the wrong key would pass a type-only check.
+	t.Parallel()
+
+	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "JKS Equality CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caCert, _ := x509.ParseCertificate(caDER)
+
+	leafKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(100),
+		Subject:      pkix.Name{CommonName: "jks-equality.example.com"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafCert, _ := x509.ParseCertificate(leafDER)
+
+	data, err := EncodeJKS(leafKey, leafCert, []*x509.Certificate{caCert}, "changeit")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	certs, keys, err := DecodeJKS(data, []string{"changeit"})
+	if err != nil {
+		t.Fatalf("DecodeJKS: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key, got %d", len(keys))
+	}
+
+	decodedRSA, ok := keys[0].(*rsa.PrivateKey)
+	if !ok {
+		t.Fatalf("expected *rsa.PrivateKey, got %T", keys[0])
+	}
+	if !leafKey.Equal(decodedRSA) {
+		t.Error("decoded JKS key does not Equal original — key material lost in round-trip")
+	}
+
+	// Verify both certs returned (leaf + CA in chain)
+	if len(certs) != 2 {
+		t.Errorf("expected 2 certs (leaf + CA), got %d", len(certs))
+	}
+}
+
+func TestDecodeJKS_CorruptedCertDER_TrustedCertEntry(t *testing.T) {
+	// WHY: A JKS TrustedCertificateEntry with corrupted cert DER exercises the
+	// `continue` at jks.go:48. The decoder must skip the bad entry and return
+	// an error (since no usable entries remain).
+	t.Parallel()
+
+	password := "changeit"
+
+	ks := keystore.New()
+	if err := ks.SetTrustedCertificateEntry("bad-cert", keystore.TrustedCertificateEntry{
+		CreationTime: time.Now(),
+		Certificate: keystore.Certificate{
+			Type:    "X.509",
+			Content: []byte("not-a-valid-certificate"),
+		},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if err := ks.Store(&buf, []byte(password)); err != nil {
+		t.Fatal(err)
+	}
+
+	_, _, err := DecodeJKS(buf.Bytes(), []string{password})
+	if err == nil {
+		t.Error("expected error for JKS with only corrupted cert entries")
+	}
+	if !strings.Contains(err.Error(), "no usable") {
+		t.Errorf("error should mention 'no usable', got: %v", err)
+	}
+}
+
+func TestDecodeJKS_CorruptedCertDER_PrivateKeyChain(t *testing.T) {
+	// WHY: A PrivateKeyEntry with a valid key but corrupted cert DER in its chain
+	// exercises the `continue` at jks.go:70. The decoder must still return the key
+	// even though the chain cert is unparseable.
+	t.Parallel()
+
+	password := "changeit"
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	pkcs8Key, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a valid leaf cert for the chain
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "valid-leaf"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ks := keystore.New()
+	if err := ks.SetPrivateKeyEntry("server", keystore.PrivateKeyEntry{
+		CreationTime: time.Now(),
+		PrivateKey:   pkcs8Key,
+		CertificateChain: []keystore.Certificate{
+			{Type: "X.509", Content: leafDER},                    // valid
+			{Type: "X.509", Content: []byte("corrupted-ca-der")}, // bad
+		},
+	}, []byte(password)); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if err := ks.Store(&buf, []byte(password)); err != nil {
+		t.Fatal(err)
+	}
+
+	certs, keys, err := DecodeJKS(buf.Bytes(), []string{password})
+	if err != nil {
+		t.Fatalf("DecodeJKS should succeed with valid key + partial chain: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Errorf("expected 1 key, got %d", len(keys))
+	}
+	// Only the valid cert should be returned; the corrupted one is skipped.
+	if len(certs) != 1 {
+		t.Errorf("expected 1 valid cert (corrupted one skipped), got %d", len(certs))
+	}
+
+	decodedRSA, ok := keys[0].(*rsa.PrivateKey)
+	if !ok {
+		t.Fatalf("expected *rsa.PrivateKey, got %T", keys[0])
+	}
+	if !key.Equal(decodedRSA) {
+		t.Error("decoded key does not Equal original")
+	}
+}
+
+func TestDecodeJKS_DifferentKeyPassword_KeyEquality(t *testing.T) {
+	// WHY: TestDecodeJKS_DifferentKeyPassword checks counts only; this verifies
+	// the decoded key material matches the original when store and key passwords
+	// differ. A password-mixing bug could decrypt with the wrong key.
+	t.Parallel()
+
+	storePassword := "storepass"
+	keyPassword := "keypass"
+
+	leafKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "keyeq-leaf"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &leafKey.PublicKey, leafKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pkcs8Key, _ := x509.MarshalPKCS8PrivateKey(leafKey)
+	ks := keystore.New()
+	if err := ks.SetPrivateKeyEntry("server", keystore.PrivateKeyEntry{
+		CreationTime: time.Now(),
+		PrivateKey:   pkcs8Key,
+		CertificateChain: []keystore.Certificate{
+			{Type: "X.509", Content: certDER},
+		},
+	}, []byte(keyPassword)); err != nil {
+		t.Fatal(err)
+	}
+
+	var buf bytes.Buffer
+	if err := ks.Store(&buf, []byte(storePassword)); err != nil {
+		t.Fatal(err)
+	}
+
+	_, keys, err := DecodeJKS(buf.Bytes(), []string{storePassword, keyPassword})
+	if err != nil {
+		t.Fatalf("DecodeJKS: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key, got %d", len(keys))
+	}
+
+	decodedRSA, ok := keys[0].(*rsa.PrivateKey)
+	if !ok {
+		t.Fatalf("expected *rsa.PrivateKey, got %T", keys[0])
+	}
+	if !leafKey.Equal(decodedRSA) {
+		t.Error("decoded key does not Equal original with different store/key passwords")
+	}
+}

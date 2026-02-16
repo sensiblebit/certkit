@@ -89,7 +89,7 @@ func DecodeJKS(data []byte, passwords []string) ([]*x509.Certificate, []crypto.P
 // stored under the alias "server". The same password protects both the store
 // and the key entry (standard Java convention).
 func EncodeJKS(privateKey crypto.PrivateKey, leaf *x509.Certificate, caCerts []*x509.Certificate, password string) ([]byte, error) {
-	pkcs8Key, err := x509.MarshalPKCS8PrivateKey(privateKey)
+	pkcs8Key, err := x509.MarshalPKCS8PrivateKey(normalizeKey(privateKey))
 	if err != nil {
 		return nil, fmt.Errorf("marshaling private key to PKCS#8: %w", err)
 	}

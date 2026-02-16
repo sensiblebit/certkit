@@ -1715,6 +1715,35 @@ func TestParsePEMPrivateKey_OpenSSH_Ed25519(t *testing.T) {
 	}
 }
 
+func TestParsePEMPrivateKey_OpenSSH_ECDSA(t *testing.T) {
+	// WHY: OpenSSH ECDSA keys return *ecdsa.PrivateKey from ssh.ParseRawPrivateKey
+	// (pointer form, which is the standard Go type for ECDSA). This path does NOT
+	// need normalizeKey but exercises the same dispatch path as Ed25519/RSA — a
+	// regression in the OPENSSH PRIVATE KEY case would be invisible without this test.
+	t.Parallel()
+	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshPEM, err := ssh.MarshalPrivateKey(ecKey, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pemBytes := pem.EncodeToMemory(sshPEM)
+
+	key, err := ParsePEMPrivateKey(pemBytes)
+	if err != nil {
+		t.Fatalf("ParsePEMPrivateKey(OpenSSH ECDSA): %v", err)
+	}
+	got, ok := key.(*ecdsa.PrivateKey)
+	if !ok {
+		t.Fatalf("expected *ecdsa.PrivateKey, got %T", key)
+	}
+	if !ecKey.Equal(got) {
+		t.Error("parsed key does not match original")
+	}
+}
+
 func TestParsePEMPrivateKey_OpenSSH_RSA(t *testing.T) {
 	// WHY: Ensures the OpenSSH PEM block type dispatch works for RSA keys,
 	// not just Ed25519 — ssh.ParseRawPrivateKey handles both.
@@ -2235,5 +2264,181 @@ func TestParsePEMPrivateKeyWithPasswords_DefaultPasswords_KeyEquality(t *testing
 	}
 	if !key.Equal(rsaParsed) {
 		t.Error("decrypted key does not Equal original")
+	}
+}
+
+func TestParsePEMPrivateKey_PKCS8Ed25519_ReturnsValueType(t *testing.T) {
+	// WHY: The PKCS#8 code path in ParsePEMPrivateKey does NOT call normalizeKey —
+	// it relies on Go's x509.ParsePKCS8PrivateKey returning ed25519.PrivateKey as a
+	// value type. If Go stdlib ever changes to return *ed25519.PrivateKey, downstream
+	// type switches (KeyAlgorithmName, MarshalPrivateKeyToPEM) would silently break.
+	// This regression test guards that contract.
+	t.Parallel()
+
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	der, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+
+	parsed, err := ParsePEMPrivateKey(pemBytes)
+	if err != nil {
+		t.Fatalf("ParsePEMPrivateKey(PKCS#8 Ed25519): %v", err)
+	}
+
+	gotType := fmt.Sprintf("%T", parsed)
+	if gotType != "ed25519.PrivateKey" {
+		t.Errorf("PKCS#8 Ed25519 returned %s, want ed25519.PrivateKey (value, not pointer)", gotType)
+	}
+
+	edParsed, ok := parsed.(ed25519.PrivateKey)
+	if !ok {
+		t.Fatalf("type assertion to ed25519.PrivateKey failed")
+	}
+	if !priv.Equal(edParsed) {
+		t.Error("parsed Ed25519 key does not Equal original")
+	}
+}
+
+func TestMarshalPrivateKeyToPEM_Ed25519Pointer(t *testing.T) {
+	// WHY: MarshalPrivateKeyToPEM does not call normalizeKey — it passes the key
+	// directly to x509.MarshalPKCS8PrivateKey. If a caller passes *ed25519.PrivateKey
+	// (pointer form from ssh.ParseRawPrivateKey), marshaling must still succeed.
+	// A failure here means non-normalized Ed25519 keys would silently fail to export.
+	t.Parallel()
+
+	_, edVal, _ := ed25519.GenerateKey(rand.Reader)
+	edPtr := &edVal
+
+	pemStr, err := MarshalPrivateKeyToPEM(edPtr)
+	if err != nil {
+		t.Fatalf("MarshalPrivateKeyToPEM(*ed25519.PrivateKey): %v", err)
+	}
+
+	// Verify the output is valid PKCS#8 PEM that round-trips
+	reparsed, err := ParsePEMPrivateKey([]byte(pemStr))
+	if err != nil {
+		t.Fatalf("re-parse marshaled PEM: %v", err)
+	}
+	if !edVal.Equal(reparsed) {
+		t.Error("round-trip through *ed25519.PrivateKey lost key material")
+	}
+}
+
+func TestOpenSSHEd25519_ToPKCS8_RoundTrip(t *testing.T) {
+	// WHY: The full pipeline for OpenSSH Ed25519 keys is: OpenSSH PEM → parse
+	// (normalizeKey) → MarshalPrivateKeyToPEM (PKCS#8) → re-parse. If any step
+	// corrupts key material, TLS handshakes fail with opaque errors.
+	t.Parallel()
+
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	sshPEM, err := ssh.MarshalPrivateKey(priv, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pemBytes := pem.EncodeToMemory(sshPEM)
+
+	// Step 1: Parse OpenSSH format (normalizes pointer to value)
+	parsed, err := ParsePEMPrivateKey(pemBytes)
+	if err != nil {
+		t.Fatalf("parse OpenSSH Ed25519: %v", err)
+	}
+
+	// Step 2: Marshal to PKCS#8 PEM
+	pkcs8PEM, err := MarshalPrivateKeyToPEM(parsed)
+	if err != nil {
+		t.Fatalf("marshal to PKCS#8: %v", err)
+	}
+
+	// Verify PEM block type is PKCS#8
+	block, _ := pem.Decode([]byte(pkcs8PEM))
+	if block == nil {
+		t.Fatal("produced unparseable PEM")
+	}
+	if block.Type != "PRIVATE KEY" {
+		t.Errorf("PEM type = %q, want \"PRIVATE KEY\"", block.Type)
+	}
+
+	// Step 3: Re-parse PKCS#8 and verify equality
+	reparsed, err := ParsePEMPrivateKey([]byte(pkcs8PEM))
+	if err != nil {
+		t.Fatalf("re-parse PKCS#8: %v", err)
+	}
+	if !priv.Equal(reparsed) {
+		t.Error("OpenSSH → PKCS#8 round-trip lost key material")
+	}
+}
+
+func TestParsePEMPrivateKey_EncryptedPKCS8_ClearError(t *testing.T) {
+	// WHY: Modern tools (openssl genpkey -aes256) produce "ENCRYPTED PRIVATE KEY"
+	// PEM blocks. ParsePEMPrivateKey hits the default switch case for this type.
+	// The error message must be clear enough that users know what happened.
+	t.Parallel()
+
+	pemBytes := pem.EncodeToMemory(&pem.Block{
+		Type:  "ENCRYPTED PRIVATE KEY",
+		Bytes: []byte("encrypted-data-here"),
+	})
+
+	_, err := ParsePEMPrivateKey(pemBytes)
+	if err == nil {
+		t.Fatal("expected error for ENCRYPTED PRIVATE KEY block")
+	}
+	if !strings.Contains(err.Error(), "ENCRYPTED PRIVATE KEY") {
+		t.Errorf("error should mention the PEM block type, got: %v", err)
+	}
+}
+
+func TestCrossFormatRoundTrip_OpenSSH_To_PKCS12(t *testing.T) {
+	// WHY: A key parsed from OpenSSH format must be usable for PKCS#12 encoding.
+	// This exercises normalizeKey (OpenSSH parse) → validatePKCS12KeyType (encode).
+	// Format boundary bugs manifest exactly at these cross-format transitions.
+	t.Parallel()
+
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	sshPEM, err := ssh.MarshalPrivateKey(priv, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pemBytes := pem.EncodeToMemory(sshPEM)
+
+	// Parse from OpenSSH format
+	parsed, err := ParsePEMPrivateKey(pemBytes)
+	if err != nil {
+		t.Fatalf("parse OpenSSH: %v", err)
+	}
+
+	// Create a self-signed cert for PKCS#12
+	edKey := parsed.(ed25519.PrivateKey)
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "cross-format-test"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, edKey.Public(), edKey)
+	if err != nil {
+		t.Fatalf("create cert: %v", err)
+	}
+	cert, _ := x509.ParseCertificate(certDER)
+
+	// Encode to PKCS#12
+	p12, err := EncodePKCS12(parsed, cert, nil, "test")
+	if err != nil {
+		t.Fatalf("EncodePKCS12 with OpenSSH-parsed key: %v", err)
+	}
+
+	// Decode and verify key material preserved
+	decodedKey, decodedCert, _, err := DecodePKCS12(p12, "test")
+	if err != nil {
+		t.Fatalf("DecodePKCS12: %v", err)
+	}
+	if !priv.Equal(decodedKey) {
+		t.Error("OpenSSH → PKCS#12 round-trip lost key material")
+	}
+	if decodedCert.Subject.CommonName != "cross-format-test" {
+		t.Errorf("cert CN = %q, want cross-format-test", decodedCert.Subject.CommonName)
 	}
 }

@@ -1045,3 +1045,35 @@ func TestMemStore_HandleKey_PEMRoundTrip(t *testing.T) {
 		})
 	}
 }
+
+func TestMemStore_HandleKey_NilPEM(t *testing.T) {
+	// WHY: HandleKey stores pemData directly without nil check. If a caller
+	// passes nil PEM (e.g., during recovery from a marshal error), the key
+	// should still be stored but rec.PEM will be nil. Downstream consumers
+	// must not panic on nil PEM.
+	t.Parallel()
+
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	store := NewMemStore()
+
+	err := store.HandleKey(key, nil, "nil-pem.key")
+	if err != nil {
+		t.Fatalf("HandleKey with nil PEM: %v", err)
+	}
+
+	if len(store.AllKeys()) != 1 {
+		t.Fatalf("expected 1 key, got %d", len(store.AllKeys()))
+	}
+
+	for _, rec := range store.AllKeys() {
+		if rec.Key == nil {
+			t.Error("stored key object is nil")
+		}
+		if rec.PEM != nil {
+			t.Errorf("expected nil PEM, got %d bytes", len(rec.PEM))
+		}
+		if rec.KeyType != "RSA" {
+			t.Errorf("KeyType = %q, want RSA", rec.KeyType)
+		}
+	}
+}
