@@ -271,6 +271,47 @@ func TestClassifyHosts_URLWithoutScheme(t *testing.T) {
 	}
 }
 
+func TestClassifyHosts_EmailEdgeCases(t *testing.T) {
+	// WHY: email detection previously used strings.Contains(h, "@") which matched
+	// invalid inputs like "user@", "@example.com", and display-name forms.
+	// Using mail.ParseAddress with a bare-address guard rejects these correctly.
+	tests := []struct {
+		name     string
+		host     string
+		wantDNS  bool
+		wantMail bool
+	}{
+		{"valid bare email", "admin@example.com", false, true},
+		{"trailing at sign", "user@", true, false},
+		{"leading at sign", "@example.com", true, false},
+		{"display name form", "\"John\" <john@example.com>", true, false},
+		{"angle bracket form", "<john@example.com>", true, false},
+		{"double at", "foo@bar@baz.com", true, false},
+		{"at only", "@", true, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dns, _, _, emails := ClassifyHosts([]string{tt.host})
+			if tt.wantMail {
+				if len(emails) != 1 {
+					t.Errorf("expected 1 email, got %d (dns=%v)", len(emails), dns)
+				}
+				if len(dns) != 0 {
+					t.Errorf("expected 0 DNS, got %d: %v", len(dns), dns)
+				}
+			}
+			if tt.wantDNS {
+				if len(dns) != 1 {
+					t.Errorf("expected 1 DNS, got %d (emails=%v)", len(dns), emails)
+				}
+				if len(emails) != 0 {
+					t.Errorf("expected 0 emails, got %d: %v", len(emails), emails)
+				}
+			}
+		})
+	}
+}
+
 // --- ParseCSRTemplate tests ---
 
 func TestParseCSRTemplate_Valid(t *testing.T) {

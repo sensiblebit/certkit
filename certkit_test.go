@@ -809,6 +809,35 @@ func TestParsePEMCertificateRequest_errors(t *testing.T) {
 	}
 }
 
+func TestParsePEMCertificateRequest_LegacyBlockType(t *testing.T) {
+	// WHY: Older tools (Netscape, MSIE) emit "NEW CERTIFICATE REQUEST" instead of
+	// "CERTIFICATE REQUEST". The DER payload is identical; rejecting the legacy type
+	// would break interop with CSRs from these tools for no benefit.
+	leaf, key := generateLeafWithSANs(t)
+	csrPEM, _, err := GenerateCSR(leaf, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Re-encode the CSR DER with the legacy PEM block type.
+	block, _ := pem.Decode([]byte(csrPEM))
+	if block == nil {
+		t.Fatal("failed to decode generated CSR PEM")
+	}
+	legacyPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "NEW CERTIFICATE REQUEST",
+		Bytes: block.Bytes,
+	})
+
+	csr, err := ParsePEMCertificateRequest(legacyPEM)
+	if err != nil {
+		t.Fatalf("ParsePEMCertificateRequest with NEW CERTIFICATE REQUEST: %v", err)
+	}
+	if csr.Subject.CommonName != "test.example.com" {
+		t.Errorf("CN=%q, want test.example.com", csr.Subject.CommonName)
+	}
+}
+
 func TestMarshalPrivateKeyToPEM_unsupported(t *testing.T) {
 	// WHY: Unsupported key types must produce a wrapped error, not panic; callers pass through untyped crypto.PrivateKey values.
 	_, err := MarshalPrivateKeyToPEM(struct{}{})

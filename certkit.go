@@ -213,7 +213,7 @@ func ParsePEMCertificateRequest(pemData []byte) (*x509.CertificateRequest, error
 	if block == nil {
 		return nil, errors.New("no PEM block found in certificate request data")
 	}
-	if block.Type != "CERTIFICATE REQUEST" {
+	if block.Type != "CERTIFICATE REQUEST" && block.Type != "NEW CERTIFICATE REQUEST" {
 		return nil, fmt.Errorf("expected CERTIFICATE REQUEST PEM block, got %q", block.Type)
 	}
 	csr, err := x509.ParseCertificateRequest(block.Bytes)

@@ -12,8 +12,8 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"net/mail"
 	"net/url"
-	"strings"
 )
 
 // GenerateCSR creates a Certificate Signing Request that copies Subject, DNSNames,
@@ -98,16 +98,17 @@ func ParseCSRTemplate(data []byte) (*CSRTemplate, error) {
 }
 
 // ClassifyHosts splits a mixed host list into DNS names, IPs, URIs, and emails.
-// Classification order: net.ParseIP for IPs, contains "://" for URIs,
-// contains "@" for emails, otherwise DNS name.
+// Classification precedence: IP address, email (RFC 5322), URI with scheme+host,
+// then DNS name. Email detection uses mail.ParseAddress with a bare-address guard
+// to reject display-name forms like "John <john@example.com>".
 func ClassifyHosts(hosts []string) (dnsNames []string, ips []net.IP, uris []*url.URL, emails []string) {
 	for _, h := range hosts {
 		if ip := net.ParseIP(h); ip != nil {
 			ips = append(ips, ip)
+		} else if addr, err := mail.ParseAddress(h); err == nil && addr.Address == h {
+			emails = append(emails, h)
 		} else if parsed, err := url.Parse(h); err == nil && parsed.Scheme != "" && parsed.Host != "" {
 			uris = append(uris, parsed)
-		} else if len(h) > 0 && strings.Contains(h, "@") {
-			emails = append(emails, h)
 		} else {
 			dnsNames = append(dnsNames, h)
 		}
