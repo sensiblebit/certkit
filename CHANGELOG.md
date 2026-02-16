@@ -14,8 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Fix `ClassifyHosts` email detection using `mail.ParseAddress` instead of `strings.Contains(h, "@")` — rejects invalid inputs like `"user@"`, `"@example.com"`, and display-name forms
-- Accept `"NEW CERTIFICATE REQUEST"` PEM block type in `ParsePEMCertificateRequest` — supports CSRs from legacy tools (Netscape, MSIE) that use the older header format
+- Fix `ClassifyHosts` email detection using `mail.ParseAddress` instead of `strings.Contains(h, "@")` — rejects invalid inputs like `"user@"`, `"@example.com"`, and display-name forms ([`2221a47`])
+- Accept `"NEW CERTIFICATE REQUEST"` PEM block type in `ParsePEMCertificateRequest` — supports CSRs from legacy tools (Netscape, MSIE) that use the older header format ([`2221a47`])
 - Fix `MarshalPrivateKeyToPEM` failing with `*ed25519.PrivateKey` pointer form — add `normalizeKey` before PKCS#8 marshaling ([`0fa55af`])
 - Fix `EncodeJKS` failing with `*ed25519.PrivateKey` pointer form — add `normalizeKey` before PKCS#8 marshaling ([`0fa55af`])
 - Fix WASM export ZIP files having unix epoch (1970-01-01) timestamps — use `CreateHeader` with current time instead of `Create` ([`273e806`])
@@ -465,6 +465,7 @@ Initial release.
 [`273e806`]: https://github.com/sensiblebit/certkit/commit/273e806
 [`0acbada`]: https://github.com/sensiblebit/certkit/commit/0acbada
 [`b20cfb3`]: https://github.com/sensiblebit/certkit/commit/b20cfb3
+[`2221a47`]: https://github.com/sensiblebit/certkit/commit/2221a47
 [`39a5ece`]: https://github.com/sensiblebit/certkit/commit/e6a5a39
 [#24]: https://github.com/sensiblebit/certkit/pull/24
 [#25]: https://github.com/sensiblebit/certkit/pull/25
