@@ -8,9 +8,54 @@ on:
 
 permissions:
   contents: read
+  pull-requests: read
 
 jobs:
-  test:
+  # ── PR Conventions ─────────────────────────────────
+
+  pr-title:
+    name: PR Title
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: amannn/action-semantic-pull-request@v6
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          types: |
+            feat
+            fix
+            docs
+            style
+            refactor
+            perf
+            test
+            build
+            ci
+            chore
+            revert
+
+  pr-conventions:
+    name: PR Conventions
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - name: Check branch name
+        run: python3 scripts/checks.py branch-name "${{ github.head_ref }}"
+      - name: Check commit messages
+        run: python3 scripts/checks.py commit-message --ci --base-ref "origin/${{ github.base_ref }}"
+      - name: Check commits are verified
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python3 scripts/checks.py verified-commits "${{ github.repository }}" "${{ github.event.pull_request.number }}"
+
+  # ── Go ──────────────────────────────────────────────
+
+  go-checks:
+    name: Go Checks
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
@@ -19,6 +64,127 @@ jobs:
           go-version: stable
           check-latest: true
           cache: true
-      - run: go build ./...
-      - run: go vet ./...
-      - run: go test -race ./...
+      - name: Build
+        run: go build -trimpath ./...
+      - name: Vet
+        run: go vet ./...
+      - name: Check goimports
+        run: python3 scripts/checks.py goimports
+
+  go-test:
+    name: Go Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          check-latest: true
+          cache: true
+      - run: go test -race -count=1 ./...
+
+  golangci-lint:
+    name: Lint (golangci-lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          check-latest: true
+          cache: true
+      - uses: golangci/golangci-lint-action@v9
+        with:
+          version: latest
+
+  govulncheck:
+    name: Vulnerability Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          check-latest: true
+          cache: true
+      - name: Install govulncheck
+        run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - name: Run govulncheck
+        run: govulncheck ./...
+
+  # ── WASM ────────────────────────────────────────────
+
+  wasm:
+    name: WASM Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          check-latest: true
+          cache: true
+      - name: Vet + Build (WASM)
+        run: python3 scripts/checks.py wasm
+
+  # ── Web (JS/TS) ────────────────────────────────────
+
+  web:
+    name: Web
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - name: Run tests
+        run: npm test
+      - name: Build Cloudflare Functions
+        run: npx wrangler pages functions build --outdir /tmp/certkit-fn-check
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: lts/*
+      - name: Check formatting (prettier)
+        run: npx prettier@latest --check 'web/**/*.{js,ts,css,html}' '!web/public/wasm_exec.js'
+      - name: Check markdown
+        run: npx markdownlint-cli@0.47.0 --config .markdownlint.yaml '**/*.md'
+
+  # ── Gate ────────────────────────────────────────────
+
+  ci-ok:
+    name: CI
+    if: always()
+    needs:
+      - pr-title
+      - pr-conventions
+      - go-checks
+      - go-test
+      - golangci-lint
+      - govulncheck
+      - wasm
+      - web
+      - lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check results
+        run: |
+          results="${{ join(needs.*.result, ' ') }}"
+          for r in $results; do
+            if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
+              echo "One or more jobs failed: $results"
+              exit 1
+            fi
+          done
+          echo "All checks passed"

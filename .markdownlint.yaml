@@ -10,3 +10,6 @@ MD024:
 
 # Allow HTML (some tables need it)
 MD033: false
+
+# Allow compact table style (no spaces around pipes)
+MD060: false

@@ -259,21 +259,75 @@ Update bottom links:
 
 ---
 
-## 16 — CI & Pre-commit
+## 16 — Git, CI & Pre-commit
 
-- **CI-1 (MUST)** Lint, vet, test (`-race`), and build on every PR; cache modules/builds.
+### Branch protection
+
+Main branch is protected. All code reaches `main` via pull request only.
+
+- **GIT-1 (MUST)** No direct pushes to `main`. All changes go through PRs.
+- **GIT-2 (MUST)** The `CI` status check must pass before merging.
+- **GIT-3 (MUST)** PRs must be up-to-date with `main` before merging.
+- **GIT-4 (MUST)** Enforced on admins — no bypasses.
+- **GIT-5 (MUST)** Branches auto-delete after PR merge.
+
+### Branch naming
+
+Branches follow `type/description` format using kebab-case descriptions.
+
+- **GIT-6 (MUST)** Branch names must match: `(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)/<description>`.
+- **GIT-7 (MUST)** Exempt prefixes: `dependabot/`, `release/`.
+
+Examples: `ci/granular-checks`, `feat/export-csv`, `fix/nil-panic`.
+
+### Conventional Commits
+
+PR titles **and** commit messages must follow [Conventional Commits](https://www.conventionalcommits.org/) format.
+
+- **GIT-8 (MUST)** Format: `type: description` or `type(scope): description`.
+- **GIT-9 (MUST)** Valid types: `feat`, `fix`, `docs`, `style`, `refactor`, `perf`, `test`, `build`, `ci`, `chore`, `revert`.
+- **GIT-10 (MUST)** Enforced by CI on both PR titles and all commit messages in the PR. Locally enforced by the `commit-msg` pre-commit hook.
+- **GIT-11 (MUST)** Commit messages explain "why", not "what". The diff shows what changed.
+
+Examples: `feat: add PKCS#7 export`, `fix(jks): handle empty alias`, `ci: add govulncheck`.
+
+### Verified commits
+
+- **GIT-12 (MUST)** All commits in a PR must be signed/verified. CI checks verification status of every commit. See [GitHub docs on commit signing](https://docs.github.com/en/authentication/managing-commit-signature-verification).
+
+### CI checks
+
+Every PR runs 10 parallel checks (`.github/workflows/ci.yml`):
+
+| Check | What it validates |
+|---|---|
+| PR Title | Conventional Commits format |
+| PR Conventions | Branch name, commit messages, verified commits |
+| Go Checks | `go build`, `go vet`, goimports |
+| Go Test | `go test -race -count=1 ./...` |
+| Lint (golangci-lint) | errcheck, staticcheck, unused, etc. |
+| Vulnerability Check | `govulncheck ./...` |
+| WASM Build | `GOOS=js GOARCH=wasm` vet + build |
+| Web | vitest + wrangler build |
+| Lint | prettier + markdownlint |
+| CI | Gate — fails if any above failed |
+
+- **CI-1 (MUST)** All checks must pass before merging. The `CI` gate job aggregates results.
 - **CI-2 (SHOULD)** Reproducible builds with `-trimpath`; embed version via `-ldflags "-X main.version=$TAG"`.
-- **CI-3 (CAN)** Run `govulncheck`/license checks in CI.
+- **CI-3 (MUST)** `govulncheck` runs on every PR to catch vulnerable dependencies early.
+
+### Pre-commit
 
 Install [pre-commit](https://pre-commit.com/) and set up the hooks:
 
 ```sh
 brew install pre-commit
 pre-commit install
+pre-commit install --hook-type commit-msg
 pre-commit run --all-files  # Manual run against all files
 ```
 
-Configured hooks: `goimports`, `go vet`, `go build`, `go test`, `wasm vet`, `wasm build`, `prettier`, `vitest`, `wrangler build`, `markdownlint`.
+Configured hooks: `no-commit-to-branch`, `branch-name`, `commit-message` (commit-msg stage), `goimports`, `go vet`, `go build`, `go test`, `wasm`, `prettier`, `vitest`, `wrangler build`, `markdownlint`.
 
 ### Tooling gates
 
