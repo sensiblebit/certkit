@@ -59,19 +59,10 @@ jobs:
         run: npx wrangler pages functions build --outdir /tmp/certkit-fn-check
 
   lint:
-    name: Lint
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-node@v6
-        with:
-          node-version: lts/*
-      - name: Check formatting (prettier)
-        id: prettier
-        run: npx prettier@latest --check 'web/**/*.{js,ts,css,html}' '!web/public/wasm_exec.js'
-      - name: Check markdown
-        if: success() || failure()
-        run: npx markdownlint-cli@0.47.0 --config .markdownlint.yaml '**/*.md'
+    uses: sensiblebit/.github/.github/workflows/lint.yml@main
+    with:
+      prettier_paths: "web/**/*.{js,ts,css,html}"
+      prettier_exclude: "!web/public/wasm_exec.js"
 
   # ── Gate ──────────────────────────────────────────────
 
