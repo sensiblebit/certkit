@@ -333,6 +333,29 @@ th {
   color: var(--fg-secondary);
 }
 
+th[data-sort] {
+  cursor: pointer;
+  user-select: none;
+}
+
+th[data-sort]:hover {
+  color: var(--accent);
+}
+
+th[data-sort].sort-asc::after,
+th[data-sort].sort-desc::after {
+  margin-left: 0.25rem;
+  font-size: 0.625rem;
+}
+
+th[data-sort].sort-asc::after {
+  content: "\25B2";
+}
+
+th[data-sort].sort-desc::after {
+  content: "\25BC";
+}
+
 tr:last-child td {
   border-bottom: none;
 }

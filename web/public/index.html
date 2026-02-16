@@ -169,13 +169,13 @@
                 <th class="col-select">
                   <input type="checkbox" id="select-all" title="Select all" />
                 </th>
-                <th>CN / Name</th>
-                <th>Type</th>
-                <th>Key Type</th>
-                <th>Expiry</th>
-                <th>SKI</th>
-                <th>Key Match</th>
-                <th>Source</th>
+                <th data-sort="cn">CN / Name</th>
+                <th data-sort="type">Type</th>
+                <th data-sort="key_type">Key Type</th>
+                <th data-sort="expiry">Expiry</th>
+                <th data-sort="ski">SKI</th>
+                <th data-sort="match">Key Match</th>
+                <th data-sort="source">Source</th>
               </tr>
             </thead>
             <tbody id="results-body"></tbody>
@@ -184,15 +184,20 @@
 
         <div id="keys-section" hidden>
           <h3>Private Keys</h3>
+          <div class="filters">
+            <label class="filter-label"
+              ><input type="checkbox" id="keys-show-all" /> Show all</label
+            >
+          </div>
           <div class="table-container">
             <table id="keys-table">
               <thead>
                 <tr>
-                  <th>Type</th>
-                  <th>Bits</th>
-                  <th>SKI</th>
-                  <th>Cert Match</th>
-                  <th>Source</th>
+                  <th data-sort="type">Type</th>
+                  <th data-sort="bits">Bits</th>
+                  <th data-sort="ski">SKI</th>
+                  <th data-sort="match">Cert Match</th>
+                  <th data-sort="source">Source</th>
                 </tr>
               </thead>
               <tbody id="keys-body"></tbody>

@@ -1,4 +1,4 @@
-.PHONY: build test vet wasm wasm-serve clean
+.PHONY: build test vet wasm wasm-serve wasm-dev clean
 
 build:
 	go build -trimpath ./...
@@ -21,6 +21,10 @@ wasm:
 wasm-serve: wasm
 	@echo "Serving at http://localhost:8080"
 	cd web/public && python3 -m http.server 8080
+
+wasm-dev: wasm
+	@echo "Serving at http://localhost:8788 (with AIA proxy)"
+	cd web && npx wrangler pages dev ./public
 
 clean:
 	rm -f web/public/certkit.wasm web/public/wasm_exec.js

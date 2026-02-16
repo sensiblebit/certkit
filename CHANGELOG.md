@@ -7,9 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.6] - 2026-02-15
+
+### Added
+
+- Expand AIA proxy domain allow list from 24 to 142 covered CA domains — adds SSL.com, Certum, HARICA, emSign, D-TRUST, Telia, Trustwave, SECOM, Actalis, Naver, PKIoverheid, WiseKey, and 50+ more CAs discovered via crt.sh/CCADB analysis of Mozilla-trusted intermediates
+- Consolidate per-host entries into suffix matches for Amazon Trust Services (`amazontrust.com`, `amznts.eu`), Microsoft (`microsoft.com`), e-Szigno (`e-szigno.hu`), T-Systems (`telesec.de`), Certum (`certum.pl`), NetLock (`netlock.hu`), HARICA (`harica.gr`), SECOM (`secomtrust.net`), SHECA (`sheca.com`), and others — reduces entry count while covering all known subdomains
+- Add click-to-sort on all certificate and key table columns with sort direction indicators
+- Default certificate sort is now expiry descending; default key sort is matched descending with type as tiebreaker
+- Private keys table now follows certificate filters — keys only appear when their corresponding certificate is visible; "Show all" checkbox overrides this, and keys-only loads show all keys automatically
+
 ### Changed
 
 - Consolidate `repo.fpki.gov` and `http.fpki.gov` into `fpki.gov` suffix in AIA proxy allow list — also covers `cite.fpki.gov` (FPKI conformance test environment)
+- Add `make wasm-dev` target to build WASM and serve with wrangler (includes working AIA proxy at localhost:8788)
 
 ## [0.7.5] - 2026-02-15
 
@@ -367,7 +378,8 @@ Initial release.
 - PKCS#12, PKCS#7, and JKS encode/decode support
 - Homebrew distribution via GoReleaser
 
-[Unreleased]: https://github.com/sensiblebit/certkit/compare/v0.7.5...HEAD
+[Unreleased]: https://github.com/sensiblebit/certkit/compare/v0.7.6...HEAD
+[0.7.6]: https://github.com/sensiblebit/certkit/compare/v0.7.5...v0.7.6
 [0.7.5]: https://github.com/sensiblebit/certkit/compare/v0.7.4...v0.7.5
 [0.7.4]: https://github.com/sensiblebit/certkit/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/sensiblebit/certkit/compare/v0.7.2...v0.7.3

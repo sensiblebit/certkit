@@ -83,6 +83,87 @@ describe("isAllowedDomain", () => {
     expect(isAllowedDomain("cite.fpki.gov")).toBe(true);
     expect(isAllowedDomain("fpki.gov")).toBe(true);
   });
+
+  it("matches amazontrust.com suffix (consolidates rootca1-4, rootg2, sca, eu)", () => {
+    expect(isAllowedDomain("crt.rootca1.amazontrust.com")).toBe(true);
+    expect(isAllowedDomain("crt.rootca4.amazontrust.com")).toBe(true);
+    expect(isAllowedDomain("crl.rootg2.amazontrust.com")).toBe(true);
+    expect(isAllowedDomain("eue2m1.crt.root.eu.amazontrust.com")).toBe(true);
+  });
+
+  it("matches amznts.eu suffix (Amazon EU short domain)", () => {
+    expect(isAllowedDomain("eue2m1.crt.root.amznts.eu")).toBe(true);
+    expect(isAllowedDomain("eur2m1.crt.root.amznts.eu")).toBe(true);
+  });
+
+  it("matches microsoft.com suffix (www, caissuers, pkiops)", () => {
+    expect(isAllowedDomain("www.microsoft.com")).toBe(true);
+    expect(isAllowedDomain("caissuers.microsoft.com")).toBe(true);
+    expect(isAllowedDomain("pkiops.microsoft.com")).toBe(true);
+  });
+
+  it("matches e-szigno.hu suffix (Hungarian CA, many subdomains)", () => {
+    expect(isAllowedDomain("www.e-szigno.hu")).toBe(true);
+    expect(isAllowedDomain("rootca2017-ca1.e-szigno.hu")).toBe(true);
+    expect(isAllowedDomain("tlsrootca2023-ca.e-szigno.hu")).toBe(true);
+    expect(isAllowedDomain("esmimerootca2024-ca.e-szigno.hu")).toBe(true);
+  });
+
+  it("matches telesec.de suffix (T-Systems, many subdomains)", () => {
+    expect(isAllowedDomain("grcl2.crt.telesec.de")).toBe(true);
+    expect(isAllowedDomain("pki0336.telesec.de")).toBe(true);
+    expect(isAllowedDomain("grcl3g2.pki.telesec.de")).toBe(true);
+    expect(isAllowedDomain("telesec.de")).toBe(true);
+  });
+
+  it("matches certum.pl suffix (Asseco, Poland)", () => {
+    expect(isAllowedDomain("repository.certum.pl")).toBe(true);
+    expect(isAllowedDomain("subca.repository.certum.pl")).toBe(true);
+    expect(isAllowedDomain("sslcom.repository.certum.pl")).toBe(true);
+  });
+
+  it("matches netlock.hu suffix (Hungary)", () => {
+    expect(isAllowedDomain("aia1.netlock.hu")).toBe(true);
+    expect(isAllowedDomain("aia2.netlock.hu")).toBe(true);
+    expect(isAllowedDomain("aia3.netlock.hu")).toBe(true);
+  });
+
+  it("matches harica.gr suffix (Greece)", () => {
+    expect(isAllowedDomain("repo.harica.gr")).toBe(true);
+    expect(isAllowedDomain("crt.harica.gr")).toBe(true);
+    expect(isAllowedDomain("www.harica.gr")).toBe(true);
+  });
+
+  it("matches secomtrust.net suffix (Japan)", () => {
+    expect(isAllowedDomain("repository.secomtrust.net")).toBe(true);
+    expect(isAllowedDomain("repo2.secomtrust.net")).toBe(true);
+  });
+
+  it("matches sheca.com suffix (Shanghai CA, China)", () => {
+    expect(isAllowedDomain("certs.global.sheca.com")).toBe(true);
+    expect(isAllowedDomain("certs.sheca.com")).toBe(true);
+    expect(isAllowedDomain("ldap2.sheca.com")).toBe(true);
+  });
+
+  it("matches new exact domain entries", () => {
+    // SSL.com
+    expect(isAllowedDomain("cert.ssl.com")).toBe(true);
+    expect(isAllowedDomain("www.ssl.com")).toBe(true);
+    // Telia
+    expect(isAllowedDomain("cps.trust.telia.com")).toBe(true);
+    // emSign
+    expect(isAllowedDomain("repository.emsign.com")).toBe(true);
+    // Actalis
+    expect(isAllowedDomain("cacert.actalis.it")).toBe(true);
+    // D-TRUST
+    expect(isAllowedDomain("www.d-trust.net")).toBe(true);
+    // PKIoverheid
+    expect(isAllowedDomain("cert.pkioverheid.nl")).toBe(true);
+    // WiseKey
+    expect(isAllowedDomain("public.wisekey.com")).toBe(true);
+    // Naver
+    expect(isAllowedDomain("rca.navercloudtrust.com")).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

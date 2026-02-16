@@ -21,10 +21,14 @@ const filterUnmatched = document.getElementById("filter-unmatched");
 const filterNonleaf = document.getElementById("filter-nonleaf");
 const filterUntrusted = document.getElementById("filter-untrusted");
 const selectAll = document.getElementById("select-all");
+const keysShowAll = document.getElementById("keys-show-all");
 
 // State
 let wasmReady = false;
 const selectedSKIs = new Set();
+let visibleCertSKIs = new Set();
+const certSort = { column: "expiry", direction: "desc" };
+const keySort = { column: "match", direction: "desc" };
 
 // certkitFetchURL is called from Go (WASM) to fetch AIA certificates.
 // Tries direct fetch first, then falls back to our own /api/fetch proxy
@@ -234,11 +238,102 @@ window.certkitOnAIAComplete = function (warningsJSON) {
 
 // --- Filters ---
 
-// Re-render the cert table when any filter changes.
-filterExpired.addEventListener("change", renderCerts);
-filterUnmatched.addEventListener("change", renderCerts);
-filterNonleaf.addEventListener("change", renderCerts);
-filterUntrusted.addEventListener("change", renderCerts);
+// Re-render both tables when any filter changes — cert filters cascade to keys
+// because keys only show when their corresponding cert is visible.
+function onFilterChange() {
+  renderCerts();
+  renderKeys();
+}
+
+filterExpired.addEventListener("change", onFilterChange);
+filterUnmatched.addEventListener("change", onFilterChange);
+filterNonleaf.addEventListener("change", onFilterChange);
+filterUntrusted.addEventListener("change", onFilterChange);
+keysShowAll.addEventListener("change", renderKeys);
+
+// --- Sorting ---
+
+const CERT_TYPE_ORDER = { leaf: 0, intermediate: 1, root: 2 };
+const SORT_DEFAULT_DESC = new Set(["expiry", "match"]);
+
+function toggleSort(state, column) {
+  if (state.column === column) {
+    state.direction = state.direction === "asc" ? "desc" : "asc";
+  } else {
+    state.column = column;
+    state.direction = SORT_DEFAULT_DESC.has(column) ? "desc" : "asc";
+  }
+}
+
+function certCompare(a, b, column) {
+  switch (column) {
+    case "cn":
+      return (a.cn || "").localeCompare(b.cn || "");
+    case "type":
+      return (
+        (CERT_TYPE_ORDER[a.cert_type] ?? 3) -
+        (CERT_TYPE_ORDER[b.cert_type] ?? 3)
+      );
+    case "key_type":
+      return (a.key_type || "").localeCompare(b.key_type || "");
+    case "expiry":
+      return (a.not_after || "").localeCompare(b.not_after || "");
+    case "ski":
+      return (a.ski || "").localeCompare(b.ski || "");
+    case "match":
+      return (a.has_key ? 1 : 0) - (b.has_key ? 1 : 0);
+    case "source":
+      return (a.source || "").localeCompare(b.source || "");
+    default:
+      return 0;
+  }
+}
+
+function keyCompare(a, b, column) {
+  switch (column) {
+    case "type":
+      return (a.key_type || "").localeCompare(b.key_type || "");
+    case "bits":
+      return (a.bit_length || 0) - (b.bit_length || 0);
+    case "ski":
+      return (a.ski || "").localeCompare(b.ski || "");
+    case "match":
+      return (a.has_cert ? 1 : 0) - (b.has_cert ? 1 : 0);
+    case "source":
+      return (a.source || "").localeCompare(b.source || "");
+    default:
+      return 0;
+  }
+}
+
+function updateSortIndicators(table, sort) {
+  for (const th of table.querySelectorAll("th[data-sort]")) {
+    th.classList.remove("sort-asc", "sort-desc");
+    if (th.dataset.sort === sort.column) {
+      th.classList.add(sort.direction === "asc" ? "sort-asc" : "sort-desc");
+    }
+  }
+}
+
+document
+  .getElementById("results-table")
+  .querySelector("thead")
+  .addEventListener("click", (e) => {
+    const th = e.target.closest("th[data-sort]");
+    if (!th) return;
+    toggleSort(certSort, th.dataset.sort);
+    renderCerts();
+  });
+
+document
+  .getElementById("keys-table")
+  .querySelector("thead")
+  .addEventListener("click", (e) => {
+    const th = e.target.closest("th[data-sort]");
+    if (!th) return;
+    toggleSort(keySort, th.dataset.sort);
+    renderKeys();
+  });
 
 // --- Selection ---
 
@@ -289,64 +384,58 @@ function refreshUI() {
   filtersDiv.hidden = false;
 
   renderCerts();
+  renderKeys();
+}
 
-  // Keys table
-  const keys = lastState.keys || [];
-  if (keys.length > 0) {
-    keysSection.hidden = false;
-    keysBody.innerHTML = "";
-    for (const key of keys) {
-      const tr = document.createElement("tr");
-      const matchBadge = key.has_cert
-        ? `<span class="badge badge-match">matched</span>`
-        : `<span class="badge badge-no-match">no cert</span>`;
-      tr.innerHTML = `
-                <td>${escapeHTML(key.key_type)}</td>
-                <td>${key.bit_length}</td>
-                <td class="ski" title="${escapeHTML(key.ski)}">${escapeHTML(key.ski)}</td>
-                <td>${matchBadge}</td>
-                <td>${escapeHTML(key.source)}</td>
-            `;
-      keysBody.appendChild(tr);
-    }
-  } else {
-    keysSection.hidden = true;
-  }
+function renderSummary() {
+  if (!lastState) return;
+  const allCerts = lastState.certs || [];
+  const allKeys = lastState.keys || [];
+
+  // Cert count uses visibleCertSKIs (computed by renderCerts).
+  const visibleCertCount = visibleCertSKIs.size;
+  // Keys follow cert visibility unless "Show all" is checked or no certs exist.
+  const showAll = keysShowAll.checked || allCerts.length === 0;
+  const visibleKeyCount = showAll
+    ? allKeys.length
+    : allKeys.filter((k) => visibleCertSKIs.has(k.ski)).length;
+
+  const hiddenCerts = allCerts.length - visibleCertCount;
+  const hiddenKeys = allKeys.length - visibleKeyCount;
+
+  summaryDiv.innerHTML = `
+    <div class="summary-item"><span class="summary-count">${visibleCertCount}</span> certificates${hiddenCerts > 0 ? ` <span class="summary-hidden">(${hiddenCerts} hidden)</span>` : ""}</div>
+    <div class="summary-item"><span class="summary-count">${visibleKeyCount}</span> keys${hiddenKeys > 0 ? ` <span class="summary-hidden">(${hiddenKeys} hidden)</span>` : ""}</div>
+    <div class="summary-item"><span class="summary-count">${lastState.matched_pairs}</span> matched pairs</div>
+  `;
 }
 
 function renderCerts() {
   if (!lastState) return;
 
   const allCerts = lastState.certs || [];
-  const hideExpired = filterExpired.checked;
-  const hideUnmatched = filterUnmatched.checked;
-  const hideNonleaf = filterNonleaf.checked;
-  const hideUntrusted = filterUntrusted.checked;
-
   const visible = allCerts.filter((c) => {
-    if (hideExpired && c.expired) return false;
-    if (hideUnmatched && !c.has_key) return false;
-    if (hideNonleaf && c.cert_type !== "leaf") return false;
-    if (hideUntrusted && !c.trusted) return false;
+    if (filterExpired.checked && c.expired) return false;
+    if (filterUnmatched.checked && !c.has_key) return false;
+    if (filterNonleaf.checked && c.cert_type !== "leaf") return false;
+    if (filterUntrusted.checked && !c.trusted) return false;
     return true;
   });
 
-  const hidden = allCerts.length - visible.length;
+  // Store visible cert SKIs so renderKeys can filter keys to match.
+  visibleCertSKIs = new Set(visible.map((c) => c.ski));
 
-  // Summary
-  summaryDiv.innerHTML = `
-        <div class="summary-item"><span class="summary-count">${visible.length}</span> certificates${hidden > 0 ? ` <span class="summary-hidden">(${hidden} hidden)</span>` : ""}</div>
-        <div class="summary-item"><span class="summary-count">${lastState.keys ? lastState.keys.length : 0}</span> keys</div>
-        <div class="summary-item"><span class="summary-count">${lastState.matched_pairs}</span> matched pairs</div>
-    `;
+  renderSummary();
 
-  // Certificates table
-  resultsBody.innerHTML = "";
+  // Sort — tiebreak by CN ascending when primary values are equal.
+  const dir = certSort.direction === "asc" ? 1 : -1;
   visible.sort((a, b) => {
-    const typeOrder = { leaf: 0, intermediate: 1, root: 2 };
-    return (typeOrder[a.cert_type] || 3) - (typeOrder[b.cert_type] || 3);
+    const primary = certCompare(a, b, certSort.column) * dir;
+    if (primary !== 0) return primary;
+    return certCompare(a, b, "cn");
   });
 
+  resultsBody.innerHTML = "";
   for (const cert of visible) {
     const tr = document.createElement("tr");
 
@@ -376,9 +465,55 @@ function renderCerts() {
     resultsBody.appendChild(tr);
   }
 
-  // Sync select-all checkbox state
+  updateSortIndicators(document.getElementById("results-table"), certSort);
   updateSelectAll();
   updateExportBtn();
+}
+
+function renderKeys() {
+  if (!lastState) return;
+  const allKeys = lastState.keys || [];
+
+  if (allKeys.length === 0) {
+    keysSection.hidden = true;
+    return;
+  }
+  keysSection.hidden = false;
+
+  // Show all keys when the checkbox is checked or no certs have been loaded.
+  const allCerts = lastState.certs || [];
+  const showAll = keysShowAll.checked || allCerts.length === 0;
+  const visible = showAll
+    ? allKeys.slice()
+    : allKeys.filter((k) => visibleCertSKIs.has(k.ski));
+
+  renderSummary();
+
+  // Sort — tiebreak by type ascending when primary values are equal.
+  const dir = keySort.direction === "asc" ? 1 : -1;
+  visible.sort((a, b) => {
+    const primary = keyCompare(a, b, keySort.column) * dir;
+    if (primary !== 0) return primary;
+    return keyCompare(a, b, "type");
+  });
+
+  keysBody.innerHTML = "";
+  for (const key of visible) {
+    const tr = document.createElement("tr");
+    const matchBadge = key.has_cert
+      ? `<span class="badge badge-match">matched</span>`
+      : `<span class="badge badge-no-match">no cert</span>`;
+    tr.innerHTML = `
+      <td>${escapeHTML(key.key_type)}</td>
+      <td>${key.bit_length}</td>
+      <td class="ski" title="${escapeHTML(key.ski)}">${escapeHTML(key.ski)}</td>
+      <td>${matchBadge}</td>
+      <td>${escapeHTML(key.source)}</td>
+    `;
+    keysBody.appendChild(tr);
+  }
+
+  updateSortIndicators(document.getElementById("keys-table"), keySort);
 }
 
 function updateSelectAll() {
@@ -445,6 +580,12 @@ resetBtn.addEventListener("click", () => {
   certkitReset();
   lastState = null;
   selectedSKIs.clear();
+  visibleCertSKIs = new Set();
+  keysShowAll.checked = false;
+  certSort.column = "expiry";
+  certSort.direction = "desc";
+  keySort.column = "match";
+  keySort.direction = "desc";
   resultsSection.hidden = true;
   filtersDiv.hidden = true;
   resultsBody.innerHTML = "";

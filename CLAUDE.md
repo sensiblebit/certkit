@@ -102,15 +102,15 @@ Cloudflare Pages deployment. Static site with WASM-powered certificate processin
 - `wrangler.toml` — Cloudflare Pages configuration.
 - `package.json` — NPM config (vitest, jsdom, workers-types dev dependencies).
 - `vitest.config.ts` — Vitest test runner config (node environment by default).
-- `functions/api/fetch.ts` — Cloudflare Pages Function: CORS proxy for AIA certificate fetches from the WASM app. Domain allow list restricts proxying to known CA hostnames (US Gov FPKI, commercial CAs, bridge participants). Security hardening: blocks query strings, URL credentials, non-standard ports, fragments; reconstructs URLs from validated components; validates redirect targets via `safeFetch()` with `redirect: "manual"` and domain re-checking (max 5 hops). Exports `isAllowedDomain()` for direct unit testing.
-- `functions/api/fetch.test.ts` — Proxy test suite (53 tests): domain allow list, CORS/OPTIONS, origin/referer validation, URL sanitization, fetch behavior, redirect handling.
+- `functions/api/fetch.ts` — Cloudflare Pages Function: CORS proxy for AIA certificate fetches from the WASM app. Domain allow list covers 142 CA hostnames (all Mozilla-trusted intermediate AIA domains, sourced from crt.sh/CCADB). Uses hostname suffix matching (`isAllowedDomain()`). Security hardening: blocks query strings, URL credentials, non-standard ports, fragments; reconstructs URLs from validated components; validates redirect targets via `safeFetch()` with `redirect: "manual"` and domain re-checking (max 5 hops). Exports `isAllowedDomain()` for direct unit testing.
+- `functions/api/fetch.test.ts` — Proxy test suite (65 tests): domain allow list (including suffix matching for consolidated entries), CORS/OPTIONS, origin/referer validation, URL sanitization, fetch behavior, redirect handling.
 - `public/index.html` — Web UI HTML. Loads `app.js` as ES module, `wasm_exec.js` (Go-generated, excluded from prettier/tests).
-- `public/app.js` — Web UI logic. ES module; imports utilities from `utils.js`. Drives WASM certificate processing UI.
+- `public/app.js` — Web UI logic. ES module; imports utilities from `utils.js`. Drives WASM certificate processing UI. Features: drag-and-drop file ingestion, cert/key filter checkboxes (hide expired, unmatched, non-leaf, untrusted), click-to-sort on all table columns (default: certs by expiry DESC, keys by matched DESC then type ASC), key table visibility linked to cert filters ("Show all" checkbox overrides, keys-only loads show all).
 - `public/utils.js` — Extracted utility functions (`formatDate`, `escapeHTML`) shared by `app.js`. ES module.
 - `public/utils.test.js` — Utils test suite (13 tests, jsdom environment).
-- `public/style.css` — Web UI styles.
+- `public/style.css` — Web UI styles. Includes sortable column header indicators (`th[data-sort]` with `▲`/`▼` pseudo-elements).
 - `public/wasm_exec.js` — Go-generated WASM glue code. Do not edit manually; excluded from prettier and vitest.
-- `public/certkit.wasm` — Compiled WASM binary (built via `make wasm`).
+- `public/certkit.wasm` — Compiled WASM binary (built via `make wasm`). Serve locally with `make wasm-dev` (wrangler, includes AIA proxy) or `make wasm-serve` (python, no proxy).
 
 ---
 
@@ -250,7 +250,7 @@ cd web && npm test      # Run all JS/TS tests (vitest run)
 cd web && npm run test:watch  # Watch mode
 ```
 
-- **Test locations**: `web/functions/api/fetch.test.ts` (proxy, 53 tests), `web/public/utils.test.js` (utilities, 13 tests).
+- **Test locations**: `web/functions/api/fetch.test.ts` (proxy, 65 tests), `web/public/utils.test.js` (utilities, 13 tests).
 - **Environment**: Default is `node` (`web/vitest.config.ts`). Files needing DOM APIs use `// @vitest-environment jsdom` per-file directive.
 - **Fetch mocking**: Use `vi.stubGlobal("fetch", vi.fn())` for the proxy tests. Use `mockImplementation(() => Promise.resolve(new Response(...)))` — not `mockResolvedValue` — because `Response` body can only be consumed once.
 - **Date testing**: `formatDate()` uses `toLocaleDateString()` which applies timezone offset. Use midday UTC times (e.g., `2026-06-15T12:00:00Z`) in test fixtures to avoid day-boundary shifts.
