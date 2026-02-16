@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add `ParseCertificatesAny()` for parsing certificates from DER, PEM, or PKCS#7 (`.p7c`) data — resolves AIA responses from DISA, FPKI, and bridge CAs that serve PKCS#7-wrapped cross-certificates
+
+### Changed
+
+- **Breaking:** Remove `ParseCertificateAny()` — use `ParseCertificatesAny()` instead (returns all certificates, not just the first)
+
+### Fixed
+
+- Fix AIA resolution silently dropping certificates from PKCS#7 (`.p7c`) AIA responses — affects DISA `issuedto/*.p7c`, FPKI `caCertsIssuedTo*.p7c`, STRAC, Symantec bridge, and other CA endpoints
+- Fix `FetchAIACertificates()` (CLI bundle command) silently dropping extra certificates from PKCS#7 AIA responses
+
 ## [0.7.4] - 2026-02-15
 
 ### Added

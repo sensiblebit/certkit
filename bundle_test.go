@@ -333,7 +333,7 @@ func TestFetchLeafFromURL_invalidURL(t *testing.T) {
 	}
 }
 
-func TestFetchCertFromURL_http404(t *testing.T) {
+func TestFetchCertificatesFromURL_HTTP404(t *testing.T) {
 	// WHY: AIA URLs that return HTTP 404 must produce a clear error; silently ignoring would leave chains incomplete.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -341,7 +341,7 @@ func TestFetchCertFromURL_http404(t *testing.T) {
 	defer srv.Close()
 
 	client := srv.Client()
-	_, err := fetchCertFromURL(context.Background(), client, srv.URL)
+	_, err := fetchCertificatesFromURL(context.Background(), client, srv.URL)
 	if err == nil {
 		t.Error("expected error for HTTP 404")
 	}
@@ -350,8 +350,8 @@ func TestFetchCertFromURL_http404(t *testing.T) {
 	}
 }
 
-func TestFetchCertFromURL_DER(t *testing.T) {
-	// WHY: AIA endpoints commonly serve raw DER; the fetcher must auto-detect DER vs PEM format to work with real CAs.
+func TestFetchCertificatesFromURL_DER(t *testing.T) {
+	// WHY: AIA endpoints commonly serve raw DER (.cer files); the fetcher must auto-detect format.
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
@@ -367,17 +367,20 @@ func TestFetchCertFromURL_DER(t *testing.T) {
 	defer srv.Close()
 
 	client := srv.Client()
-	cert, err := fetchCertFromURL(context.Background(), client, srv.URL)
+	certs, err := fetchCertificatesFromURL(context.Background(), client, srv.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cert.Subject.CommonName != "der-test" {
-		t.Errorf("CN=%q, want der-test", cert.Subject.CommonName)
+	if len(certs) != 1 {
+		t.Fatalf("expected 1 cert, got %d", len(certs))
+	}
+	if certs[0].Subject.CommonName != "der-test" {
+		t.Errorf("CN=%q, want der-test", certs[0].Subject.CommonName)
 	}
 }
 
-func TestFetchCertFromURL_PEM(t *testing.T) {
-	// WHY: Some AIA endpoints serve PEM-encoded certs; the fetcher must handle both PEM and DER transparently.
+func TestFetchCertificatesFromURL_PEM(t *testing.T) {
+	// WHY: Some AIA endpoints serve PEM-encoded certs; the fetcher must handle PEM transparently.
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
@@ -394,29 +397,79 @@ func TestFetchCertFromURL_PEM(t *testing.T) {
 	defer srv.Close()
 
 	client := srv.Client()
-	cert, err := fetchCertFromURL(context.Background(), client, srv.URL)
+	certs, err := fetchCertificatesFromURL(context.Background(), client, srv.URL)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cert.Subject.CommonName != "pem-test" {
-		t.Errorf("CN=%q, want pem-test", cert.Subject.CommonName)
+	if len(certs) != 1 {
+		t.Fatalf("expected 1 cert, got %d", len(certs))
+	}
+	if certs[0].Subject.CommonName != "pem-test" {
+		t.Errorf("CN=%q, want pem-test", certs[0].Subject.CommonName)
 	}
 }
 
-func TestFetchCertFromURL_garbage(t *testing.T) {
-	// WHY: Non-certificate responses from AIA endpoints must produce a clear parse error, not return a corrupt certificate object.
+func TestFetchCertificatesFromURL_PKCS7(t *testing.T) {
+	// WHY: DISA and FPKI AIA endpoints serve .p7c (PKCS#7) files containing
+	// one or more cross-certificates. All certs must be extracted.
+	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "p7c-ca"},
+		NotBefore:    time.Now().Add(-1 * time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		IsCA:         true, BasicConstraintsValid: true,
+		KeyUsage: x509.KeyUsageCertSign,
+	}
+	caDER, _ := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	caCert, _ := x509.ParseCertificate(caDER)
+
+	interKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	interTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "p7c-intermediate"},
+		NotBefore:    time.Now().Add(-1 * time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		IsCA:         true, BasicConstraintsValid: true,
+		KeyUsage: x509.KeyUsageCertSign,
+	}
+	interDER, _ := x509.CreateCertificate(rand.Reader, interTmpl, caCert, &interKey.PublicKey, caKey)
+	interCert, _ := x509.ParseCertificate(interDER)
+
+	p7Data, err := EncodePKCS7([]*x509.Certificate{interCert, caCert})
+	if err != nil {
+		t.Fatalf("encode PKCS#7: %v", err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(p7Data)
+	}))
+	defer srv.Close()
+
+	client := srv.Client()
+	certs, err := fetchCertificatesFromURL(context.Background(), client, srv.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(certs) != 2 {
+		t.Fatalf("expected 2 certs from PKCS#7, got %d", len(certs))
+	}
+}
+
+func TestFetchCertificatesFromURL_Garbage(t *testing.T) {
+	// WHY: Non-certificate responses must produce a clear parse error, not return corrupt data.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("this is not a certificate"))
 	}))
 	defer srv.Close()
 
 	client := srv.Client()
-	_, err := fetchCertFromURL(context.Background(), client, srv.URL)
+	_, err := fetchCertificatesFromURL(context.Background(), client, srv.URL)
 	if err == nil {
 		t.Error("expected error for garbage body")
 	}
 	if !strings.Contains(err.Error(), "not DER") {
-		t.Errorf("error should mention DER/PEM parse failure, got: %v", err)
+		t.Errorf("error should mention parse failure, got: %v", err)
 	}
 }
 

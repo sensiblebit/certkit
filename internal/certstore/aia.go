@@ -70,7 +70,7 @@ func ResolveAIA(ctx context.Context, input ResolveAIAInput) []string {
 					continue
 				}
 
-				issuer, err := certkit.ParseCertificateAny(body)
+				issuers, err := certkit.ParseCertificatesAny(body)
 				if err != nil {
 					warnings = append(warnings, fmt.Sprintf(
 						"Fetched %s but could not parse: %v",
@@ -79,10 +79,12 @@ func ResolveAIA(ctx context.Context, input ResolveAIAInput) []string {
 					continue
 				}
 
-				if err := input.Store.HandleCertificate(issuer, "AIA: "+aiaURL); err != nil {
-					continue
+				for _, issuer := range issuers {
+					if err := input.Store.HandleCertificate(issuer, "AIA: "+aiaURL); err != nil {
+						continue
+					}
+					fetched++
 				}
-				fetched++
 			}
 		}
 

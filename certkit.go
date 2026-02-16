@@ -60,18 +60,24 @@ func ParsePEMCertificate(pemData []byte) (*x509.Certificate, error) {
 	return certs[0], nil
 }
 
-// ParseCertificateAny attempts to parse a certificate from raw bytes, trying
-// DER encoding first (most common for AIA responses), then PEM.
-func ParseCertificateAny(data []byte) (*x509.Certificate, error) {
+// ParseCertificatesAny attempts to parse certificates from raw bytes, trying
+// DER encoding first (single cert, most common for AIA .cer responses), then
+// PEM (may contain multiple certs), then PKCS#7/P7C (common for AIA .p7c
+// responses from DISA, FPKI, and bridge CAs).
+func ParseCertificatesAny(data []byte) ([]*x509.Certificate, error) {
 	cert, derErr := x509.ParseCertificate(data)
 	if derErr == nil {
-		return cert, nil
+		return []*x509.Certificate{cert}, nil
 	}
-	cert, pemErr := ParsePEMCertificate(data)
+	certs, pemErr := ParsePEMCertificates(data)
 	if pemErr == nil {
-		return cert, nil
+		return certs, nil
 	}
-	return nil, fmt.Errorf("not DER (%v) or PEM (%v)", derErr, pemErr)
+	certs, p7Err := DecodePKCS7(data)
+	if p7Err == nil {
+		return certs, nil
+	}
+	return nil, fmt.Errorf("not DER (%v) or PEM (%v) or PKCS#7 (%v)", derErr, pemErr, p7Err)
 }
 
 // ParsePEMPrivateKey parses a PEM-encoded private key (PKCS#1, PKCS#8, or EC).

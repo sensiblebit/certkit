@@ -37,7 +37,7 @@ web/                                                # Cloudflare Pages site + CO
 
 Stateless utility functions. No database, no file I/O. This is the public library API.
 
-- `certkit.go` — PEM parsing, key generation, fingerprints, SKI computation. `DeduplicatePasswords()`, `ParseCertificateAny()`.
+- `certkit.go` — PEM parsing, key generation, fingerprints, SKI computation. `DeduplicatePasswords()`, `ParseCertificatesAny()` (DER/PEM/PKCS#7).
 - `bundle.go` — Certificate chain resolution via AIA, trust store verification. `BundleResult`/`BundleOptions` types, `DefaultOptions()`, `FetchLeafFromURL()`, `FetchAIACertificates()`, `Bundle()`. `MozillaRootPool()` (`sync.Once`-cached), `MozillaRootPEM()`.
 - `csr.go` — CSR generation from certs, templates, or existing CSRs
 - `pkcs.go` — PKCS#12 and PKCS#7 encode/decode

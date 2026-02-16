@@ -11,6 +11,8 @@ import (
 	"math/big"
 	"testing"
 	"time"
+
+	"github.com/sensiblebit/certkit"
 )
 
 func TestResolveAIA_FetchesMissingIssuer(t *testing.T) {
@@ -340,6 +342,88 @@ func TestResolveAIA_MaxDepthDefault(t *testing.T) {
 
 	if fetchCount != 1 {
 		t.Errorf("expected 1 fetch with default depth, got %d", fetchCount)
+	}
+}
+
+func TestResolveAIA_PKCS7Response(t *testing.T) {
+	// WHY: AIA endpoints commonly serve .p7c (PKCS#7) files, especially
+	// DISA and FPKI. The fetcher must parse PKCS#7 and ingest all
+	// certificates from the bundle, not just the first.
+	t.Parallel()
+	store := NewMemStore()
+
+	rootKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	rootTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "P7C Root CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	rootDER, _ := x509.CreateCertificate(rand.Reader, rootTmpl, rootTmpl, &rootKey.PublicKey, rootKey)
+	rootCert, _ := x509.ParseCertificate(rootDER)
+
+	interKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	interTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(2),
+		Subject:               pkix.Name{CommonName: "P7C Intermediate CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	interDER, _ := x509.CreateCertificate(rand.Reader, interTmpl, rootCert, &interKey.PublicKey, rootKey)
+	interCert, _ := x509.ParseCertificate(interDER)
+
+	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	leafTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(3),
+		Subject:               pkix.Name{CommonName: "p7c-leaf.example.com"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IssuingCertificateURL: []string{"http://crl.example.mil/issuedto/root_IT.p7c"},
+	}
+	leafDER, _ := x509.CreateCertificate(rand.Reader, leafTmpl, interCert, &leafKey.PublicKey, interKey)
+	leafCert, _ := x509.ParseCertificate(leafDER)
+
+	if err := store.HandleCertificate(leafCert, "leaf.pem"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Encode both root and intermediate into a single PKCS#7 bundle
+	p7Data, err := certkit.EncodePKCS7([]*x509.Certificate{interCert, rootCert})
+	if err != nil {
+		t.Fatalf("encode PKCS#7: %v", err)
+	}
+
+	fetcher := func(_ context.Context, url string) ([]byte, error) {
+		if url == "http://crl.example.mil/issuedto/root_IT.p7c" {
+			return p7Data, nil
+		}
+		return nil, fmt.Errorf("unexpected URL: %s", url)
+	}
+
+	warnings := ResolveAIA(context.Background(), ResolveAIAInput{
+		Store: store,
+		Fetch: fetcher,
+	})
+
+	if len(warnings) != 0 {
+		t.Errorf("expected 0 warnings, got %v", warnings)
+	}
+
+	// All three certs should be in the store: leaf + intermediate + root from p7c
+	allCerts := store.AllCertsFlat()
+	if len(allCerts) != 3 {
+		t.Errorf("expected 3 certs in store (leaf + 2 from PKCS#7), got %d", len(allCerts))
+	}
+
+	// Verify the issuer chain is resolved
+	if !store.HasIssuer(leafCert) {
+		t.Error("leaf should now have its issuer in the store")
 	}
 }
 

@@ -178,20 +178,20 @@ func FetchAIACertificates(ctx context.Context, cert *x509.Certificate, timeout t
 			}
 			seen[aiaURL] = true
 
-			issuer, err := fetchCertFromURL(ctx, client, aiaURL)
+			certs, err := fetchCertificatesFromURL(ctx, client, aiaURL)
 			if err != nil {
 				warnings = append(warnings, fmt.Sprintf("AIA fetch failed for %s: %v", aiaURL, err))
 				continue
 			}
-			fetched = append(fetched, issuer)
-			queue = append(queue, issuer)
+			fetched = append(fetched, certs...)
+			queue = append(queue, certs...)
 		}
 	}
 	return fetched, warnings
 }
 
-// fetchCertFromURL fetches a single certificate (DER or PEM) from a URL.
-func fetchCertFromURL(ctx context.Context, client *http.Client, certURL string) (*x509.Certificate, error) {
+// fetchCertificatesFromURL fetches certificates from a URL (DER, PEM, or PKCS#7/P7C).
+func fetchCertificatesFromURL(ctx context.Context, client *http.Client, certURL string) ([]*x509.Certificate, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, certURL, nil)
 	if err != nil {
 		return nil, err
@@ -211,7 +211,7 @@ func fetchCertFromURL(ctx context.Context, client *http.Client, certURL string) 
 		return nil, err
 	}
 
-	return ParseCertificateAny(body)
+	return ParseCertificatesAny(body)
 }
 
 // detectAndSwapLeaf checks if the first cert is a CA and exactly one non-CA
