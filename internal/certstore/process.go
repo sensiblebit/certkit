@@ -172,10 +172,12 @@ func processDER(data []byte, source string, passwords []string, handler CertHand
 		if bytes.Equal(derived[ed25519.SeedSize:], data[ed25519.SeedSize:]) {
 			slog.Debug("parsed Ed25519 private key")
 			keyPEM, err := certkit.MarshalPrivateKeyToPEM(derived)
-			if err == nil {
-				if err := handler.HandleKey(derived, []byte(keyPEM), source); err != nil {
-					slog.Debug("handler rejected Ed25519 key", "path", source, "error", err)
-				}
+			if err != nil {
+				slog.Debug("marshaling Ed25519 key to PEM", "error", err)
+				return
+			}
+			if err := handler.HandleKey(derived, []byte(keyPEM), source); err != nil {
+				slog.Debug("handler rejected Ed25519 key", "path", source, "error", err)
 			}
 			return
 		}

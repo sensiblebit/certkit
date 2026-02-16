@@ -29,7 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Tests
 
-- Ralph Loop pass 3 — key handling normalization and scale coverage:
+- Ralph Loop pass 3 — key handling normalization and scale coverage ([`c89e5de`], [`0db22eb`]):
   - Add `ProcessData_PKCS8DER_Ed25519_ValueForm` asserting stored key is value type, not pointer
   - Add `SameECDSAKey_SEC1AndPKCS8_Equality` cross-format test (all NIST curves at parse level + pipeline level)
   - Add `SameEd25519Key_OpenSSHAndPKCS8_Equality` cross-format test verifying key equality and SKI match
@@ -54,7 +54,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Log marshal errors in `processDER` PKCS#8 and SEC1 EC paths instead of silently dropping keys — aligns with PKCS#1 RSA path behavior
+- Log marshal errors in all `processDER` key paths (PKCS#8, SEC1 EC, Ed25519 raw) instead of silently dropping keys — aligns with PKCS#1 RSA path behavior ([`c89e5de`], [`827e913`])
 - Normalize PKCS#8 parsed keys via `normalizeKey` in `ParsePEMPrivateKey` — ensures Ed25519 value form from the earliest point in the pipeline instead of relying on Go stdlib behavior ([`0031f7a`])
 - Fix `privateKeySize` in inspect returning "unknown" for `*ed25519.PrivateKey` pointer form ([`0031f7a`])
 - Reorder `HandleKey` normalization before `GetPublicKey` call for correctness clarity ([`0031f7a`])
@@ -524,6 +524,9 @@ Initial release.
 [`0031f7a`]: https://github.com/sensiblebit/certkit/commit/0031f7a
 [`dec8949`]: https://github.com/sensiblebit/certkit/commit/dec8949
 [`19ee683`]: https://github.com/sensiblebit/certkit/commit/19ee683
+[`c89e5de`]: https://github.com/sensiblebit/certkit/commit/c89e5de
+[`0db22eb`]: https://github.com/sensiblebit/certkit/commit/0db22eb
+[`827e913`]: https://github.com/sensiblebit/certkit/commit/827e913
 [#24]: https://github.com/sensiblebit/certkit/pull/24
 [#25]: https://github.com/sensiblebit/certkit/pull/25
 [#26]: https://github.com/sensiblebit/certkit/pull/26
