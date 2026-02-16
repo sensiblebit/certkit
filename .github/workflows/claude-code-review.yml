@@ -17,18 +17,23 @@ jobs:
       id-token: write
 
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v6
-        with:
-          fetch-depth: 1
-
-      - name: Minimize previous Claude review comments
+      - name: Check if review workflow was modified
+        id: check
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh pr view ${{ github.event.pull_request.number }} \
+          if gh -R ${{ github.repository }} pr diff ${{ github.event.pull_request.number }} --name-only | grep -q '^\.github/workflows/claude-code-review\.yml$'; then
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping Claude review — workflow file was modified (OAuth validation will fail)"
+          fi
+
+      - name: Minimize previous review comments
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh -R ${{ github.repository }} pr view ${{ github.event.pull_request.number }} \
             --json comments \
-            --jq '.comments[] | select(.author.login == "claude") | .id' \
+            --jq '.comments[] | select(.author.login == "claude" or .author.login == "github-actions") | .id' \
           | while read -r node_id; do
             gh api graphql -f query='
               mutation {
@@ -38,7 +43,26 @@ jobs:
               }'
           done
 
+      - name: Post skip comment
+        if: steps.check.outputs.skip == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh -R ${{ github.repository }} pr comment ${{ github.event.pull_request.number }} \
+            --body "## Code review
+
+          Skipped — this PR modifies \`claude-code-review.yml\`. The OAuth token exchange requires the workflow file to match the default branch, so the review cannot run until this change is merged.
+
+          @copilot please review this pull request."
+
+      - name: Checkout repository
+        if: steps.check.outputs.skip != 'true'
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+
       - name: Run Claude Code Review
+        if: steps.check.outputs.skip != 'true'
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
