@@ -321,6 +321,41 @@ func TestParseContainerData_PEMKeyOnly_Ed25519(t *testing.T) {
 	}
 }
 
+func TestParseContainerData_PKCS12_Ed25519(t *testing.T) {
+	// WHY: ParseContainerData returns the key from DecodePKCS12 which calls
+	// normalizeKey internally. This verifies the Ed25519 key emerges as
+	// ed25519.PrivateKey (value type) from a PKCS#12 container through
+	// ParseContainerData — the RSA-only test would not catch a normalization
+	// gap specific to Ed25519.
+	t.Parallel()
+
+	ca := newEd25519CA(t)
+	leaf := newEd25519Leaf(t, ca, "ed-p12.example.com", []string{"ed-p12.example.com"})
+	p12Data := newPKCS12Bundle(t, leaf, ca, "changeit")
+
+	contents, err := ParseContainerData(p12Data, []string{"changeit"})
+	if err != nil {
+		t.Fatalf("ParseContainerData: %v", err)
+	}
+	if contents.Leaf == nil {
+		t.Fatal("expected Leaf to be non-nil")
+	}
+	if contents.Leaf.Subject.CommonName != "ed-p12.example.com" {
+		t.Errorf("Leaf CN = %q, want ed-p12.example.com", contents.Leaf.Subject.CommonName)
+	}
+	if contents.Key == nil {
+		t.Fatal("expected Key to be non-nil for PKCS#12")
+	}
+	edKey, ok := contents.Key.(ed25519.PrivateKey)
+	if !ok {
+		t.Fatalf("Key type = %T, want ed25519.PrivateKey (value, not pointer)", contents.Key)
+	}
+	origKey := leaf.key.(ed25519.PrivateKey)
+	if !origKey.Equal(edKey) {
+		t.Error("extracted Ed25519 key does not Equal original")
+	}
+}
+
 func TestParseContainerData_GarbageData(t *testing.T) {
 	// WHY: Completely unrecognizable data must return an error that mentions
 	// the formats attempted, so the user knows what was tried.

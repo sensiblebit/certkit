@@ -2606,6 +2606,43 @@ func TestEncodePKCS12_Ed25519Pointer(t *testing.T) {
 	}
 }
 
+func TestEncodePKCS12Legacy_Ed25519Pointer(t *testing.T) {
+	// WHY: EncodePKCS12Legacy uses a different cipher (LegacyRC2) but shares the
+	// same normalizeKey+validatePKCS12KeyType path. This verifies that
+	// *ed25519.PrivateKey (pointer form) is normalized before encoding, matching
+	// the modern EncodePKCS12 behavior.
+	t.Parallel()
+
+	_, edVal, _ := ed25519.GenerateKey(rand.Reader)
+	edPtr := &edVal
+
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "ed-ptr-p12-legacy"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, edVal.Public(), edVal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, _ := x509.ParseCertificate(certDER)
+
+	p12, err := EncodePKCS12Legacy(edPtr, cert, nil, "test")
+	if err != nil {
+		t.Fatalf("EncodePKCS12Legacy(*ed25519.PrivateKey): %v", err)
+	}
+
+	decodedKey, _, _, err := DecodePKCS12(p12, "test")
+	if err != nil {
+		t.Fatalf("DecodePKCS12: %v", err)
+	}
+	if !edVal.Equal(decodedKey) {
+		t.Error("pointer Ed25519 → PKCS#12 legacy round-trip lost key material")
+	}
+}
+
 func TestEncodeJKS_Ed25519Pointer(t *testing.T) {
 	// WHY: EncodeJKS calls normalizeKey internally, but this test directly
 	// verifies that *ed25519.PrivateKey (pointer form) works end-to-end.
@@ -3019,5 +3056,60 @@ func TestCertSKI_AllKeyTypes(t *testing.T) {
 				t.Errorf("CertSKI format invalid: %s", ski)
 			}
 		})
+	}
+}
+
+func TestCrossFormatRoundTrip_OpenSSH_To_JKS(t *testing.T) {
+	// WHY: OpenSSH Ed25519 keys arrive as *ed25519.PrivateKey (pointer form)
+	// from ssh.ParseRawPrivateKey. EncodeJKS must normalize to value form
+	// before PKCS#8 marshaling. This is the cross-format counterpart to
+	// TestCrossFormatRoundTrip_OpenSSH_To_PKCS12.
+	t.Parallel()
+
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	sshPEM, err := ssh.MarshalPrivateKey(priv, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	pemBytes := pem.EncodeToMemory(sshPEM)
+
+	// Parse from OpenSSH format — produces normalized ed25519.PrivateKey
+	parsed, err := ParsePEMPrivateKey(pemBytes)
+	if err != nil {
+		t.Fatalf("parse OpenSSH: %v", err)
+	}
+
+	edKey := parsed.(ed25519.PrivateKey)
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "openssh-to-jks"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, edKey.Public(), edKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, _ := x509.ParseCertificate(certDER)
+
+	jksData, err := EncodeJKS(parsed, cert, nil, "changeit")
+	if err != nil {
+		t.Fatalf("EncodeJKS(OpenSSH-parsed key): %v", err)
+	}
+
+	_, keys, err := DecodeJKS(jksData, []string{"changeit"})
+	if err != nil {
+		t.Fatalf("DecodeJKS: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key, got %d", len(keys))
+	}
+	decodedKey, ok := keys[0].(ed25519.PrivateKey)
+	if !ok {
+		t.Fatalf("decoded key type = %T, want ed25519.PrivateKey (value)", keys[0])
+	}
+	if !priv.Equal(decodedKey) {
+		t.Error("OpenSSH Ed25519 → JKS round-trip lost key material")
 	}
 }
