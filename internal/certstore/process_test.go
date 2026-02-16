@@ -2397,3 +2397,138 @@ func TestProcessData_SameEd25519Key_OpenSSHAndPKCS8_Equality(t *testing.T) {
 		t.Errorf("PKCS8-parsed key type = %T, want ed25519.PrivateKey", pkcs8Rec.Key)
 	}
 }
+
+func TestProcessData_DERKeyWithPEMExtension(t *testing.T) {
+	// WHY: A file named "key.pem" that contains raw DER (not PEM text) must
+	// still be ingested via the binary format fallback. ProcessData checks
+	// IsPEM first — if that returns false and the extension is recognized,
+	// processDER runs. This test proves the fallback works for .pem-extension
+	// files containing binary data.
+	t.Parallel()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkcs8DER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{
+		Data:    pkcs8DER,
+		Path:    "server.pem", // DER data with .pem extension
+		Handler: store,
+	}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	if len(store.AllKeys()) != 1 {
+		t.Fatalf("expected 1 key from DER data with .pem extension, got %d", len(store.AllKeys()))
+	}
+	for _, rec := range store.AllKeys() {
+		if !keysEqual(t, key, rec.Key) {
+			t.Error("stored key does not Equal original")
+		}
+	}
+}
+
+func TestProcessData_PKCS8DER_RSA4096(t *testing.T) {
+	// WHY: All DER key tests use RSA 2048. A 4096-bit RSA key exercises
+	// larger big.Int marshaling through the PKCS#8 → PEM → HandleKey
+	// pipeline. A buffer or encoding bug at scale would be invisible
+	// with smaller keys.
+	t.Parallel()
+	key, err := rsa.GenerateKey(rand.Reader, 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkcs8DER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{
+		Data:    pkcs8DER,
+		Path:    "rsa4096.der",
+		Handler: store,
+	}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	if len(store.AllKeys()) != 1 {
+		t.Fatalf("expected 1 key, got %d", len(store.AllKeys()))
+	}
+	for _, rec := range store.AllKeys() {
+		if rec.KeyType != "RSA" {
+			t.Errorf("KeyType = %q, want RSA", rec.KeyType)
+		}
+		if rec.BitLength != 4096 {
+			t.Errorf("BitLength = %d, want 4096", rec.BitLength)
+		}
+		if !keysEqual(t, key, rec.Key) {
+			t.Error("stored 4096-bit RSA key does not Equal original")
+		}
+	}
+}
+
+func TestProcessData_PKCS8DER_AllKeyTypes(t *testing.T) {
+	// WHY: processDER's PKCS#8 path is tested individually for RSA (2048),
+	// but ECDSA and Ed25519 as PKCS#8 DER (not PEM) are only covered via
+	// TestProcessData_DER_KeyRoundTrip. This table-driven test explicitly
+	// verifies each key type through the PKCS#8 DER → MemStore path with
+	// key equality, type, and bit length assertions.
+	t.Parallel()
+
+	ecP256, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	ecP384, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	ecP521, _ := ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
+	_, edKey, _ := ed25519.GenerateKey(rand.Reader)
+
+	tests := []struct {
+		name      string
+		key       crypto.PrivateKey
+		keyType   string
+		bitLength int
+	}{
+		{"ECDSA P-256", ecP256, "ECDSA", 256},
+		{"ECDSA P-384", ecP384, "ECDSA", 384},
+		{"ECDSA P-521", ecP521, "ECDSA", 521},
+		{"Ed25519", edKey, "Ed25519", 256},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			pkcs8DER, err := x509.MarshalPKCS8PrivateKey(tt.key)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			store := NewMemStore()
+			if err := ProcessData(ProcessInput{
+				Data:    pkcs8DER,
+				Path:    "test.der",
+				Handler: store,
+			}); err != nil {
+				t.Fatalf("ProcessData: %v", err)
+			}
+
+			if len(store.AllKeys()) != 1 {
+				t.Fatalf("expected 1 key, got %d", len(store.AllKeys()))
+			}
+			for _, rec := range store.AllKeys() {
+				if rec.KeyType != tt.keyType {
+					t.Errorf("KeyType = %q, want %q", rec.KeyType, tt.keyType)
+				}
+				if rec.BitLength != tt.bitLength {
+					t.Errorf("BitLength = %d, want %d", rec.BitLength, tt.bitLength)
+				}
+				if !keysEqual(t, tt.key, rec.Key) {
+					t.Errorf("stored %s key does not Equal original", tt.name)
+				}
+			}
+		})
+	}
+}
