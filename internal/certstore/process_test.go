@@ -3023,6 +3023,135 @@ func TestProcessData_CrossFormatSKIEquality_Ed25519(t *testing.T) {
 	}
 }
 
+func TestProcessData_EncryptedKey_StoredPEMIsPKCS8(t *testing.T) {
+	// WHY: Legacy encrypted keys arrive as "RSA PRIVATE KEY" (PKCS#1) or
+	// "EC PRIVATE KEY" (SEC1). After decryption, the stored PEM must be
+	// normalized to "PRIVATE KEY" (PKCS#8). If the original block type
+	// leaks through, downstream parsers expecting PKCS#8 fail silently.
+	t.Parallel()
+
+	t.Run("RSA", func(t *testing.T) {
+		t.Parallel()
+		rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			t.Fatal(err)
+		}
+		block := &pem.Block{
+			Type:  "RSA PRIVATE KEY",
+			Bytes: x509.MarshalPKCS1PrivateKey(rsaKey),
+		}
+		//nolint:staticcheck // testing legacy encrypted PEM
+		encBlock, err := x509.EncryptPEMBlock(rand.Reader, block.Type, block.Bytes, []byte("pass"), x509.PEMCipherAES256)
+		if err != nil {
+			t.Fatal(err)
+		}
+		store := NewMemStore()
+		if err := ProcessData(ProcessInput{
+			Data:      pem.EncodeToMemory(encBlock),
+			Path:      "enc-rsa.pem",
+			Passwords: []string{"pass"},
+			Handler:   store,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		keys := store.AllKeysFlat()
+		if len(keys) != 1 {
+			t.Fatalf("expected 1 key, got %d", len(keys))
+		}
+		pemBlock, _ := pem.Decode(keys[0].PEM)
+		if pemBlock == nil {
+			t.Fatal("stored PEM not decodable")
+		}
+		if pemBlock.Type != "PRIVATE KEY" {
+			t.Errorf("stored PEM type = %q after RSA decryption, want \"PRIVATE KEY\"", pemBlock.Type)
+		}
+	})
+
+	t.Run("ECDSA", func(t *testing.T) {
+		t.Parallel()
+		ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ecDER, err := x509.MarshalECPrivateKey(ecKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		block := &pem.Block{Type: "EC PRIVATE KEY", Bytes: ecDER}
+		//nolint:staticcheck // testing legacy encrypted PEM
+		encBlock, err := x509.EncryptPEMBlock(rand.Reader, block.Type, block.Bytes, []byte("ecpass"), x509.PEMCipherAES256)
+		if err != nil {
+			t.Fatal(err)
+		}
+		store := NewMemStore()
+		if err := ProcessData(ProcessInput{
+			Data:      pem.EncodeToMemory(encBlock),
+			Path:      "enc-ec.pem",
+			Passwords: []string{"ecpass"},
+			Handler:   store,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		keys := store.AllKeysFlat()
+		if len(keys) != 1 {
+			t.Fatalf("expected 1 key, got %d", len(keys))
+		}
+		pemBlock, _ := pem.Decode(keys[0].PEM)
+		if pemBlock == nil {
+			t.Fatal("stored PEM not decodable")
+		}
+		if pemBlock.Type != "PRIVATE KEY" {
+			t.Errorf("stored PEM type = %q after ECDSA decryption, want \"PRIVATE KEY\"", pemBlock.Type)
+		}
+	})
+}
+
+func TestProcessData_SameKeySameStore_DeduplicationAcrossFormats(t *testing.T) {
+	// WHY: When the same key arrives from two different container formats
+	// (e.g., PEM and PKCS#12) into the same store, it must deduplicate to a
+	// single entry. If format-specific normalization diverges, the same key
+	// gets two SKIs and appears twice — breaking bundle export.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "dedup.example.com", []string{"dedup.example.com"})
+
+	// Ingest from PEM first
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{
+		Data:    leaf.keyPEM,
+		Path:    "key.pem",
+		Handler: store,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.AllKeysFlat()) != 1 {
+		t.Fatalf("expected 1 key after PEM, got %d", len(store.AllKeysFlat()))
+	}
+
+	// Ingest same key from PKCS#12
+	p12 := newPKCS12Bundle(t, leaf, ca, "test")
+	if err := ProcessData(ProcessInput{
+		Data:      p12,
+		Path:      "bundle.p12",
+		Passwords: []string{"test"},
+		Handler:   store,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Must still be exactly 1 key (deduplicated by SKI)
+	keys := store.AllKeysFlat()
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key after PEM+PKCS#12 (dedup), got %d", len(keys))
+	}
+
+	// Source should be from the second ingestion (last-write-wins)
+	if keys[0].Source != "bundle.p12" {
+		t.Errorf("Source = %q, want bundle.p12 (last-write-wins)", keys[0].Source)
+	}
+}
+
 func TestProcessData_StoredPEMAlwaysPKCS8(t *testing.T) {
 	// WHY: All stored key PEM must use "PRIVATE KEY" (PKCS#8) block type
 	// regardless of the input format. If legacy format leaks through

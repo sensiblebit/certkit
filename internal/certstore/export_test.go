@@ -1201,3 +1201,139 @@ func TestGenerateBundleFiles_Ed25519Key(t *testing.T) {
 		}
 	}
 }
+
+func TestGenerateBundleFiles_PKCS12RoundTrip_AllKeyTypes(t *testing.T) {
+	// WHY: The P12 file in GenerateBundleFiles output is created by re-parsing
+	// KeyRecord.PEM (stored PKCS#8) and encoding with EncodePKCS12Legacy.
+	// If stored PEM is corrupt or normalization fails, the P12 is undecodable.
+	// This round-trip catches regressions across all key types.
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		mkLeaf  func(t *testing.T, ca testCA) testLeaf
+		keyType string
+		bits    int
+		prefix  string
+	}{
+		{"RSA", func(t *testing.T, ca testCA) testLeaf {
+			return newRSALeaf(t, ca, "p12rt-rsa.example.com", []string{"p12rt-rsa.example.com"})
+		}, "RSA", 2048, "p12rt-rsa"},
+		{"ECDSA", func(t *testing.T, ca testCA) testLeaf {
+			return newECDSALeaf(t, ca, "p12rt-ec.example.com", []string{"p12rt-ec.example.com"})
+		}, "ECDSA", 256, "p12rt-ec"},
+		{"Ed25519", func(t *testing.T, ca testCA) testLeaf {
+			return newEd25519Leaf(t, ca, "p12rt-ed.example.com", []string{"p12rt-ed.example.com"})
+		}, "Ed25519", 256, "p12rt-ed"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ca := newRSACA(t)
+			leaf := tt.mkLeaf(t, ca)
+
+			bundle := &certkit.BundleResult{
+				Leaf:  leaf.cert,
+				Roots: []*x509.Certificate{ca.cert},
+			}
+
+			files, err := GenerateBundleFiles(BundleExportInput{
+				Bundle:     bundle,
+				KeyPEM:     leaf.keyPEM,
+				KeyType:    tt.keyType,
+				BitLength:  tt.bits,
+				Prefix:     tt.prefix,
+				SecretName: tt.prefix + "-tls",
+			})
+			if err != nil {
+				t.Fatalf("GenerateBundleFiles: %v", err)
+			}
+
+			// Find the P12 file and decode it
+			for _, f := range files {
+				if strings.HasSuffix(f.Name, ".p12") {
+					privKey, leafCert, _, err := certkit.DecodePKCS12(f.Data, "changeit")
+					if err != nil {
+						t.Fatalf("DecodePKCS12: %v", err)
+					}
+					if leafCert == nil {
+						t.Fatal("P12 contained no leaf cert")
+					}
+					if !leafCert.Equal(leaf.cert) {
+						t.Error("P12 leaf cert does not match original")
+					}
+					if privKey == nil {
+						t.Fatal("P12 contained no private key")
+					}
+					if !keysEqual(t, leaf.key, privKey) {
+						t.Error("P12 key does not match original")
+					}
+					return
+				}
+			}
+			t.Fatal("no .p12 file in output")
+		})
+	}
+}
+
+func TestGenerateBundleFiles_PKCS12ChainIntegrity(t *testing.T) {
+	// WHY: The PKCS#12 from GenerateBundleFiles must include the full chain
+	// (intermediates). If EncodePKCS12Legacy drops intermediates, the P12 is
+	// unusable for server installation that requires the chain.
+	t.Parallel()
+
+	root := newRSACA(t)
+	intermediate := newIntermediateCA(t, root)
+	leaf := newRSALeaf(t, intermediate, "chain.example.com", []string{"chain.example.com"})
+
+	bundle := &certkit.BundleResult{
+		Leaf:          leaf.cert,
+		Intermediates: []*x509.Certificate{intermediate.cert},
+		Roots:         []*x509.Certificate{root.cert},
+	}
+
+	files, err := GenerateBundleFiles(BundleExportInput{
+		Bundle:     bundle,
+		KeyPEM:     leaf.keyPEM,
+		KeyType:    "RSA",
+		BitLength:  2048,
+		Prefix:     "chain",
+		SecretName: "chain-tls",
+	})
+	if err != nil {
+		t.Fatalf("GenerateBundleFiles: %v", err)
+	}
+
+	for _, f := range files {
+		if !strings.HasSuffix(f.Name, ".p12") {
+			continue
+		}
+		_, leafCert, caCerts, err := certkit.DecodePKCS12(f.Data, "changeit")
+		if err != nil {
+			t.Fatalf("DecodePKCS12: %v", err)
+		}
+		if leafCert == nil {
+			t.Fatal("P12 has no leaf cert")
+		}
+		if !leafCert.Equal(leaf.cert) {
+			t.Error("P12 leaf does not match original")
+		}
+		// Intermediates should be present in the CA certs
+		if len(caCerts) == 0 {
+			t.Fatal("P12 has no CA certs (intermediates missing)")
+		}
+		foundIntermediate := false
+		for _, ca := range caCerts {
+			if ca.Equal(intermediate.cert) {
+				foundIntermediate = true
+				break
+			}
+		}
+		if !foundIntermediate {
+			t.Error("P12 does not contain the intermediate CA cert")
+		}
+		return
+	}
+	t.Fatal("no .p12 file in output")
+}
