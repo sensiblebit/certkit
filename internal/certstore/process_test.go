@@ -2738,3 +2738,96 @@ func TestProcessData_IngestExportReingest_AllKeyTypes(t *testing.T) {
 		})
 	}
 }
+
+func TestProcessData_DSAPrivateKeyBlock_SilentlySkipped(t *testing.T) {
+	// WHY: processPEMPrivateKeys matches "DSA PRIVATE KEY" via
+	// strings.Contains(block.Type, "PRIVATE KEY"). ParsePEMPrivateKey returns
+	// "unsupported PEM block type" for DSA. This block must be silently skipped
+	// without preventing other valid keys in the same file from being extracted.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "dsa-skip.example.com", []string{"dsa-skip.example.com"})
+
+	// Fake DSA key block (valid PEM envelope, garbage content)
+	dsaBlock := pem.EncodeToMemory(&pem.Block{
+		Type:  "DSA PRIVATE KEY",
+		Bytes: []byte("fake-dsa-key-data"),
+	})
+	combined := slices.Concat(dsaBlock, leaf.keyPEM)
+
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{
+		Data:    combined,
+		Path:    "dsa-mixed.pem",
+		Handler: store,
+	}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	keys := store.AllKeys()
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key (RSA, DSA block skipped), got %d", len(keys))
+	}
+	for _, rec := range keys {
+		if rec.KeyType != "RSA" {
+			t.Errorf("KeyType = %q, want RSA", rec.KeyType)
+		}
+	}
+}
+
+func TestNormalizePrivateKey(t *testing.T) {
+	// WHY: normalizePrivateKey is the process-level normalization that ensures
+	// all keys dispatched to handlers are in canonical form. It must convert
+	// *ed25519.PrivateKey to ed25519.PrivateKey and be a no-op for RSA/ECDSA.
+	t.Parallel()
+
+	_, edPriv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edPtr := &edPriv
+
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name     string
+		key      any
+		wantType string
+	}{
+		{"Ed25519 pointer → value", edPtr, "ed25519.PrivateKey"},
+		{"Ed25519 value (no-op)", edPriv, "ed25519.PrivateKey"},
+		{"RSA (passthrough)", rsaKey, "*rsa.PrivateKey"},
+		{"ECDSA (passthrough)", ecKey, "*ecdsa.PrivateKey"},
+		{"nil (passthrough)", nil, "<nil>"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := normalizePrivateKey(tt.key)
+			gotType := fmt.Sprintf("%T", result)
+			if gotType != tt.wantType {
+				t.Errorf("normalizePrivateKey returned %s, want %s", gotType, tt.wantType)
+			}
+		})
+	}
+
+	// Verify Ed25519 pointer normalization preserves key material
+	normalized := normalizePrivateKey(edPtr)
+	edVal, ok := normalized.(ed25519.PrivateKey)
+	if !ok {
+		t.Fatalf("expected ed25519.PrivateKey, got %T", normalized)
+	}
+	if !edPriv.Equal(edVal) {
+		t.Error("normalized Ed25519 key does not Equal original")
+	}
+}
