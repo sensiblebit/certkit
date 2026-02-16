@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/smallstep/pkcs7"
 	gopkcs12 "software.sslmate.com/src/go-pkcs12"
@@ -48,6 +49,7 @@ func EncodePKCS12Legacy(privateKey crypto.PrivateKey, leaf *x509.Certificate, ca
 // DecodePKCS12 decodes a PKCS#12/PFX bundle and returns the private key, leaf certificate,
 // and CA certificates. Returns an error if decoding fails.
 func DecodePKCS12(pfxData []byte, password string) (crypto.PrivateKey, *x509.Certificate, []*x509.Certificate, error) {
+	slog.Debug("decoding PKCS#12 bundle", "size", len(pfxData), "password", password)
 	privateKey, leaf, caCerts, err := gopkcs12.DecodeChain(pfxData, password)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("decoding PKCS#12: %w", err)
@@ -63,6 +65,9 @@ func EncodePKCS7(certs []*x509.Certificate) ([]byte, error) {
 	}
 	var derBytes []byte
 	for _, cert := range certs {
+		if cert.Raw == nil {
+			continue
+		}
 		derBytes = append(derBytes, cert.Raw...)
 	}
 	return pkcs7.DegenerateCertificate(derBytes)
