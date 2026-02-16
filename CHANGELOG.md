@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add pull request template with summary, test plan, and checklist
 - Add `--fix` suggestion to `checks.py` goimports failure output
 - Add `require_tool()` guard in `checks.py` for `go`, `gh` — gives clear errors when tools are missing locally
+- Add Claude Code automatic PR review and `@claude` mention workflows
+- Add Copilot review instructions (`.github/copilot-instructions.md`) with project coding standards
 
 ### Fixed
 
