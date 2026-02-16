@@ -769,3 +769,51 @@ func TestParseContainerData_PEMSkipsMalformedFirstKey(t *testing.T) {
 		t.Error("recovered key should match leaf certificate")
 	}
 }
+
+func TestParseContainerData_DERPrivateKey_ReturnsError(t *testing.T) {
+	// WHY: ParseContainerData supports DER certificates but NOT DER private
+	// keys. A DER-encoded PKCS#8 private key must produce a clear error, not
+	// silently succeed with wrong content or panic. This documents the design
+	// boundary: DER key parsing is ProcessData's job, not ParseContainerData's.
+	t.Parallel()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkcs8DER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = ParseContainerData(pkcs8DER, nil)
+	if err == nil {
+		t.Fatal("expected error for DER private key passed to ParseContainerData")
+	}
+	if !strings.Contains(err.Error(), "could not parse") {
+		t.Errorf("error should mention 'could not parse', got: %v", err)
+	}
+}
+
+func TestParseContainerData_EmptyJKS_FallsThrough(t *testing.T) {
+	// WHY: A valid JKS file with zero entries (no certs, no keys) parses
+	// successfully via DecodeJKS but returns empty slices. ParseContainerData
+	// checks "if leaf != nil" before returning — an empty JKS falls through
+	// to PKCS#7, PEM, and DER parsers, all of which fail. The resulting error
+	// must be clear, not a panic from attempting to decode JKS magic bytes
+	// as another format.
+	t.Parallel()
+
+	// Create an empty JKS keystore
+	ks := keystore.New()
+	var buf bytes.Buffer
+	if err := ks.Store(&buf, []byte("changeit")); err != nil {
+		t.Fatal(err)
+	}
+	emptyJKSData := buf.Bytes()
+
+	_, err := ParseContainerData(emptyJKSData, []string{"changeit"})
+	if err == nil {
+		t.Fatal("expected error for empty JKS (no certs, no keys)")
+	}
+}

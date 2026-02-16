@@ -4631,6 +4631,28 @@ func TestNormalizeKey_DoublePointer(t *testing.T) {
 	}
 }
 
+func TestParsePEMPrivateKeyWithPasswords_CorruptNotEncrypted(t *testing.T) {
+	// WHY: When ParsePEMPrivateKeyWithPasswords receives a corrupt but not
+	// encrypted PEM block, it falls through to re-call ParsePEMPrivateKey
+	// (lines 185-188) for a clean error. This path is only exercised when
+	// unencrypted parsing fails AND IsEncryptedPEMBlock returns false.
+	t.Parallel()
+
+	corruptPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: []byte("this is corrupt DER but not encrypted"),
+	})
+
+	_, err := ParsePEMPrivateKeyWithPasswords(corruptPEM, []string{"pass1", "pass2"})
+	if err == nil {
+		t.Fatal("expected error for corrupt non-encrypted PEM key")
+	}
+	// The error should come from ParsePEMPrivateKey, not from decryption
+	if strings.Contains(err.Error(), "decrypting") {
+		t.Errorf("error should not mention decrypting (key is not encrypted), got: %v", err)
+	}
+}
+
 func TestComputeSKI_SameKeyDifferentFormats_ProduceSameSKI(t *testing.T) {
 	// WHY: SKI computation extracts the public key bytes from the SPKI DER
 	// encoding. If a key is generated and then its public key is extracted

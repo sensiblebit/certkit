@@ -3689,3 +3689,154 @@ func TestProcessData_AllDERFormats_ProduceSameSKI(t *testing.T) {
 		}
 	}
 }
+
+func TestProcessData_PKCS12_EmptyPassword(t *testing.T) {
+	// WHY: Many PKCS#12 files use an empty password (""). The processDER
+	// password iteration must include "" in its attempts. Without this test,
+	// a regression that skips empty passwords would silently lose keys from
+	// files exported with no password (e.g., macOS Keychain exports).
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "empty-pass.example.com", []string{"empty-pass.example.com"})
+	rsaKey := leaf.key.(*rsa.PrivateKey)
+
+	p12Data, err := certkit.EncodePKCS12(rsaKey, leaf.cert, []*x509.Certificate{ca.cert}, "")
+	if err != nil {
+		t.Fatalf("EncodePKCS12 with empty password: %v", err)
+	}
+
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{
+		Data:      p12Data,
+		Path:      "empty-pass.p12",
+		Passwords: []string{"", "changeit"}, // empty password must be tried
+		Handler:   store,
+	}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	keys := store.AllKeysFlat()
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key from PKCS#12 with empty password, got %d", len(keys))
+	}
+	if !keysEqual(t, rsaKey, keys[0].Key) {
+		t.Error("stored key does not Equal original RSA key")
+	}
+}
+
+func TestProcessData_EmptyPath_BinaryDER_SilentlySkipped(t *testing.T) {
+	// WHY: When ProcessData receives binary (non-PEM) data with an empty path
+	// string, HasBinaryExtension("") returns false, so processDER is never
+	// called. This means valid DER keys with empty paths are silently lost.
+	// This test documents the behavior: callers must provide a path with a
+	// recognized extension for binary data to be processed.
+	t.Parallel()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkcs8DER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{
+		Data:    pkcs8DER,
+		Path:    "", // empty path — no extension to match
+		Handler: store,
+	}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	keys := store.AllKeysFlat()
+	if len(keys) != 0 {
+		t.Errorf("expected 0 keys for DER data with empty path, got %d (binary data should be skipped without recognized extension)", len(keys))
+	}
+}
+
+func TestProcessData_DERFormatPriority_PKCS1NotConsumedByPKCS8(t *testing.T) {
+	// WHY: processDER tries PKCS#8 parsing before PKCS#1. A raw PKCS#1 RSA
+	// DER blob must fail PKCS#8 parsing and fall through to the PKCS#1 path.
+	// This test verifies the priority ordering works correctly — if PKCS#8
+	// incorrectly consumed PKCS#1 data, the key would be silently corrupted
+	// or lost.
+	t.Parallel()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkcs1DER := x509.MarshalPKCS1PrivateKey(key)
+
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{
+		Data:    pkcs1DER,
+		Path:    "legacy.key",
+		Handler: store,
+	}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	keys := store.AllKeysFlat()
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key from PKCS#1 DER, got %d", len(keys))
+	}
+	if keys[0].KeyType != "RSA" {
+		t.Errorf("KeyType = %q, want RSA", keys[0].KeyType)
+	}
+	if !keysEqual(t, key, keys[0].Key) {
+		t.Error("PKCS#1 DER key material mismatch after priority fallthrough")
+	}
+
+	// Verify the stored PEM is normalized to PKCS#8
+	block, _ := pem.Decode(keys[0].PEM)
+	if block == nil {
+		t.Fatal("stored PEM has no decodable block")
+	}
+	if block.Type != "PRIVATE KEY" {
+		t.Errorf("stored PEM type = %q, want \"PRIVATE KEY\" (PKCS#8)", block.Type)
+	}
+}
+
+func TestProcessData_DERFormatPriority_SEC1NotConsumedByPKCS8(t *testing.T) {
+	// WHY: processDER tries PKCS#8 before SEC1 EC. A raw SEC1 EC DER blob
+	// must fail PKCS#8 parsing and fall through to the SEC1 path. If PKCS#8
+	// were to loosely accept SEC1 data, the parsed key could have wrong
+	// curve parameters or missing fields.
+	t.Parallel()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec1DER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{
+		Data:    sec1DER,
+		Path:    "ec.key",
+		Handler: store,
+	}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	keys := store.AllKeysFlat()
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key from SEC1 DER, got %d", len(keys))
+	}
+	if keys[0].KeyType != "ECDSA" {
+		t.Errorf("KeyType = %q, want ECDSA", keys[0].KeyType)
+	}
+	if keys[0].BitLength != 256 {
+		t.Errorf("BitLength = %d, want 256", keys[0].BitLength)
+	}
+	if !keysEqual(t, key, keys[0].Key) {
+		t.Error("SEC1 DER key material mismatch after priority fallthrough")
+	}
+}
