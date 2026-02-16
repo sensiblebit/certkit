@@ -27,21 +27,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add Claude Code automatic PR review and `@claude` mention workflows
 - Add Copilot review instructions (`.github/copilot-instructions.md`) with project coding standards
 
-### Fixed
-
-- Fix CI commit-message check ignoring `--base-ref` argument — base ref was parsed as positional `file` arg instead of the named `--base-ref` flag, always defaulting to `origin/main`
-- Normalize Ed25519 pointer-form keys in `EncodePKCS12` and `EncodePKCS12Legacy` before validation — previously rejected `*ed25519.PrivateKey` with a confusing "unsupported private key type" error instead of normalizing like `EncodeJKS` does ([`1661e53`])
-- Fix `ClassifyHosts` email detection using `mail.ParseAddress` instead of `strings.Contains(h, "@")` — rejects invalid inputs like `"user@"`, `"@example.com"`, and display-name forms ([`2221a47`])
-
 ### Tests
 
-- Add key normalization tests: `normalizeKey(nil)`, idempotent double-normalization, `*ed25519.PrivateKey` through `EncodePKCS12`/`EncodeJKS`, PKCS#8 Ed25519 → PKCS#12/JKS cross-format round-trips, `ComputeSKI` ↔ `CertSKI` equivalence across all key types, `ComputeSKI` ↔ Go auto-populated `SubjectKeyId`, cross-key-type SKI uniqueness, `CertSKIEmbedded`/`CertAKIEmbedded` chain linkage, `KeyMatchesCert` with Ed25519 pointer, corrupt OpenSSH body error, `MarshalPrivateKeyToPEM` determinism and P-384, `CertSKI` for RSA/Ed25519 certs ([`1661e53`])
-- Fix false confidence in PKCS#12 tests: add key equality checks to `TestEncodePKCS12_withChain`, `TestDecodePKCS12_withChain`, `TestEncodePKCS12_MultiCertChain`, and `TestEncodeJKS_EmptyPassword` — previously discarded decoded keys ([`1661e53`])
-- Fix stale WHY comment in `TestMarshalPrivateKeyToPEM_Ed25519Pointer` — incorrectly stated `normalizeKey` is not called ([`1661e53`])
-- Add Ed25519 PKCS#12 container test, `EncodePKCS12Legacy` pointer-form test, and OpenSSH→JKS cross-format round-trip — fills iteration 2 gaps for Ed25519 normalization through all container paths ([`f23f8ab`])
-- Add `GetPublicKey` test for `*ed25519.PrivateKey` pointer form, key-cert matching verification in PEM container tests, and multi-key PEM first-key-wins behavior test ([`2fc570c`])
-- Harden key handling tests: add direct `normalizeKey` unit tests, `validatePKCS12KeyType` coverage for Ed25519 pointer rejection, cross-format PEM round-trips (PKCS#1/SEC1 → PKCS#8), end-to-end ProcessData → export pipeline verification, key deduplication behavior, and container tests for ECDSA/Ed25519 key types ([`39a5ece`])
-- Harden key handling tests with normalization and round-trip coverage: Ed25519 pointer-form marshaling, OpenSSH ECDSA parsing, cross-format OpenSSH→PKCS#12 round-trip, encrypted PKCS#8 error clarity, JKS key equality with separate store/key passwords, corrupted cert chain handling, ECDSA/Ed25519 through PKCS#12 and JKS pipelines, DER key round-trips with equality checks, stored PEM PKCS#8 format verification ([`0fa55af`])
+- Comprehensive key handling test hardening via Ralph Loop (5 passes, 2 review iterations) covering all key handling paths: parsing, normalization, matching, encoding, and cross-format round-trips ([`ff58d2b`])
+  - Table-driven PKCS#12 and legacy PKCS#12 round-trip tests for all 5 key types (RSA, ECDSA P-256/P-384/P-521, Ed25519)
+  - Cross-format round-trips: OpenSSH RSA/ECDSA/Ed25519 → PKCS#12/JKS, PKCS#1 RSA → PKCS#12/JKS, SEC1 ECDSA → PKCS#12/JKS
+  - Encrypted OpenSSH RSA and ECDSA decrypt round-trip tests
+  - JKS multi-cert chain round-trip with ordering verification (leaf → intermediate → root)
+  - Nil/panic guard tests for `HandleKey`, `HandleCertificate`, `DecodeJKS`, `EncodePKCS12`/Legacy, `EncodeJKS`
+  - False confidence fixes: `keysEqual` assertions replacing type-only checks, `GetPublicKey` value equality
+  - `ComputeSKI` tests for ECDSA P-384 and P-521 curves
+  - `MatchedPairs` orphaned key and root cert exclusion tests
+  - Ed25519 pointer/value normalization tested across all boundaries
+  - `ProcessData` integration tests for PKCS#1 RSA DER, OpenSSH keys, P-384/P-521 curves, legacy-encrypted PEM
+  - `t.Parallel()` added to ~60 safe tests; WHY comments on every test function
+
+### Fixed
+
+- Fix `HandleCertificate` nil pointer panic when called with nil certificate — now returns a clear error instead of crashing the ingestion pipeline ([`1ea20c4`])
+- Fix `KeyMatchesCert` nil pointer panic when called with nil certificate — now returns a clear error ([`1ea20c4`])
+- Fix `EncodeJKS` nil pointer panic when called with nil leaf certificate — now returns a clear error matching `EncodePKCS12` behavior ([`1ea20c4`])
+- Add nil certificate validation in `EncodePKCS12` and `EncodePKCS12Legacy` — prevents panic from underlying library when leaf certificate is nil ([`1ea20c4`])
+- Normalize Ed25519 pointer-form keys in `EncodePKCS12` and `EncodePKCS12Legacy` before validation — previously rejected `*ed25519.PrivateKey` with a confusing "unsupported private key type" error ([`1ea20c4`])
+- Add PKCS#1 RSA DER key detection to binary format pipeline — previously PKCS#1 RSA DER files were silently skipped during ingestion ([`1ea20c4`])
+- Fix CI commit-message check ignoring `--base-ref` argument — base ref was parsed as positional `file` arg instead of the named `--base-ref` flag, always defaulting to `origin/main`
+- Fix `ClassifyHosts` email detection using `mail.ParseAddress` instead of `strings.Contains(h, "@")` — rejects invalid inputs like `"user@"`, `"@example.com"`, and display-name forms ([`2221a47`])
 - Accept `"NEW CERTIFICATE REQUEST"` PEM block type in `ParsePEMCertificateRequest` — supports CSRs from legacy tools (Netscape, MSIE) that use the older header format ([`2221a47`])
 - Fix `MarshalPrivateKeyToPEM` failing with `*ed25519.PrivateKey` pointer form — add `normalizeKey` before PKCS#8 marshaling ([`0fa55af`])
 - Fix `EncodeJKS` failing with `*ed25519.PrivateKey` pointer form — add `normalizeKey` before PKCS#8 marshaling ([`0fa55af`])
@@ -493,10 +503,8 @@ Initial release.
 [`0acbada`]: https://github.com/sensiblebit/certkit/commit/0acbada
 [`b20cfb3`]: https://github.com/sensiblebit/certkit/commit/b20cfb3
 [`2221a47`]: https://github.com/sensiblebit/certkit/commit/2221a47
-[`1661e53`]: https://github.com/sensiblebit/certkit/commit/1661e53
-[`f23f8ab`]: https://github.com/sensiblebit/certkit/commit/f23f8ab
-[`2fc570c`]: https://github.com/sensiblebit/certkit/commit/2fc570c
-[`39a5ece`]: https://github.com/sensiblebit/certkit/commit/e6a5a39
+[`1ea20c4`]: https://github.com/sensiblebit/certkit/commit/1ea20c4
+[`ff58d2b`]: https://github.com/sensiblebit/certkit/commit/ff58d2b
 [#24]: https://github.com/sensiblebit/certkit/pull/24
 [#25]: https://github.com/sensiblebit/certkit/pull/25
 [#26]: https://github.com/sensiblebit/certkit/pull/26

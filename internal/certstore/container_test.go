@@ -1,13 +1,16 @@
 package certstore
 
 import (
+	"bytes"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/rsa"
 	"crypto/x509"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/pavlo-v-chernykh/keystore-go/v4"
 	"github.com/sensiblebit/certkit"
 )
 
@@ -407,6 +410,77 @@ func TestParseContainerData_PEMMultiKey_ReturnsFirst(t *testing.T) {
 	}
 }
 
+func TestParseContainerData_PEMCertAndKeyMixed(t *testing.T) {
+	// WHY: Real-world PEM files often contain multiple CERTIFICATE blocks
+	// followed by or interleaved with a PRIVATE KEY block. ParseContainerData
+	// must extract both the cert chain and the key from such files.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "mixed.example.com", []string{"mixed.example.com"})
+
+	// cert → CA cert → key (common bundle format)
+	combined := append(leaf.certPEM, ca.certPEM...)
+	combined = append(combined, leaf.keyPEM...)
+
+	contents, err := ParseContainerData(combined, nil)
+	if err != nil {
+		t.Fatalf("ParseContainerData: %v", err)
+	}
+	if contents.Leaf == nil {
+		t.Fatal("expected Leaf to be non-nil")
+	}
+	if contents.Key == nil {
+		t.Fatal("expected Key to be non-nil")
+	}
+	if len(contents.ExtraCerts) != 1 {
+		t.Errorf("expected 1 extra cert (CA), got %d", len(contents.ExtraCerts))
+	}
+	if match, err := certkit.KeyMatchesCert(contents.Key, contents.Leaf); err != nil {
+		t.Fatalf("KeyMatchesCert: %v", err)
+	} else if !match {
+		t.Error("extracted key should match leaf certificate")
+	}
+}
+
+func TestParseContainerData_JKS_TrustedCertOnly(t *testing.T) {
+	// WHY: JKS files with only TrustedCertificateEntry (no PrivateKeyEntry)
+	// must be parsed successfully by ParseContainerData, returning the cert
+	// with no key. The JKS path in ParseContainerData checks `leaf != nil`
+	// before returning — this verifies that trusted-cert-only JKS works.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	password := "changeit"
+
+	// Build a JKS with only a trusted cert entry (no private key)
+	ks := keystore.New()
+	if err := ks.SetTrustedCertificateEntry("ca", keystore.TrustedCertificateEntry{
+		CreationTime: time.Now(),
+		Certificate: keystore.Certificate{
+			Type:    "X.509",
+			Content: ca.certDER,
+		},
+	}); err != nil {
+		t.Fatalf("set trusted cert entry: %v", err)
+	}
+	var buf bytes.Buffer
+	if err := ks.Store(&buf, []byte(password)); err != nil {
+		t.Fatalf("store JKS: %v", err)
+	}
+
+	contents, err := ParseContainerData(buf.Bytes(), []string{password})
+	if err != nil {
+		t.Fatalf("ParseContainerData: %v", err)
+	}
+	if contents.Leaf == nil {
+		t.Fatal("expected Leaf to be non-nil for trusted cert JKS")
+	}
+	if contents.Key != nil {
+		t.Errorf("expected no key for trusted-cert-only JKS, got %T", contents.Key)
+	}
+}
+
 func TestParseContainerData_GarbageData(t *testing.T) {
 	// WHY: Completely unrecognizable data must return an error that mentions
 	// the formats attempted, so the user knows what was tried.
@@ -421,5 +495,39 @@ func TestParseContainerData_GarbageData(t *testing.T) {
 		if !strings.Contains(err.Error(), format) {
 			t.Errorf("error should mention %s, got: %v", format, err)
 		}
+	}
+}
+
+func TestParseContainerData_PEMSkipsMalformedFirstKey(t *testing.T) {
+	// WHY: findPEMPrivateKey iterates all PEM blocks and returns the first
+	// successfully parsed key. When the first key block is malformed, it must
+	// skip it and return the second valid key. This tests the continue-on-error
+	// behavior that prevents a single corrupt key from hiding valid keys.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "skip-malformed.example.com", []string{"skip-malformed.example.com"})
+
+	// Malformed key block (valid PEM envelope but garbage content)
+	malformedKeyPEM := []byte("-----BEGIN PRIVATE KEY-----\nZm9vYmFy\n-----END PRIVATE KEY-----\n")
+
+	// PEM: cert + malformed key + valid key
+	combined := append(leaf.certPEM, malformedKeyPEM...)
+	combined = append(combined, leaf.keyPEM...)
+
+	contents, err := ParseContainerData(combined, nil)
+	if err != nil {
+		t.Fatalf("ParseContainerData: %v", err)
+	}
+	if contents.Key == nil {
+		t.Fatal("expected Key to be non-nil; findPEMPrivateKey should skip malformed and use second key")
+	}
+	if _, ok := contents.Key.(*rsa.PrivateKey); !ok {
+		t.Fatalf("Key type = %T, want *rsa.PrivateKey", contents.Key)
+	}
+	if match, err := certkit.KeyMatchesCert(contents.Key, contents.Leaf); err != nil {
+		t.Fatalf("KeyMatchesCert: %v", err)
+	} else if !match {
+		t.Error("recovered key should match leaf certificate")
 	}
 }

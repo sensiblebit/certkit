@@ -466,7 +466,7 @@ func TestMemStore_HandleKey_UnsupportedKeyType(t *testing.T) {
 
 func TestMemStore_HandleKey_AllKeyTypes(t *testing.T) {
 	// WHY: Verifies all three key algorithms can be ingested and retrieved
-	// by their computed SKI.
+	// by their computed SKI with correct metadata AND key material equality.
 	t.Parallel()
 
 	tests := []struct {
@@ -529,6 +529,9 @@ func TestMemStore_HandleKey_AllKeyTypes(t *testing.T) {
 				}
 				if rec.BitLength != tt.wantBits {
 					t.Errorf("BitLength = %d, want %d", rec.BitLength, tt.wantBits)
+				}
+				if !keysEqual(t, key, rec.Key) {
+					t.Error("stored key object does not Equal original")
 				}
 			}
 		})
@@ -1075,5 +1078,140 @@ func TestMemStore_HandleKey_NilPEM(t *testing.T) {
 		if rec.KeyType != "RSA" {
 			t.Errorf("KeyType = %q, want RSA", rec.KeyType)
 		}
+	}
+}
+
+func TestMemStore_MatchedPairs_OrphanedKey(t *testing.T) {
+	// WHY: A key without any matching certificate must NOT appear in MatchedPairs.
+	// MatchedPairs iterates certsBySKI and checks for matching keys; an orphaned
+	// key (key present but no cert with same SKI) must be excluded. If the
+	// implementation ever changed to iterate keys instead, orphaned keys could
+	// appear as false matches.
+	t.Parallel()
+
+	store := NewMemStore()
+
+	// Store a key with no matching certificate
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	keyPEM, _ := certkit.MarshalPrivateKeyToPEM(key)
+	if err := store.HandleKey(key, []byte(keyPEM), "orphan.key"); err != nil {
+		t.Fatalf("HandleKey: %v", err)
+	}
+
+	if len(store.AllKeys()) != 1 {
+		t.Fatalf("expected 1 key stored, got %d", len(store.AllKeys()))
+	}
+
+	matched := store.MatchedPairs()
+	if len(matched) != 0 {
+		t.Errorf("expected 0 matched pairs for orphaned key, got %d", len(matched))
+	}
+}
+
+func TestMemStore_HandleKey_Ed25519PointerValueIdenticalRecord(t *testing.T) {
+	// WHY: The same Ed25519 key stored as *ed25519.PrivateKey (pointer) and then
+	// ed25519.PrivateKey (value) must produce identical KeyRecords — same SKI,
+	// same KeyType, same PEM. A subtle SKI difference between the two paths
+	// would cause the key to appear as two separate entries.
+	t.Parallel()
+
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	privPtr := &priv
+
+	keyPEM, _ := certkit.MarshalPrivateKeyToPEM(priv)
+
+	// Store pointer form
+	storePtr := NewMemStore()
+	if err := storePtr.HandleKey(privPtr, []byte(keyPEM), "ptr.key"); err != nil {
+		t.Fatalf("HandleKey(pointer): %v", err)
+	}
+
+	// Store value form
+	storeVal := NewMemStore()
+	if err := storeVal.HandleKey(priv, []byte(keyPEM), "val.key"); err != nil {
+		t.Fatalf("HandleKey(value): %v", err)
+	}
+
+	keysPtr := storePtr.AllKeys()
+	keysVal := storeVal.AllKeys()
+
+	if len(keysPtr) != 1 || len(keysVal) != 1 {
+		t.Fatalf("expected 1 key each, got ptr=%d val=%d", len(keysPtr), len(keysVal))
+	}
+
+	var recPtr, recVal *KeyRecord
+	for _, r := range keysPtr {
+		recPtr = r
+	}
+	for _, r := range keysVal {
+		recVal = r
+	}
+
+	if recPtr.SKI != recVal.SKI {
+		t.Errorf("SKI mismatch: pointer=%q value=%q", recPtr.SKI, recVal.SKI)
+	}
+	if recPtr.KeyType != recVal.KeyType {
+		t.Errorf("KeyType mismatch: pointer=%q value=%q", recPtr.KeyType, recVal.KeyType)
+	}
+	if recPtr.BitLength != recVal.BitLength {
+		t.Errorf("BitLength mismatch: pointer=%d value=%d", recPtr.BitLength, recVal.BitLength)
+	}
+	if !keysEqual(t, recPtr.Key, recVal.Key) {
+		t.Error("stored key objects not equal between pointer and value forms")
+	}
+}
+
+func TestMemStore_HandleKey_NilKey(t *testing.T) {
+	// WHY: Nil key must return a clean error, not panic — callers may pass nil from
+	// a failed decode without checking, and a panic would crash the ingestion pipeline.
+	t.Parallel()
+	store := NewMemStore()
+	err := store.HandleKey(nil, nil, "nil.pem")
+	if err == nil {
+		t.Fatal("expected error for nil key")
+	}
+}
+
+func TestMemStore_HandleCertificate_NilCert(t *testing.T) {
+	// WHY: Nil cert would panic on cert.PublicKey dereference — callers need a
+	// clean error when passing nil from a failed parse.
+	t.Parallel()
+	store := NewMemStore()
+	err := store.HandleCertificate(nil, "nil.pem")
+	if err == nil {
+		t.Fatal("expected error for nil cert")
+	}
+}
+
+func TestMemStore_MatchedPairs_RootCertWithKeyExcluded(t *testing.T) {
+	// WHY: MatchedPairs must only return SKIs with leaf certs — a root CA cert with
+	// its key must NOT appear, even though both cert and key share the same SKI.
+	t.Parallel()
+	store := NewMemStore()
+
+	caKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Root CA"},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	caBytes, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	caCert, _ := x509.ParseCertificate(caBytes)
+
+	if err := store.HandleCertificate(caCert, "ca.pem"); err != nil {
+		t.Fatal(err)
+	}
+	keyPEM, _ := certkit.MarshalPrivateKeyToPEM(caKey)
+	if err := store.HandleKey(caKey, []byte(keyPEM), "ca-key.pem"); err != nil {
+		t.Fatal(err)
+	}
+
+	matched := store.MatchedPairs()
+	if len(matched) != 0 {
+		t.Errorf("MatchedPairs should exclude root certs, got %d matches", len(matched))
 	}
 }
