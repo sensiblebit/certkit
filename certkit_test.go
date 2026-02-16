@@ -4541,3 +4541,133 @@ func TestMarshalPrivateKeyToPEM_RoundTrip_PreservesKeyMaterial(t *testing.T) {
 		})
 	}
 }
+
+func TestMarshalPrivateKeyToPEM_ECDSACurvePreservation(t *testing.T) {
+	// WHY: MarshalPrivateKeyToPEM encodes all ECDSA keys as PKCS#8. Different
+	// curves (P-256, P-384, P-521) have different OIDs and coordinate sizes.
+	// A marshal/parse round-trip must preserve the curve identity — not just
+	// the key bytes — to prevent P-384 being misidentified as P-256.
+	t.Parallel()
+
+	curves := []struct {
+		name  string
+		curve elliptic.Curve
+	}{
+		{"P-256", elliptic.P256()},
+		{"P-384", elliptic.P384()},
+		{"P-521", elliptic.P521()},
+	}
+
+	for _, tc := range curves {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			key, err := ecdsa.GenerateKey(tc.curve, rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			pemStr, err := MarshalPrivateKeyToPEM(key)
+			if err != nil {
+				t.Fatalf("MarshalPrivateKeyToPEM: %v", err)
+			}
+
+			parsed, err := ParsePEMPrivateKey([]byte(pemStr))
+			if err != nil {
+				t.Fatalf("ParsePEMPrivateKey: %v", err)
+			}
+
+			ecParsed, ok := parsed.(*ecdsa.PrivateKey)
+			if !ok {
+				t.Fatalf("parsed type = %T, want *ecdsa.PrivateKey", parsed)
+			}
+			if ecParsed.Curve != tc.curve {
+				t.Errorf("curve = %v, want %v", ecParsed.Curve, tc.curve)
+			}
+			if !key.Equal(ecParsed) {
+				t.Error("round-tripped ECDSA key does not Equal original")
+			}
+		})
+	}
+}
+
+func TestKeyAlgorithmName_Ed25519PointerForm(t *testing.T) {
+	// WHY: KeyAlgorithmName handles both ed25519.PrivateKey and
+	// *ed25519.PrivateKey in its type switch. This test verifies the pointer
+	// form case works and produces the same result as value form — a missing
+	// case in the switch would return "unknown" silently.
+	t.Parallel()
+
+	_, edKey, _ := ed25519.GenerateKey(rand.Reader)
+	edPtr := &edKey
+
+	if name := KeyAlgorithmName(edKey); name != "Ed25519" {
+		t.Errorf("KeyAlgorithmName(value) = %q, want Ed25519", name)
+	}
+	if name := KeyAlgorithmName(edPtr); name != "Ed25519" {
+		t.Errorf("KeyAlgorithmName(pointer) = %q, want Ed25519", name)
+	}
+}
+
+func TestNormalizeKey_DoublePointer(t *testing.T) {
+	// WHY: normalizeKey handles *ed25519.PrivateKey. If a **ed25519.PrivateKey
+	// (double pointer, theoretically possible from reflection or incorrect casting)
+	// is passed, it must pass through unchanged rather than panicking. This guards
+	// against unexpected pointer nesting.
+	t.Parallel()
+
+	_, edKey, _ := ed25519.GenerateKey(rand.Reader)
+	edPtr := &edKey
+	// Pass *ed25519.PrivateKey (single pointer) — normalizeKey should dereference
+	result := normalizeKey(edPtr)
+	if _, ok := result.(ed25519.PrivateKey); !ok {
+		t.Errorf("normalizeKey(*ed25519.PrivateKey) = %T, want ed25519.PrivateKey", result)
+	}
+
+	// Pass a non-ed25519 pointer — should pass through unchanged
+	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	result2 := normalizeKey(rsaKey)
+	if _, ok := result2.(*rsa.PrivateKey); !ok {
+		t.Errorf("normalizeKey(*rsa.PrivateKey) = %T, want *rsa.PrivateKey", result2)
+	}
+}
+
+func TestComputeSKI_SameKeyDifferentFormats_ProduceSameSKI(t *testing.T) {
+	// WHY: SKI computation extracts the public key bytes from the SPKI DER
+	// encoding. If a key is generated and then its public key is extracted
+	// via crypto.Signer vs directly taken from the cert, both paths must
+	// produce the same SKI. Format-dependent SKI differences would break
+	// key-cert matching.
+	t.Parallel()
+
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "ski-test"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// SKI from public key directly
+	skiFromKey, err := ComputeSKI(&key.PublicKey)
+	if err != nil {
+		t.Fatalf("ComputeSKI from key: %v", err)
+	}
+
+	// SKI from certificate
+	skiFromCert := CertSKI(cert)
+
+	// Compare (both are colon-hex formatted)
+	skiFromKeyHex := ColonHex(skiFromKey)
+	if skiFromKeyHex != skiFromCert {
+		t.Errorf("SKI from key (%s) != SKI from cert (%s)", skiFromKeyHex, skiFromCert)
+	}
+}

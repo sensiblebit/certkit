@@ -3357,3 +3357,301 @@ func TestNormalizePrivateKey(t *testing.T) {
 		t.Error("normalized Ed25519 key does not Equal original")
 	}
 }
+
+func TestProcessData_PKCS1RSADERKey_RoundTripThroughExport(t *testing.T) {
+	// WHY: PKCS#1 RSA DER goes through processDER → MarshalPrivateKeyToPEM →
+	// HandleKey, normalizing from PKCS#1 to PKCS#8. This test verifies the
+	// full round-trip: ingest PKCS#1 DER → store → export stored PEM →
+	// re-ingest → verify key equality. A marshaling bug in the PKCS#1→PKCS#8
+	// conversion would only surface through a full export-reingest cycle.
+	t.Parallel()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkcs1DER := x509.MarshalPKCS1PrivateKey(key)
+
+	// Step 1: Ingest PKCS#1 DER
+	store1 := NewMemStore()
+	if err := ProcessData(ProcessInput{
+		Data:    pkcs1DER,
+		Path:    "pkcs1.key",
+		Handler: store1,
+	}); err != nil {
+		t.Fatalf("first ingest: %v", err)
+	}
+
+	keys1 := store1.AllKeysFlat()
+	if len(keys1) != 1 {
+		t.Fatalf("expected 1 key, got %d", len(keys1))
+	}
+
+	// Step 2: Export stored PEM and re-ingest
+	store2 := NewMemStore()
+	if err := ProcessData(ProcessInput{
+		Data:    keys1[0].PEM,
+		Path:    "re-exported.pem",
+		Handler: store2,
+	}); err != nil {
+		t.Fatalf("re-ingest: %v", err)
+	}
+
+	keys2 := store2.AllKeysFlat()
+	if len(keys2) != 1 {
+		t.Fatalf("expected 1 key after re-ingest, got %d", len(keys2))
+	}
+	if !keysEqual(t, key, keys2[0].Key) {
+		t.Error("PKCS#1 DER → store → export → re-ingest key material mismatch")
+	}
+	if keys1[0].SKI != keys2[0].SKI {
+		t.Errorf("SKI changed across re-ingest: %s → %s", keys1[0].SKI, keys2[0].SKI)
+	}
+}
+
+func TestProcessData_SEC1ECDERKey_RoundTripThroughExport(t *testing.T) {
+	// WHY: SEC1 EC DER keys go through a different processDER branch than
+	// PKCS#8 or PKCS#1. The SEC1→PKCS#8 normalization during storage could
+	// silently corrupt curve parameters (especially for P-384/P-521 which
+	// have larger coordinates). Full round-trip proves preservation.
+	t.Parallel()
+
+	curves := []struct {
+		name  string
+		curve elliptic.Curve
+	}{
+		{"P-256", elliptic.P256()},
+		{"P-384", elliptic.P384()},
+		{"P-521", elliptic.P521()},
+	}
+
+	for _, tc := range curves {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			key, err := ecdsa.GenerateKey(tc.curve, rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sec1DER, err := x509.MarshalECPrivateKey(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Step 1: Ingest SEC1 DER
+			store1 := NewMemStore()
+			if err := ProcessData(ProcessInput{
+				Data:    sec1DER,
+				Path:    "ec.key",
+				Handler: store1,
+			}); err != nil {
+				t.Fatalf("ingest: %v", err)
+			}
+
+			keys1 := store1.AllKeysFlat()
+			if len(keys1) != 1 {
+				t.Fatalf("expected 1 key, got %d", len(keys1))
+			}
+
+			// Step 2: Export stored PEM and re-ingest
+			store2 := NewMemStore()
+			if err := ProcessData(ProcessInput{
+				Data:    keys1[0].PEM,
+				Path:    "re-exported.pem",
+				Handler: store2,
+			}); err != nil {
+				t.Fatalf("re-ingest: %v", err)
+			}
+
+			keys2 := store2.AllKeysFlat()
+			if len(keys2) != 1 {
+				t.Fatalf("expected 1 key after re-ingest, got %d", len(keys2))
+			}
+			if !keysEqual(t, key, keys2[0].Key) {
+				t.Errorf("SEC1 %s DER round-trip key material mismatch", tc.name)
+			}
+			if keys1[0].SKI != keys2[0].SKI {
+				t.Errorf("SKI changed: %s → %s", keys1[0].SKI, keys2[0].SKI)
+			}
+		})
+	}
+}
+
+func TestProcessData_OpenSSHEd25519_StoredAsNormalizedValueType(t *testing.T) {
+	// WHY: ssh.ParseRawPrivateKey returns *ed25519.PrivateKey (pointer).
+	// The processPEMPrivateKeys → normalizePrivateKey → HandleKey chain
+	// must convert it to ed25519.PrivateKey (value type) before storage.
+	// If normalization is skipped, the stored key type would be a pointer,
+	// which breaks type switches in MatchedPairs and export code.
+	t.Parallel()
+
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshBlock, err := ssh.MarshalPrivateKey(priv, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshPEM := pem.EncodeToMemory(sshBlock)
+
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{
+		Data:    sshPEM,
+		Path:    "ed25519-openssh.pem",
+		Handler: store,
+	}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	keys := store.AllKeysFlat()
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key, got %d", len(keys))
+	}
+	rec := keys[0]
+	if fmt.Sprintf("%T", rec.Key) != "ed25519.PrivateKey" {
+		t.Errorf("stored key type = %T, want ed25519.PrivateKey (value type)", rec.Key)
+	}
+	if rec.KeyType != "Ed25519" {
+		t.Errorf("KeyType = %q, want Ed25519", rec.KeyType)
+	}
+	if rec.BitLength != 256 {
+		t.Errorf("BitLength = %d, want 256", rec.BitLength)
+	}
+	if !keysEqual(t, priv, rec.Key) {
+		t.Error("stored key does not Equal original Ed25519 key")
+	}
+}
+
+func TestProcessData_PKCS12_Ed25519_StoredAsValueType(t *testing.T) {
+	// WHY: PKCS#12 decoding goes through DecodePKCS12 → normalizeKey (in
+	// certkit.go), then processDER calls normalizePrivateKey again before
+	// HandleKey. This test verifies the PKCS#12-specific Ed25519 path
+	// produces a stored key of ed25519.PrivateKey value type with correct
+	// key material, SKI, and type metadata.
+	t.Parallel()
+
+	ca := newEd25519CA(t)
+	leaf := newEd25519Leaf(t, ca, "p12-ed.example.com", []string{"p12-ed.example.com"})
+	p12Data := newPKCS12Bundle(t, leaf, ca, "test123")
+
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{
+		Data:      p12Data,
+		Path:      "ed25519.p12",
+		Passwords: []string{"test123"},
+		Handler:   store,
+	}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	keys := store.AllKeysFlat()
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key from PKCS#12, got %d", len(keys))
+	}
+	rec := keys[0]
+	if fmt.Sprintf("%T", rec.Key) != "ed25519.PrivateKey" {
+		t.Errorf("stored key type = %T, want ed25519.PrivateKey (value type)", rec.Key)
+	}
+	if rec.KeyType != "Ed25519" {
+		t.Errorf("KeyType = %q, want Ed25519", rec.KeyType)
+	}
+	origKey := leaf.key.(ed25519.PrivateKey)
+	if !keysEqual(t, origKey, rec.Key) {
+		t.Error("stored Ed25519 key from PKCS#12 does not Equal original")
+	}
+}
+
+func TestProcessData_JKS_Ed25519_StoredAsValueType(t *testing.T) {
+	// WHY: JKS decoding extracts keys via x509.ParsePKCS8PrivateKey, which
+	// for Ed25519 may return either pointer or value form depending on Go
+	// version. The processDER → normalizePrivateKey chain must produce
+	// ed25519.PrivateKey (value type) regardless. This is a different code
+	// path from PKCS#12 Ed25519.
+	t.Parallel()
+
+	ca := newEd25519CA(t)
+	leaf := newEd25519Leaf(t, ca, "jks-ed.example.com", []string{"jks-ed.example.com"})
+	jksData := newJKSBundle(t, leaf, ca, "changeit")
+
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{
+		Data:      jksData,
+		Path:      "ed25519.jks",
+		Passwords: []string{"changeit"},
+		Handler:   store,
+	}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	keys := store.AllKeysFlat()
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key from JKS, got %d", len(keys))
+	}
+	rec := keys[0]
+	if fmt.Sprintf("%T", rec.Key) != "ed25519.PrivateKey" {
+		t.Errorf("stored key type = %T, want ed25519.PrivateKey (value type)", rec.Key)
+	}
+	if rec.KeyType != "Ed25519" {
+		t.Errorf("KeyType = %q, want Ed25519", rec.KeyType)
+	}
+	origKey := leaf.key.(ed25519.PrivateKey)
+	if !keysEqual(t, origKey, rec.Key) {
+		t.Error("stored Ed25519 key from JKS does not Equal original")
+	}
+}
+
+func TestProcessData_AllDERFormats_ProduceSameSKI(t *testing.T) {
+	// WHY: The same RSA key ingested as PKCS#1 DER, PKCS#8 DER, and PEM
+	// must produce identical SKIs in the store. A format-dependent SKI
+	// difference would prevent deduplication and break bundle matching.
+	t.Parallel()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pkcs1DER := x509.MarshalPKCS1PrivateKey(key)
+	pkcs8DER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: pkcs1DER,
+	})
+
+	formats := []struct {
+		name string
+		data []byte
+		path string
+	}{
+		{"PKCS#1 DER", pkcs1DER, "key.der"},
+		{"PKCS#8 DER", pkcs8DER, "key.p8"},
+		{"PEM", keyPEM, "key.pem"},
+	}
+
+	var skis []string
+	for _, f := range formats {
+		store := NewMemStore()
+		if err := ProcessData(ProcessInput{
+			Data:    f.data,
+			Path:    f.path,
+			Handler: store,
+		}); err != nil {
+			t.Fatalf("%s: ProcessData: %v", f.name, err)
+		}
+		keys := store.AllKeysFlat()
+		if len(keys) != 1 {
+			t.Fatalf("%s: expected 1 key, got %d", f.name, len(keys))
+		}
+		skis = append(skis, keys[0].SKI)
+	}
+
+	for i := 1; i < len(skis); i++ {
+		if skis[i] != skis[0] {
+			t.Errorf("SKI mismatch: %s=%s vs %s=%s",
+				formats[0].name, skis[0], formats[i].name, skis[i])
+		}
+	}
+}

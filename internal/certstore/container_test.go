@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/pem"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/pavlo-v-chernykh/keystore-go/v4"
 	"github.com/sensiblebit/certkit"
+	"golang.org/x/crypto/ssh"
 )
 
 func TestParseContainerData_EmptyData(t *testing.T) {
@@ -567,6 +569,76 @@ func TestParseContainerData_PEMCertWithEncryptedPKCS8Key(t *testing.T) {
 	// Key should be nil since ENCRYPTED PRIVATE KEY cannot be decrypted
 	if contents.Key != nil {
 		t.Errorf("expected Key to be nil for undecryptable ENCRYPTED PRIVATE KEY, got %T", contents.Key)
+	}
+}
+
+func TestParseContainerData_JKS_Ed25519Key(t *testing.T) {
+	// WHY: ParseContainerData tests PKCS#12 Ed25519 but not JKS Ed25519.
+	// JKS key extraction uses DecodeJKS which parses PKCS#8 internally and
+	// normalizes Ed25519 pointer form — a different code path than PKCS#12.
+	// A missing normalization in the JKS branch of ParseContainerData would
+	// return *ed25519.PrivateKey, breaking downstream type switches.
+	t.Parallel()
+
+	ca := newEd25519CA(t)
+	leaf := newEd25519Leaf(t, ca, "ed-jks.example.com", []string{"ed-jks.example.com"})
+	jksData := newJKSBundle(t, leaf, ca, "changeit")
+
+	contents, err := ParseContainerData(jksData, []string{"changeit"})
+	if err != nil {
+		t.Fatalf("ParseContainerData: %v", err)
+	}
+	if contents.Leaf == nil {
+		t.Fatal("expected Leaf to be non-nil")
+	}
+	if contents.Leaf.Subject.CommonName != "ed-jks.example.com" {
+		t.Errorf("Leaf CN = %q, want ed-jks.example.com", contents.Leaf.Subject.CommonName)
+	}
+	if contents.Key == nil {
+		t.Fatal("expected Key to be non-nil for JKS with Ed25519 key")
+	}
+	edKey, ok := contents.Key.(ed25519.PrivateKey)
+	if !ok {
+		t.Fatalf("Key type = %T, want ed25519.PrivateKey (value, not pointer)", contents.Key)
+	}
+	origKey := leaf.key.(ed25519.PrivateKey)
+	if !origKey.Equal(edKey) {
+		t.Error("extracted Ed25519 key from JKS does not Equal original")
+	}
+}
+
+func TestParseContainerData_PEMKeyNormalizesEd25519(t *testing.T) {
+	// WHY: findPEMPrivateKey calls ParsePEMPrivateKeyWithPasswords which
+	// calls normalizeKey internally. However, there is no test proving the
+	// returned key from ParseContainerData's PEM path is actually the
+	// normalized ed25519.PrivateKey value type (not pointer). A regression
+	// in normalizeKey or the OpenSSH parsing path would surface here.
+	t.Parallel()
+
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Use OpenSSH format (the path most likely to return pointer form)
+	sshBlock, err := ssh.MarshalPrivateKey(priv, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshPEM := pem.EncodeToMemory(sshBlock)
+
+	contents, err := ParseContainerData(sshPEM, nil)
+	if err != nil {
+		t.Fatalf("ParseContainerData: %v", err)
+	}
+	if contents.Key == nil {
+		t.Fatal("expected Key to be non-nil for OpenSSH Ed25519")
+	}
+	if _, ok := contents.Key.(ed25519.PrivateKey); !ok {
+		t.Fatalf("Key type = %T, want ed25519.PrivateKey (value type)", contents.Key)
+	}
+	if !priv.Equal(contents.Key) {
+		t.Error("returned Ed25519 key does not Equal original")
 	}
 }
 
