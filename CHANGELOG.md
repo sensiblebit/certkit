@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Consolidate CI from 16 jobs to 10 by merging jobs with identical setup: branch-name + commit-messages + verified-commits → PR Conventions, go-build + go-vet + goimports → Go Checks, web-test + wrangler-build → Web, web-lint + markdownlint → Lint
 - Remove redundant `go vet` and `go test` steps from release workflow — tags are created from main which already passed CI
 - Consolidate Dependabot GitHub Actions PRs into a single grouped PR instead of one per action
+- Add `build(deps)` commit-message prefix to Dependabot so PR titles and commits follow Conventional Commits
 - Replace fragile hardcoded file list in WASM pre-commit hook with `types: [go]`
 - Consolidate `run()` and `run_output()` into single `run(cmd, *, capture=False)` in `checks.py`
 
