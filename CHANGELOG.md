@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Tests
 
+- Ralph Loop key handling test hardening: corrupt DER in RSA/EC PEM blocks, same-key-all-formats equality, ComputeSKILegacy RSA/Ed25519, Ed25519-vs-RSA cross-type mismatch, JKS magic byte boundaries, PKCS#12 multi-password iteration, encrypted PEM with nil passwords, duplicate test consolidation ([`7652404`])
 - Comprehensive key handling test hardening via Ralph Loop (5 passes, 2 review iterations) covering all key handling paths: parsing, normalization, matching, encoding, and cross-format round-trips ([`ff58d2b`])
   - Table-driven PKCS#12 and legacy PKCS#12 round-trip tests for all 5 key types (RSA, ECDSA P-256/P-384/P-521, Ed25519)
   - Cross-format round-trips: OpenSSH RSA/ECDSA/Ed25519 → PKCS#12/JKS, PKCS#1 RSA → PKCS#12/JKS, SEC1 ECDSA → PKCS#12/JKS
@@ -44,6 +45,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Normalize PKCS#8 parsed keys via `normalizeKey` in `ParsePEMPrivateKey` — ensures Ed25519 value form from the earliest point in the pipeline instead of relying on Go stdlib behavior ([`0031f7a`])
+- Fix `privateKeySize` in inspect returning "unknown" for `*ed25519.PrivateKey` pointer form ([`0031f7a`])
+- Reorder `HandleKey` normalization before `GetPublicKey` call for correctness clarity ([`0031f7a`])
+- Add nil guard to `GenerateECKey` — prevents panic when called with nil curve ([`7652404`])
 - Fix `HandleCertificate` nil pointer panic when called with nil certificate — now returns a clear error instead of crashing the ingestion pipeline ([`1ea20c4`])
 - Fix `KeyMatchesCert` nil pointer panic when called with nil certificate — now returns a clear error ([`1ea20c4`])
 - Fix `EncodeJKS` nil pointer panic when called with nil leaf certificate — now returns a clear error matching `EncodePKCS12` behavior ([`1ea20c4`])
@@ -505,6 +510,8 @@ Initial release.
 [`2221a47`]: https://github.com/sensiblebit/certkit/commit/2221a47
 [`1ea20c4`]: https://github.com/sensiblebit/certkit/commit/1ea20c4
 [`ff58d2b`]: https://github.com/sensiblebit/certkit/commit/ff58d2b
+[`7652404`]: https://github.com/sensiblebit/certkit/commit/7652404
+[`0031f7a`]: https://github.com/sensiblebit/certkit/commit/0031f7a
 [#24]: https://github.com/sensiblebit/certkit/pull/24
 [#25]: https://github.com/sensiblebit/certkit/pull/25
 [#26]: https://github.com/sensiblebit/certkit/pull/26

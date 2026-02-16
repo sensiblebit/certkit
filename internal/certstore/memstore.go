@@ -98,7 +98,15 @@ func (s *MemStore) HandleCertificate(cert *x509.Certificate, source string) erro
 }
 
 // HandleKey computes the SKI and stores the private key with its PEM encoding.
+// Normalizes *ed25519.PrivateKey (pointer form from ssh.ParseRawPrivateKey) to
+// the value form before computing the SKI and storing, so downstream type
+// switches only need one case.
 func (s *MemStore) HandleKey(key any, pemData []byte, source string) error {
+	// Normalize before any operations so all downstream code sees canonical types.
+	if ptr, ok := key.(*ed25519.PrivateKey); ok {
+		key = *ptr
+	}
+
 	pub, err := certkit.GetPublicKey(key)
 	if err != nil {
 		return fmt.Errorf("extracting public key: %w", err)
@@ -108,12 +116,6 @@ func (s *MemStore) HandleKey(key any, pemData []byte, source string) error {
 		return fmt.Errorf("computing SKI: %w", err)
 	}
 	ski := hex.EncodeToString(rawSKI)
-
-	// Normalize *ed25519.PrivateKey (pointer form from ssh.ParseRawPrivateKey)
-	// to the value form so downstream type switches don't need both cases.
-	if ptr, ok := key.(*ed25519.PrivateKey); ok {
-		key = *ptr
-	}
 
 	rec := &KeyRecord{
 		Key:    key,

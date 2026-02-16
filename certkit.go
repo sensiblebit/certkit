@@ -107,7 +107,7 @@ func ParsePEMPrivateKey(pemData []byte) (crypto.PrivateKey, error) {
 		return x509.ParseECPrivateKey(block.Bytes)
 	case "PRIVATE KEY":
 		if key, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
-			return key, nil
+			return normalizeKey(key), nil
 		}
 		// Fall back: some tools (e.g., pkcs12.ToPEM) label PKCS#1 keys as "PRIVATE KEY"
 		if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {

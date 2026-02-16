@@ -2159,11 +2159,17 @@ func TestProcessData_PKCS12_MultiPasswordIteration(t *testing.T) {
 		t.Fatalf("ProcessData: %v", err)
 	}
 
-	if len(store.AllCerts()) == 0 {
-		t.Error("expected certs to be extracted after finding correct password")
+	if len(store.AllCerts()) < 2 {
+		t.Errorf("expected at least 2 certs (leaf + CA), got %d", len(store.AllCerts()))
 	}
 	if len(store.AllKeys()) != 1 {
-		t.Error("expected 1 key to be extracted after finding correct password")
+		t.Fatalf("expected 1 key, got %d", len(store.AllKeys()))
+	}
+	// Verify key material matches the original leaf key
+	for _, rec := range store.AllKeys() {
+		if !keysEqual(t, leaf.key, rec.Key) {
+			t.Error("extracted key does not match original leaf key")
+		}
 	}
 }
 

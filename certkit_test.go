@@ -1228,9 +1228,9 @@ func TestCertExpiresWithin_AlreadyExpired(t *testing.T) {
 	}
 }
 
-// WHY: MarshalPublicKeyToPEM is used for key export; round-trip with .Equal()
-// proves no information is lost across all supported key types.
 func TestMarshalPublicKeyToPEM_RoundTrip(t *testing.T) {
+	// WHY: MarshalPublicKeyToPEM is used for key export; round-trip with .Equal()
+	// proves no information is lost across all supported key types.
 	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
 	edPub, _, _ := ed25519.GenerateKey(rand.Reader)
@@ -4242,6 +4242,11 @@ func TestComputeSKILegacy_Ed25519(t *testing.T) {
 	ski2, _ := ComputeSKILegacy(pub)
 	if !bytes.Equal(ski, ski2) {
 		t.Error("ComputeSKILegacy not deterministic for Ed25519")
+	}
+	// Must differ from modern SKI (SHA-256 truncated vs SHA-1)
+	modern, _ := ComputeSKI(pub)
+	if bytes.Equal(ski, modern) {
+		t.Error("Legacy and modern SKI should differ for Ed25519")
 	}
 }
 
