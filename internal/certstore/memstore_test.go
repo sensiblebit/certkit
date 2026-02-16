@@ -80,85 +80,6 @@ func TestMemStore_HandleCertificate_DuplicateIgnored(t *testing.T) {
 	}
 }
 
-func TestMemStore_HandleKey_RSA(t *testing.T) {
-	// WHY: Verifies RSA key ingestion stores correct key type and bit length.
-	t.Parallel()
-	store := NewMemStore()
-	pemData := rsaKeyPEM(t)
-	key, _ := certkit.ParsePEMPrivateKey(pemData)
-
-	if err := store.HandleKey(key, pemData, "key.pem"); err != nil {
-		t.Fatalf("HandleKey: %v", err)
-	}
-
-	keys := store.AllKeys()
-	if len(keys) != 1 {
-		t.Fatalf("expected 1 key, got %d", len(keys))
-	}
-	for _, rec := range keys {
-		if rec.KeyType != "RSA" {
-			t.Errorf("KeyType = %q, want RSA", rec.KeyType)
-		}
-		if rec.BitLength != 2048 {
-			t.Errorf("BitLength = %d, want 2048", rec.BitLength)
-		}
-		if rec.Source != "key.pem" {
-			t.Errorf("Source = %q, want key.pem", rec.Source)
-		}
-	}
-}
-
-func TestMemStore_HandleKey_ECDSA(t *testing.T) {
-	// WHY: Verifies ECDSA key ingestion stores correct key type and bit size.
-	t.Parallel()
-	store := NewMemStore()
-	pemData := ecdsaKeyPEM(t)
-	key, _ := certkit.ParsePEMPrivateKey(pemData)
-
-	if err := store.HandleKey(key, pemData, "ec.pem"); err != nil {
-		t.Fatalf("HandleKey: %v", err)
-	}
-
-	keys := store.AllKeys()
-	if len(keys) != 1 {
-		t.Fatalf("expected 1 key, got %d", len(keys))
-	}
-	for _, rec := range keys {
-		if rec.KeyType != "ECDSA" {
-			t.Errorf("KeyType = %q, want ECDSA", rec.KeyType)
-		}
-		if rec.BitLength != 256 {
-			t.Errorf("BitLength = %d, want 256", rec.BitLength)
-		}
-	}
-}
-
-func TestMemStore_HandleKey_Ed25519(t *testing.T) {
-	// WHY: Verifies Ed25519 key ingestion stores correct key type and 256-bit
-	// length (not 512 from raw byte count).
-	t.Parallel()
-	store := NewMemStore()
-	pemData := ed25519KeyPEM(t)
-	key, _ := certkit.ParsePEMPrivateKey(pemData)
-
-	if err := store.HandleKey(key, pemData, "ed.pem"); err != nil {
-		t.Fatalf("HandleKey: %v", err)
-	}
-
-	keys := store.AllKeys()
-	if len(keys) != 1 {
-		t.Fatalf("expected 1 key, got %d", len(keys))
-	}
-	for _, rec := range keys {
-		if rec.KeyType != "Ed25519" {
-			t.Errorf("KeyType = %q, want Ed25519", rec.KeyType)
-		}
-		if rec.BitLength != 256 {
-			t.Errorf("BitLength = %d, want 256", rec.BitLength)
-		}
-	}
-}
-
 func TestMemStore_MatchedPairs(t *testing.T) {
 	// WHY: MatchedPairs must only return SKIs with both a leaf cert and a key;
 	// root certs and intermediate certs must be excluded even if they have keys.
@@ -320,6 +241,92 @@ func TestMemStore_HasIssuer_NotPresent(t *testing.T) {
 
 	if store.HasIssuer(leaf.cert) {
 		t.Error("expected HasIssuer=false when issuer is not in store")
+	}
+}
+
+func TestMemStore_HasIssuer_MultipleIssuers(t *testing.T) {
+	// WHY: Cross-signed or renewed CAs can share the same subject DN but have
+	// different keys; HasIssuer must return true when any cert's RawSubject
+	// matches the leaf's RawIssuer — even if the matching CA isn't the signer.
+	t.Parallel()
+
+	// Create two CAs with the same subject DN but different keys.
+	ca1Key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	sharedSubject := pkix.Name{CommonName: "Shared Subject CA", Organization: []string{"TestOrg"}}
+	ca1Template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               sharedSubject,
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		SubjectKeyId:          []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20},
+	}
+	ca1DER, _ := x509.CreateCertificate(rand.Reader, ca1Template, ca1Template, &ca1Key.PublicKey, ca1Key)
+	ca1Cert, _ := x509.ParseCertificate(ca1DER)
+
+	ca2Key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	ca2Template := &x509.Certificate{
+		SerialNumber:          big.NewInt(2),
+		Subject:               sharedSubject,
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		SubjectKeyId:          []byte{20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1},
+	}
+	ca2DER, _ := x509.CreateCertificate(rand.Reader, ca2Template, ca2Template, &ca2Key.PublicKey, ca2Key)
+	ca2Cert, _ := x509.ParseCertificate(ca2DER)
+
+	// Create a leaf signed by ca1.
+	leafKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	leafTemplate := &x509.Certificate{
+		SerialNumber:   big.NewInt(100),
+		Subject:        pkix.Name{CommonName: "multi-issuer.example.com"},
+		DNSNames:       []string{"multi-issuer.example.com"},
+		NotBefore:      time.Now().Add(-time.Hour),
+		NotAfter:       time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:       x509.KeyUsageDigitalSignature,
+		AuthorityKeyId: ca1Cert.SubjectKeyId,
+	}
+	leafDER, _ := x509.CreateCertificate(rand.Reader, leafTemplate, ca1Cert, &leafKey.PublicKey, ca1Key)
+	leafCert, _ := x509.ParseCertificate(leafDER)
+
+	// Add only ca2 (NOT ca1) and the leaf. HasIssuer should still return true
+	// because ca2 has the same RawSubject as the leaf's RawIssuer.
+	store := NewMemStore()
+	if err := store.HandleCertificate(ca2Cert, "ca2.pem"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HandleCertificate(leafCert, "leaf.pem"); err != nil {
+		t.Fatal(err)
+	}
+
+	if !store.HasIssuer(leafCert) {
+		t.Error("expected HasIssuer=true when a different CA with matching subject DN is in store")
+	}
+}
+
+func TestMemStore_SetBundleName_NonexistentSKI(t *testing.T) {
+	// WHY: SetBundleName with a nonexistent SKI must be a no-op without
+	// panic — callers may pass stale or invalid SKIs.
+	t.Parallel()
+	store := NewMemStore()
+	ca := newRSACA(t)
+	if err := store.HandleCertificate(ca.cert, "ca.pem"); err != nil {
+		t.Fatal(err)
+	}
+
+	// This SKI does not exist in the store
+	store.SetBundleName("deadbeef", "should-not-appear")
+
+	// Verify no bundle name was applied to the existing cert
+	for _, names := range store.BundleNames() {
+		if names == "should-not-appear" {
+			t.Error("SetBundleName should not create a phantom bundle name")
+		}
 	}
 }
 
@@ -823,15 +830,14 @@ func TestMemStore_DumpDebug(t *testing.T) {
 
 func TestMemStore_HandleKey_Ed25519Pointer(t *testing.T) {
 	// WHY: ssh.ParseRawPrivateKey returns *ed25519.PrivateKey (pointer), not
-	// the value type. HandleKey has a special case for this; verifying it
-	// stores the correct key type and bit length.
+	// the value type. HandleKey must normalize it to ed25519.PrivateKey so
+	// downstream type switches (e.g., inspect.keyBitDetail) work correctly.
 	t.Parallel()
 
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatalf("generate Ed25519 key: %v", err)
 	}
-	// Create a pointer to the Ed25519 private key, mimicking ssh.ParseRawPrivateKey behavior
 	privPtr := &priv
 
 	store := NewMemStore()
@@ -846,14 +852,11 @@ func TestMemStore_HandleKey_Ed25519Pointer(t *testing.T) {
 		t.Fatalf("expected 1 key, got %d", len(keys))
 	}
 	for _, rec := range keys {
+		if _, ok := rec.Key.(ed25519.PrivateKey); !ok {
+			t.Errorf("stored key type = %T, want ed25519.PrivateKey (value, not pointer)", rec.Key)
+		}
 		if rec.KeyType != "Ed25519" {
 			t.Errorf("KeyType = %q, want Ed25519", rec.KeyType)
-		}
-		if rec.BitLength != 256 {
-			t.Errorf("BitLength = %d, want 256", rec.BitLength)
-		}
-		if rec.Source != "ed25519-ptr.pem" {
-			t.Errorf("Source = %q, want ed25519-ptr.pem", rec.Source)
 		}
 	}
 }

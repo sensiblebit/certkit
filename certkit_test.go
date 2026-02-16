@@ -1035,7 +1035,8 @@ func TestKeyMatchesCert_UnsupportedKey(t *testing.T) {
 
 func TestIsPEM(t *testing.T) {
 	// WHY: IsPEM is used as a fast-path filter before attempting PEM parse;
-	// false negatives would skip valid certs.
+	// false negatives would skip valid certs, false positives waste time.
+	t.Parallel()
 	tests := []struct {
 		name string
 		data []byte
@@ -1043,11 +1044,14 @@ func TestIsPEM(t *testing.T) {
 	}{
 		{"PEM data", []byte("-----BEGIN CERTIFICATE-----\nfoo\n-----END CERTIFICATE-----"), true},
 		{"DER data", []byte{0x30, 0x82, 0x01}, false},
+		{"empty bytes", []byte{}, false},
+		{"nil", nil, false},
+		{"DER with extra byte", []byte{0x30, 0x82, 0x01, 0x00}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := IsPEM(tt.data); got != tt.want {
-				t.Errorf("IsPEM() = %v, want %v", got, tt.want)
+				t.Errorf("IsPEM(%v) = %v, want %v", tt.data, got, tt.want)
 			}
 		})
 	}
@@ -1499,27 +1503,6 @@ func TestGetCertificateType_Intermediate(t *testing.T) {
 	}
 }
 
-func TestIsPEM_EdgeCases(t *testing.T) {
-	// WHY: Empty, nil, and binary input must return false without panic; these are common inputs during file scanning.
-	tests := []struct {
-		name string
-		data []byte
-		want bool
-	}{
-		{"empty bytes", []byte{}, false},
-		{"nil", nil, false},
-		{"valid PEM", []byte("-----BEGIN CERTIFICATE-----\nfoo\n-----END CERTIFICATE-----"), true},
-		{"DER bytes", []byte{0x30, 0x82, 0x01, 0x00}, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := IsPEM(tt.data); got != tt.want {
-				t.Errorf("IsPEM(%v) = %v, want %v", tt.data, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestParsePEMCertificates_NilInput(t *testing.T) {
 	// WHY: Nil input must produce a clear "no certificates found" error, not a nil-pointer panic.
 	_, err := ParsePEMCertificates(nil)
@@ -1722,12 +1705,12 @@ func TestParsePEMPrivateKey_OpenSSH_Ed25519(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParsePEMPrivateKey(OpenSSH Ed25519): %v", err)
 	}
-	// ssh.ParseRawPrivateKey returns *ed25519.PrivateKey (pointer)
-	got, ok := key.(*ed25519.PrivateKey)
+	// ParsePEMPrivateKey normalizes *ed25519.PrivateKey to value form.
+	got, ok := key.(ed25519.PrivateKey)
 	if !ok {
-		t.Fatalf("expected *ed25519.PrivateKey, got %T", key)
+		t.Fatalf("expected ed25519.PrivateKey, got %T", key)
 	}
-	if !priv.Equal(*got) {
+	if !priv.Equal(got) {
 		t.Error("parsed key does not match original")
 	}
 }
@@ -1786,11 +1769,11 @@ func TestParsePEMPrivateKeyWithPasswords_OpenSSH_Encrypted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParsePEMPrivateKeyWithPasswords(OpenSSH encrypted): %v", err)
 	}
-	got, ok := key.(*ed25519.PrivateKey)
+	got, ok := key.(ed25519.PrivateKey)
 	if !ok {
-		t.Fatalf("expected *ed25519.PrivateKey, got %T", key)
+		t.Fatalf("expected ed25519.PrivateKey, got %T", key)
 	}
-	if !priv.Equal(*got) {
+	if !priv.Equal(got) {
 		t.Error("decrypted key does not match original")
 	}
 }
@@ -1845,30 +1828,6 @@ func TestComputeSKILegacy_DSAKey(t *testing.T) {
 	}
 	if len(ski) != 20 {
 		t.Errorf("SKI length = %d, want 20 (SHA-1 = 20 bytes)", len(ski))
-	}
-}
-
-// --- PKCS#7 round-trip test ---
-
-func TestEncodePKCS7_EmptyCertList(t *testing.T) {
-	// WHY: Empty cert list must produce a clear error, not a malformed
-	// PKCS#7 structure or panic in the DER builder.
-	t.Parallel()
-	_, err := EncodePKCS7([]*x509.Certificate{})
-	if err == nil {
-		t.Fatal("expected error for empty cert list")
-	}
-	if !strings.Contains(err.Error(), "no certificates") {
-		t.Errorf("error should mention no certificates, got: %v", err)
-	}
-}
-
-func TestEncodePKCS7_NilCertList(t *testing.T) {
-	// WHY: Nil cert list must also produce a clear error.
-	t.Parallel()
-	_, err := EncodePKCS7(nil)
-	if err == nil {
-		t.Fatal("expected error for nil cert list")
 	}
 }
 

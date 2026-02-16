@@ -514,6 +514,35 @@ func TestGenerateYAML_EarliestExpiry(t *testing.T) {
 	}
 }
 
+func TestEarliestExpiry_RootExpiresBeforeLeaf(t *testing.T) {
+	// WHY: When the root expires before the leaf, earliestExpiry must return
+	// the root's NotAfter — not the leaf's. This path was previously untested.
+	t.Parallel()
+
+	// Create a short-lived "root" that expires in 30 days.
+	shortRoot := newRSACA(t)
+	// Override NotAfter to 30 days from now by creating a leaf whose NotAfter
+	// is after the root. The newRSACA sets root to 10 years, newRSALeaf to 1 year.
+	// So we'll construct the bundle manually with a fake short-lived root.
+	leaf := newRSALeaf(t, shortRoot, "rootexp.example.com", []string{"rootexp.example.com"})
+
+	// Create a fake root cert that expires 1 hour from now (before the leaf).
+	fakeRoot := &x509.Certificate{
+		NotAfter: time.Now().Add(1 * time.Hour),
+	}
+
+	bundle := &certkit.BundleResult{
+		Leaf:  leaf.cert,
+		Roots: []*x509.Certificate{fakeRoot},
+	}
+
+	earliest := earliestExpiry(bundle)
+
+	if !earliest.Equal(fakeRoot.NotAfter) {
+		t.Errorf("earliestExpiry = %v, want root NotAfter %v", earliest, fakeRoot.NotAfter)
+	}
+}
+
 func TestGenerateCSR_RoundTrip(t *testing.T) {
 	// WHY: Verifies that a generated CSR can be parsed back and retains the
 	// correct subject fields and DNS names — full encode/decode round-trip per T-6.

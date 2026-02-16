@@ -195,11 +195,27 @@ func TestDecodePKCS12_wrongPassword(t *testing.T) {
 	}
 }
 
-func TestEncodePKCS7_empty(t *testing.T) {
-	// WHY: Empty cert list must be rejected; producing a PKCS#7 with no certs would create a valid-looking but useless container.
-	_, err := EncodePKCS7(nil)
-	if err == nil {
-		t.Error("expected error for empty cert list")
+func TestEncodePKCS7_EmptyInput(t *testing.T) {
+	// WHY: Both nil and empty cert lists must be rejected; producing a PKCS#7
+	// with no certs would create a valid-looking but useless container.
+	t.Parallel()
+	tests := []struct {
+		name  string
+		certs []*x509.Certificate
+	}{
+		{"nil", nil},
+		{"empty slice", []*x509.Certificate{}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := EncodePKCS7(tt.certs)
+			if err == nil {
+				t.Fatal("expected error for empty cert list")
+			}
+			if !strings.Contains(err.Error(), "no certificates") {
+				t.Errorf("error should mention no certificates, got: %v", err)
+			}
+		})
 	}
 }
 

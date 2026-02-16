@@ -213,6 +213,27 @@ func TestParseContainerData_PKCS7(t *testing.T) {
 	}
 }
 
+func TestParseContainerData_PEMKeyOnly(t *testing.T) {
+	// WHY: A PEM file containing only a private key (no cert) is valid input;
+	// must return Key non-nil and Leaf nil without error.
+	t.Parallel()
+
+	keyPEM := rsaKeyPEM(t)
+	contents, err := ParseContainerData(keyPEM, nil)
+	if err != nil {
+		t.Fatalf("ParseContainerData: %v", err)
+	}
+	if contents.Leaf != nil {
+		t.Error("expected Leaf to be nil for key-only PEM")
+	}
+	if contents.Key == nil {
+		t.Fatal("expected Key to be non-nil for key-only PEM")
+	}
+	if len(contents.ExtraCerts) != 0 {
+		t.Errorf("expected 0 ExtraCerts, got %d", len(contents.ExtraCerts))
+	}
+}
+
 func TestParseContainerData_GarbageData(t *testing.T) {
 	// WHY: Completely unrecognizable data must return an error that mentions
 	// the formats attempted, so the user knows what was tried.

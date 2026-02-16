@@ -112,6 +112,11 @@ func ParsePEMPrivateKey(pemData []byte) (crypto.PrivateKey, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parsing OpenSSH private key: %w", err)
 		}
+		// ssh.ParseRawPrivateKey returns *ed25519.PrivateKey; normalize to
+		// value form so downstream type switches only need one case.
+		if ptr, ok := key.(*ed25519.PrivateKey); ok {
+			return *ptr, nil
+		}
 		return key, nil
 	default:
 		return nil, fmt.Errorf("unsupported PEM block type %q", block.Type)
@@ -164,6 +169,9 @@ func ParsePEMPrivateKeyWithPasswords(pemData []byte, passwords []string) (crypto
 			}
 			key, err := ssh.ParseRawPrivateKeyWithPassphrase(pemData, []byte(password))
 			if err == nil {
+				if ptr, ok := key.(*ed25519.PrivateKey); ok {
+					return *ptr, nil
+				}
 				return key, nil
 			}
 		}

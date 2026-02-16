@@ -105,6 +105,12 @@ func (s *MemStore) HandleKey(key any, pemData []byte, source string) error {
 	}
 	ski := hex.EncodeToString(rawSKI)
 
+	// Normalize *ed25519.PrivateKey (pointer form from ssh.ParseRawPrivateKey)
+	// to the value form so downstream type switches don't need both cases.
+	if ptr, ok := key.(*ed25519.PrivateKey); ok {
+		key = *ptr
+	}
+
 	rec := &KeyRecord{
 		Key:    key,
 		SKI:    ski,
@@ -120,10 +126,6 @@ func (s *MemStore) HandleKey(key any, pemData []byte, source string) error {
 		rec.KeyType = "ECDSA"
 		rec.BitLength = k.Curve.Params().BitSize
 	case ed25519.PrivateKey:
-		rec.KeyType = "Ed25519"
-		rec.BitLength = 256
-	case *ed25519.PrivateKey:
-		// ssh.ParseRawPrivateKey returns *ed25519.PrivateKey (pointer)
 		rec.KeyType = "Ed25519"
 		rec.BitLength = 256
 	}

@@ -649,6 +649,80 @@ func TestDetectAndSwapLeaf_NoSwapWhenLeafIsCorrect(t *testing.T) {
 	}
 }
 
+func TestDetectAndSwapLeaf_AllCAsInExtras(t *testing.T) {
+	// WHY: When the leaf is a CA and all extras are also CAs, the swap
+	// heuristic must not fire — there is no non-CA candidate to swap to.
+	t.Parallel()
+
+	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "AllCA Root"},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	caBytes, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	caCert, _ := x509.ParseCertificate(caBytes)
+
+	intKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	intTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(2),
+		Subject:               pkix.Name{CommonName: "AllCA Intermediate"},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	intBytes, _ := x509.CreateCertificate(rand.Reader, intTemplate, caCert, &intKey.PublicKey, caKey)
+	intCert, _ := x509.ParseCertificate(intBytes)
+
+	newLeaf, newExtras, warnings := detectAndSwapLeaf(caCert, []*x509.Certificate{intCert})
+
+	if newLeaf.Subject.CommonName != "AllCA Root" {
+		t.Errorf("should not swap when all extras are CAs, leaf CN=%q", newLeaf.Subject.CommonName)
+	}
+	if len(warnings) != 0 {
+		t.Errorf("should not produce warnings, got %v", warnings)
+	}
+	if len(newExtras) != 1 {
+		t.Errorf("extras should be unchanged, got %d", len(newExtras))
+	}
+}
+
+func TestMozillaRootPEM(t *testing.T) {
+	// WHY: MozillaRootPEM is an exported function returning embedded root
+	// certs; must return non-empty, parseable PEM data.
+	t.Parallel()
+	data := MozillaRootPEM()
+	if len(data) == 0 {
+		t.Fatal("MozillaRootPEM returned empty data")
+	}
+	block, _ := pem.Decode(data)
+	if block == nil {
+		t.Fatal("MozillaRootPEM does not contain valid PEM")
+	}
+	if block.Type != "CERTIFICATE" {
+		t.Errorf("first PEM block type = %q, want CERTIFICATE", block.Type)
+	}
+}
+
+func TestMozillaRootPool(t *testing.T) {
+	// WHY: MozillaRootPool is used for chain verification; must return a
+	// non-nil pool with no error. Uses sync.Once internally.
+	t.Parallel()
+	pool, err := MozillaRootPool()
+	if err != nil {
+		t.Fatalf("MozillaRootPool: %v", err)
+	}
+	if pool == nil {
+		t.Fatal("MozillaRootPool returned nil pool")
+	}
+}
+
 func TestCheckSHA1Signatures(t *testing.T) {
 	// WHY: SHA-1 signed certs are deprecated and insecure; the warning system must detect them so users know to replace affected certs.
 	// Test the helper directly with hand-set SignatureAlgorithm

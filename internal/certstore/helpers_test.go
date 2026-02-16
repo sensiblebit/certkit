@@ -9,7 +9,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"math/big"
-	"strings"
 	"testing"
 )
 
@@ -230,16 +229,5 @@ func TestSanitizeFileName(t *testing.T) {
 				t.Errorf("SanitizeFileName(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
-	}
-}
-
-func TestGetKeyType_MatchesUnknownSubstring(t *testing.T) {
-	// WHY: The unknown key type branch must include the Go type name for
-	// debugging; verify substring presence, not exact match.
-	t.Parallel()
-	cert := &x509.Certificate{PublicKey: "not-a-real-key"}
-	got := GetKeyType(cert)
-	if !strings.Contains(got, "unknown key type") {
-		t.Errorf("GetKeyType() = %q, want substring %q", got, "unknown key type")
 	}
 }

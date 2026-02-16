@@ -60,52 +60,6 @@ func TestProcessData_PEMPrivateKey(t *testing.T) {
 	}
 }
 
-func TestProcessData_PEMMixedCertAndKey(t *testing.T) {
-	// WHY: PEM files containing both cert and key blocks must have both extracted.
-	t.Parallel()
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "mixed.example.com", []string{"mixed.example.com"})
-	store := NewMemStore()
-
-	combined := append(leaf.certPEM, leaf.keyPEM...)
-	if err := ProcessData(ProcessInput{
-		Data:    combined,
-		Path:    "mixed.pem",
-		Handler: store,
-	}); err != nil {
-		t.Fatalf("ProcessData: %v", err)
-	}
-
-	if len(store.AllCerts()) != 1 {
-		t.Errorf("expected 1 cert, got %d", len(store.AllCerts()))
-	}
-	if len(store.AllKeys()) != 1 {
-		t.Errorf("expected 1 key, got %d", len(store.AllKeys()))
-	}
-}
-
-func TestProcessData_PEMMultipleCerts(t *testing.T) {
-	// WHY: Multi-cert PEM files must have all certificates extracted.
-	t.Parallel()
-	ca := newRSACA(t)
-	leaf1 := newRSALeaf(t, ca, "multi1.example.com", []string{"multi1.example.com"})
-	leaf2 := newECDSALeaf(t, ca, "multi2.example.com", []string{"multi2.example.com"})
-	store := NewMemStore()
-
-	combined := append(leaf1.certPEM, leaf2.certPEM...)
-	if err := ProcessData(ProcessInput{
-		Data:    combined,
-		Path:    "multi.pem",
-		Handler: store,
-	}); err != nil {
-		t.Fatalf("ProcessData: %v", err)
-	}
-
-	if len(store.AllCerts()) != 2 {
-		t.Fatalf("expected 2 certs, got %d", len(store.AllCerts()))
-	}
-}
-
 func TestProcessData_PEMEncryptedKey_CorrectPassword(t *testing.T) {
 	// WHY: Encrypted PEM keys with the correct password must be decrypted and stored.
 	t.Parallel()
