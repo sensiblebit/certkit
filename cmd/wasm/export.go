@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"time"
 
 	"github.com/sensiblebit/certkit"
 	"github.com/sensiblebit/certkit/internal/certstore"
@@ -75,8 +76,13 @@ type zipBundleWriter struct {
 // WriteBundleFiles writes each file as a ZIP entry under folder/.
 func (w *zipBundleWriter) WriteBundleFiles(folder string, files []certstore.BundleFile) error {
 	prefix := folder + "/"
+	now := time.Now()
 	for _, f := range files {
-		entry, err := w.zw.Create(prefix + f.Name)
+		entry, err := w.zw.CreateHeader(&zip.FileHeader{
+			Name:     prefix + f.Name,
+			Modified: now,
+			Method:   zip.Deflate,
+		})
 		if err != nil {
 			return fmt.Errorf("creating ZIP entry %s: %w", f.Name, err)
 		}

@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"math/big"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -1974,5 +1975,87 @@ func TestParseCertificatesAny_Garbage(t *testing.T) {
 	errStr := err.Error()
 	if !strings.Contains(errStr, "DER") || !strings.Contains(errStr, "PEM") || !strings.Contains(errStr, "PKCS#7") {
 		t.Errorf("error should mention all three formats, got: %v", err)
+	}
+}
+
+func TestDeduplicatePasswords(t *testing.T) {
+	// WHY: DeduplicatePasswords merges user-supplied passwords with defaults; duplicates would cause redundant decryption attempts and confusing retry behavior.
+	t.Parallel()
+
+	defaults := DefaultPasswords()
+
+	tests := []struct {
+		name  string
+		extra []string
+		want  []string
+	}{
+		{
+			name:  "nil extra returns defaults only",
+			extra: nil,
+			want:  defaults,
+		},
+		{
+			name:  "empty extra returns defaults only",
+			extra: []string{},
+			want:  defaults,
+		},
+		{
+			name:  "extra with unique values appends after defaults",
+			extra: []string{"hunter2", "s3cret"},
+			want:  append(slices.Clone(defaults), "hunter2", "s3cret"),
+		},
+		{
+			name:  "extra duplicating defaults produces no duplicates",
+			extra: []string{"changeit", "password"},
+			want:  defaults,
+		},
+		{
+			name:  "extra with internal duplicates deduplicates",
+			extra: []string{"newpass", "newpass", "another", "another"},
+			want:  append(slices.Clone(defaults), "newpass", "another"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := DeduplicatePasswords(tt.extra)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("DeduplicatePasswords(%v)\n got: %v\nwant: %v", tt.extra, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParsePEMPrivateKey_PKCS8RSA(t *testing.T) {
+	// WHY: RSA keys encoded as PKCS#8 ("PRIVATE KEY" PEM type) are common from modern tools like openssl genpkey; ParsePEMPrivateKey must handle them distinctly from PKCS#1 ("RSA PRIVATE KEY").
+	t.Parallel()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatalf("MarshalPKCS8PrivateKey: %v", err)
+	}
+
+	pemData := pem.EncodeToMemory(&pem.Block{
+		Type:  "PRIVATE KEY",
+		Bytes: der,
+	})
+
+	parsed, err := ParsePEMPrivateKey(pemData)
+	if err != nil {
+		t.Fatalf("ParsePEMPrivateKey failed: %v", err)
+	}
+
+	rsaParsed, ok := parsed.(*rsa.PrivateKey)
+	if !ok {
+		t.Fatalf("expected *rsa.PrivateKey, got %T", parsed)
+	}
+	if !key.Equal(rsaParsed) {
+		t.Error("parsed PKCS#8 RSA key does not match original")
 	}
 }

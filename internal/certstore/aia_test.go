@@ -451,3 +451,61 @@ func TestResolveAIA_EmptyStore(t *testing.T) {
 		t.Errorf("expected 0 fetches for empty store, got %d", fetchCount)
 	}
 }
+
+func TestResolveAIA_CancelledContext(t *testing.T) {
+	// WHY: A cancelled context must propagate to the fetcher, producing a
+	// warning rather than hanging — ensures Ctrl+C during AIA resolution
+	// terminates promptly.
+	t.Parallel()
+
+	// Create a leaf with an AIA URL but no issuer in the store.
+	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "AIA Cancel CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	caBytes, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	caCert, _ := x509.ParseCertificate(caBytes)
+
+	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	leafTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(2),
+		Subject:               pkix.Name{CommonName: "cancel.example.com"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		IssuingCertificateURL: []string{"http://ca.example.com/issuer.cer"},
+		AuthorityKeyId:        caCert.SubjectKeyId,
+	}
+	leafBytes, _ := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
+	leafCert, _ := x509.ParseCertificate(leafBytes)
+
+	store := NewMemStore()
+	_ = store.HandleCertificate(leafCert, "test")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // cancel immediately
+
+	fetchCalled := false
+	fetcher := func(fctx context.Context, url string) ([]byte, error) {
+		fetchCalled = true
+		return nil, fctx.Err()
+	}
+
+	warnings := ResolveAIA(ctx, ResolveAIAInput{
+		Store: store,
+		Fetch: fetcher,
+	})
+
+	if !fetchCalled {
+		t.Error("fetcher should have been called")
+	}
+	if len(warnings) == 0 {
+		t.Error("expected at least one warning from cancelled fetch")
+	}
+}

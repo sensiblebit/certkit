@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fix WASM export ZIP files having unix epoch (1970-01-01) timestamps — use `CreateHeader` with current time instead of `Create` ([`273e806`])
+
 ## [0.7.6] - 2026-02-15
 
 ### Added
@@ -445,6 +449,7 @@ Initial release.
 [`6747351`]: https://github.com/sensiblebit/certkit/commit/6747351
 [`626a6db`]: https://github.com/sensiblebit/certkit/commit/626a6db
 [`c4a91cb`]: https://github.com/sensiblebit/certkit/commit/c4a91cb
+[`273e806`]: https://github.com/sensiblebit/certkit/commit/273e806
 [#24]: https://github.com/sensiblebit/certkit/pull/24
 [#25]: https://github.com/sensiblebit/certkit/pull/25
 [#26]: https://github.com/sensiblebit/certkit/pull/26

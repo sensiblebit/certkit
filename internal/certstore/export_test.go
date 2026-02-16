@@ -1,6 +1,7 @@
 package certstore
 
 import (
+	"crypto/ecdsa"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
@@ -764,11 +765,10 @@ func TestGenerateJSON_IPAddresses(t *testing.T) {
 	t.Parallel()
 
 	ca := newRSACA(t)
-
-	// Create a leaf with IP SANs. Use the helper then check JSON output.
-	leaf := newRSALeaf(t, ca, "ip.example.com", []string{"ip.example.com"})
-	// Manually add IP to the cert's IPAddresses field won't work since the cert
-	// is already signed. Instead, verify the SANs from the cert are in JSON.
+	leaf := newRSALeafWithIPSANs(t, ca, "ip.example.com",
+		[]string{"ip.example.com"},
+		[]net.IP{net.ParseIP("10.0.0.1"), net.ParseIP("::1")},
+	)
 
 	bundle := &certkit.BundleResult{Leaf: leaf.cert}
 
@@ -782,13 +782,30 @@ func TestGenerateJSON_IPAddresses(t *testing.T) {
 		t.Fatalf("invalid JSON: %v", err)
 	}
 
-	// Verify sans is an array (even if just DNS names)
 	sans, ok := result["sans"].([]any)
 	if !ok {
 		t.Fatal("sans should be an array")
 	}
-	if len(sans) == 0 {
-		t.Error("sans should not be empty for cert with DNS names")
+
+	// Expect 3 SANs: 1 DNS name + 2 IP addresses
+	if len(sans) != 3 {
+		t.Fatalf("expected 3 SANs (1 DNS + 2 IPs), got %d: %v", len(sans), sans)
+	}
+
+	// Collect all SAN strings for verification
+	sanStrings := make(map[string]bool)
+	for _, s := range sans {
+		str, ok := s.(string)
+		if !ok {
+			t.Fatalf("SAN entry is not a string: %T", s)
+		}
+		sanStrings[str] = true
+	}
+
+	for _, expected := range []string{"ip.example.com", "10.0.0.1", "::1"} {
+		if !sanStrings[expected] {
+			t.Errorf("expected SAN %q not found in %v", expected, sans)
+		}
 	}
 }
 
@@ -817,16 +834,25 @@ func TestGenerateBundleFiles_ECDSAKey(t *testing.T) {
 		t.Fatalf("GenerateBundleFiles with ECDSA: %v", err)
 	}
 
-	// Should still produce all expected files
-	if len(files) < 10 {
-		t.Errorf("expected at least 10 files, got %d", len(files))
+	// Without intermediates: 12 - 1 (no intermediates.pem) = 11 files
+	if len(files) != 11 {
+		t.Errorf("expected 11 files, got %d", len(files))
 	}
 
-	// Verify key file contains EC key
+	// Verify key file contains a parseable EC key that matches the original
 	for _, f := range files {
 		if f.Name == "ecdsa.key" {
-			if !strings.Contains(string(f.Data), "EC PRIVATE KEY") {
-				t.Error("key file should contain EC PRIVATE KEY PEM block")
+			parsed, err := certkit.ParsePEMPrivateKey(f.Data)
+			if err != nil {
+				t.Fatalf("parsing exported ECDSA key: %v", err)
+			}
+			ecKey, ok := parsed.(*ecdsa.PrivateKey)
+			if !ok {
+				t.Fatalf("expected *ecdsa.PrivateKey, got %T", parsed)
+			}
+			origKey := leaf.key.(*ecdsa.PrivateKey)
+			if !origKey.Equal(ecKey) {
+				t.Error("exported ECDSA key does not match original")
 			}
 		}
 	}

@@ -621,3 +621,99 @@ func TestEncodePKCS12Legacy_WithCAChain(t *testing.T) {
 		t.Error("legacy PKCS#12 key round-trip mismatch")
 	}
 }
+
+func TestEncodePKCS12Legacy_RSA(t *testing.T) {
+	// WHY: Legacy PKCS#12 (RC2 encryption) with RSA keys is the most common format encountered from older Windows/Java systems; round-trip proves compatibility.
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "legacy-rsa-p12-test"},
+		NotBefore:    time.Now().Add(-1 * time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	certBytes, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(certBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	password := "legacy-rsa-pass"
+	pfxData, err := EncodePKCS12Legacy(key, cert, nil, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pfxData) == 0 {
+		t.Fatal("empty PKCS#12 legacy data")
+	}
+
+	decodedKey, decodedCert, _, err := DecodePKCS12(pfxData, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !decodedCert.Equal(cert) {
+		t.Error("decoded certificate does not match original")
+	}
+	decodedRSAKey, ok := decodedKey.(*rsa.PrivateKey)
+	if !ok {
+		t.Fatalf("expected *rsa.PrivateKey, got %T", decodedKey)
+	}
+	if !key.Equal(decodedRSAKey) {
+		t.Error("decoded RSA private key does not match original")
+	}
+}
+
+func TestEncodePKCS12Legacy_Ed25519(t *testing.T) {
+	// WHY: Legacy PKCS#12 with Ed25519 keys validates that the legacy encoder handles PKCS#8-only key types correctly despite using older encryption algorithms.
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pub := priv.Public().(ed25519.PublicKey)
+
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "legacy-ed25519-p12-test"},
+		NotBefore:    time.Now().Add(-1 * time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	certBytes, err := x509.CreateCertificate(rand.Reader, template, template, pub, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(certBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	password := "legacy-ed-pass"
+	pfxData, err := EncodePKCS12Legacy(priv, cert, nil, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pfxData) == 0 {
+		t.Fatal("empty PKCS#12 legacy data")
+	}
+
+	decodedKey, decodedCert, _, err := DecodePKCS12(pfxData, password)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !decodedCert.Equal(cert) {
+		t.Error("decoded certificate does not match original")
+	}
+	edDecoded, ok := decodedKey.(ed25519.PrivateKey)
+	if !ok {
+		t.Fatalf("expected ed25519.PrivateKey, got %T", decodedKey)
+	}
+	if !priv.Equal(edDecoded) {
+		t.Error("decoded Ed25519 private key does not match original")
+	}
+}

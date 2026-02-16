@@ -821,6 +821,43 @@ func TestMemStore_DumpDebug(t *testing.T) {
 	store.DumpDebug() // populated — should not panic
 }
 
+func TestMemStore_HandleKey_Ed25519Pointer(t *testing.T) {
+	// WHY: ssh.ParseRawPrivateKey returns *ed25519.PrivateKey (pointer), not
+	// the value type. HandleKey has a special case for this; verifying it
+	// stores the correct key type and bit length.
+	t.Parallel()
+
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate Ed25519 key: %v", err)
+	}
+	// Create a pointer to the Ed25519 private key, mimicking ssh.ParseRawPrivateKey behavior
+	privPtr := &priv
+
+	store := NewMemStore()
+	keyPEMData := ed25519KeyPEM(t)
+
+	if err := store.HandleKey(privPtr, keyPEMData, "ed25519-ptr.pem"); err != nil {
+		t.Fatalf("HandleKey: %v", err)
+	}
+
+	keys := store.AllKeys()
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key, got %d", len(keys))
+	}
+	for _, rec := range keys {
+		if rec.KeyType != "Ed25519" {
+			t.Errorf("KeyType = %q, want Ed25519", rec.KeyType)
+		}
+		if rec.BitLength != 256 {
+			t.Errorf("BitLength = %d, want 256", rec.BitLength)
+		}
+		if rec.Source != "ed25519-ptr.pem" {
+			t.Errorf("Source = %q, want ed25519-ptr.pem", rec.Source)
+		}
+	}
+}
+
 // computeSKIHex computes the hex-encoded SKI from a certificate's public key.
 func computeSKIHex(t *testing.T, cert *x509.Certificate) string {
 	t.Helper()

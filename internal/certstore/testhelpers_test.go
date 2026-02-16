@@ -11,6 +11,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"net"
 	"testing"
 	"time"
 
@@ -269,6 +270,43 @@ func newJKSBundle(t *testing.T, leaf testLeaf, ca testCA, password string) []byt
 		t.Fatalf("store JKS: %v", err)
 	}
 	return buf.Bytes()
+}
+
+// newRSALeafWithIPSANs generates an RSA leaf certificate with both DNS and IP SANs.
+func newRSALeafWithIPSANs(t *testing.T, ca testCA, cn string, dnsNames []string, ips []net.IP) testLeaf {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate RSA leaf key: %v", err)
+	}
+
+	tmpl := &x509.Certificate{
+		SerialNumber:   big.NewInt(300),
+		Subject:        pkix.Name{CommonName: cn, Organization: []string{"TestOrg"}},
+		DNSNames:       dnsNames,
+		IPAddresses:    ips,
+		NotBefore:      time.Now().Add(-time.Hour),
+		NotAfter:       time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:       x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:    []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		AuthorityKeyId: ca.cert.SubjectKeyId,
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, ca.cert, &key.PublicKey, ca.key)
+	if err != nil {
+		t.Fatalf("create RSA leaf cert with IP SANs: %v", err)
+	}
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatalf("parse RSA leaf cert with IP SANs: %v", err)
+	}
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	keyPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	})
+	return testLeaf{cert: cert, certPEM: certPEM, certDER: certDER, key: key, keyPEM: keyPEM}
 }
 
 // rsaKeyPEM returns PEM-encoded RSA private key bytes.

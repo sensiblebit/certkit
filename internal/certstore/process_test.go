@@ -253,8 +253,8 @@ func TestProcessData_PKCS12_CorrectPassword(t *testing.T) {
 		t.Fatalf("ProcessData: %v", err)
 	}
 
-	if len(store.AllCerts()) < 1 {
-		t.Errorf("expected at least 1 cert from PKCS#12, got %d", len(store.AllCerts()))
+	if len(store.AllCerts()) != 2 {
+		t.Errorf("expected 2 certs from PKCS#12 (leaf + CA), got %d", len(store.AllCerts()))
 	}
 	if len(store.AllKeys()) != 1 {
 		t.Errorf("expected 1 key from PKCS#12, got %d", len(store.AllKeys()))
@@ -303,8 +303,8 @@ func TestProcessData_JKS(t *testing.T) {
 		t.Fatalf("ProcessData: %v", err)
 	}
 
-	if len(store.AllCerts()) < 1 {
-		t.Errorf("expected at least 1 cert from JKS, got %d", len(store.AllCerts()))
+	if len(store.AllCerts()) != 2 {
+		t.Errorf("expected 2 certs from JKS (leaf + CA), got %d", len(store.AllCerts()))
 	}
 	if len(store.AllKeys()) != 1 {
 		t.Errorf("expected 1 key from JKS, got %d", len(store.AllKeys()))
@@ -700,5 +700,87 @@ func TestProcessData_CertAndKeyInSamePEM(t *testing.T) {
 	matched := store.MatchedPairs()
 	if len(matched) != 1 {
 		t.Errorf("expected 1 matched pair, got %d", len(matched))
+	}
+}
+
+func TestProcessData_MalformedPEMCert(t *testing.T) {
+	// WHY: A PEM file with one valid cert and one malformed CERTIFICATE block
+	// must still ingest the valid cert — malformed blocks are skipped, not fatal.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "mixed.example.com", []string{"mixed.example.com"})
+
+	malformedBlock := pem.EncodeToMemory(&pem.Block{
+		Type:  "CERTIFICATE",
+		Bytes: []byte("this is not valid DER"),
+	})
+	combined := append(leaf.certPEM, malformedBlock...)
+
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{
+		Data:    combined,
+		Path:    "mixed.pem",
+		Handler: store,
+	}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	if len(store.AllCerts()) != 1 {
+		t.Errorf("expected 1 cert (valid one ingested, malformed skipped), got %d", len(store.AllCerts()))
+	}
+}
+
+func TestProcessData_PKCS12_NilPasswords(t *testing.T) {
+	// WHY: Encrypted PKCS#12 with nil password list must not panic or extract
+	// data — the PKCS#12 loop iterates passwords, so nil means zero attempts.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "nilpw.example.com", []string{"nilpw.example.com"})
+	p12Data := newPKCS12Bundle(t, leaf, ca, "secret")
+
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{
+		Data:      p12Data,
+		Path:      "bundle.p12",
+		Passwords: nil,
+		Handler:   store,
+	}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	if len(store.AllCerts()) != 0 {
+		t.Errorf("expected 0 certs with nil passwords, got %d", len(store.AllCerts()))
+	}
+	if len(store.AllKeys()) != 0 {
+		t.Errorf("expected 0 keys with nil passwords, got %d", len(store.AllKeys()))
+	}
+}
+
+func TestProcessData_JKS_WrongPassword(t *testing.T) {
+	// WHY: JKS with the wrong password must be silently skipped, leaving the
+	// store empty — no partial extraction or errors should leak through.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "jkswrong.example.com", []string{"jkswrong.example.com"})
+	jksData := newJKSBundle(t, leaf, ca, "correctpw")
+	store := NewMemStore()
+
+	if err := ProcessData(ProcessInput{
+		Data:      jksData,
+		Path:      "store.jks",
+		Passwords: []string{"wrongpw"},
+		Handler:   store,
+	}); err != nil {
+		t.Fatalf("ProcessData should not error: %v", err)
+	}
+
+	if len(store.AllCerts()) != 0 {
+		t.Errorf("expected 0 certs with wrong JKS password, got %d", len(store.AllCerts()))
+	}
+	if len(store.AllKeys()) != 0 {
+		t.Errorf("expected 0 keys with wrong JKS password, got %d", len(store.AllKeys()))
 	}
 }
