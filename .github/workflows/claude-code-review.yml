@@ -25,9 +25,12 @@ jobs:
           if gh -R ${{ github.repository }} pr diff ${{ github.event.pull_request.number }} --name-only | grep -q '^\.github/workflows/claude-code-review\.yml$'; then
             echo "skip=true" >> "$GITHUB_OUTPUT"
             echo "::notice::Skipping Claude review — workflow file was modified (OAuth validation will fail)"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Minimize previous review comments
+        if: steps.check.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -51,9 +54,11 @@ jobs:
           gh -R ${{ github.repository }} pr comment ${{ github.event.pull_request.number }} \
             --body "## Code review
 
-          Skipped — this PR modifies \`claude-code-review.yml\`. The OAuth token exchange requires the workflow file to match the default branch, so the review cannot run until this change is merged.
+          ⏭️ **Skipped** — This PR modifies \`claude-code-review.yml\`.
 
-          @copilot please review this pull request."
+          The Claude Code Action OAuth flow validates that the workflow file matches the default branch exactly. PRs that modify this file will always fail the OAuth validation until merged.
+
+          Manual review or alternative review tools should be used for this change."
 
       - name: Checkout repository
         if: steps.check.outputs.skip != 'true'

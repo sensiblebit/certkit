@@ -26,6 +26,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `require_tool()` guard in `checks.py` for `go`, `gh` — gives clear errors when tools are missing locally
 - Add Claude Code automatic PR review and `@claude` mention workflows
 - Add Copilot review instructions (`.github/copilot-instructions.md`) with project coding standards
+- Add early skip check to Claude Code review workflow when `claude-code-review.yml` is modified to avoid OAuth validation failures ([`999d988`])
 
 ### Tests
 
@@ -544,6 +545,7 @@ Initial release.
 [`a62908f`]: https://github.com/sensiblebit/certkit/commit/a62908f
 [`55b5c1e`]: https://github.com/sensiblebit/certkit/commit/55b5c1e
 [`8cf81d9`]: https://github.com/sensiblebit/certkit/commit/8cf81d9
+[`999d988`]: https://github.com/sensiblebit/certkit/commit/999d988
 [#24]: https://github.com/sensiblebit/certkit/pull/24
 [#25]: https://github.com/sensiblebit/certkit/pull/25
 [#26]: https://github.com/sensiblebit/certkit/pull/26
