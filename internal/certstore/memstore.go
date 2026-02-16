@@ -7,6 +7,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -66,6 +67,9 @@ func NewMemStore() *MemStore {
 // uses. Multiple certificates with the same SKI but different serials (key
 // reuse across renewals) are all retained.
 func (s *MemStore) HandleCertificate(cert *x509.Certificate, source string) error {
+	if cert == nil {
+		return errors.New("certificate is nil")
+	}
 	rawSKI, err := certkit.ComputeSKI(cert.PublicKey)
 	if err != nil {
 		return fmt.Errorf("computing SKI: %w", err)
@@ -94,7 +98,15 @@ func (s *MemStore) HandleCertificate(cert *x509.Certificate, source string) erro
 }
 
 // HandleKey computes the SKI and stores the private key with its PEM encoding.
+// Normalizes *ed25519.PrivateKey (pointer form from ssh.ParseRawPrivateKey) to
+// the value form before computing the SKI and storing, so downstream type
+// switches only need one case.
 func (s *MemStore) HandleKey(key any, pemData []byte, source string) error {
+	// Normalize before any operations so all downstream code sees canonical types.
+	if ptr, ok := key.(*ed25519.PrivateKey); ok {
+		key = *ptr
+	}
+
 	pub, err := certkit.GetPublicKey(key)
 	if err != nil {
 		return fmt.Errorf("extracting public key: %w", err)
@@ -104,12 +116,6 @@ func (s *MemStore) HandleKey(key any, pemData []byte, source string) error {
 		return fmt.Errorf("computing SKI: %w", err)
 	}
 	ski := hex.EncodeToString(rawSKI)
-
-	// Normalize *ed25519.PrivateKey (pointer form from ssh.ParseRawPrivateKey)
-	// to the value form so downstream type switches don't need both cases.
-	if ptr, ok := key.(*ed25519.PrivateKey); ok {
-		key = *ptr
-	}
 
 	rec := &KeyRecord{
 		Key:    key,

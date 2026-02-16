@@ -18,6 +18,7 @@ import (
 
 func TestEncodePKCS12_withChain(t *testing.T) {
 	// WHY: PKCS#12 bundles with CA chains are the primary export format for Java/Windows; the chain must survive encoding and decode correctly.
+	t.Parallel()
 	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	caTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
@@ -68,6 +69,7 @@ func TestEncodePKCS12_withChain(t *testing.T) {
 
 func TestEncodePKCS12_unsupportedKeyType(t *testing.T) {
 	// WHY: Unsupported key types must produce a clear error, not panic; callers pass untyped crypto.PrivateKey from various decoders.
+	t.Parallel()
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
@@ -87,99 +89,136 @@ func TestEncodePKCS12_unsupportedKeyType(t *testing.T) {
 	}
 }
 
-func TestDecodePKCS12_roundTrip(t *testing.T) {
-	// WHY: Encode-then-decode round-trip proves PKCS#12 encoding preserves key material, cert identity, and produces no CA certs for a standalone bundle.
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "decode-p12-test"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	cert, _ := x509.ParseCertificate(certBytes)
+func TestEncodePKCS12_RoundTrip_AllKeyTypes(t *testing.T) {
+	// WHY: PKCS#12 round-trip must preserve key material and cert identity for all supported
+	// key types (RSA, ECDSA P-256/P-384/P-521, Ed25519). Different key types use different
+	// PKCS#8 OIDs and encoding paths; a curve-dependent or type-dependent bug would be
+	// invisible without complete coverage.
+	t.Parallel()
 
-	password := "test-pass"
-	pfxData, err := EncodePKCS12(key, cert, nil, password)
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name    string
+		genKey  func(t *testing.T) (any, any) // returns (privateKey, publicKey)
+		checkEq func(t *testing.T, original, decoded any)
+	}{
+		{
+			name: "ECDSA-P256",
+			genKey: func(t *testing.T) (any, any) {
+				t.Helper()
+				k, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				return k, &k.PublicKey
+			},
+			checkEq: func(t *testing.T, original, decoded any) {
+				t.Helper()
+				if !original.(*ecdsa.PrivateKey).Equal(decoded) {
+					t.Error("key mismatch")
+				}
+			},
+		},
+		{
+			name: "RSA",
+			genKey: func(t *testing.T) (any, any) {
+				t.Helper()
+				k, err := rsa.GenerateKey(rand.Reader, 2048)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return k, &k.PublicKey
+			},
+			checkEq: func(t *testing.T, original, decoded any) {
+				t.Helper()
+				if !original.(*rsa.PrivateKey).Equal(decoded) {
+					t.Error("key mismatch")
+				}
+			},
+		},
+		{
+			name: "Ed25519",
+			genKey: func(t *testing.T) (any, any) {
+				t.Helper()
+				_, priv, err := ed25519.GenerateKey(rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return priv, priv.Public()
+			},
+			checkEq: func(t *testing.T, original, decoded any) {
+				t.Helper()
+				if !original.(ed25519.PrivateKey).Equal(decoded) {
+					t.Error("key mismatch")
+				}
+			},
+		},
+		{
+			name: "ECDSA-P384",
+			genKey: func(t *testing.T) (any, any) {
+				t.Helper()
+				k, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+				return k, &k.PublicKey
+			},
+			checkEq: func(t *testing.T, original, decoded any) {
+				t.Helper()
+				if !original.(*ecdsa.PrivateKey).Equal(decoded) {
+					t.Error("key mismatch")
+				}
+			},
+		},
+		{
+			name: "ECDSA-P521",
+			genKey: func(t *testing.T) (any, any) {
+				t.Helper()
+				k, _ := ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
+				return k, &k.PublicKey
+			},
+			checkEq: func(t *testing.T, original, decoded any) {
+				t.Helper()
+				if !original.(*ecdsa.PrivateKey).Equal(decoded) {
+					t.Error("key mismatch")
+				}
+			},
+		},
 	}
 
-	decodedKey, decodedCert, caCerts, err := DecodePKCS12(pfxData, password)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if decodedCert.Subject.CommonName != "decode-p12-test" {
-		t.Errorf("CN=%q, want decode-p12-test", decodedCert.Subject.CommonName)
-	}
-	decodedECKey, ok := decodedKey.(*ecdsa.PrivateKey)
-	if !ok {
-		t.Fatalf("expected *ecdsa.PrivateKey, got %T", decodedKey)
-	}
-	if !key.Equal(decodedECKey) {
-		t.Error("decoded private key does not match original")
-	}
-	if !decodedCert.Equal(cert) {
-		t.Error("decoded certificate does not match original")
-	}
-	if len(caCerts) != 0 {
-		t.Errorf("expected 0 CA certs, got %d", len(caCerts))
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			key, pub := tt.genKey(t)
+			template := &x509.Certificate{
+				SerialNumber: big.NewInt(1),
+				Subject:      pkix.Name{CommonName: tt.name + "-p12-test"},
+				NotBefore:    time.Now().Add(-1 * time.Hour),
+				NotAfter:     time.Now().Add(24 * time.Hour),
+				KeyUsage:     x509.KeyUsageDigitalSignature,
+			}
+			certBytes, err := x509.CreateCertificate(rand.Reader, template, template, pub, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cert, _ := x509.ParseCertificate(certBytes)
 
-func TestDecodePKCS12_withChain(t *testing.T) {
-	// WHY: PKCS#12 with CA chain must decode both the leaf and CA certs; missing CA certs would break chain-of-trust verification after import.
-	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	caTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "Decode P12 CA"},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-	}
-	caBytes, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
-	caCert, _ := x509.ParseCertificate(caBytes)
+			pfxData, err := EncodePKCS12(key, cert, nil, "test-pass")
+			if err != nil {
+				t.Fatalf("EncodePKCS12: %v", err)
+			}
 
-	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	leafTemplate := &x509.Certificate{
-		SerialNumber: big.NewInt(2),
-		Subject:      pkix.Name{CommonName: "decode-p12-leaf"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	leafBytes, _ := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
-	leafCert, _ := x509.ParseCertificate(leafBytes)
-
-	pfxData, err := EncodePKCS12(leafKey, leafCert, []*x509.Certificate{caCert}, "pass")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	decodedKey, decodedCert, decodedCAs, err := DecodePKCS12(pfxData, "pass")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if decodedCert.Subject.CommonName != "decode-p12-leaf" {
-		t.Errorf("leaf CN=%q", decodedCert.Subject.CommonName)
-	}
-	if len(decodedCAs) != 1 {
-		t.Errorf("expected 1 CA cert, got %d", len(decodedCAs))
-	}
-	decodedECKey, ok := decodedKey.(*ecdsa.PrivateKey)
-	if !ok {
-		t.Fatalf("expected *ecdsa.PrivateKey, got %T", decodedKey)
-	}
-	if !leafKey.Equal(decodedECKey) {
-		t.Error("decoded key does not match original")
+			decodedKey, decodedCert, caCerts, err := DecodePKCS12(pfxData, "test-pass")
+			if err != nil {
+				t.Fatalf("DecodePKCS12: %v", err)
+			}
+			if !decodedCert.Equal(cert) {
+				t.Error("decoded certificate does not match original")
+			}
+			if len(caCerts) != 0 {
+				t.Errorf("expected 0 CA certs, got %d", len(caCerts))
+			}
+			tt.checkEq(t, key, decodedKey)
+		})
 	}
 }
 
 func TestDecodePKCS12_invalidData(t *testing.T) {
 	// WHY: Non-PKCS#12 data must produce a "decoding PKCS#12" error, not a generic ASN.1 message; users need to know the format was wrong.
+	t.Parallel()
 	_, _, _, err := DecodePKCS12([]byte("not pkcs12"), "pass")
 	if err == nil {
 		t.Error("expected error for invalid PKCS#12 data")
@@ -191,6 +230,7 @@ func TestDecodePKCS12_invalidData(t *testing.T) {
 
 func TestDecodePKCS12_wrongPassword(t *testing.T) {
 	// WHY: Wrong passwords must produce an error, not silently return garbage or a zero-value key; this guards against data corruption on import.
+	t.Parallel()
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
@@ -234,6 +274,7 @@ func TestEncodePKCS7_EmptyInput(t *testing.T) {
 
 func TestDecodePKCS7_roundTrip(t *testing.T) {
 	// WHY: PKCS#7 round-trip must preserve all certs in order with byte-exact equality; any loss breaks chain assembly from .p7b files.
+	t.Parallel()
 	caPEM, intPEM, leafPEM := generateTestPKI(t)
 	ca, _ := ParsePEMCertificate([]byte(caPEM))
 	intermediate, _ := ParsePEMCertificate([]byte(intPEM))
@@ -262,46 +303,139 @@ func TestDecodePKCS7_roundTrip(t *testing.T) {
 	}
 }
 
-func TestEncodePKCS12Legacy_roundTrip(t *testing.T) {
-	// WHY: Legacy PKCS#12 (RC2 encryption) is needed for older Java/Windows compatibility; round-trip proves the legacy encoder produces decodable output.
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "legacy-p12-test"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	cert, _ := x509.ParseCertificate(certBytes)
+func TestEncodePKCS12Legacy_RoundTrip_AllKeyTypes(t *testing.T) {
+	// WHY: Legacy PKCS#12 (RC2 encryption) round-trip must preserve key material and cert identity
+	// for all supported key types (RSA, ECDSA P-256/P-384/P-521, Ed25519). The legacy encoder uses
+	// different encryption algorithms than the modern encoder; a key-type-specific encoding bug
+	// would only surface with complete coverage.
+	t.Parallel()
 
-	password := "legacy-pass"
-	pfxData, err := EncodePKCS12Legacy(key, cert, nil, password)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(pfxData) == 0 {
-		t.Fatal("empty PKCS#12 legacy data")
+	tests := []struct {
+		name    string
+		genKey  func(t *testing.T) (any, any) // returns (privateKey, publicKey)
+		checkEq func(t *testing.T, original, decoded any)
+	}{
+		{
+			name: "ECDSA-P256",
+			genKey: func(t *testing.T) (any, any) {
+				t.Helper()
+				k, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				return k, &k.PublicKey
+			},
+			checkEq: func(t *testing.T, original, decoded any) {
+				t.Helper()
+				if !original.(*ecdsa.PrivateKey).Equal(decoded) {
+					t.Error("key mismatch")
+				}
+			},
+		},
+		{
+			name: "RSA",
+			genKey: func(t *testing.T) (any, any) {
+				t.Helper()
+				k, err := rsa.GenerateKey(rand.Reader, 2048)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return k, &k.PublicKey
+			},
+			checkEq: func(t *testing.T, original, decoded any) {
+				t.Helper()
+				if !original.(*rsa.PrivateKey).Equal(decoded) {
+					t.Error("key mismatch")
+				}
+			},
+		},
+		{
+			name: "Ed25519",
+			genKey: func(t *testing.T) (any, any) {
+				t.Helper()
+				_, priv, err := ed25519.GenerateKey(rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return priv, priv.Public()
+			},
+			checkEq: func(t *testing.T, original, decoded any) {
+				t.Helper()
+				if !original.(ed25519.PrivateKey).Equal(decoded) {
+					t.Error("key mismatch")
+				}
+			},
+		},
+		{
+			name: "ECDSA-P384",
+			genKey: func(t *testing.T) (any, any) {
+				t.Helper()
+				k, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+				return k, &k.PublicKey
+			},
+			checkEq: func(t *testing.T, original, decoded any) {
+				t.Helper()
+				if !original.(*ecdsa.PrivateKey).Equal(decoded) {
+					t.Error("key mismatch")
+				}
+			},
+		},
+		{
+			name: "ECDSA-P521",
+			genKey: func(t *testing.T) (any, any) {
+				t.Helper()
+				k, _ := ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
+				return k, &k.PublicKey
+			},
+			checkEq: func(t *testing.T, original, decoded any) {
+				t.Helper()
+				if !original.(*ecdsa.PrivateKey).Equal(decoded) {
+					t.Error("key mismatch")
+				}
+			},
+		},
 	}
 
-	decodedKey, decodedCert, _, err := DecodePKCS12(pfxData, password)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !decodedCert.Equal(cert) {
-		t.Error("decoded certificate does not match original")
-	}
-	decodedECKey, ok := decodedKey.(*ecdsa.PrivateKey)
-	if !ok {
-		t.Fatalf("expected *ecdsa.PrivateKey, got %T", decodedKey)
-	}
-	if !key.Equal(decodedECKey) {
-		t.Error("decoded private key does not match original")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			key, pub := tt.genKey(t)
+			template := &x509.Certificate{
+				SerialNumber: big.NewInt(1),
+				Subject:      pkix.Name{CommonName: tt.name + "-legacy-p12-test"},
+				NotBefore:    time.Now().Add(-1 * time.Hour),
+				NotAfter:     time.Now().Add(24 * time.Hour),
+				KeyUsage:     x509.KeyUsageDigitalSignature,
+			}
+			certBytes, err := x509.CreateCertificate(rand.Reader, template, template, pub, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cert, _ := x509.ParseCertificate(certBytes)
+
+			pfxData, err := EncodePKCS12Legacy(key, cert, nil, "test-pass")
+			if err != nil {
+				t.Fatalf("EncodePKCS12Legacy: %v", err)
+			}
+			if len(pfxData) == 0 {
+				t.Fatal("empty PKCS#12 legacy data")
+			}
+
+			decodedKey, decodedCert, caCerts, err := DecodePKCS12(pfxData, "test-pass")
+			if err != nil {
+				t.Fatalf("DecodePKCS12: %v", err)
+			}
+			if !decodedCert.Equal(cert) {
+				t.Error("decoded certificate does not match original")
+			}
+			if len(caCerts) != 0 {
+				t.Errorf("expected 0 CA certs, got %d", len(caCerts))
+			}
+			tt.checkEq(t, key, decodedKey)
+		})
 	}
 }
 
 func TestDecodePKCS7_invalidData(t *testing.T) {
 	// WHY: Non-PKCS#7 data must produce a "parsing PKCS#7" error; without this, the ingestion pipeline cannot distinguish format from corruption errors.
+	t.Parallel()
 	_, err := DecodePKCS7([]byte("not pkcs7"))
 	if err == nil {
 		t.Error("expected error for invalid PKCS#7 data")
@@ -311,98 +445,9 @@ func TestDecodePKCS7_invalidData(t *testing.T) {
 	}
 }
 
-func TestEncodePKCS12_RSA(t *testing.T) {
-	// WHY: PKCS#12 with RSA keys must round-trip correctly; RSA is the most common key type in PKCS#12 files from Windows and Java.
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "rsa-pkcs12-test"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	certBytes, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cert, err := x509.ParseCertificate(certBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	password := "rsa-pass"
-	pfxData, err := EncodePKCS12(key, cert, nil, password)
-	if err != nil {
-		t.Fatalf("EncodePKCS12 with RSA key: %v", err)
-	}
-
-	decodedKey, decodedCert, _, err := DecodePKCS12(pfxData, password)
-	if err != nil {
-		t.Fatalf("DecodePKCS12 round-trip: %v", err)
-	}
-	if decodedCert.Subject.CommonName != "rsa-pkcs12-test" {
-		t.Errorf("CN=%q, want rsa-pkcs12-test", decodedCert.Subject.CommonName)
-	}
-	rsaDecoded, ok := decodedKey.(*rsa.PrivateKey)
-	if !ok {
-		t.Fatalf("expected *rsa.PrivateKey, got %T", decodedKey)
-	}
-	if !key.Equal(rsaDecoded) {
-		t.Error("RSA key round-trip mismatch")
-	}
-}
-
-func TestEncodePKCS12_Ed25519(t *testing.T) {
-	// WHY: PKCS#12 with Ed25519 keys must round-trip correctly; Ed25519 requires PKCS#8 encoding which differs from RSA/ECDSA paths.
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pub := priv.Public().(ed25519.PublicKey)
-
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "ed25519-pkcs12-test"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	certBytes, err := x509.CreateCertificate(rand.Reader, template, template, pub, priv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cert, err := x509.ParseCertificate(certBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	password := "ed-pass"
-	pfxData, err := EncodePKCS12(priv, cert, nil, password)
-	if err != nil {
-		t.Fatalf("EncodePKCS12 with Ed25519 key: %v", err)
-	}
-
-	decodedKey, decodedCert, _, err := DecodePKCS12(pfxData, password)
-	if err != nil {
-		t.Fatalf("DecodePKCS12 round-trip: %v", err)
-	}
-	if decodedCert.Subject.CommonName != "ed25519-pkcs12-test" {
-		t.Errorf("CN=%q, want ed25519-pkcs12-test", decodedCert.Subject.CommonName)
-	}
-	edDecoded, ok := decodedKey.(ed25519.PrivateKey)
-	if !ok {
-		t.Fatalf("expected ed25519.PrivateKey, got %T", decodedKey)
-	}
-	if !priv.Equal(edDecoded) {
-		t.Error("Ed25519 key round-trip mismatch")
-	}
-}
-
 func TestEncodePKCS12_EmptyPassword(t *testing.T) {
 	// WHY: Empty-password PKCS#12 files are common in development; the encoder must handle the empty string without error.
+	t.Parallel()
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
@@ -437,6 +482,7 @@ func TestEncodePKCS12_EmptyPassword(t *testing.T) {
 
 func TestEncodePKCS12_MultiCertChain(t *testing.T) {
 	// WHY: Multi-level chains (root + intermediate + leaf) must all survive PKCS#12 encoding; missing intermediates would break TLS verification.
+	t.Parallel()
 	// Create root CA
 	rootKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	rootTemplate := &x509.Certificate{
@@ -504,6 +550,7 @@ func TestEncodePKCS12_MultiCertChain(t *testing.T) {
 
 func TestEncodePKCS12Legacy_UnsupportedKey(t *testing.T) {
 	// WHY: The legacy encoder must reject unsupported key types with a clear error, matching the behavior of the modern encoder.
+	t.Parallel()
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
@@ -525,6 +572,7 @@ func TestEncodePKCS12Legacy_UnsupportedKey(t *testing.T) {
 
 func TestDecodePKCS12_TruncatedData(t *testing.T) {
 	// WHY: Truncated PKCS#12 data (e.g., incomplete download) must produce an error, not return partial or corrupt key/cert material.
+	t.Parallel()
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
@@ -550,6 +598,7 @@ func TestDecodePKCS12_TruncatedData(t *testing.T) {
 
 func TestEncodePKCS7_SingleCert(t *testing.T) {
 	// WHY: Single-cert PKCS#7 is the simplest case; verifies the encoder works without a chain and the round-trip preserves cert identity.
+	t.Parallel()
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
@@ -579,6 +628,7 @@ func TestEncodePKCS7_SingleCert(t *testing.T) {
 
 func TestDecodePKCS7_EmptyPKCS7(t *testing.T) {
 	// WHY: A PKCS#7 container with no certificates must produce a "no certificates" error, not return an empty slice that callers would silently accept.
+	t.Parallel()
 	// EncodePKCS7 rejects empty input, so we try to create a degenerate PKCS#7
 	// with no certificates using the underlying library directly.
 	derData, err := smPkcs7.DegenerateCertificate([]byte{})
@@ -600,6 +650,7 @@ func TestEncodePKCS12Legacy_WithCAChain(t *testing.T) {
 	// WHY: EncodePKCS12Legacy with intermediates was untested — only the nil
 	// CA certs path was covered. This ensures the legacy RC2 encoder correctly
 	// includes CA certs in the bundle and they survive a round-trip decode.
+	t.Parallel()
 	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	caTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
@@ -658,98 +709,185 @@ func TestEncodePKCS12Legacy_WithCAChain(t *testing.T) {
 	}
 }
 
-func TestEncodePKCS12Legacy_RSA(t *testing.T) {
-	// WHY: Legacy PKCS#12 (RC2 encryption) with RSA keys is the most common format encountered from older Windows/Java systems; round-trip proves compatibility.
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestEncodePKCS12Legacy_EmptyPassword(t *testing.T) {
+	// WHY: Empty-password legacy PKCS#12 is common in development; the legacy RC2
+	// cipher may handle empty passwords differently from the modern encoder.
+	t.Parallel()
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "legacy-rsa-p12-test"},
+		Subject:      pkix.Name{CommonName: "legacy-empty-pass"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 	}
-	certBytes, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	cert, _ := x509.ParseCertificate(certBytes)
+
+	pfxData, err := EncodePKCS12Legacy(key, cert, nil, "")
 	if err != nil {
-		t.Fatal(err)
-	}
-	cert, err := x509.ParseCertificate(certBytes)
-	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("EncodePKCS12Legacy with empty password: %v", err)
 	}
 
-	password := "legacy-rsa-pass"
-	pfxData, err := EncodePKCS12Legacy(key, cert, nil, password)
+	decodedKey, decodedCert, _, err := DecodePKCS12(pfxData, "")
 	if err != nil {
-		t.Fatal(err)
-	}
-	if len(pfxData) == 0 {
-		t.Fatal("empty PKCS#12 legacy data")
-	}
-
-	decodedKey, decodedCert, _, err := DecodePKCS12(pfxData, password)
-	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("DecodePKCS12 with empty password: %v", err)
 	}
 	if !decodedCert.Equal(cert) {
 		t.Error("decoded certificate does not match original")
 	}
-	decodedRSAKey, ok := decodedKey.(*rsa.PrivateKey)
+	ecDecoded, ok := decodedKey.(*ecdsa.PrivateKey)
 	if !ok {
-		t.Fatalf("expected *rsa.PrivateKey, got %T", decodedKey)
+		t.Fatalf("expected *ecdsa.PrivateKey, got %T", decodedKey)
 	}
-	if !key.Equal(decodedRSAKey) {
-		t.Error("decoded RSA private key does not match original")
+	if !key.Equal(ecDecoded) {
+		t.Error("legacy empty-password PKCS#12 key round-trip mismatch")
 	}
 }
 
-func TestEncodePKCS12Legacy_Ed25519(t *testing.T) {
-	// WHY: Legacy PKCS#12 with Ed25519 keys validates that the legacy encoder handles PKCS#8-only key types correctly despite using older encryption algorithms.
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pub := priv.Public().(ed25519.PublicKey)
-
+func TestEncodePKCS12_NilPrivateKey(t *testing.T) {
+	// WHY: Nil private key must fail gracefully with clear error, not panic in validatePKCS12KeyType or normalizeKey.
+	t.Parallel()
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "legacy-ed25519-p12-test"},
+		Subject:      pkix.Name{CommonName: "nil-key-test"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 	}
-	certBytes, err := x509.CreateCertificate(rand.Reader, template, template, pub, priv)
-	if err != nil {
-		t.Fatal(err)
+	// Create cert with temporary key, but pass nil to encoder
+	tempKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &tempKey.PublicKey, tempKey)
+	cert, _ := x509.ParseCertificate(certBytes)
+
+	_, err := EncodePKCS12(nil, cert, nil, "pass")
+	if err == nil {
+		t.Fatal("expected error with nil private key")
 	}
-	cert, err := x509.ParseCertificate(certBytes)
+	if !strings.Contains(err.Error(), "unsupported") && !strings.Contains(err.Error(), "key") {
+		t.Errorf("error should mention key type, got: %v", err)
+	}
+}
+
+func TestEncodePKCS12_NilLeafCertificate(t *testing.T) {
+	// WHY: Nil leaf certificate must fail gracefully with clear error, not panic.
+	t.Parallel()
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+
+	_, err := EncodePKCS12(key, nil, nil, "pass")
+	if err == nil {
+		t.Fatal("expected error with nil leaf certificate")
+	}
+	if !strings.Contains(err.Error(), "certificate") && !strings.Contains(err.Error(), "nil") {
+		t.Errorf("error should mention certificate or nil, got: %v", err)
+	}
+}
+
+func TestEncodePKCS12_ExpiredCertificate(t *testing.T) {
+	// WHY: Expired certificates must be encodable to PKCS#12 per design doc (expiry filtering is export-only).
+	t.Parallel()
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	expiredTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "expired.example.com"},
+		NotBefore:    time.Now().Add(-365 * 24 * time.Hour),
+		NotAfter:     time.Now().Add(-1 * time.Hour), // Expired 1 hour ago
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	certBytes, _ := x509.CreateCertificate(rand.Reader, expiredTemplate, expiredTemplate, &key.PublicKey, key)
+	cert, _ := x509.ParseCertificate(certBytes)
+
+	pfxData, err := EncodePKCS12(key, cert, nil, "pass")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("EncodePKCS12 should succeed with expired cert: %v", err)
 	}
 
-	password := "legacy-ed-pass"
-	pfxData, err := EncodePKCS12Legacy(priv, cert, nil, password)
+	// Verify round-trip preserves expired status
+	_, decodedCert, _, err := DecodePKCS12(pfxData, "pass")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("DecodePKCS12: %v", err)
 	}
-	if len(pfxData) == 0 {
-		t.Fatal("empty PKCS#12 legacy data")
+	if time.Now().Before(decodedCert.NotAfter) {
+		t.Error("decoded cert should be expired")
+	}
+}
+
+func TestEncodePKCS12Legacy_NilPrivateKey(t *testing.T) {
+	// WHY: Nil private key must fail gracefully with clear error, not panic.
+	// EncodePKCS12 has TestEncodePKCS12_NilPrivateKey; legacy encoder needs parity.
+	t.Parallel()
+
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "nil-key-legacy"},
+		NotBefore:    time.Now().Add(-1 * time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	tempKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &tempKey.PublicKey, tempKey)
+	cert, _ := x509.ParseCertificate(certBytes)
+
+	_, err := EncodePKCS12Legacy(nil, cert, nil, "pass")
+	if err == nil {
+		t.Fatal("expected error with nil private key")
+	}
+	if !strings.Contains(err.Error(), "unsupported") && !strings.Contains(err.Error(), "key") {
+		t.Errorf("error should mention key type, got: %v", err)
+	}
+}
+
+func TestEncodePKCS12Legacy_NilLeafCertificate(t *testing.T) {
+	// WHY: Nil leaf certificate must fail gracefully with clear error, not panic.
+	// EncodePKCS12 has TestEncodePKCS12_NilLeafCertificate; legacy encoder needs parity.
+	t.Parallel()
+
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+
+	_, err := EncodePKCS12Legacy(key, nil, nil, "pass")
+	if err == nil {
+		t.Fatal("expected error with nil leaf certificate")
+	}
+	if !strings.Contains(err.Error(), "certificate") && !strings.Contains(err.Error(), "nil") {
+		t.Errorf("error should mention certificate or nil, got: %v", err)
+	}
+}
+
+func TestEncodePKCS12_KeyCertMismatch(t *testing.T) {
+	// WHY: Documents that EncodePKCS12 does not validate key/cert match - validation is caller's responsibility.
+	t.Parallel()
+	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	ecdsaKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+
+	// Create cert for ECDSA key
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "mismatch-test"},
+		NotBefore:    time.Now().Add(-1 * time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &ecdsaKey.PublicKey, ecdsaKey)
+	cert, _ := x509.ParseCertificate(certBytes)
+
+	// Encode with mismatched RSA key
+	pfxData, err := EncodePKCS12(rsaKey, cert, nil, "pass")
+	if err != nil {
+		t.Fatalf("EncodePKCS12 with key/cert mismatch: %v (library does not validate match)", err)
 	}
 
-	decodedKey, decodedCert, _, err := DecodePKCS12(pfxData, password)
+	// Decode succeeds but key won't match cert
+	decodedKey, decodedCert, _, err := DecodePKCS12(pfxData, "pass")
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("DecodePKCS12: %v", err)
 	}
-	if !decodedCert.Equal(cert) {
-		t.Error("decoded certificate does not match original")
+
+	// Verify mismatch
+	matches, err := KeyMatchesCert(decodedKey, decodedCert)
+	if err != nil {
+		t.Fatalf("KeyMatchesCert: %v", err)
 	}
-	edDecoded, ok := decodedKey.(ed25519.PrivateKey)
-	if !ok {
-		t.Fatalf("expected ed25519.PrivateKey, got %T", decodedKey)
-	}
-	if !priv.Equal(edDecoded) {
-		t.Error("decoded Ed25519 private key does not match original")
+	if matches {
+		t.Error("KeyMatchesCert should return false for mismatched key/cert")
 	}
 }

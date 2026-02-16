@@ -107,7 +107,7 @@ func ParsePEMPrivateKey(pemData []byte) (crypto.PrivateKey, error) {
 		return x509.ParseECPrivateKey(block.Bytes)
 	case "PRIVATE KEY":
 		if key, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
-			return key, nil
+			return normalizeKey(key), nil
 		}
 		// Fall back: some tools (e.g., pkcs12.ToPEM) label PKCS#1 keys as "PRIVATE KEY"
 		if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
@@ -462,6 +462,9 @@ func GetPublicKey(priv crypto.PrivateKey) (crypto.PublicKey, error) {
 // in a certificate. Uses the Equal method available on all standard public key
 // types since Go 1.20, which handles cross-type mismatches by returning false.
 func KeyMatchesCert(priv crypto.PrivateKey, cert *x509.Certificate) (bool, error) {
+	if cert == nil {
+		return false, errors.New("certificate is nil")
+	}
 	pub, err := GetPublicKey(priv)
 	if err != nil {
 		return false, err
@@ -528,6 +531,9 @@ func GenerateRSAKey(bits int) (*rsa.PrivateKey, error) {
 
 // GenerateECKey generates a new ECDSA private key on the given curve.
 func GenerateECKey(curve elliptic.Curve) (*ecdsa.PrivateKey, error) {
+	if curve == nil {
+		return nil, errors.New("generating EC key: curve cannot be nil")
+	}
 	key, err := ecdsa.GenerateKey(curve, rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("generating EC key: %w", err)

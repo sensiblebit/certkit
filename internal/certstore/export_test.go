@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
@@ -154,6 +155,52 @@ func TestGenerateBundleFiles_NoRoot(t *testing.T) {
 	if string(chainData) != string(fullchainData) {
 		t.Error("fullchain.pem should equal chain.pem when no root is present")
 	}
+}
+
+func TestGenerateBundleFiles_RSAKeyFileRoundTrip(t *testing.T) {
+	// WHY: The .key file is written directly from KeyRecord.PEM and must be
+	// parseable back to an equivalent RSA key. ECDSA and Ed25519 variants
+	// already have explicit key-file round-trip checks — RSA was missing.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "rsa-roundtrip.example.com", []string{"rsa-roundtrip.example.com"})
+
+	bundle := &certkit.BundleResult{
+		Leaf:  leaf.cert,
+		Roots: []*x509.Certificate{ca.cert},
+	}
+
+	files, err := GenerateBundleFiles(BundleExportInput{
+		Bundle:     bundle,
+		KeyPEM:     leaf.keyPEM,
+		KeyType:    "RSA",
+		BitLength:  2048,
+		Prefix:     "rsa-rt",
+		SecretName: "rsa-rt-tls",
+	})
+	if err != nil {
+		t.Fatalf("GenerateBundleFiles: %v", err)
+	}
+
+	for _, f := range files {
+		if f.Name == "rsa-rt.key" {
+			parsed, err := certkit.ParsePEMPrivateKey(f.Data)
+			if err != nil {
+				t.Fatalf("parsing exported RSA key: %v", err)
+			}
+			rsaParsed, ok := parsed.(*rsa.PrivateKey)
+			if !ok {
+				t.Fatalf("expected *rsa.PrivateKey, got %T", parsed)
+			}
+			origKey := leaf.key.(*rsa.PrivateKey)
+			if !origKey.Equal(rsaParsed) {
+				t.Error("exported RSA key does not match original")
+			}
+			return
+		}
+	}
+	t.Fatal("rsa-rt.key file not found in output")
 }
 
 func TestGenerateBundleFiles_InvalidKeyPEM(t *testing.T) {
@@ -425,6 +472,96 @@ func TestGenerateJSON_EmptyAuthorityKeyID(t *testing.T) {
 	}
 }
 
+func TestGenerateYAML_ECDSAKeyMetadata(t *testing.T) {
+	// WHY: YAML output must correctly reflect ECDSA key type and bit size.
+	// Only RSA metadata was tested previously — an ECDSA-specific mapping
+	// error (e.g., wrong key_size for P-256) would go undetected.
+	t.Parallel()
+
+	ca := newECDSACA(t)
+	leaf := newECDSALeaf(t, ca, "ec-yaml.example.com", []string{"ec-yaml.example.com"})
+
+	bundle := &certkit.BundleResult{
+		Leaf:  leaf.cert,
+		Roots: []*x509.Certificate{ca.cert},
+	}
+
+	data, err := GenerateYAML(bundle, leaf.keyPEM, "ECDSA", 256)
+	if err != nil {
+		t.Fatalf("GenerateYAML: %v", err)
+	}
+
+	var result map[string]any
+	if err := yaml.Unmarshal(data, &result); err != nil {
+		t.Fatalf("invalid YAML: %v", err)
+	}
+
+	if result["key_type"] != "ECDSA" {
+		t.Errorf("key_type = %v, want ECDSA", result["key_type"])
+	}
+	if result["key_size"] != 256 {
+		t.Errorf("key_size = %v, want 256", result["key_size"])
+	}
+}
+
+func TestGenerateYAML_Ed25519KeyMetadata(t *testing.T) {
+	// WHY: YAML output must correctly reflect Ed25519 key type and bit size.
+	// Ed25519 always has 256-bit keys; verifying the metadata propagation
+	// through the export pipeline catches silent misreporting.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate Ed25519 key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:   big.NewInt(700),
+		Subject:        pkix.Name{CommonName: "ed-yaml.example.com", Organization: []string{"TestOrg"}},
+		DNSNames:       []string{"ed-yaml.example.com"},
+		NotBefore:      time.Now().Add(-time.Hour),
+		NotAfter:       time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:       x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:    []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		AuthorityKeyId: ca.cert.SubjectKeyId,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, ca.cert, pub, ca.key)
+	if err != nil {
+		t.Fatalf("create cert: %v", err)
+	}
+	leafCert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatalf("parse cert: %v", err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+
+	bundle := &certkit.BundleResult{
+		Leaf:  leafCert,
+		Roots: []*x509.Certificate{ca.cert},
+	}
+
+	data, err := GenerateYAML(bundle, keyPEM, "Ed25519", 256)
+	if err != nil {
+		t.Fatalf("GenerateYAML: %v", err)
+	}
+
+	var result map[string]any
+	if err := yaml.Unmarshal(data, &result); err != nil {
+		t.Fatalf("invalid YAML: %v", err)
+	}
+
+	if result["key_type"] != "Ed25519" {
+		t.Errorf("key_type = %v, want Ed25519", result["key_type"])
+	}
+	if result["key_size"] != 256 {
+		t.Errorf("key_size = %v, want 256", result["key_size"])
+	}
+}
+
 func TestGenerateYAML_Fields(t *testing.T) {
 	// WHY: Verifies that YAML output contains all expected fields with correct
 	// types and RFC 3339 timestamps — regression guard for output format changes.
@@ -688,6 +825,104 @@ func TestGenerateCSR_SubjectOverride(t *testing.T) {
 	// OU should default to "None" since override didn't set it
 	if len(csr.Subject.OrganizationalUnit) != 1 || csr.Subject.OrganizationalUnit[0] != "None" {
 		t.Errorf("organizational_unit = %v, want [None]", csr.Subject.OrganizationalUnit)
+	}
+}
+
+func TestGenerateCSR_ECDSAKey(t *testing.T) {
+	// WHY: CSR generation with ECDSA keys exercises a different signing path
+	// (ECDSA-SHA256 vs RSA-SHA256). Only RSA was tested previously — an ECDSA-
+	// specific signing failure would go undetected.
+	t.Parallel()
+
+	ca := newECDSACA(t)
+	leaf := newECDSALeaf(t, ca, "ecdsa-csr.example.com", []string{"ecdsa-csr.example.com"})
+
+	csrPEM, csrJSON, err := GenerateCSR(leaf.cert, leaf.keyPEM, nil)
+	if err != nil {
+		t.Fatalf("GenerateCSR with ECDSA key: %v", err)
+	}
+
+	block, _ := pem.Decode(csrPEM)
+	if block == nil {
+		t.Fatal("CSR PEM does not contain valid PEM block")
+	}
+	csr, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		t.Fatalf("parse CSR: %v", err)
+	}
+	if err := csr.CheckSignature(); err != nil {
+		t.Errorf("CSR signature invalid: %v", err)
+	}
+
+	// Verify CSR JSON reports ECDSA
+	var jsonResult map[string]any
+	if err := json.Unmarshal(csrJSON, &jsonResult); err != nil {
+		t.Fatalf("CSR JSON invalid: %v", err)
+	}
+	if algo, ok := jsonResult["key_algorithm"].(string); !ok || algo != "ECDSA" {
+		t.Errorf("key_algorithm = %v, want ECDSA", jsonResult["key_algorithm"])
+	}
+}
+
+func TestGenerateCSR_Ed25519Key(t *testing.T) {
+	// WHY: CSR generation with Ed25519 keys uses pure EdDSA signing (no hash
+	// algorithm selection). Only RSA was tested previously — an Ed25519-
+	// specific signing failure would go undetected.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate Ed25519 key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:   big.NewInt(600),
+		Subject:        pkix.Name{CommonName: "ed-csr.example.com", Organization: []string{"TestOrg"}},
+		DNSNames:       []string{"ed-csr.example.com"},
+		NotBefore:      time.Now().Add(-time.Hour),
+		NotAfter:       time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:       x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:    []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		AuthorityKeyId: ca.cert.SubjectKeyId,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, ca.cert, pub, ca.key)
+	if err != nil {
+		t.Fatalf("create cert: %v", err)
+	}
+	leafCert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatalf("parse cert: %v", err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+
+	csrPEM, csrJSON, err := GenerateCSR(leafCert, keyPEM, nil)
+	if err != nil {
+		t.Fatalf("GenerateCSR with Ed25519 key: %v", err)
+	}
+
+	block, _ := pem.Decode(csrPEM)
+	if block == nil {
+		t.Fatal("CSR PEM does not contain valid PEM block")
+	}
+	csr, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		t.Fatalf("parse CSR: %v", err)
+	}
+	if err := csr.CheckSignature(); err != nil {
+		t.Errorf("CSR signature invalid: %v", err)
+	}
+
+	// Verify CSR JSON reports Ed25519
+	var jsonResult map[string]any
+	if err := json.Unmarshal(csrJSON, &jsonResult); err != nil {
+		t.Fatalf("CSR JSON invalid: %v", err)
+	}
+	if algo, ok := jsonResult["key_algorithm"].(string); !ok || algo != "Ed25519" {
+		t.Errorf("key_algorithm = %v, want Ed25519", jsonResult["key_algorithm"])
 	}
 }
 
@@ -965,4 +1200,140 @@ func TestGenerateBundleFiles_Ed25519Key(t *testing.T) {
 			}
 		}
 	}
+}
+
+func TestGenerateBundleFiles_PKCS12RoundTrip_AllKeyTypes(t *testing.T) {
+	// WHY: The P12 file in GenerateBundleFiles output is created by re-parsing
+	// KeyRecord.PEM (stored PKCS#8) and encoding with EncodePKCS12Legacy.
+	// If stored PEM is corrupt or normalization fails, the P12 is undecodable.
+	// This round-trip catches regressions across all key types.
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		mkLeaf  func(t *testing.T, ca testCA) testLeaf
+		keyType string
+		bits    int
+		prefix  string
+	}{
+		{"RSA", func(t *testing.T, ca testCA) testLeaf {
+			return newRSALeaf(t, ca, "p12rt-rsa.example.com", []string{"p12rt-rsa.example.com"})
+		}, "RSA", 2048, "p12rt-rsa"},
+		{"ECDSA", func(t *testing.T, ca testCA) testLeaf {
+			return newECDSALeaf(t, ca, "p12rt-ec.example.com", []string{"p12rt-ec.example.com"})
+		}, "ECDSA", 256, "p12rt-ec"},
+		{"Ed25519", func(t *testing.T, ca testCA) testLeaf {
+			return newEd25519Leaf(t, ca, "p12rt-ed.example.com", []string{"p12rt-ed.example.com"})
+		}, "Ed25519", 256, "p12rt-ed"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ca := newRSACA(t)
+			leaf := tt.mkLeaf(t, ca)
+
+			bundle := &certkit.BundleResult{
+				Leaf:  leaf.cert,
+				Roots: []*x509.Certificate{ca.cert},
+			}
+
+			files, err := GenerateBundleFiles(BundleExportInput{
+				Bundle:     bundle,
+				KeyPEM:     leaf.keyPEM,
+				KeyType:    tt.keyType,
+				BitLength:  tt.bits,
+				Prefix:     tt.prefix,
+				SecretName: tt.prefix + "-tls",
+			})
+			if err != nil {
+				t.Fatalf("GenerateBundleFiles: %v", err)
+			}
+
+			// Find the P12 file and decode it
+			for _, f := range files {
+				if strings.HasSuffix(f.Name, ".p12") {
+					privKey, leafCert, _, err := certkit.DecodePKCS12(f.Data, "changeit")
+					if err != nil {
+						t.Fatalf("DecodePKCS12: %v", err)
+					}
+					if leafCert == nil {
+						t.Fatal("P12 contained no leaf cert")
+					}
+					if !leafCert.Equal(leaf.cert) {
+						t.Error("P12 leaf cert does not match original")
+					}
+					if privKey == nil {
+						t.Fatal("P12 contained no private key")
+					}
+					if !keysEqual(t, leaf.key, privKey) {
+						t.Error("P12 key does not match original")
+					}
+					return
+				}
+			}
+			t.Fatal("no .p12 file in output")
+		})
+	}
+}
+
+func TestGenerateBundleFiles_PKCS12ChainIntegrity(t *testing.T) {
+	// WHY: The PKCS#12 from GenerateBundleFiles must include the full chain
+	// (intermediates). If EncodePKCS12Legacy drops intermediates, the P12 is
+	// unusable for server installation that requires the chain.
+	t.Parallel()
+
+	root := newRSACA(t)
+	intermediate := newIntermediateCA(t, root)
+	leaf := newRSALeaf(t, intermediate, "chain.example.com", []string{"chain.example.com"})
+
+	bundle := &certkit.BundleResult{
+		Leaf:          leaf.cert,
+		Intermediates: []*x509.Certificate{intermediate.cert},
+		Roots:         []*x509.Certificate{root.cert},
+	}
+
+	files, err := GenerateBundleFiles(BundleExportInput{
+		Bundle:     bundle,
+		KeyPEM:     leaf.keyPEM,
+		KeyType:    "RSA",
+		BitLength:  2048,
+		Prefix:     "chain",
+		SecretName: "chain-tls",
+	})
+	if err != nil {
+		t.Fatalf("GenerateBundleFiles: %v", err)
+	}
+
+	for _, f := range files {
+		if !strings.HasSuffix(f.Name, ".p12") {
+			continue
+		}
+		_, leafCert, caCerts, err := certkit.DecodePKCS12(f.Data, "changeit")
+		if err != nil {
+			t.Fatalf("DecodePKCS12: %v", err)
+		}
+		if leafCert == nil {
+			t.Fatal("P12 has no leaf cert")
+		}
+		if !leafCert.Equal(leaf.cert) {
+			t.Error("P12 leaf does not match original")
+		}
+		// Intermediates should be present in the CA certs
+		if len(caCerts) == 0 {
+			t.Fatal("P12 has no CA certs (intermediates missing)")
+		}
+		foundIntermediate := false
+		for _, ca := range caCerts {
+			if ca.Equal(intermediate.cert) {
+				foundIntermediate = true
+				break
+			}
+		}
+		if !foundIntermediate {
+			t.Error("P12 does not contain the intermediate CA cert")
+		}
+		return
+	}
+	t.Fatal("no .p12 file in output")
 }

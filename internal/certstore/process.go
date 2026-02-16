@@ -11,6 +11,17 @@ import (
 	"github.com/sensiblebit/certkit"
 )
 
+// normalizePrivateKey converts *ed25519.PrivateKey (pointer form, returned by
+// ssh.ParseRawPrivateKey and potentially by x509.ParsePKCS8PrivateKey) to the
+// canonical ed25519.PrivateKey value form. This ensures all handlers receive
+// normalized key types, regardless of which parser produced the key.
+func normalizePrivateKey(key any) any {
+	if ptr, ok := key.(*ed25519.PrivateKey); ok {
+		return *ptr
+	}
+	return key
+}
+
 // ProcessData ingests certificates and keys from in-memory data, dispatching
 // parsed objects to the handler. It detects PEM vs binary format and tries all
 // known crypto formats in priority order. All certificates are ingested
@@ -64,7 +75,8 @@ func processPEMCertificates(data []byte, source string, handler CertHandler) {
 
 // processPEMPrivateKeys parses all PRIVATE KEY PEM blocks and dispatches them
 // to the handler. Keys that fail to parse (wrong password, unsupported format)
-// are logged and skipped.
+// are logged and skipped. Ed25519 keys are normalized to value form before
+// dispatching to ensure handlers always receive canonical types.
 func processPEMPrivateKeys(data []byte, source string, passwords []string, handler CertHandler) {
 	rest := data
 	for len(rest) > 0 {
@@ -84,6 +96,11 @@ func processPEMPrivateKeys(data []byte, source string, passwords []string, handl
 			continue
 		}
 
+		// Normalize Ed25519 pointer form to value form at the earliest point,
+		// before passing to MarshalPrivateKeyToPEM or the handler. This ensures
+		// all downstream code sees canonical types regardless of parser behavior.
+		key = normalizePrivateKey(key)
+
 		keyPEM, err := certkit.MarshalPrivateKeyToPEM(key)
 		if err != nil {
 			slog.Debug("marshaling private key", "path", source, "error", err)
@@ -97,7 +114,7 @@ func processPEMPrivateKeys(data []byte, source string, passwords []string, handl
 }
 
 // processDER tries all binary crypto formats in priority order:
-// DER certificate(s) → PKCS#7 → PKCS#8 → SEC1 EC → Ed25519 raw → JKS → PKCS#12.
+// DER certificate(s) → PKCS#7 → PKCS#8 → PKCS#1 RSA → SEC1 EC → Ed25519 raw → JKS → PKCS#12.
 func processDER(data []byte, source string, passwords []string, handler CertHandler) {
 	// Try DER certificate(s)
 	if certs, err := x509.ParseCertificates(data); err == nil && len(certs) > 0 {
@@ -124,11 +141,28 @@ func processDER(data []byte, source string, passwords []string, handler CertHand
 	// Try PKCS#8
 	if key, err := x509.ParsePKCS8PrivateKey(data); err == nil && key != nil {
 		slog.Debug("parsed PKCS#8 private key")
+		key = normalizePrivateKey(key)
 		keyPEM, err := certkit.MarshalPrivateKeyToPEM(key)
-		if err == nil {
-			if err := handler.HandleKey(key, []byte(keyPEM), source); err != nil {
-				slog.Debug("handler rejected PKCS#8 key", "path", source, "error", err)
-			}
+		if err != nil {
+			slog.Debug("marshaling PKCS#8 key to PEM", "error", err)
+			return
+		}
+		if err := handler.HandleKey(key, []byte(keyPEM), source); err != nil {
+			slog.Debug("handler rejected PKCS#8 key", "path", source, "error", err)
+		}
+		return
+	}
+
+	// Try PKCS#1 RSA
+	if key, err := x509.ParsePKCS1PrivateKey(data); err == nil {
+		slog.Debug("parsed PKCS#1 RSA private key")
+		keyPEM, err := certkit.MarshalPrivateKeyToPEM(key)
+		if err != nil {
+			slog.Debug("marshaling PKCS#1 RSA key to PEM", "error", err)
+			return
+		}
+		if err := handler.HandleKey(key, []byte(keyPEM), source); err != nil {
+			slog.Debug("handler rejected PKCS#1 RSA key", "path", source, "error", err)
 		}
 		return
 	}
@@ -137,10 +171,12 @@ func processDER(data []byte, source string, passwords []string, handler CertHand
 	if key, err := x509.ParseECPrivateKey(data); err == nil {
 		slog.Debug("parsed SEC1 EC private key")
 		keyPEM, err := certkit.MarshalPrivateKeyToPEM(key)
-		if err == nil {
-			if err := handler.HandleKey(key, []byte(keyPEM), source); err != nil {
-				slog.Debug("handler rejected SEC1 EC key", "path", source, "error", err)
-			}
+		if err != nil {
+			slog.Debug("marshaling SEC1 EC key to PEM", "error", err)
+			return
+		}
+		if err := handler.HandleKey(key, []byte(keyPEM), source); err != nil {
+			slog.Debug("handler rejected SEC1 EC key", "path", source, "error", err)
 		}
 		return
 	}
@@ -154,10 +190,12 @@ func processDER(data []byte, source string, passwords []string, handler CertHand
 		if bytes.Equal(derived[ed25519.SeedSize:], data[ed25519.SeedSize:]) {
 			slog.Debug("parsed Ed25519 private key")
 			keyPEM, err := certkit.MarshalPrivateKeyToPEM(derived)
-			if err == nil {
-				if err := handler.HandleKey(derived, []byte(keyPEM), source); err != nil {
-					slog.Debug("handler rejected Ed25519 key", "path", source, "error", err)
-				}
+			if err != nil {
+				slog.Debug("marshaling Ed25519 key to PEM", "error", err)
+				return
+			}
+			if err := handler.HandleKey(derived, []byte(keyPEM), source); err != nil {
+				slog.Debug("handler rejected Ed25519 key", "path", source, "error", err)
 			}
 			return
 		}
@@ -176,6 +214,7 @@ func processDER(data []byte, source string, passwords []string, handler CertHand
 				}
 			}
 			for _, key := range keys {
+				key = normalizePrivateKey(key)
 				keyPEM, err := certkit.MarshalPrivateKeyToPEM(key)
 				if err != nil {
 					slog.Debug("marshaling JKS key", "error", err)
@@ -210,6 +249,7 @@ func processDER(data []byte, source string, passwords []string, handler CertHand
 		}
 
 		if privKey != nil {
+			privKey = normalizePrivateKey(privKey)
 			keyPEM, err := certkit.MarshalPrivateKeyToPEM(privKey)
 			if err != nil {
 				slog.Debug("marshaling PKCS#12 key", "error", err)

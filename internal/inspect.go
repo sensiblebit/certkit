@@ -222,7 +222,7 @@ func privateKeySize(key any) string {
 		return fmt.Sprintf("%d", k.N.BitLen())
 	case *ecdsa.PrivateKey:
 		return k.Curve.Params().Name
-	case ed25519.PrivateKey:
+	case ed25519.PrivateKey, *ed25519.PrivateKey:
 		return "256"
 	default:
 		return "unknown"
