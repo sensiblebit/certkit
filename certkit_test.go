@@ -542,7 +542,8 @@ func TestDefaultPasswords(t *testing.T) {
 }
 
 func TestParsePEMPrivateKeyWithPasswords_Unencrypted(t *testing.T) {
-	// WHY: Unencrypted keys passed to the password-aware parser must parse normally without requiring any password.
+	// WHY: Unencrypted keys passed to the password-aware parser must parse
+	// normally without requiring any password, and key material must match.
 	t.Parallel()
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
 	pemBytes := pem.EncodeToMemory(&pem.Block{
@@ -554,8 +555,12 @@ func TestParsePEMPrivateKeyWithPasswords_Unencrypted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected unencrypted key to parse: %v", err)
 	}
-	if _, ok := parsed.(*rsa.PrivateKey); !ok {
-		t.Errorf("expected *rsa.PrivateKey, got %T", parsed)
+	rsaParsed, ok := parsed.(*rsa.PrivateKey)
+	if !ok {
+		t.Fatalf("expected *rsa.PrivateKey, got %T", parsed)
+	}
+	if !key.Equal(rsaParsed) {
+		t.Error("parsed unencrypted key does not Equal original")
 	}
 }
 
@@ -642,7 +647,9 @@ func TestParsePEMPrivateKeyWithPasswords_WrongPassword(t *testing.T) {
 }
 
 func TestParsePEMPrivateKeyWithPasswords_DefaultPasswords(t *testing.T) {
-	// WHY: Keys encrypted with common passwords (like "changeit") must be auto-decryptable via DefaultPasswords without user intervention.
+	// WHY: Keys encrypted with common passwords (like "changeit") must be
+	// auto-decryptable via DefaultPasswords without user intervention, and
+	// the decrypted key material must match the original.
 	t.Parallel()
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
 	block := &pem.Block{
@@ -659,8 +666,12 @@ func TestParsePEMPrivateKeyWithPasswords_DefaultPasswords(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected DefaultPasswords to include 'changeit': %v", err)
 	}
-	if _, ok := parsed.(*rsa.PrivateKey); !ok {
-		t.Errorf("expected *rsa.PrivateKey, got %T", parsed)
+	rsaParsed, ok := parsed.(*rsa.PrivateKey)
+	if !ok {
+		t.Fatalf("expected *rsa.PrivateKey, got %T", parsed)
+	}
+	if !key.Equal(rsaParsed) {
+		t.Error("decrypted key does not Equal original")
 	}
 }
 
@@ -2239,61 +2250,6 @@ func TestCrossFormatPEMRoundTrip(t *testing.T) {
 	}
 }
 
-func TestParsePEMPrivateKeyWithPasswords_Unencrypted_KeyEquality(t *testing.T) {
-	// WHY: The existing TestParsePEMPrivateKeyWithPasswords_Unencrypted only
-	// checks the type, not the value. This verifies the parsed key actually
-	// matches the original via .Equal().
-	t.Parallel()
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	pemBytes := pem.EncodeToMemory(&pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(key),
-	})
-
-	parsed, err := ParsePEMPrivateKeyWithPasswords(pemBytes, nil)
-	if err != nil {
-		t.Fatalf("expected unencrypted key to parse: %v", err)
-	}
-	rsaParsed, ok := parsed.(*rsa.PrivateKey)
-	if !ok {
-		t.Fatalf("expected *rsa.PrivateKey, got %T", parsed)
-	}
-	if !key.Equal(rsaParsed) {
-		t.Error("parsed unencrypted key does not Equal original")
-	}
-}
-
-func TestParsePEMPrivateKeyWithPasswords_DefaultPasswords_KeyEquality(t *testing.T) {
-	// WHY: The existing TestParsePEMPrivateKeyWithPasswords_DefaultPasswords
-	// only checks the type. This verifies the decrypted key actually matches
-	// the original, catching silent corruption during decryption.
-	t.Parallel()
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	block := &pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(key),
-	}
-
-	//nolint:staticcheck // x509.EncryptPEMBlock is deprecated but needed for test
-	encBlock, err := x509.EncryptPEMBlock(rand.Reader, block.Type, block.Bytes, []byte("changeit"), x509.PEMCipherAES256)
-	if err != nil {
-		t.Fatal(err)
-	}
-	encPEM := pem.EncodeToMemory(encBlock)
-
-	parsed, err := ParsePEMPrivateKeyWithPasswords(encPEM, DefaultPasswords())
-	if err != nil {
-		t.Fatalf("expected DefaultPasswords to include 'changeit': %v", err)
-	}
-	rsaParsed, ok := parsed.(*rsa.PrivateKey)
-	if !ok {
-		t.Fatalf("expected *rsa.PrivateKey, got %T", parsed)
-	}
-	if !key.Equal(rsaParsed) {
-		t.Error("decrypted key does not Equal original")
-	}
-}
-
 func TestParsePEMPrivateKey_PKCS8Ed25519_ReturnsValueType(t *testing.T) {
 	// WHY: The PKCS#8 code path in ParsePEMPrivateKey does NOT call normalizeKey —
 	// it relies on Go's x509.ParsePKCS8PrivateKey returning ed25519.PrivateKey as a
@@ -3134,28 +3090,6 @@ func TestParsePEMPrivateKey_EmptyInput(t *testing.T) {
 				t.Errorf("error should mention 'no PEM block', got: %v", err)
 			}
 		})
-	}
-}
-
-func TestParsePEMPrivateKeyWithPasswords_NilPasswords_UnencryptedKey(t *testing.T) {
-	// WHY: When passwords is nil, ParsePEMPrivateKeyWithPasswords must
-	// still parse unencrypted keys — it tries unencrypted first before
-	// checking the password list. A nil-passwords bug would break callers
-	// that don't provide passwords for unencrypted key files.
-	t.Parallel()
-
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	pemBytes := pem.EncodeToMemory(&pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(key),
-	})
-
-	parsed, err := ParsePEMPrivateKeyWithPasswords(pemBytes, nil)
-	if err != nil {
-		t.Fatalf("ParsePEMPrivateKeyWithPasswords(nil passwords) failed: %v", err)
-	}
-	if !key.Equal(parsed) {
-		t.Error("parsed key does not match original with nil passwords")
 	}
 }
 
@@ -4161,5 +4095,194 @@ func TestComputeSKI_ECDSA_P521(t *testing.T) {
 	ski2, _ := ComputeSKI(&key.PublicKey)
 	if !bytes.Equal(ski1, ski2) {
 		t.Error("ComputeSKI not deterministic for P-521")
+	}
+}
+
+func TestParsePEMPrivateKey_CorruptDER_RSABlock(t *testing.T) {
+	// WHY: Corrupt DER inside an "RSA PRIVATE KEY" block calls
+	// x509.ParsePKCS1PrivateKey directly with no fallback — the error
+	// must be clear and not panic.
+	t.Parallel()
+	pemData := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: []byte("this is not valid DER"),
+	})
+	_, err := ParsePEMPrivateKey(pemData)
+	if err == nil {
+		t.Fatal("expected error for corrupt DER in RSA PRIVATE KEY block")
+	}
+}
+
+func TestParsePEMPrivateKey_CorruptDER_ECBlock(t *testing.T) {
+	// WHY: Corrupt DER inside an "EC PRIVATE KEY" block calls
+	// x509.ParseECPrivateKey directly with no fallback — the error
+	// must be clear and not panic.
+	t.Parallel()
+	pemData := pem.EncodeToMemory(&pem.Block{
+		Type:  "EC PRIVATE KEY",
+		Bytes: []byte("this is not valid DER"),
+	})
+	_, err := ParsePEMPrivateKey(pemData)
+	if err == nil {
+		t.Fatal("expected error for corrupt DER in EC PRIVATE KEY block")
+	}
+}
+
+func TestParsePEMPrivateKey_RawDERBytes(t *testing.T) {
+	// WHY: Users may accidentally pass raw DER bytes (not PEM-wrapped) to
+	// ParsePEMPrivateKey. The error must say "no PEM block", not panic.
+	t.Parallel()
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	derBytes := x509.MarshalPKCS1PrivateKey(key)
+
+	_, err := ParsePEMPrivateKey(derBytes)
+	if err == nil {
+		t.Fatal("expected error for raw DER bytes")
+	}
+	if !strings.Contains(err.Error(), "no PEM block") {
+		t.Errorf("error should mention 'no PEM block', got: %v", err)
+	}
+}
+
+func TestParsePEMPrivateKey_SameKeyAllFormats(t *testing.T) {
+	// WHY: The same RSA key can arrive as PKCS#1, PKCS#8, or mislabeled
+	// "PRIVATE KEY" with PKCS#1 bytes. All formats must produce Equal()
+	// keys. A format-dependent parse mangling would be invisible without
+	// this cross-format equality check.
+	t.Parallel()
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+
+	pkcs1PEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	})
+
+	pkcs8DER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkcs8PEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "PRIVATE KEY",
+		Bytes: pkcs8DER,
+	})
+
+	// Mislabeled: PKCS#1 bytes in "PRIVATE KEY" block
+	mislabeledPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	})
+
+	formats := []struct {
+		name string
+		pem  []byte
+	}{
+		{"PKCS#1", pkcs1PEM},
+		{"PKCS#8", pkcs8PEM},
+		{"mislabeled PKCS#1 as PRIVATE KEY", mislabeledPEM},
+	}
+
+	var parsedKeys []crypto.PrivateKey
+	for _, f := range formats {
+		parsed, err := ParsePEMPrivateKey(f.pem)
+		if err != nil {
+			t.Fatalf("ParsePEMPrivateKey(%s): %v", f.name, err)
+		}
+		parsedKeys = append(parsedKeys, parsed)
+	}
+
+	// All parsed keys must be Equal to the original and to each other
+	for i, f := range formats {
+		rsaKey, ok := parsedKeys[i].(*rsa.PrivateKey)
+		if !ok {
+			t.Fatalf("%s: expected *rsa.PrivateKey, got %T", f.name, parsedKeys[i])
+		}
+		if !key.Equal(rsaKey) {
+			t.Errorf("%s: parsed key does not Equal original", f.name)
+		}
+	}
+}
+
+func TestComputeSKILegacy_RSA(t *testing.T) {
+	// WHY: ComputeSKILegacy was only tested with ECDSA and DSA. RSA keys
+	// use a different SPKI OID — a marshaling bug would produce wrong legacy SKIs.
+	t.Parallel()
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	ski, err := ComputeSKILegacy(&key.PublicKey)
+	if err != nil {
+		t.Fatalf("ComputeSKILegacy(RSA): %v", err)
+	}
+	if len(ski) != 20 {
+		t.Errorf("SKI length = %d, want 20", len(ski))
+	}
+	// Deterministic
+	ski2, _ := ComputeSKILegacy(&key.PublicKey)
+	if !bytes.Equal(ski, ski2) {
+		t.Error("ComputeSKILegacy not deterministic for RSA")
+	}
+	// Must differ from modern SKI (SHA-256 truncated vs SHA-1)
+	modern, _ := ComputeSKI(&key.PublicKey)
+	if bytes.Equal(ski, modern) {
+		t.Error("Legacy and modern SKI should differ")
+	}
+}
+
+func TestComputeSKILegacy_Ed25519(t *testing.T) {
+	// WHY: ComputeSKILegacy had no Ed25519 coverage. Ed25519 uses a
+	// distinct SPKI OID (1.3.101.112) — ensures legacy SKI handles it.
+	t.Parallel()
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	ski, err := ComputeSKILegacy(pub)
+	if err != nil {
+		t.Fatalf("ComputeSKILegacy(Ed25519): %v", err)
+	}
+	if len(ski) != 20 {
+		t.Errorf("SKI length = %d, want 20", len(ski))
+	}
+	// Deterministic
+	ski2, _ := ComputeSKILegacy(pub)
+	if !bytes.Equal(ski, ski2) {
+		t.Error("ComputeSKILegacy not deterministic for Ed25519")
+	}
+}
+
+func TestKeyMatchesCert_Ed25519VsRSA(t *testing.T) {
+	// WHY: Cross-algorithm mismatch tests only covered RSA key vs ECDSA
+	// cert. Ed25519 key vs RSA cert exercises a different comparison path
+	// in the Equal method.
+	t.Parallel()
+	_, edKey, _ := ed25519.GenerateKey(rand.Reader)
+	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "rsa-cert"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &rsaKey.PublicKey, rsaKey)
+	cert, _ := x509.ParseCertificate(certBytes)
+
+	matches, err := KeyMatchesCert(edKey, cert)
+	if err != nil {
+		t.Fatalf("KeyMatchesCert(Ed25519 key, RSA cert): %v", err)
+	}
+	if matches {
+		t.Error("Ed25519 key should not match RSA cert")
+	}
+}
+
+func TestGenerateECKey_NilCurve(t *testing.T) {
+	// WHY: GenerateECKey(nil) would panic inside ecdsa.GenerateKey with
+	// a nil pointer dereference. Callers need a clear error, not a panic.
+	t.Parallel()
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("GenerateECKey(nil) panicked: %v", r)
+		}
+	}()
+	_, err := GenerateECKey(nil)
+	if err == nil {
+		t.Error("expected error for nil curve")
 	}
 }

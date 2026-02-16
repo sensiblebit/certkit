@@ -531,6 +531,9 @@ func GenerateRSAKey(bits int) (*rsa.PrivateKey, error) {
 
 // GenerateECKey generates a new ECDSA private key on the given curve.
 func GenerateECKey(curve elliptic.Curve) (*ecdsa.PrivateKey, error) {
+	if curve == nil {
+		return nil, errors.New("generating EC key: curve cannot be nil")
+	}
 	key, err := ecdsa.GenerateKey(curve, rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("generating EC key: %w", err)

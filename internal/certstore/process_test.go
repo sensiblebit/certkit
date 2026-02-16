@@ -2139,3 +2139,93 @@ func TestProcessData_SEC1ECDERToExportPKCS12_RoundTrip(t *testing.T) {
 		t.Error("SEC1 EC DER → store → PKCS#12 round-trip lost key material")
 	}
 }
+
+func TestProcessData_PKCS12_MultiPasswordIteration(t *testing.T) {
+	// WHY: processDER iterates passwords for PKCS#12 decoding. If the loop
+	// stopped after the first failure instead of trying all passwords, a
+	// valid password later in the list would be missed.
+	t.Parallel()
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "multi-pw.example.com", []string{"multi-pw.example.com"})
+	p12Data := newPKCS12Bundle(t, leaf, ca, "correctpass")
+
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{
+		Data:      p12Data,
+		Path:      "multi.p12",
+		Passwords: []string{"wrong1", "wrong2", "correctpass"},
+		Handler:   store,
+	}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	if len(store.AllCerts()) == 0 {
+		t.Error("expected certs to be extracted after finding correct password")
+	}
+	if len(store.AllKeys()) != 1 {
+		t.Error("expected 1 key to be extracted after finding correct password")
+	}
+}
+
+func TestProcessData_JKS_MagicBytesGarbageBody(t *testing.T) {
+	// WHY: processDER checks for JKS magic bytes (0xFEEDFEED) before
+	// attempting JKS decode. Data that starts with the magic but is otherwise
+	// garbage should fail JKS decode and fall through to PKCS#12 attempt
+	// without panicking.
+	t.Parallel()
+	data := []byte{0xFE, 0xED, 0xFE, 0xED, 0x00, 0x01, 0x02, 0x03, 0xFF, 0xFF}
+
+	store := NewMemStore()
+	// Should not panic, should not produce data
+	_ = ProcessData(ProcessInput{
+		Data:      data,
+		Path:      "garbage.jks",
+		Passwords: []string{"changeit"},
+		Handler:   store,
+	})
+	if len(store.AllCerts()) != 0 || len(store.AllKeys()) != 0 {
+		t.Error("garbage data with JKS magic should not produce certs or keys")
+	}
+}
+
+func TestProcessData_JKS_MagicBytesOnly(t *testing.T) {
+	// WHY: Exactly 4 bytes of JKS magic (0xFEEDFEED) is the minimum length
+	// that passes the magic check. This boundary case should fail gracefully.
+	t.Parallel()
+	data := []byte{0xFE, 0xED, 0xFE, 0xED}
+
+	store := NewMemStore()
+	_ = ProcessData(ProcessInput{
+		Data:      data,
+		Path:      "tiny.jks",
+		Passwords: []string{"changeit"},
+		Handler:   store,
+	})
+	if len(store.AllCerts()) != 0 || len(store.AllKeys()) != 0 {
+		t.Error("4-byte JKS magic should not produce certs or keys")
+	}
+}
+
+func TestProcessData_PEMEncryptedKey_NilPasswords(t *testing.T) {
+	// WHY: Encrypted PEM key with nil password list should silently skip
+	// the key (no panic from iterating nil slice), producing no stored keys.
+	t.Parallel()
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	block := &pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	}
+	//nolint:staticcheck // x509.EncryptPEMBlock is deprecated but needed for test
+	encBlock, _ := x509.EncryptPEMBlock(rand.Reader, block.Type, block.Bytes, []byte("secret"), x509.PEMCipherAES256)
+	encPEM := pem.EncodeToMemory(encBlock)
+
+	store := NewMemStore()
+	_ = ProcessData(ProcessInput{
+		Data:    encPEM,
+		Path:    "encrypted.pem",
+		Handler: store,
+	})
+	if len(store.AllKeys()) != 0 {
+		t.Error("encrypted PEM with nil passwords should produce no keys")
+	}
+}
