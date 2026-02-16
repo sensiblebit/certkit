@@ -642,6 +642,100 @@ func TestParseContainerData_PEMKeyNormalizesEd25519(t *testing.T) {
 	}
 }
 
+func TestParseContainerData_PEMEncryptedRSAKey_WithPassword(t *testing.T) {
+	// WHY: findPEMPrivateKey delegates to ParsePEMPrivateKeyWithPasswords
+	// which handles legacy encrypted PEM. This test verifies that an encrypted
+	// RSA key paired with a certificate is decrypted and returned correctly
+	// through the ParseContainerData path — the only test for encrypted keys
+	// through this path (TestParseContainerData_PEMCertWithEncryptedPKCS8Key)
+	// uses undecryptable data and expects Key=nil.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "enc-rsa.example.com", []string{"enc-rsa.example.com"})
+
+	// Create encrypted PEM key (legacy format)
+	rsaKey := leaf.key.(*rsa.PrivateKey)
+	block := &pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(rsaKey),
+	}
+	//nolint:staticcheck // testing legacy encrypted PEM
+	encBlock, err := x509.EncryptPEMBlock(rand.Reader, block.Type, block.Bytes, []byte("mypass"), x509.PEMCipherAES256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encKeyPEM := pem.EncodeToMemory(encBlock)
+	combined := append(leaf.certPEM, encKeyPEM...)
+
+	contents, err := ParseContainerData(combined, []string{"mypass"})
+	if err != nil {
+		t.Fatalf("ParseContainerData: %v", err)
+	}
+	if contents.Leaf == nil {
+		t.Fatal("expected Leaf to be non-nil")
+	}
+	if contents.Key == nil {
+		t.Fatal("expected Key to be non-nil — encrypted key should decrypt with correct password")
+	}
+	if _, ok := contents.Key.(*rsa.PrivateKey); !ok {
+		t.Fatalf("Key type = %T, want *rsa.PrivateKey", contents.Key)
+	}
+	match, err := certkit.KeyMatchesCert(contents.Key, contents.Leaf)
+	if err != nil {
+		t.Fatalf("KeyMatchesCert: %v", err)
+	}
+	if !match {
+		t.Error("decrypted key should match leaf certificate")
+	}
+}
+
+func TestParseContainerData_PEMEncryptedECDSAKey_WithPassword(t *testing.T) {
+	// WHY: Same as the RSA encrypted test above, but for ECDSA. The legacy
+	// encrypted PEM path uses SEC1 encoding under the hood, which goes through
+	// a different parse fallback in ParsePEMPrivateKey ("EC PRIVATE KEY" block).
+	// A bug in the password-aware ECDSA path would be invisible without this.
+	t.Parallel()
+
+	ca := newECDSACA(t)
+	leaf := newECDSALeaf(t, ca, "enc-ec.example.com", []string{"enc-ec.example.com"})
+
+	ecKey := leaf.key.(*ecdsa.PrivateKey)
+	ecDER, err := x509.MarshalECPrivateKey(ecKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block := &pem.Block{Type: "EC PRIVATE KEY", Bytes: ecDER}
+	//nolint:staticcheck // testing legacy encrypted PEM
+	encBlock, err := x509.EncryptPEMBlock(rand.Reader, block.Type, block.Bytes, []byte("ecpass"), x509.PEMCipherAES256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encKeyPEM := pem.EncodeToMemory(encBlock)
+	combined := append(leaf.certPEM, encKeyPEM...)
+
+	contents, err := ParseContainerData(combined, []string{"ecpass"})
+	if err != nil {
+		t.Fatalf("ParseContainerData: %v", err)
+	}
+	if contents.Leaf == nil {
+		t.Fatal("expected Leaf to be non-nil")
+	}
+	if contents.Key == nil {
+		t.Fatal("expected Key to be non-nil — encrypted ECDSA key should decrypt")
+	}
+	if _, ok := contents.Key.(*ecdsa.PrivateKey); !ok {
+		t.Fatalf("Key type = %T, want *ecdsa.PrivateKey", contents.Key)
+	}
+	match, err := certkit.KeyMatchesCert(contents.Key, contents.Leaf)
+	if err != nil {
+		t.Fatalf("KeyMatchesCert: %v", err)
+	}
+	if !match {
+		t.Error("decrypted ECDSA key should match leaf certificate")
+	}
+}
+
 func TestParseContainerData_PEMSkipsMalformedFirstKey(t *testing.T) {
 	// WHY: findPEMPrivateKey iterates all PEM blocks and returns the first
 	// successfully parsed key. When the first key block is malformed, it must
