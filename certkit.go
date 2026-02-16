@@ -462,6 +462,9 @@ func GetPublicKey(priv crypto.PrivateKey) (crypto.PublicKey, error) {
 // in a certificate. Uses the Equal method available on all standard public key
 // types since Go 1.20, which handles cross-type mismatches by returning false.
 func KeyMatchesCert(priv crypto.PrivateKey, cert *x509.Certificate) (bool, error) {
+	if cert == nil {
+		return false, errors.New("certificate is nil")
+	}
 	pub, err := GetPublicKey(priv)
 	if err != nil {
 		return false, err

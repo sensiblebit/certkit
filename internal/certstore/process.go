@@ -97,7 +97,7 @@ func processPEMPrivateKeys(data []byte, source string, passwords []string, handl
 }
 
 // processDER tries all binary crypto formats in priority order:
-// DER certificate(s) → PKCS#7 → PKCS#8 → SEC1 EC → Ed25519 raw → JKS → PKCS#12.
+// DER certificate(s) → PKCS#7 → PKCS#8 → PKCS#1 RSA → SEC1 EC → Ed25519 raw → JKS → PKCS#12.
 func processDER(data []byte, source string, passwords []string, handler CertHandler) {
 	// Try DER certificate(s)
 	if certs, err := x509.ParseCertificates(data); err == nil && len(certs) > 0 {
@@ -129,6 +129,20 @@ func processDER(data []byte, source string, passwords []string, handler CertHand
 			if err := handler.HandleKey(key, []byte(keyPEM), source); err != nil {
 				slog.Debug("handler rejected PKCS#8 key", "path", source, "error", err)
 			}
+		}
+		return
+	}
+
+	// Try PKCS#1 RSA
+	if key, err := x509.ParsePKCS1PrivateKey(data); err == nil {
+		slog.Debug("parsed PKCS#1 RSA private key")
+		keyPEM, err := certkit.MarshalPrivateKeyToPEM(key)
+		if err != nil {
+			slog.Debug("marshaling PKCS#1 RSA key to PEM", "error", err)
+			return
+		}
+		if err := handler.HandleKey(key, []byte(keyPEM), source); err != nil {
+			slog.Debug("handler rejected PKCS#1 RSA key", "path", source, "error", err)
 		}
 		return
 	}

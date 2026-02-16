@@ -7,6 +7,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -66,6 +67,9 @@ func NewMemStore() *MemStore {
 // uses. Multiple certificates with the same SKI but different serials (key
 // reuse across renewals) are all retained.
 func (s *MemStore) HandleCertificate(cert *x509.Certificate, source string) error {
+	if cert == nil {
+		return errors.New("certificate is nil")
+	}
 	rawSKI, err := certkit.ComputeSKI(cert.PublicKey)
 	if err != nil {
 		return fmt.Errorf("computing SKI: %w", err)

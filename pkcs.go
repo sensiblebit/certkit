@@ -27,6 +27,9 @@ func validatePKCS12KeyType(privateKey crypto.PrivateKey) error {
 // CA chain, and password. Returns the DER-encoded PKCS#12 data.
 // Normalizes Ed25519 pointer form to value form before encoding.
 func EncodePKCS12(privateKey crypto.PrivateKey, leaf *x509.Certificate, caCerts []*x509.Certificate, password string) ([]byte, error) {
+	if leaf == nil {
+		return nil, errors.New("leaf certificate cannot be nil")
+	}
 	privateKey = normalizeKey(privateKey)
 	if err := validatePKCS12KeyType(privateKey); err != nil {
 		return nil, err
@@ -38,6 +41,9 @@ func EncodePKCS12(privateKey crypto.PrivateKey, leaf *x509.Certificate, caCerts 
 // compatibility with older Java keystores. Returns the DER-encoded PKCS#12 data.
 // Normalizes Ed25519 pointer form to value form before encoding.
 func EncodePKCS12Legacy(privateKey crypto.PrivateKey, leaf *x509.Certificate, caCerts []*x509.Certificate, password string) ([]byte, error) {
+	if leaf == nil {
+		return nil, errors.New("leaf certificate cannot be nil")
+	}
 	privateKey = normalizeKey(privateKey)
 	if err := validatePKCS12KeyType(privateKey); err != nil {
 		return nil, err
