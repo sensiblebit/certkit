@@ -22,10 +22,32 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Minimize previous Claude review comments
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr view ${{ github.event.pull_request.number }} \
+            --json comments \
+            --jq '.comments[] | select(.author.login == "claude") | .id' \
+          | while read -r node_id; do
+            gh api graphql -f query='
+              mutation {
+                minimizeComment(input: {subjectId: "'"$node_id"'", classifier: OUTDATED}) {
+                  minimizedComment { isMinimized }
+                }
+              }'
+          done
+
       - name: Run Claude Code Review
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
           plugins: 'code-review@claude-code-plugins'
-          prompt: '/code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}'
+          prompt: |
+            /code-review:code-review --comment ${{ github.repository }}/pull/${{ github.event.pull_request.number }}
+
+            IMPORTANT: You MUST always post a PR comment, even if no issues are found.
+            Do NOT skip the review for any reason — never treat a PR as "trivial" or
+            "obviously correct." Always run the full review pipeline and post a comment
+            with the results. If no issues are found, post the "No issues found" summary.
