@@ -11,116 +11,16 @@ permissions:
   pull-requests: read
 
 jobs:
-  # ── PR Conventions ─────────────────────────────────
-
-  pr-title:
-    name: PR Title
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: amannn/action-semantic-pull-request@v6
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          types: |
-            feat
-            fix
-            docs
-            style
-            refactor
-            perf
-            test
-            build
-            ci
-            chore
-            revert
+  # ── Org-wide reusable workflows ───────────────────────
 
   pr-conventions:
-    name: PR Conventions
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - name: Check branch name
-        id: branch
-        run: python3 scripts/checks.py branch-name "${{ github.head_ref }}"
-      - name: Check commit messages
-        if: success() || failure()
-        id: commits
-        run: python3 scripts/checks.py commit-message --ci --base-ref "origin/${{ github.base_ref }}"
-      - name: Check commits are verified
-        if: success() || failure()
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: python3 scripts/checks.py verified-commits "${{ github.repository }}" "${{ github.event.pull_request.number }}"
+    uses: sensiblebit/.github/.github/workflows/pr-conventions.yml@main
 
-  # ── Go ──────────────────────────────────────────────
+  go-ci:
+    uses: sensiblebit/.github/.github/workflows/go-ci.yml@main
 
-  go-checks:
-    name: Go Checks
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version: stable
-          check-latest: true
-          cache: true
-      - name: Build
-        id: build
-        run: go build -trimpath ./...
-      - name: Vet
-        if: success() || failure()
-        id: vet
-        run: go vet ./...
-      - name: Check goimports
-        if: success() || failure()
-        run: python3 scripts/checks.py goimports
-
-  go-test:
-    name: Go Test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version: stable
-          check-latest: true
-          cache: true
-      - run: go test -race -count=1 ./...
-
-  golangci-lint:
-    name: Lint (golangci-lint)
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version: stable
-          check-latest: true
-          cache: true
-      - uses: golangci/golangci-lint-action@v9
-        with:
-          version: latest
-
-  govulncheck:
-    name: Vulnerability Check
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-go@v6
-        with:
-          go-version: stable
-          check-latest: true
-          cache: true
-      - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
-      - name: Run govulncheck
-        run: govulncheck ./...
-
-  # ── WASM ────────────────────────────────────────────
+  # ── Project-specific ──────────────────────────────────
 
   wasm:
     name: WASM Build
@@ -133,9 +33,9 @@ jobs:
           check-latest: true
           cache: true
       - name: Vet + Build (WASM)
-        run: python3 scripts/checks.py wasm
-
-  # ── Web (JS/TS) ────────────────────────────────────
+        run: |
+          GOOS=js GOARCH=wasm go vet ./cmd/wasm/
+          GOOS=js GOARCH=wasm go build -o /dev/null ./cmd/wasm/
 
   web:
     name: Web
@@ -173,18 +73,14 @@ jobs:
         if: success() || failure()
         run: npx markdownlint-cli@0.47.0 --config .markdownlint.yaml '**/*.md'
 
-  # ── Gate ────────────────────────────────────────────
+  # ── Gate ──────────────────────────────────────────────
 
   ci-ok:
     name: CI
     if: always()
     needs:
-      - pr-title
       - pr-conventions
-      - go-checks
-      - go-test
-      - golangci-lint
-      - govulncheck
+      - go-ci
       - wasm
       - web
       - lint
