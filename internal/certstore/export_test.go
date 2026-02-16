@@ -425,6 +425,96 @@ func TestGenerateJSON_EmptyAuthorityKeyID(t *testing.T) {
 	}
 }
 
+func TestGenerateYAML_ECDSAKeyMetadata(t *testing.T) {
+	// WHY: YAML output must correctly reflect ECDSA key type and bit size.
+	// Only RSA metadata was tested previously — an ECDSA-specific mapping
+	// error (e.g., wrong key_size for P-256) would go undetected.
+	t.Parallel()
+
+	ca := newECDSACA(t)
+	leaf := newECDSALeaf(t, ca, "ec-yaml.example.com", []string{"ec-yaml.example.com"})
+
+	bundle := &certkit.BundleResult{
+		Leaf:  leaf.cert,
+		Roots: []*x509.Certificate{ca.cert},
+	}
+
+	data, err := GenerateYAML(bundle, leaf.keyPEM, "ECDSA", 256)
+	if err != nil {
+		t.Fatalf("GenerateYAML: %v", err)
+	}
+
+	var result map[string]any
+	if err := yaml.Unmarshal(data, &result); err != nil {
+		t.Fatalf("invalid YAML: %v", err)
+	}
+
+	if result["key_type"] != "ECDSA" {
+		t.Errorf("key_type = %v, want ECDSA", result["key_type"])
+	}
+	if result["key_size"] != 256 {
+		t.Errorf("key_size = %v, want 256", result["key_size"])
+	}
+}
+
+func TestGenerateYAML_Ed25519KeyMetadata(t *testing.T) {
+	// WHY: YAML output must correctly reflect Ed25519 key type and bit size.
+	// Ed25519 always has 256-bit keys; verifying the metadata propagation
+	// through the export pipeline catches silent misreporting.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate Ed25519 key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:   big.NewInt(700),
+		Subject:        pkix.Name{CommonName: "ed-yaml.example.com", Organization: []string{"TestOrg"}},
+		DNSNames:       []string{"ed-yaml.example.com"},
+		NotBefore:      time.Now().Add(-time.Hour),
+		NotAfter:       time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:       x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:    []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		AuthorityKeyId: ca.cert.SubjectKeyId,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, ca.cert, pub, ca.key)
+	if err != nil {
+		t.Fatalf("create cert: %v", err)
+	}
+	leafCert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatalf("parse cert: %v", err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+
+	bundle := &certkit.BundleResult{
+		Leaf:  leafCert,
+		Roots: []*x509.Certificate{ca.cert},
+	}
+
+	data, err := GenerateYAML(bundle, keyPEM, "Ed25519", 256)
+	if err != nil {
+		t.Fatalf("GenerateYAML: %v", err)
+	}
+
+	var result map[string]any
+	if err := yaml.Unmarshal(data, &result); err != nil {
+		t.Fatalf("invalid YAML: %v", err)
+	}
+
+	if result["key_type"] != "Ed25519" {
+		t.Errorf("key_type = %v, want Ed25519", result["key_type"])
+	}
+	if result["key_size"] != 256 {
+		t.Errorf("key_size = %v, want 256", result["key_size"])
+	}
+}
+
 func TestGenerateYAML_Fields(t *testing.T) {
 	// WHY: Verifies that YAML output contains all expected fields with correct
 	// types and RFC 3339 timestamps — regression guard for output format changes.
@@ -688,6 +778,104 @@ func TestGenerateCSR_SubjectOverride(t *testing.T) {
 	// OU should default to "None" since override didn't set it
 	if len(csr.Subject.OrganizationalUnit) != 1 || csr.Subject.OrganizationalUnit[0] != "None" {
 		t.Errorf("organizational_unit = %v, want [None]", csr.Subject.OrganizationalUnit)
+	}
+}
+
+func TestGenerateCSR_ECDSAKey(t *testing.T) {
+	// WHY: CSR generation with ECDSA keys exercises a different signing path
+	// (ECDSA-SHA256 vs RSA-SHA256). Only RSA was tested previously — an ECDSA-
+	// specific signing failure would go undetected.
+	t.Parallel()
+
+	ca := newECDSACA(t)
+	leaf := newECDSALeaf(t, ca, "ecdsa-csr.example.com", []string{"ecdsa-csr.example.com"})
+
+	csrPEM, csrJSON, err := GenerateCSR(leaf.cert, leaf.keyPEM, nil)
+	if err != nil {
+		t.Fatalf("GenerateCSR with ECDSA key: %v", err)
+	}
+
+	block, _ := pem.Decode(csrPEM)
+	if block == nil {
+		t.Fatal("CSR PEM does not contain valid PEM block")
+	}
+	csr, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		t.Fatalf("parse CSR: %v", err)
+	}
+	if err := csr.CheckSignature(); err != nil {
+		t.Errorf("CSR signature invalid: %v", err)
+	}
+
+	// Verify CSR JSON reports ECDSA
+	var jsonResult map[string]any
+	if err := json.Unmarshal(csrJSON, &jsonResult); err != nil {
+		t.Fatalf("CSR JSON invalid: %v", err)
+	}
+	if algo, ok := jsonResult["key_algorithm"].(string); !ok || algo != "ECDSA" {
+		t.Errorf("key_algorithm = %v, want ECDSA", jsonResult["key_algorithm"])
+	}
+}
+
+func TestGenerateCSR_Ed25519Key(t *testing.T) {
+	// WHY: CSR generation with Ed25519 keys uses pure EdDSA signing (no hash
+	// algorithm selection). Only RSA was tested previously — an Ed25519-
+	// specific signing failure would go undetected.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate Ed25519 key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:   big.NewInt(600),
+		Subject:        pkix.Name{CommonName: "ed-csr.example.com", Organization: []string{"TestOrg"}},
+		DNSNames:       []string{"ed-csr.example.com"},
+		NotBefore:      time.Now().Add(-time.Hour),
+		NotAfter:       time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:       x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:    []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		AuthorityKeyId: ca.cert.SubjectKeyId,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, ca.cert, pub, ca.key)
+	if err != nil {
+		t.Fatalf("create cert: %v", err)
+	}
+	leafCert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatalf("parse cert: %v", err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+
+	csrPEM, csrJSON, err := GenerateCSR(leafCert, keyPEM, nil)
+	if err != nil {
+		t.Fatalf("GenerateCSR with Ed25519 key: %v", err)
+	}
+
+	block, _ := pem.Decode(csrPEM)
+	if block == nil {
+		t.Fatal("CSR PEM does not contain valid PEM block")
+	}
+	csr, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		t.Fatalf("parse CSR: %v", err)
+	}
+	if err := csr.CheckSignature(); err != nil {
+		t.Errorf("CSR signature invalid: %v", err)
+	}
+
+	// Verify CSR JSON reports Ed25519
+	var jsonResult map[string]any
+	if err := json.Unmarshal(csrJSON, &jsonResult); err != nil {
+		t.Fatalf("CSR JSON invalid: %v", err)
+	}
+	if algo, ok := jsonResult["key_algorithm"].(string); !ok || algo != "Ed25519" {
+		t.Errorf("key_algorithm = %v, want Ed25519", jsonResult["key_algorithm"])
 	}
 }
 

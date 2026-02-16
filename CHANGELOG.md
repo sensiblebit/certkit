@@ -29,6 +29,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Tests
 
+- Ralph Loop pass 4 — key handling normalization and export pipeline gaps ([`e82047d`]):
+  - Add `ParseContainerData_PEMCertAndKey_Ed25519` testing combined cert+key PEM with Ed25519 value form
+  - Add `HandleKey_Ed25519DeduplicationPointerAndValue` testing pointer and value form dedup in single store
+  - Add `GenerateCSR_ECDSAKey` and `GenerateCSR_Ed25519Key` testing CSR generation across all key types
+  - Add `GenerateYAML_ECDSAKeyMetadata` and `GenerateYAML_Ed25519KeyMetadata` testing YAML key metadata
+  - Add `ProcessData_IngestExportReingest_AllKeyTypes` full pipeline round-trip for all key types
 - Ralph Loop pass 3 — key handling normalization and scale coverage ([`c89e5de`], [`0db22eb`]):
   - Add `ProcessData_PKCS8DER_Ed25519_ValueForm` asserting stored key is value type, not pointer
   - Add `SameECDSAKey_SEC1AndPKCS8_Equality` cross-format test (all NIST curves at parse level + pipeline level)
@@ -527,6 +533,7 @@ Initial release.
 [`c89e5de`]: https://github.com/sensiblebit/certkit/commit/c89e5de
 [`0db22eb`]: https://github.com/sensiblebit/certkit/commit/0db22eb
 [`827e913`]: https://github.com/sensiblebit/certkit/commit/827e913
+[`e82047d`]: https://github.com/sensiblebit/certkit/commit/e82047d
 [#24]: https://github.com/sensiblebit/certkit/pull/24
 [#25]: https://github.com/sensiblebit/certkit/pull/25
 [#26]: https://github.com/sensiblebit/certkit/pull/26

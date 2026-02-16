@@ -2532,3 +2532,99 @@ func TestProcessData_PKCS8DER_AllKeyTypes(t *testing.T) {
 		})
 	}
 }
+
+func TestProcessData_IngestExportReingest_AllKeyTypes(t *testing.T) {
+	// WHY: Tests the full pipeline: ingest a key via ProcessData → store in
+	// MemStore → export the stored PEM → re-ingest via ProcessData into a
+	// fresh store → verify key material equality. This catches subtle
+	// normalization or PEM encoding bugs that single-step tests miss.
+	t.Parallel()
+
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, edKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		key  any
+	}{
+		{"RSA", rsaKey},
+		{"ECDSA", ecKey},
+		{"Ed25519", edKey},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Step 1: Marshal to PKCS#8 PEM and ingest
+			keyPEM, err := certkit.MarshalPrivateKeyToPEM(tt.key)
+			if err != nil {
+				t.Fatalf("MarshalPrivateKeyToPEM: %v", err)
+			}
+
+			store1 := NewMemStore()
+			if err := ProcessData(ProcessInput{
+				Data:    []byte(keyPEM),
+				Path:    "original.pem",
+				Handler: store1,
+			}); err != nil {
+				t.Fatalf("first ingest: %v", err)
+			}
+
+			if len(store1.AllKeys()) != 1 {
+				t.Fatalf("first store: expected 1 key, got %d", len(store1.AllKeys()))
+			}
+
+			// Step 2: Extract stored PEM and re-ingest
+			var storedPEM []byte
+			for _, rec := range store1.AllKeys() {
+				storedPEM = rec.PEM
+			}
+			if len(storedPEM) == 0 {
+				t.Fatal("stored PEM is empty")
+			}
+
+			store2 := NewMemStore()
+			if err := ProcessData(ProcessInput{
+				Data:    storedPEM,
+				Path:    "reingested.pem",
+				Handler: store2,
+			}); err != nil {
+				t.Fatalf("second ingest: %v", err)
+			}
+
+			if len(store2.AllKeys()) != 1 {
+				t.Fatalf("second store: expected 1 key, got %d", len(store2.AllKeys()))
+			}
+
+			// Step 3: Verify key material equality
+			for _, rec := range store2.AllKeys() {
+				if !keysEqual(t, tt.key, rec.Key) {
+					t.Error("re-ingested key does not Equal original")
+				}
+			}
+
+			// Step 4: Verify SKIs match between stores
+			var ski1, ski2 string
+			for ski := range store1.AllKeys() {
+				ski1 = ski
+			}
+			for ski := range store2.AllKeys() {
+				ski2 = ski
+			}
+			if ski1 != ski2 {
+				t.Errorf("SKI mismatch after re-ingest: %q != %q", ski1, ski2)
+			}
+		})
+	}
+}

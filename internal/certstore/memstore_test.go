@@ -1198,6 +1198,55 @@ func TestMemStore_HandleKey_Ed25519PointerValueIdenticalRecord(t *testing.T) {
 	}
 }
 
+func TestMemStore_HandleKey_Ed25519DeduplicationPointerAndValue(t *testing.T) {
+	// WHY: The same Ed25519 key ingested first as *ed25519.PrivateKey (pointer
+	// from ssh.ParseRawPrivateKey) and then as ed25519.PrivateKey (value from
+	// x509.ParsePKCS8PrivateKey) must deduplicate to a single entry in the
+	// same store. A normalization bug would produce different SKIs and store
+	// two separate records for the same key material.
+	t.Parallel()
+
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate Ed25519 key: %v", err)
+	}
+	privPtr := &priv
+
+	keyPEM, err := certkit.MarshalPrivateKeyToPEM(priv)
+	if err != nil {
+		t.Fatalf("marshal Ed25519 key: %v", err)
+	}
+
+	store := NewMemStore()
+
+	// Ingest pointer form first (simulates ssh.ParseRawPrivateKey path)
+	if err := store.HandleKey(privPtr, []byte(keyPEM), "openssh-source.key"); err != nil {
+		t.Fatalf("HandleKey(pointer): %v", err)
+	}
+	// Ingest value form second (simulates x509.ParsePKCS8PrivateKey path)
+	if err := store.HandleKey(priv, []byte(keyPEM), "pkcs8-source.key"); err != nil {
+		t.Fatalf("HandleKey(value): %v", err)
+	}
+
+	keys := store.AllKeys()
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key (deduplicated), got %d", len(keys))
+	}
+	for _, rec := range keys {
+		// Last-write-wins: pkcs8-source should overwrite openssh-source
+		if rec.Source != "pkcs8-source.key" {
+			t.Errorf("Source = %q, want pkcs8-source.key (last-write-wins)", rec.Source)
+		}
+		if rec.KeyType != "Ed25519" {
+			t.Errorf("KeyType = %q, want Ed25519", rec.KeyType)
+		}
+		// Verify stored key is value type (not pointer)
+		if _, ok := rec.Key.(ed25519.PrivateKey); !ok {
+			t.Errorf("stored key type = %T, want ed25519.PrivateKey (value)", rec.Key)
+		}
+	}
+}
+
 func TestMemStore_HandleKey_NilKey(t *testing.T) {
 	// WHY: Nil key must return a clean error, not panic — callers may pass nil from
 	// a failed decode without checking, and a panic would crash the ingestion pipeline.

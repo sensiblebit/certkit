@@ -498,6 +498,44 @@ func TestParseContainerData_GarbageData(t *testing.T) {
 	}
 }
 
+func TestParseContainerData_PEMCertAndKey_Ed25519(t *testing.T) {
+	// WHY: Combined cert+key PEM with Ed25519 must parse correctly and return
+	// the normalized value type, not a pointer — the ECDSA variant would not
+	// catch an Ed25519-specific normalization gap in findPEMPrivateKey.
+	t.Parallel()
+
+	ca := newEd25519CA(t)
+	leaf := newEd25519Leaf(t, ca, "ed-combined.example.com", []string{"ed-combined.example.com"})
+
+	combined := append(leaf.certPEM, leaf.keyPEM...)
+	contents, err := ParseContainerData(combined, nil)
+	if err != nil {
+		t.Fatalf("ParseContainerData: %v", err)
+	}
+	if contents.Leaf == nil {
+		t.Fatal("expected Leaf to be non-nil")
+	}
+	if contents.Leaf.Subject.CommonName != "ed-combined.example.com" {
+		t.Errorf("Leaf CN = %q, want ed-combined.example.com", contents.Leaf.Subject.CommonName)
+	}
+	if contents.Key == nil {
+		t.Fatal("expected Key to be non-nil for cert+key PEM")
+	}
+	edKey, ok := contents.Key.(ed25519.PrivateKey)
+	if !ok {
+		t.Fatalf("Key type = %T, want ed25519.PrivateKey (value, not pointer)", contents.Key)
+	}
+	origKey := leaf.key.(ed25519.PrivateKey)
+	if !origKey.Equal(edKey) {
+		t.Error("extracted Ed25519 key does not Equal original")
+	}
+	if match, err := certkit.KeyMatchesCert(contents.Key, contents.Leaf); err != nil {
+		t.Fatalf("KeyMatchesCert: %v", err)
+	} else if !match {
+		t.Error("extracted Ed25519 key does not match extracted leaf certificate")
+	}
+}
+
 func TestParseContainerData_PEMSkipsMalformedFirstKey(t *testing.T) {
 	// WHY: findPEMPrivateKey iterates all PEM blocks and returns the first
 	// successfully parsed key. When the first key block is malformed, it must
