@@ -11,6 +11,7 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -437,6 +438,22 @@ func TestMemStore_MultipleCertsAndKeys(t *testing.T) {
 	if len(store.MatchedPairs()) != 2 {
 		t.Errorf("expected 2 matched pairs, got %d", len(store.MatchedPairs()))
 	}
+
+	// Verify key material is preserved, not just counts.
+	for _, rec := range store.AllKeys() {
+		switch rec.KeyType {
+		case "RSA":
+			if !keysEqual(t, leaf1.key, rec.Key) {
+				t.Error("stored RSA key does not match original")
+			}
+		case "ECDSA":
+			if !keysEqual(t, leaf2.key, rec.Key) {
+				t.Error("stored ECDSA key does not match original")
+			}
+		default:
+			t.Errorf("unexpected key type: %s", rec.KeyType)
+		}
+	}
 }
 
 func TestMemStore_HandleCertificate_UnsupportedKeyType(t *testing.T) {
@@ -764,7 +781,27 @@ func TestMemStore_AllKeysFlat(t *testing.T) {
 
 	flat := store.AllKeysFlat()
 	if len(flat) != 2 {
-		t.Errorf("expected 2 flat keys, got %d", len(flat))
+		t.Fatalf("expected 2 flat keys, got %d", len(flat))
+	}
+
+	// Verify each returned key matches one of the originals.
+	hasRSA, hasECDSA := false, false
+	for _, rec := range flat {
+		switch rec.KeyType {
+		case "RSA":
+			hasRSA = true
+			if !keysEqual(t, leaf1.key, rec.Key) {
+				t.Error("flat RSA key does not match original")
+			}
+		case "ECDSA":
+			hasECDSA = true
+			if !keysEqual(t, leaf2.key, rec.Key) {
+				t.Error("flat ECDSA key does not match original")
+			}
+		}
+	}
+	if !hasRSA || !hasECDSA {
+		t.Errorf("expected both RSA and ECDSA keys, got RSA=%v ECDSA=%v", hasRSA, hasECDSA)
 	}
 }
 
@@ -1170,6 +1207,9 @@ func TestMemStore_HandleKey_NilKey(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for nil key")
 	}
+	if !strings.Contains(err.Error(), "extracting public key") {
+		t.Errorf("error should mention extracting public key, got: %v", err)
+	}
 }
 
 func TestMemStore_HandleCertificate_NilCert(t *testing.T) {
@@ -1180,6 +1220,9 @@ func TestMemStore_HandleCertificate_NilCert(t *testing.T) {
 	err := store.HandleCertificate(nil, "nil.pem")
 	if err == nil {
 		t.Fatal("expected error for nil cert")
+	}
+	if !strings.Contains(err.Error(), "certificate is nil") {
+		t.Errorf("error should mention nil certificate, got: %v", err)
 	}
 }
 

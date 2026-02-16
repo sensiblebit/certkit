@@ -225,8 +225,21 @@ func TestDecodeJKS_PrivateKeyEntry(t *testing.T) {
 	if len(keys) != 1 {
 		t.Errorf("expected 1 key, got %d", len(keys))
 	}
-	if _, ok := keys[0].(*rsa.PrivateKey); !ok {
-		t.Errorf("expected *rsa.PrivateKey, got %T", keys[0])
+	rsaKey, ok := keys[0].(*rsa.PrivateKey)
+	if !ok {
+		t.Fatalf("expected *rsa.PrivateKey, got %T", keys[0])
+	}
+	// Verify key is functional by round-tripping through PEM.
+	pemStr, err := MarshalPrivateKeyToPEM(rsaKey)
+	if err != nil {
+		t.Fatalf("MarshalPrivateKeyToPEM: %v", err)
+	}
+	parsed, err := ParsePEMPrivateKey([]byte(pemStr))
+	if err != nil {
+		t.Fatalf("re-parse key PEM: %v", err)
+	}
+	if !rsaKey.Equal(parsed) {
+		t.Error("decoded JKS key does not survive PEM round-trip")
 	}
 }
 

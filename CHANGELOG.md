@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Tests
 
+- Ralph Loop pass 2: strengthen count-only assertions with key material equality checks in `MultipleCertsAndKeys`, `AllKeysFlat`; add error message assertions for nil key/cert; add PEM round-trip verification in `DecodeJKS_PrivateKeyEntry`; fix WHY comment placement ([`dec8949`], [`19ee683`])
 - Ralph Loop key handling test hardening: corrupt DER in RSA/EC PEM blocks, same-key-all-formats equality, ComputeSKILegacy RSA/Ed25519, Ed25519-vs-RSA cross-type mismatch, JKS magic byte boundaries, PKCS#12 multi-password iteration, encrypted PEM with nil passwords, duplicate test consolidation ([`7652404`])
 - Comprehensive key handling test hardening via Ralph Loop (5 passes, 2 review iterations) covering all key handling paths: parsing, normalization, matching, encoding, and cross-format round-trips ([`ff58d2b`])
   - Table-driven PKCS#12 and legacy PKCS#12 round-trip tests for all 5 key types (RSA, ECDSA P-256/P-384/P-521, Ed25519)
@@ -512,6 +513,8 @@ Initial release.
 [`ff58d2b`]: https://github.com/sensiblebit/certkit/commit/ff58d2b
 [`7652404`]: https://github.com/sensiblebit/certkit/commit/7652404
 [`0031f7a`]: https://github.com/sensiblebit/certkit/commit/0031f7a
+[`dec8949`]: https://github.com/sensiblebit/certkit/commit/dec8949
+[`19ee683`]: https://github.com/sensiblebit/certkit/commit/19ee683
 [#24]: https://github.com/sensiblebit/certkit/pull/24
 [#25]: https://github.com/sensiblebit/certkit/pull/25
 [#26]: https://github.com/sensiblebit/certkit/pull/26
