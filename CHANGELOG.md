@@ -27,6 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add Claude Code automatic PR review and `@claude` mention workflows
 - Add Copilot review instructions (`.github/copilot-instructions.md`) with project coding standards
 
+### Docs
+
+- Fix expired certificate behavior description in EXAMPLES.md — certs are always ingested, filtering is output-only ([`3555a5b`])
+- Clarify PKCS#12 default password is `changeit` with user override via `-p` in EXAMPLES.md ([`3555a5b`])
+
 ### Fixed
 
 - Fix CI commit-message check ignoring `--base-ref` argument — base ref was parsed as positional `file` arg instead of the named `--base-ref` flag, always defaulting to `origin/main`
@@ -497,6 +502,7 @@ Initial release.
 [`f23f8ab`]: https://github.com/sensiblebit/certkit/commit/f23f8ab
 [`2fc570c`]: https://github.com/sensiblebit/certkit/commit/2fc570c
 [`39a5ece`]: https://github.com/sensiblebit/certkit/commit/e6a5a39
+[`3555a5b`]: https://github.com/sensiblebit/certkit/commit/3555a5b
 [#24]: https://github.com/sensiblebit/certkit/pull/24
 [#25]: https://github.com/sensiblebit/certkit/pull/25
 [#26]: https://github.com/sensiblebit/certkit/pull/26
