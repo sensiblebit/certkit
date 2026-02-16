@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Tests
+
+- Harden key handling tests: add direct `normalizeKey` unit tests, `validatePKCS12KeyType` coverage for Ed25519 pointer rejection, cross-format PEM round-trips (PKCS#1/SEC1 → PKCS#8), end-to-end ProcessData → export pipeline verification, key deduplication behavior, and container tests for ECDSA/Ed25519 key types ([`39a5ece`])
+
 ### Fixed
 
 - Fix WASM export ZIP files having unix epoch (1970-01-01) timestamps — use `CreateHeader` with current time instead of `Create` ([`273e806`])
@@ -455,6 +459,7 @@ Initial release.
 [`273e806`]: https://github.com/sensiblebit/certkit/commit/273e806
 [`0acbada`]: https://github.com/sensiblebit/certkit/commit/0acbada
 [`b20cfb3`]: https://github.com/sensiblebit/certkit/commit/b20cfb3
+[`39a5ece`]: https://github.com/sensiblebit/certkit/commit/e6a5a39
 [#24]: https://github.com/sensiblebit/certkit/pull/24
 [#25]: https://github.com/sensiblebit/certkit/pull/25
 [#26]: https://github.com/sensiblebit/certkit/pull/26

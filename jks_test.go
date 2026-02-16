@@ -502,6 +502,7 @@ func TestEncodeDecodeJKS_KeyTypes(t *testing.T) {
 		name     string
 		setup    func(t *testing.T) (leafKey any, leafCert *x509.Certificate, caCerts []*x509.Certificate, wantCN string, wantCerts int)
 		wantType string // e.g. "*rsa.PrivateKey"
+		checkEq  func(t *testing.T, original, decoded any)
 	}{
 		{
 			name: "RSA",
@@ -537,6 +538,12 @@ func TestEncodeDecodeJKS_KeyTypes(t *testing.T) {
 				return leafKey, leafCert, []*x509.Certificate{caCert}, "jks-rsa-leaf.example.com", 2
 			},
 			wantType: "*rsa.PrivateKey",
+			checkEq: func(t *testing.T, original, decoded any) {
+				t.Helper()
+				if !original.(*rsa.PrivateKey).Equal(decoded) {
+					t.Error("decoded RSA key does not Equal original")
+				}
+			},
 		},
 		{
 			name: "ECDSA",
@@ -572,6 +579,12 @@ func TestEncodeDecodeJKS_KeyTypes(t *testing.T) {
 				return leafKey, leafCert, []*x509.Certificate{caCert}, "jks-ecdsa-leaf.example.com", 2
 			},
 			wantType: "*ecdsa.PrivateKey",
+			checkEq: func(t *testing.T, original, decoded any) {
+				t.Helper()
+				if !original.(*ecdsa.PrivateKey).Equal(decoded) {
+					t.Error("decoded ECDSA key does not Equal original")
+				}
+			},
 		},
 		{
 			name: "Ed25519",
@@ -596,6 +609,12 @@ func TestEncodeDecodeJKS_KeyTypes(t *testing.T) {
 				return priv, leafCert, nil, "jks-ed25519.example.com", 1
 			},
 			wantType: "ed25519.PrivateKey",
+			checkEq: func(t *testing.T, original, decoded any) {
+				t.Helper()
+				if !original.(ed25519.PrivateKey).Equal(decoded) {
+					t.Error("decoded Ed25519 key does not Equal original")
+				}
+			},
 		},
 	}
 	for _, tt := range tests {
@@ -622,6 +641,9 @@ func TestEncodeDecodeJKS_KeyTypes(t *testing.T) {
 			if gotType != tt.wantType {
 				t.Fatalf("expected %s, got %s", tt.wantType, gotType)
 			}
+
+			// Verify private key equality (not just public key match).
+			tt.checkEq(t, leafKey, keys[0])
 
 			match, err := KeyMatchesCert(keys[0], certs[0])
 			if err != nil {

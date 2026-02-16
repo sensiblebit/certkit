@@ -2018,3 +2018,222 @@ func TestParsePEMPrivateKey_PKCS8RSA(t *testing.T) {
 		t.Error("parsed PKCS#8 RSA key does not match original")
 	}
 }
+
+// TestNormalizeKey verifies that normalizeKey correctly dereferences
+// *ed25519.PrivateKey to ed25519.PrivateKey and passes other types through.
+func TestNormalizeKey(t *testing.T) {
+	// WHY: normalizeKey is the single normalization point for Ed25519 pointer
+	// form returned by ssh.ParseRawPrivateKey; a broken normalizeKey would
+	// silently store the wrong type and break downstream type switches.
+	t.Parallel()
+
+	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	_, edVal, _ := ed25519.GenerateKey(rand.Reader)
+	edPtr := &edVal
+
+	tests := []struct {
+		name     string
+		input    crypto.PrivateKey
+		wantType string
+	}{
+		{"RSA passthrough", rsaKey, "*rsa.PrivateKey"},
+		{"ECDSA passthrough", ecKey, "*ecdsa.PrivateKey"},
+		{"Ed25519 value passthrough", edVal, "ed25519.PrivateKey"},
+		{"Ed25519 pointer dereferenced", edPtr, "ed25519.PrivateKey"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := normalizeKey(tt.input)
+			gotType := fmt.Sprintf("%T", result)
+			if gotType != tt.wantType {
+				t.Errorf("normalizeKey(%T) type = %s, want %s", tt.input, gotType, tt.wantType)
+			}
+		})
+	}
+
+	// Verify Ed25519 pointer normalization preserves key material.
+	t.Run("Ed25519 pointer preserves key", func(t *testing.T) {
+		result := normalizeKey(edPtr)
+		resultVal, ok := result.(ed25519.PrivateKey)
+		if !ok {
+			t.Fatalf("expected ed25519.PrivateKey, got %T", result)
+		}
+		if !edVal.Equal(resultVal) {
+			t.Error("normalized Ed25519 key does not Equal original")
+		}
+	})
+}
+
+// TestValidatePKCS12KeyType verifies key type validation for PKCS#12 encoding.
+func TestValidatePKCS12KeyType(t *testing.T) {
+	// WHY: validatePKCS12KeyType is the gatekeeper for PKCS#12 encoding; it must
+	// accept the exact Go types returned by decoders and reject pointer forms of
+	// Ed25519 keys that would cause encoding failures downstream.
+	t.Parallel()
+
+	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	_, edVal, _ := ed25519.GenerateKey(rand.Reader)
+	edPtr := &edVal
+
+	tests := []struct {
+		name    string
+		key     crypto.PrivateKey
+		wantErr bool
+	}{
+		{"RSA accepted", rsaKey, false},
+		{"ECDSA accepted", ecKey, false},
+		{"Ed25519 value accepted", edVal, false},
+		{"Ed25519 pointer rejected", edPtr, true},
+		{"nil rejected", nil, true},
+		{"unsupported type rejected", struct{}{}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validatePKCS12KeyType(tt.key)
+			if tt.wantErr && err == nil {
+				t.Errorf("validatePKCS12KeyType(%T) = nil, want error", tt.key)
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("validatePKCS12KeyType(%T) = %v, want nil", tt.key, err)
+			}
+		})
+	}
+}
+
+// TestCrossFormatPEMRoundTrip verifies that keys encoded in legacy formats
+// (PKCS#1, SEC1) survive a parse → marshal-to-PKCS#8 → re-parse cycle with
+// Equal() key material. This is the normalization path used by ProcessData.
+func TestCrossFormatPEMRoundTrip(t *testing.T) {
+	// WHY: When keys arrive in PKCS#1 or SEC1 format, the processing pipeline
+	// re-encodes them as PKCS#8 for storage. This round-trip must preserve key
+	// material or all exports (PEM, PKCS#12, JKS) would contain wrong keys.
+	t.Parallel()
+
+	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+
+	tests := []struct {
+		name      string
+		origKey   crypto.PrivateKey
+		inputPEM  []byte
+		wantLabel string
+	}{
+		{
+			name:    "PKCS1 RSA → PKCS8 → parse",
+			origKey: rsaKey,
+			inputPEM: pem.EncodeToMemory(&pem.Block{
+				Type:  "RSA PRIVATE KEY",
+				Bytes: x509.MarshalPKCS1PrivateKey(rsaKey),
+			}),
+			wantLabel: "PRIVATE KEY",
+		},
+		{
+			name:    "SEC1 ECDSA → PKCS8 → parse",
+			origKey: ecKey,
+			inputPEM: func() []byte {
+				der, _ := x509.MarshalECPrivateKey(ecKey)
+				return pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})
+			}(),
+			wantLabel: "PRIVATE KEY",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// Step 1: Parse original format
+			parsed, err := ParsePEMPrivateKey(tt.inputPEM)
+			if err != nil {
+				t.Fatalf("ParsePEMPrivateKey: %v", err)
+			}
+
+			// Step 2: Marshal to PKCS#8 (normalization)
+			pkcs8PEM, err := MarshalPrivateKeyToPEM(parsed)
+			if err != nil {
+				t.Fatalf("MarshalPrivateKeyToPEM: %v", err)
+			}
+
+			// Verify the output is labeled as PKCS#8
+			block, _ := pem.Decode([]byte(pkcs8PEM))
+			if block == nil {
+				t.Fatal("MarshalPrivateKeyToPEM produced unparseable PEM")
+			}
+			if block.Type != tt.wantLabel {
+				t.Errorf("PEM type = %q, want %q", block.Type, tt.wantLabel)
+			}
+
+			// Step 3: Re-parse the PKCS#8 PEM
+			reparsed, err := ParsePEMPrivateKey([]byte(pkcs8PEM))
+			if err != nil {
+				t.Fatalf("re-parse PKCS#8 PEM: %v", err)
+			}
+
+			// Step 4: Verify the key material is preserved
+			type equalKey interface {
+				Equal(x crypto.PrivateKey) bool
+			}
+			orig, ok := tt.origKey.(equalKey)
+			if !ok {
+				t.Fatalf("original key %T does not implement Equal", tt.origKey)
+			}
+			if !orig.Equal(reparsed) {
+				t.Error("cross-format round-trip lost key material")
+			}
+		})
+	}
+}
+
+func TestParsePEMPrivateKeyWithPasswords_Unencrypted_KeyEquality(t *testing.T) {
+	// WHY: The existing TestParsePEMPrivateKeyWithPasswords_Unencrypted only
+	// checks the type, not the value. This verifies the parsed key actually
+	// matches the original via .Equal().
+	t.Parallel()
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	pemBytes := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	})
+
+	parsed, err := ParsePEMPrivateKeyWithPasswords(pemBytes, nil)
+	if err != nil {
+		t.Fatalf("expected unencrypted key to parse: %v", err)
+	}
+	rsaParsed, ok := parsed.(*rsa.PrivateKey)
+	if !ok {
+		t.Fatalf("expected *rsa.PrivateKey, got %T", parsed)
+	}
+	if !key.Equal(rsaParsed) {
+		t.Error("parsed unencrypted key does not Equal original")
+	}
+}
+
+func TestParsePEMPrivateKeyWithPasswords_DefaultPasswords_KeyEquality(t *testing.T) {
+	// WHY: The existing TestParsePEMPrivateKeyWithPasswords_DefaultPasswords
+	// only checks the type. This verifies the decrypted key actually matches
+	// the original, catching silent corruption during decryption.
+	t.Parallel()
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	block := &pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	}
+
+	//nolint:staticcheck // x509.EncryptPEMBlock is deprecated but needed for test
+	encBlock, err := x509.EncryptPEMBlock(rand.Reader, block.Type, block.Bytes, []byte("changeit"), x509.PEMCipherAES256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encPEM := pem.EncodeToMemory(encBlock)
+
+	parsed, err := ParsePEMPrivateKeyWithPasswords(encPEM, DefaultPasswords())
+	if err != nil {
+		t.Fatalf("expected DefaultPasswords to include 'changeit': %v", err)
+	}
+	rsaParsed, ok := parsed.(*rsa.PrivateKey)
+	if !ok {
+		t.Fatalf("expected *rsa.PrivateKey, got %T", parsed)
+	}
+	if !key.Equal(rsaParsed) {
+		t.Error("decrypted key does not Equal original")
+	}
+}

@@ -336,6 +336,26 @@ func ecdsaKeyPEM(t *testing.T) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: ecBytes})
 }
 
+// keysEqual compares two private keys by extracting their public keys and using
+// the Equal method. Works across all supported key types (RSA, ECDSA, Ed25519).
+func keysEqual(t *testing.T, a, b any) bool {
+	t.Helper()
+	switch ak := a.(type) {
+	case *rsa.PrivateKey:
+		bk, ok := b.(*rsa.PrivateKey)
+		return ok && ak.Equal(bk)
+	case *ecdsa.PrivateKey:
+		bk, ok := b.(*ecdsa.PrivateKey)
+		return ok && ak.Equal(bk)
+	case ed25519.PrivateKey:
+		bk, ok := b.(ed25519.PrivateKey)
+		return ok && ak.Equal(bk)
+	default:
+		t.Fatalf("keysEqual: unsupported key type %T", a)
+		return false
+	}
+}
+
 // ed25519KeyPEM returns PEM-encoded Ed25519 private key bytes.
 func ed25519KeyPEM(t *testing.T) []byte {
 	t.Helper()

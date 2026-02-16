@@ -1,6 +1,8 @@
 package certstore
 
 import (
+	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/rsa"
 	"crypto/x509"
 	"strings"
@@ -244,6 +246,78 @@ func TestParseContainerData_PEMKeyOnly(t *testing.T) {
 	}
 	if len(contents.ExtraCerts) != 0 {
 		t.Errorf("expected 0 ExtraCerts, got %d", len(contents.ExtraCerts))
+	}
+}
+
+func TestParseContainerData_PEMCertAndKey_ECDSA(t *testing.T) {
+	// WHY: Combined cert+key PEM with ECDSA key must parse correctly; the
+	// existing PEMCertAndKey test only covers RSA.
+	t.Parallel()
+
+	ca := newECDSACA(t)
+	leaf := newECDSALeaf(t, ca, "ecdsa-combined.example.com", []string{"ecdsa-combined.example.com"})
+
+	combined := append(leaf.certPEM, leaf.keyPEM...)
+	contents, err := ParseContainerData(combined, nil)
+	if err != nil {
+		t.Fatalf("ParseContainerData: %v", err)
+	}
+	if contents.Leaf == nil {
+		t.Fatal("expected Leaf to be non-nil")
+	}
+	if contents.Leaf.Subject.CommonName != "ecdsa-combined.example.com" {
+		t.Errorf("Leaf CN = %q, want ecdsa-combined.example.com", contents.Leaf.Subject.CommonName)
+	}
+	if contents.Key == nil {
+		t.Fatal("expected Key to be non-nil for cert+key PEM")
+	}
+	ecKey, ok := contents.Key.(*ecdsa.PrivateKey)
+	if !ok {
+		t.Fatalf("Key type = %T, want *ecdsa.PrivateKey", contents.Key)
+	}
+	if !leaf.key.(*ecdsa.PrivateKey).Equal(ecKey) {
+		t.Error("extracted ECDSA key does not Equal original")
+	}
+}
+
+func TestParseContainerData_PEMKeyOnly_ECDSA(t *testing.T) {
+	// WHY: ECDSA key-only PEM file must extract correctly via findPEMPrivateKey.
+	t.Parallel()
+
+	keyPEM := ecdsaKeyPEM(t)
+	contents, err := ParseContainerData(keyPEM, nil)
+	if err != nil {
+		t.Fatalf("ParseContainerData: %v", err)
+	}
+	if contents.Leaf != nil {
+		t.Error("expected Leaf to be nil for key-only PEM")
+	}
+	if contents.Key == nil {
+		t.Fatal("expected Key to be non-nil")
+	}
+	if _, ok := contents.Key.(*ecdsa.PrivateKey); !ok {
+		t.Errorf("Key type = %T, want *ecdsa.PrivateKey", contents.Key)
+	}
+}
+
+func TestParseContainerData_PEMKeyOnly_Ed25519(t *testing.T) {
+	// WHY: Ed25519 key-only PEM must parse correctly via findPEMPrivateKey;
+	// this covers the Ed25519 PKCS#8 path through container parsing.
+	t.Parallel()
+
+	keyPEM := ed25519KeyPEM(t)
+	contents, err := ParseContainerData(keyPEM, nil)
+	if err != nil {
+		t.Fatalf("ParseContainerData: %v", err)
+	}
+	if contents.Leaf != nil {
+		t.Error("expected Leaf to be nil for key-only PEM")
+	}
+	if contents.Key == nil {
+		t.Fatal("expected Key to be non-nil")
+	}
+	if _, ok := contents.Key.(ed25519.PrivateKey); !ok {
+		t.Errorf("Key type = %T, want ed25519.PrivateKey", contents.Key)
 	}
 }
 

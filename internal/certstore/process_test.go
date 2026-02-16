@@ -1,14 +1,19 @@
 package certstore
 
 import (
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/pem"
+	"math/big"
+	"slices"
 	"testing"
+	"time"
 
 	"github.com/sensiblebit/certkit"
 )
@@ -815,5 +820,251 @@ func TestProcessData_JKS_WrongPassword(t *testing.T) {
 	}
 	if len(store.AllKeys()) != 0 {
 		t.Errorf("expected 0 keys with wrong JKS password, got %d", len(store.AllKeys()))
+	}
+}
+
+// TestProcessData_PEMKey_ReencodingIntegrity verifies that ProcessData
+// re-encodes keys from PKCS#1/SEC1 format to PKCS#8 PEM and the stored PEM
+// round-trips back to the original key for all supported key types.
+func TestProcessData_PEMKey_ReencodingIntegrity(t *testing.T) {
+	// WHY: ProcessData normalizes all key formats to PKCS#8 PEM for storage.
+	// If this re-encoding loses key material, every downstream consumer (export,
+	// PKCS#12, CSR) silently produces wrong output.
+	t.Parallel()
+
+	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	_, edKey, _ := ed25519.GenerateKey(rand.Reader)
+
+	ecDER, _ := x509.MarshalECPrivateKey(ecKey)
+	edDER, _ := x509.MarshalPKCS8PrivateKey(edKey)
+
+	tests := []struct {
+		name    string
+		origKey crypto.PrivateKey
+		pemData []byte
+	}{
+		{
+			name:    "PKCS1 RSA",
+			origKey: rsaKey,
+			pemData: pem.EncodeToMemory(&pem.Block{
+				Type:  "RSA PRIVATE KEY",
+				Bytes: x509.MarshalPKCS1PrivateKey(rsaKey),
+			}),
+		},
+		{
+			name:    "SEC1 ECDSA",
+			origKey: ecKey,
+			pemData: pem.EncodeToMemory(&pem.Block{
+				Type:  "EC PRIVATE KEY",
+				Bytes: ecDER,
+			}),
+		},
+		{
+			name:    "PKCS8 Ed25519",
+			origKey: edKey,
+			pemData: pem.EncodeToMemory(&pem.Block{
+				Type:  "PRIVATE KEY",
+				Bytes: edDER,
+			}),
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			store := NewMemStore()
+			if err := ProcessData(ProcessInput{
+				Data:    tt.pemData,
+				Path:    "key.pem",
+				Handler: store,
+			}); err != nil {
+				t.Fatalf("ProcessData: %v", err)
+			}
+
+			keys := store.AllKeys()
+			if len(keys) != 1 {
+				t.Fatalf("expected 1 key, got %d", len(keys))
+			}
+			for _, rec := range keys {
+				// Verify stored PEM is parseable and equals original
+				parsedKey, err := certkit.ParsePEMPrivateKey(rec.PEM)
+				if err != nil {
+					t.Fatalf("stored PEM is unparseable: %v", err)
+				}
+				type equalKey interface {
+					Equal(x crypto.PrivateKey) bool
+				}
+				orig, ok := tt.origKey.(equalKey)
+				if !ok {
+					t.Fatalf("original key %T does not implement Equal", tt.origKey)
+				}
+				if !orig.Equal(parsedKey) {
+					t.Error("stored PEM round-trip key does not Equal original")
+				}
+
+				// Verify the PEM is PKCS#8 format
+				block, _ := pem.Decode(rec.PEM)
+				if block == nil {
+					t.Fatal("stored PEM is not decodeable")
+				}
+				if block.Type != "PRIVATE KEY" {
+					t.Errorf("stored PEM type = %q, want PRIVATE KEY (PKCS#8)", block.Type)
+				}
+			}
+		})
+	}
+}
+
+// TestProcessData_EndToEnd_IngestExportRoundTrip verifies the full pipeline:
+// ingest PEM cert+key via ProcessData → store in MemStore → retrieve key →
+// build export input → verify the .key file round-trips back to Equal().
+func TestProcessData_EndToEnd_IngestExportRoundTrip(t *testing.T) {
+	// WHY: The end-to-end round-trip is the core value proposition of certkit.
+	// Each stage is tested in isolation, but the integration between ProcessData,
+	// MemStore, and GenerateBundleFiles is untested. A subtle format mismatch
+	// between stages would silently produce wrong exports.
+	t.Parallel()
+
+	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	_, edKey, _ := ed25519.GenerateKey(rand.Reader)
+
+	tests := []struct {
+		name    string
+		makeKey func(t *testing.T) (crypto.PrivateKey, crypto.PublicKey, []byte)
+		keyType string
+		bitLen  int
+	}{
+		{
+			name: "RSA",
+			makeKey: func(t *testing.T) (crypto.PrivateKey, crypto.PublicKey, []byte) {
+				t.Helper()
+				keyPEM := pem.EncodeToMemory(&pem.Block{
+					Type:  "RSA PRIVATE KEY",
+					Bytes: x509.MarshalPKCS1PrivateKey(rsaKey),
+				})
+				return rsaKey, &rsaKey.PublicKey, keyPEM
+			},
+			keyType: "RSA",
+			bitLen:  2048,
+		},
+		{
+			name: "ECDSA",
+			makeKey: func(t *testing.T) (crypto.PrivateKey, crypto.PublicKey, []byte) {
+				t.Helper()
+				ecDER, _ := x509.MarshalECPrivateKey(ecKey)
+				keyPEM := pem.EncodeToMemory(&pem.Block{
+					Type:  "EC PRIVATE KEY",
+					Bytes: ecDER,
+				})
+				return ecKey, &ecKey.PublicKey, keyPEM
+			},
+			keyType: "ECDSA",
+			bitLen:  256,
+		},
+		{
+			name: "Ed25519",
+			makeKey: func(t *testing.T) (crypto.PrivateKey, crypto.PublicKey, []byte) {
+				t.Helper()
+				edDER, _ := x509.MarshalPKCS8PrivateKey(edKey)
+				keyPEM := pem.EncodeToMemory(&pem.Block{
+					Type:  "PRIVATE KEY",
+					Bytes: edDER,
+				})
+				return edKey, edKey.Public(), keyPEM
+			},
+			keyType: "Ed25519",
+			bitLen:  256,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			origKey, pubKey, keyPEM := tt.makeKey(t)
+
+			// Create a self-signed leaf cert using the key
+			tmpl := &x509.Certificate{
+				SerialNumber: big.NewInt(1),
+				Subject:      pkix.Name{CommonName: "e2e-" + tt.name + ".example.com"},
+				DNSNames:     []string{"e2e-" + tt.name + ".example.com"},
+				NotBefore:    time.Now().Add(-time.Hour),
+				NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+				KeyUsage:     x509.KeyUsageDigitalSignature,
+				ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+			}
+			certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pubKey, origKey)
+			if err != nil {
+				t.Fatalf("create cert: %v", err)
+			}
+			certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+
+			// Ingest combined cert+key PEM
+			store := NewMemStore()
+			combined := slices.Concat(certPEM, keyPEM)
+			if err := ProcessData(ProcessInput{
+				Data:    combined,
+				Path:    "combined.pem",
+				Handler: store,
+			}); err != nil {
+				t.Fatalf("ProcessData: %v", err)
+			}
+
+			// Verify cert and key were stored
+			if len(store.AllCerts()) != 1 {
+				t.Fatalf("expected 1 cert, got %d", len(store.AllCerts()))
+			}
+			if len(store.AllKeys()) != 1 {
+				t.Fatalf("expected 1 key, got %d", len(store.AllKeys()))
+			}
+
+			// Retrieve the stored key PEM
+			var storedRec *KeyRecord
+			for _, rec := range store.AllKeys() {
+				storedRec = rec
+			}
+
+			// Build export input and generate bundle files
+			cert, _ := x509.ParseCertificate(certDER)
+			bundle := &certkit.BundleResult{Leaf: cert}
+			files, err := GenerateBundleFiles(BundleExportInput{
+				Bundle:     bundle,
+				KeyPEM:     storedRec.PEM,
+				KeyType:    tt.keyType,
+				BitLength:  tt.bitLen,
+				Prefix:     "test",
+				SecretName: "test-secret",
+			})
+			if err != nil {
+				t.Fatalf("GenerateBundleFiles: %v", err)
+			}
+
+			// Find the .key file in the output
+			var exportedKeyPEM []byte
+			for _, f := range files {
+				if f.Name == "test.key" {
+					exportedKeyPEM = f.Data
+					break
+				}
+			}
+			if exportedKeyPEM == nil {
+				t.Fatal("no .key file in exported bundle")
+			}
+
+			// Parse the exported .key file and verify it equals the original
+			exportedKey, err := certkit.ParsePEMPrivateKey(exportedKeyPEM)
+			if err != nil {
+				t.Fatalf("parse exported .key: %v", err)
+			}
+			type equalKey interface {
+				Equal(x crypto.PrivateKey) bool
+			}
+			orig, ok := origKey.(equalKey)
+			if !ok {
+				t.Fatalf("original key %T does not implement Equal", origKey)
+			}
+			if !orig.Equal(exportedKey) {
+				t.Error("exported .key file key does not Equal original — end-to-end round-trip failed")
+			}
+		})
 	}
 }

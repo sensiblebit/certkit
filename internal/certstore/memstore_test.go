@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
+	"encoding/pem"
 	"math/big"
 	"testing"
 	"time"
@@ -832,6 +833,7 @@ func TestMemStore_HandleKey_Ed25519Pointer(t *testing.T) {
 	// WHY: ssh.ParseRawPrivateKey returns *ed25519.PrivateKey (pointer), not
 	// the value type. HandleKey must normalize it to ed25519.PrivateKey so
 	// downstream type switches (e.g., inspect.keyBitDetail) work correctly.
+	// Uses the same key for object and PEM to verify consistency.
 	t.Parallel()
 
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -840,9 +842,14 @@ func TestMemStore_HandleKey_Ed25519Pointer(t *testing.T) {
 	}
 	privPtr := &priv
 
-	store := NewMemStore()
-	keyPEMData := ed25519KeyPEM(t)
+	// Marshal the SAME key to PEM (not a random different key)
+	keyDER, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatalf("marshal Ed25519 key: %v", err)
+	}
+	keyPEMData := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 
+	store := NewMemStore()
 	if err := store.HandleKey(privPtr, keyPEMData, "ed25519-ptr.pem"); err != nil {
 		t.Fatalf("HandleKey: %v", err)
 	}
@@ -852,11 +859,24 @@ func TestMemStore_HandleKey_Ed25519Pointer(t *testing.T) {
 		t.Fatalf("expected 1 key, got %d", len(keys))
 	}
 	for _, rec := range keys {
-		if _, ok := rec.Key.(ed25519.PrivateKey); !ok {
+		storedKey, ok := rec.Key.(ed25519.PrivateKey)
+		if !ok {
 			t.Errorf("stored key type = %T, want ed25519.PrivateKey (value, not pointer)", rec.Key)
 		}
 		if rec.KeyType != "Ed25519" {
 			t.Errorf("KeyType = %q, want Ed25519", rec.KeyType)
+		}
+		// Verify stored key matches original
+		if !priv.Equal(storedKey) {
+			t.Error("stored Ed25519 key does not Equal original")
+		}
+		// Verify stored PEM round-trips back to the same key
+		parsedKey, err := certkit.ParsePEMPrivateKey(rec.PEM)
+		if err != nil {
+			t.Fatalf("re-parse stored PEM: %v", err)
+		}
+		if !priv.Equal(parsedKey) {
+			t.Error("PEM round-trip key does not Equal original")
 		}
 	}
 }
@@ -929,4 +949,99 @@ func signLeafWithKey(t *testing.T, ca testCA, key *rsa.PrivateKey, cn string, se
 		t.Fatalf("parse cert: %v", err)
 	}
 	return cert
+}
+
+func TestMemStore_HandleKey_Deduplication(t *testing.T) {
+	// WHY: When the same key is ingested from multiple sources (e.g., key.pem
+	// and bundle.p12), HandleKey silently overwrites. This test documents the
+	// last-write-wins behavior and verifies the store remains consistent.
+	t.Parallel()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPEM1, err := certkit.MarshalPrivateKeyToPEM(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPEM2, err := certkit.MarshalPrivateKeyToPEM(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewMemStore()
+	if err := store.HandleKey(key, []byte(keyPEM1), "source-a.pem"); err != nil {
+		t.Fatalf("HandleKey source-a: %v", err)
+	}
+	if err := store.HandleKey(key, []byte(keyPEM2), "source-b.pem"); err != nil {
+		t.Fatalf("HandleKey source-b: %v", err)
+	}
+
+	keys := store.AllKeys()
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key (deduplicated by SKI), got %d", len(keys))
+	}
+	for _, rec := range keys {
+		// Last-write-wins: source-b overwrites source-a
+		if rec.Source != "source-b.pem" {
+			t.Errorf("Source = %q, want source-b.pem (last-write-wins)", rec.Source)
+		}
+		// Key material must still be valid
+		parsedKey, err := certkit.ParsePEMPrivateKey(rec.PEM)
+		if err != nil {
+			t.Fatalf("stored PEM is unparseable: %v", err)
+		}
+		if !key.Equal(parsedKey) {
+			t.Error("stored key PEM does not match original")
+		}
+	}
+}
+
+func TestMemStore_HandleKey_PEMRoundTrip(t *testing.T) {
+	// WHY: HandleKey stores a PEM blob alongside the key object. This test
+	// verifies that the stored PEM round-trips back to the original key for
+	// all supported key types, catching silent PEM corruption.
+	t.Parallel()
+
+	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	_, edKey, _ := ed25519.GenerateKey(rand.Reader)
+
+	tests := []struct {
+		name string
+		key  any
+	}{
+		{"RSA", rsaKey},
+		{"ECDSA", ecKey},
+		{"Ed25519", edKey},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			keyPEM, err := certkit.MarshalPrivateKeyToPEM(tt.key)
+			if err != nil {
+				t.Fatalf("MarshalPrivateKeyToPEM: %v", err)
+			}
+
+			store := NewMemStore()
+			if err := store.HandleKey(tt.key, []byte(keyPEM), "test.pem"); err != nil {
+				t.Fatalf("HandleKey: %v", err)
+			}
+
+			keys := store.AllKeys()
+			if len(keys) != 1 {
+				t.Fatalf("expected 1 key, got %d", len(keys))
+			}
+			for _, rec := range keys {
+				parsedKey, err := certkit.ParsePEMPrivateKey(rec.PEM)
+				if err != nil {
+					t.Fatalf("stored PEM round-trip parse failed: %v", err)
+				}
+				if !keysEqual(t, tt.key, parsedKey) {
+					t.Error("stored PEM round-trip key does not Equal original")
+				}
+			}
+		})
+	}
 }
