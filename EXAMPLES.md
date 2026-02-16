@@ -143,7 +143,7 @@ Going the other direction -- you have PEM files and need a `.p12` for a Java app
 certkit bundle cert.pem --key key.pem --format p12 -o bundle.p12
 ```
 
-The output `.p12` uses password `changeit` (the Java convention). Same works for JKS:
+The output `.p12` uses password `changeit` by default (the Java convention). Override with `-p "your-password"`. Same works for JKS:
 
 ```sh
 certkit bundle cert.pem --key key.pem --format jks -o keystore.jks
@@ -324,14 +324,14 @@ Useful in scripts or when fetching certs from other tools.
 
 ## "I need to work with expired certificates"
 
-By default, certkit skips expired certificates in all commands. To include them:
+certkit always reads and parses expired certificates -- they're never silently dropped. However, expired certificates are excluded from output by default (scan summaries, bundle exports). Use `--allow-expired` to include them:
 
 ```sh
-certkit inspect expired-cert.pem --allow-expired
-certkit verify expired-cert.pem --allow-expired
-certkit bundle expired-cert.pem --allow-expired --force
 certkit scan /path/to/certs/ --allow-expired
+certkit bundle expired-cert.pem --allow-expired --force
 ```
+
+Commands that target a specific file (`inspect`, `verify`) always show the certificate regardless of expiry.
 
 ---
 
