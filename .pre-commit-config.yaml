@@ -1,12 +1,32 @@
 repos:
+  # ── Git Conventions ──
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: no-commit-to-branch
+        name: no commit to main
+        args: [--branch, main]
+
   - repo: local
     hooks:
+      - id: branch-name
+        name: branch name
+        entry: python3 scripts/checks.py branch-name
+        language: system
+        always_run: true
+        pass_filenames: false
+
+      - id: commit-message
+        name: commit message
+        entry: python3 scripts/checks.py commit-message
+        language: system
+        stages: [commit-msg]
+
       # ── Go ──
       - id: goimports
         name: goimports
-        entry: goimports -w
-        language: golang
-        additional_dependencies: [golang.org/x/tools/cmd/goimports@latest]
+        entry: python3 scripts/checks.py goimports --fix
+        language: system
         types: [go]
 
       - id: go-vet
@@ -31,16 +51,9 @@ repos:
         pass_filenames: false
 
       # ── WASM ──
-      - id: wasm-vet
-        name: wasm vet
-        entry: bash -c 'GOOS=js GOARCH=wasm go vet ./cmd/wasm/'
-        language: system
-        files: (^cmd/wasm/|^internal/|^certkit\.go|^bundle\.go|^csr\.go|^pkcs\.go|^jks\.go)
-        pass_filenames: false
-
-      - id: wasm-build
-        name: wasm build
-        entry: bash -c 'GOOS=js GOARCH=wasm go build -o /dev/null ./cmd/wasm/'
+      - id: wasm
+        name: wasm
+        entry: python3 scripts/checks.py wasm
         language: system
         files: (^cmd/wasm/|^internal/|^certkit\.go|^bundle\.go|^csr\.go|^pkcs\.go|^jks\.go)
         pass_filenames: false
@@ -73,7 +86,7 @@ repos:
 
   # ── Markdown ──
   - repo: https://github.com/igorshubovych/markdownlint-cli
-    rev: v0.43.0
+    rev: v0.47.0
     hooks:
       - id: markdownlint
         args: [--config, .markdownlint.yaml]
