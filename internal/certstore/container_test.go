@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/pem"
 	"strings"
 	"testing"
 	"time"
@@ -533,6 +534,39 @@ func TestParseContainerData_PEMCertAndKey_Ed25519(t *testing.T) {
 		t.Fatalf("KeyMatchesCert: %v", err)
 	} else if !match {
 		t.Error("extracted Ed25519 key does not match extracted leaf certificate")
+	}
+}
+
+func TestParseContainerData_PEMCertWithEncryptedPKCS8Key(t *testing.T) {
+	// WHY: Modern tools produce "ENCRYPTED PRIVATE KEY" PEM blocks (PKCS#8 v2).
+	// findPEMPrivateKey matches these via strings.Contains("PRIVATE KEY"), but
+	// ParsePEMPrivateKeyWithPasswords cannot decrypt them. When paired with a
+	// valid certificate, ParseContainerData must still return the cert with
+	// Key=nil, not error out entirely.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "enc-pkcs8.example.com", []string{"enc-pkcs8.example.com"})
+
+	encryptedBlock := pem.EncodeToMemory(&pem.Block{
+		Type:  "ENCRYPTED PRIVATE KEY",
+		Bytes: []byte("opaque-encrypted-pkcs8-data"),
+	})
+	combined := append(leaf.certPEM, encryptedBlock...)
+
+	contents, err := ParseContainerData(combined, []string{"password"})
+	if err != nil {
+		t.Fatalf("ParseContainerData: %v", err)
+	}
+	if contents.Leaf == nil {
+		t.Fatal("expected Leaf to be non-nil")
+	}
+	if contents.Leaf.Subject.CommonName != "enc-pkcs8.example.com" {
+		t.Errorf("Leaf CN = %q, want enc-pkcs8.example.com", contents.Leaf.Subject.CommonName)
+	}
+	// Key should be nil since ENCRYPTED PRIVATE KEY cannot be decrypted
+	if contents.Key != nil {
+		t.Errorf("expected Key to be nil for undecryptable ENCRYPTED PRIVATE KEY, got %T", contents.Key)
 	}
 }
 

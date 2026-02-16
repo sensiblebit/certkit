@@ -414,6 +414,49 @@ func TestProcessData_Ed25519RawKey_Valid(t *testing.T) {
 	}
 }
 
+func TestProcessData_Ed25519RawKey_StoredPEM_IsPKCS8(t *testing.T) {
+	// WHY: Raw Ed25519 keys (64-byte seed||public) are detected and ingested
+	// via processDER's special-case path. The stored PEM must be normalized to
+	// PKCS#8 ("PRIVATE KEY") — not a raw blob or OpenSSH format. This verifies
+	// the MarshalPrivateKeyToPEM call in the Ed25519 raw path produces the
+	// correct normalized PEM that downstream export code expects.
+	t.Parallel()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := NewMemStore()
+
+	if err := ProcessData(ProcessInput{
+		Data:    []byte(priv),
+		Path:    "ed25519-raw.key",
+		Handler: store,
+	}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	if len(store.AllKeys()) != 1 {
+		t.Fatalf("expected 1 key, got %d", len(store.AllKeys()))
+	}
+	for _, rec := range store.AllKeys() {
+		block, _ := pem.Decode(rec.PEM)
+		if block == nil {
+			t.Fatal("stored PEM is not parseable")
+		}
+		if block.Type != "PRIVATE KEY" {
+			t.Errorf("stored PEM type = %q, want PRIVATE KEY (PKCS#8)", block.Type)
+		}
+		// Round-trip: re-parse the stored PEM and verify key equality
+		parsedKey, err := certkit.ParsePEMPrivateKey(rec.PEM)
+		if err != nil {
+			t.Fatalf("re-parse stored PEM: %v", err)
+		}
+		if !priv.Equal(parsedKey) {
+			t.Error("round-tripped Ed25519 raw key does not Equal original")
+		}
+	}
+}
+
 func TestProcessData_Ed25519RawKey_Invalid64Bytes(t *testing.T) {
 	// WHY: Arbitrary 64-byte files must NOT be misidentified as Ed25519 keys.
 	t.Parallel()
@@ -2012,6 +2055,73 @@ func TestProcessData_PEMCertBlocksSkippedByKeyParser(t *testing.T) {
 		if rec.KeyType != "RSA" {
 			t.Errorf("KeyType = %q, want RSA", rec.KeyType)
 		}
+	}
+}
+
+func TestProcessData_PEMEncryptedPKCS8Block_SilentlySkipped(t *testing.T) {
+	// WHY: Modern tools (openssl genpkey -aes256) produce "ENCRYPTED PRIVATE KEY"
+	// PEM blocks (PKCS#8 v2 encrypted). processPEMPrivateKeys matches these via
+	// strings.Contains(block.Type, "PRIVATE KEY") but ParsePEMPrivateKeyWithPasswords
+	// cannot decrypt them. The block must be silently skipped without preventing
+	// other valid keys in the same file from being extracted.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "mixed-enc.example.com", []string{"mixed-enc.example.com"})
+
+	// Simulate: ENCRYPTED PRIVATE KEY block (unreadable) followed by valid key
+	encryptedBlock := pem.EncodeToMemory(&pem.Block{
+		Type:  "ENCRYPTED PRIVATE KEY",
+		Bytes: []byte("opaque-encrypted-pkcs8-data"),
+	})
+	combined := slices.Concat(encryptedBlock, leaf.keyPEM)
+
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{
+		Data:    combined,
+		Path:    "mixed-encrypted.pem",
+		Handler: store,
+	}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	keys := store.AllKeys()
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key (valid RSA, encrypted block skipped), got %d", len(keys))
+	}
+	for _, rec := range keys {
+		if rec.KeyType != "RSA" {
+			t.Errorf("KeyType = %q, want RSA", rec.KeyType)
+		}
+		if !keysEqual(t, leaf.key, rec.Key) {
+			t.Error("extracted RSA key does not Equal original")
+		}
+	}
+}
+
+func TestProcessData_PEMEncryptedPKCS8Block_OnlyBlock(t *testing.T) {
+	// WHY: When the ONLY key block is "ENCRYPTED PRIVATE KEY" (PKCS#8 v2),
+	// processPEMPrivateKeys must silently skip it since decryption is not
+	// supported. No keys should be stored, and no error should be returned.
+	t.Parallel()
+
+	encryptedBlock := pem.EncodeToMemory(&pem.Block{
+		Type:  "ENCRYPTED PRIVATE KEY",
+		Bytes: []byte("opaque-encrypted-pkcs8-data"),
+	})
+
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{
+		Data:      encryptedBlock,
+		Path:      "encrypted-only.pem",
+		Passwords: []string{"password123"},
+		Handler:   store,
+	}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	if len(store.AllKeys()) != 0 {
+		t.Errorf("expected 0 keys (ENCRYPTED PRIVATE KEY not supported), got %d", len(store.AllKeys()))
 	}
 }
 

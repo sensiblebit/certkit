@@ -29,6 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Tests
 
+- Ralph Loop pass 5 — ENCRYPTED PRIVATE KEY handling and stored PEM normalization ([`6bcf2fb`]):
+  - Add `ProcessData_PEMEncryptedPKCS8Block_SilentlySkipped` testing ENCRYPTED PRIVATE KEY block skip with valid key recovery
+  - Add `ProcessData_PEMEncryptedPKCS8Block_OnlyBlock` testing ENCRYPTED PRIVATE KEY as sole block produces no keys
+  - Add `ProcessData_Ed25519RawKey_StoredPEM_IsPKCS8` verifying raw 64-byte Ed25519 stored as PKCS#8 PEM
+  - Add `ParseContainerData_PEMCertWithEncryptedPKCS8Key` testing cert+ENCRYPTED PRIVATE KEY PEM returns cert with nil key
 - Ralph Loop pass 4 — key handling normalization and export pipeline gaps ([`e82047d`]):
   - Add `ParseContainerData_PEMCertAndKey_Ed25519` testing combined cert+key PEM with Ed25519 value form
   - Add `HandleKey_Ed25519DeduplicationPointerAndValue` testing pointer and value form dedup in single store
@@ -534,6 +539,7 @@ Initial release.
 [`0db22eb`]: https://github.com/sensiblebit/certkit/commit/0db22eb
 [`827e913`]: https://github.com/sensiblebit/certkit/commit/827e913
 [`e82047d`]: https://github.com/sensiblebit/certkit/commit/e82047d
+[`6bcf2fb`]: https://github.com/sensiblebit/certkit/commit/6bcf2fb
 [#24]: https://github.com/sensiblebit/certkit/pull/24
 [#25]: https://github.com/sensiblebit/certkit/pull/25
 [#26]: https://github.com/sensiblebit/certkit/pull/26
