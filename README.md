@@ -124,7 +124,6 @@ Chain verification is always performed. When the input contains an embedded priv
 
 | Flag | Default | Description |
 |---|---|---|
-| `--db`, `-d` | *(in-memory)* | SQLite database path |
 | `--bundle-path` | | Export bundles to this directory |
 | `--config`, `-c` | `./bundles.yaml` | Path to bundle config YAML |
 | `--force`, `-f` | `false` | Allow export of untrusted certificate bundles |
@@ -132,6 +131,8 @@ Chain verification is always performed. When the input contains an embedded priv
 | `--dump-keys` | | Dump all discovered keys to a single PEM file |
 | `--dump-certs` | | Dump all discovered certificates to a single PEM file |
 | `--max-file-size` | `10485760` | Skip files larger than this size in bytes (0 to disable) |
+| `--save-db` | | Save the in-memory database to disk after scanning |
+| `--load-db` | | Load an existing database into memory before scanning |
 | `--format` | `text` | Output format: `text`, `json` |
 
 ### Keygen Flags
@@ -212,7 +213,7 @@ When running `certkit scan --bundle-path`, each bundle produces the following fi
 | `<cn>.intermediates.pem` | Intermediate certificates |
 | `<cn>.root.pem` | Root certificate |
 | `<cn>.key` | Private key (PEM, mode 0600) |
-| `<cn>.p12` | PKCS#12 archive (password: `changeit`, mode 0600) |
+| `<cn>.p12` | PKCS#12 archive (default password: `changeit`, override via `--passwords`, mode 0600) |
 | `<cn>.k8s.yaml` | Kubernetes `kubernetes.io/tls` Secret (mode 0600) |
 | `<cn>.json` | Certificate metadata |
 | `<cn>.yaml` | Certificate and key metadata |
@@ -266,11 +267,11 @@ jks, _ := certkit.EncodeJKS(key, leaf, intermediates, "changeit")
 flowchart TD
     A[Input files / stdin] --> B[Format detection - PEM vs DER]
     B --> C[Parse certs, keys, CSRs<br/>PKCS#12, PKCS#7, JKS, encrypted PEM, PKCS#8, SEC1, Ed25519]
-    C --> D[Store in SQLite<br/>certificates + keys indexed by SKI]
+    C --> D[Catalog in MemStore<br/>certificates + keys indexed by SKI]
     D --> E[Resolve AKIs<br/>match legacy SHA-1 AKIs to computed RFC 7093 M1 SKIs]
     E --> F{--bundle-path?}
     F -- yes --> G[Match keys to certs, build chains,<br/>write all output formats per bundle]
     F -- no --> H[Print scan summary]
 ```
 
-Expired certificates are skipped during ingestion by default (use `--allow-expired` to include them). SKI computation uses RFC 7093 Method 1 (SHA-256 truncated to 160 bits). Non-root certificate AKIs are resolved post-ingestion by matching against a multi-hash lookup (RFC 7093 M1 + legacy SHA-1) of all CA certificates.
+Expired certificates are always ingested; expiry filtering is output-only (`--allow-expired` overrides). SKI computation uses RFC 7093 Method 1 (SHA-256 truncated to 160 bits). Non-root certificate AKIs are resolved post-ingestion by matching against a multi-hash lookup (RFC 7093 M1 + legacy SHA-1) of all CA certificates.
