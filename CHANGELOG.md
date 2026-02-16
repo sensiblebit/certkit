@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Remove redundant `go vet` and `go test` steps from release workflow — tags are created from main which already passed CI
 - Consolidate Dependabot GitHub Actions PRs into a single grouped PR instead of one per action
 - Add `build(deps)` commit-message prefix to Dependabot so PR titles and commits follow Conventional Commits
+- Run all steps in consolidated CI jobs even when earlier steps fail (`if: success() || failure()`) so all failures are reported at once
 - Replace fragile hardcoded file list in WASM pre-commit hook with `types: [go]`
 - Consolidate `run()` and `run_output()` into single `run(cmd, *, capture=False)` in `checks.py`
 

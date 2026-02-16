@@ -44,10 +44,14 @@ jobs:
         with:
           fetch-depth: 0
       - name: Check branch name
+        id: branch
         run: python3 scripts/checks.py branch-name "${{ github.head_ref }}"
       - name: Check commit messages
+        if: success() || failure()
+        id: commits
         run: python3 scripts/checks.py commit-message --ci --base-ref "origin/${{ github.base_ref }}"
       - name: Check commits are verified
+        if: success() || failure()
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python3 scripts/checks.py verified-commits "${{ github.repository }}" "${{ github.event.pull_request.number }}"
@@ -65,10 +69,14 @@ jobs:
           check-latest: true
           cache: true
       - name: Build
+        id: build
         run: go build -trimpath ./...
       - name: Vet
+        if: success() || failure()
+        id: vet
         run: go vet ./...
       - name: Check goimports
+        if: success() || failure()
         run: python3 scripts/checks.py goimports
 
   go-test:
@@ -144,8 +152,10 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
       - name: Run tests
+        id: test
         run: npm test
       - name: Build Cloudflare Functions
+        if: success() || failure()
         run: npx wrangler pages functions build --outdir /tmp/certkit-fn-check
 
   lint:
@@ -157,8 +167,10 @@ jobs:
         with:
           node-version: lts/*
       - name: Check formatting (prettier)
+        id: prettier
         run: npx prettier@latest --check 'web/**/*.{js,ts,css,html}' '!web/public/wasm_exec.js'
       - name: Check markdown
+        if: success() || failure()
         run: npx markdownlint-cli@0.47.0 --config .markdownlint.yaml '**/*.md'
 
   # ── Gate ────────────────────────────────────────────
