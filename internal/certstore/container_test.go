@@ -61,7 +61,9 @@ func TestParseContainerData_PEMCertificate(t *testing.T) {
 
 func TestParseContainerData_PEMCertAndKey(t *testing.T) {
 	// WHY: Combined cert+key PEM files are a common deployment pattern; both
-	// the leaf and the key must be extracted from a single data blob.
+	// the leaf and the key must be extracted from a single data blob. The key
+	// must actually match the leaf certificate — a type-only check would miss
+	// a wrong-key pairing bug.
 	t.Parallel()
 
 	ca := newRSACA(t)
@@ -81,8 +83,17 @@ func TestParseContainerData_PEMCertAndKey(t *testing.T) {
 	if contents.Key == nil {
 		t.Fatal("expected Key to be non-nil for cert+key PEM")
 	}
-	if _, ok := contents.Key.(*rsa.PrivateKey); !ok {
-		t.Errorf("Key type = %T, want *rsa.PrivateKey", contents.Key)
+	rsaKey, ok := contents.Key.(*rsa.PrivateKey)
+	if !ok {
+		t.Fatalf("Key type = %T, want *rsa.PrivateKey", contents.Key)
+	}
+	if !leaf.key.(*rsa.PrivateKey).Equal(rsaKey) {
+		t.Error("extracted key does not Equal original")
+	}
+	if match, err := certkit.KeyMatchesCert(contents.Key, contents.Leaf); err != nil {
+		t.Fatalf("KeyMatchesCert: %v", err)
+	} else if !match {
+		t.Error("extracted key does not match extracted leaf certificate")
 	}
 }
 
@@ -278,6 +289,11 @@ func TestParseContainerData_PEMCertAndKey_ECDSA(t *testing.T) {
 	if !leaf.key.(*ecdsa.PrivateKey).Equal(ecKey) {
 		t.Error("extracted ECDSA key does not Equal original")
 	}
+	if match, err := certkit.KeyMatchesCert(contents.Key, contents.Leaf); err != nil {
+		t.Fatalf("KeyMatchesCert: %v", err)
+	} else if !match {
+		t.Error("extracted ECDSA key does not match extracted leaf certificate")
+	}
 }
 
 func TestParseContainerData_PEMKeyOnly_ECDSA(t *testing.T) {
@@ -353,6 +369,41 @@ func TestParseContainerData_PKCS12_Ed25519(t *testing.T) {
 	origKey := leaf.key.(ed25519.PrivateKey)
 	if !origKey.Equal(edKey) {
 		t.Error("extracted Ed25519 key does not Equal original")
+	}
+}
+
+func TestParseContainerData_PEMMultiKey_ReturnsFirst(t *testing.T) {
+	// WHY: findPEMPrivateKey returns the first parseable key. When a PEM file
+	// contains multiple keys (e.g., rotated keys), the first one wins. This
+	// documents that behavior and ensures the returned key matches the cert.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "multikey.example.com", []string{"multikey.example.com"})
+
+	// Generate a second unrelated RSA key
+	otherCA := newECDSACA(t)
+	otherLeaf := newECDSALeaf(t, otherCA, "other.example.com", []string{"other.example.com"})
+
+	// PEM: leaf cert + leaf key (matching) + other key (non-matching)
+	combined := append(leaf.certPEM, leaf.keyPEM...)
+	combined = append(combined, otherLeaf.keyPEM...)
+
+	contents, err := ParseContainerData(combined, nil)
+	if err != nil {
+		t.Fatalf("ParseContainerData: %v", err)
+	}
+	if contents.Key == nil {
+		t.Fatal("expected Key to be non-nil")
+	}
+	// First key should be the RSA key (matching the cert)
+	if _, ok := contents.Key.(*rsa.PrivateKey); !ok {
+		t.Fatalf("Key type = %T, want *rsa.PrivateKey (first key in PEM)", contents.Key)
+	}
+	if match, err := certkit.KeyMatchesCert(contents.Key, contents.Leaf); err != nil {
+		t.Fatalf("KeyMatchesCert: %v", err)
+	} else if !match {
+		t.Error("first key in PEM should match the leaf certificate")
 	}
 }
 

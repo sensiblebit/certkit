@@ -930,6 +930,8 @@ func TestGetPublicKey(t *testing.T) {
 	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	_, edPriv, _ := ed25519.GenerateKey(rand.Reader)
 
+	edPtr := &edPriv
+
 	tests := []struct {
 		name    string
 		priv    any
@@ -939,6 +941,7 @@ func TestGetPublicKey(t *testing.T) {
 		{"RSA", rsaKey, "*rsa.PublicKey", false},
 		{"ECDSA", ecKey, "*ecdsa.PublicKey", false},
 		{"Ed25519", edPriv, "ed25519.PublicKey", false},
+		{"Ed25519Pointer", edPtr, "ed25519.PublicKey", false},
 		{"unsupported", struct{}{}, "", true},
 	}
 	for _, tt := range tests {
