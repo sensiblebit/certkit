@@ -4399,3 +4399,145 @@ func TestParsePEMPrivateKey_SameEd25519Key_OpenSSHAndPKCS8(t *testing.T) {
 		t.Error("same Ed25519 key parsed from OpenSSH and PKCS#8 should be Equal")
 	}
 }
+
+func TestMarshalPrivateKeyToPEM_BlockTypeAlwaysPKCS8(t *testing.T) {
+	// WHY: All stored keys use PKCS#8 PEM ("PRIVATE KEY" block type). If a
+	// regression emits "RSA PRIVATE KEY" or "EC PRIVATE KEY", downstream
+	// parsers expecting PKCS#8 would silently fail or produce wrong types.
+	t.Parallel()
+
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, edKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		key  crypto.PrivateKey
+	}{
+		{"RSA", rsaKey},
+		{"ECDSA", ecKey},
+		{"Ed25519", edKey},
+		{"Ed25519 pointer", &edKey},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			pemStr, err := MarshalPrivateKeyToPEM(tt.key)
+			if err != nil {
+				t.Fatalf("MarshalPrivateKeyToPEM: %v", err)
+			}
+			block, _ := pem.Decode([]byte(pemStr))
+			if block == nil {
+				t.Fatal("no PEM block in output")
+			}
+			if block.Type != "PRIVATE KEY" {
+				t.Errorf("PEM block type = %q, want \"PRIVATE KEY\"", block.Type)
+			}
+		})
+	}
+}
+
+func TestParsePEMPrivateKey_EmptyDERInBlock(t *testing.T) {
+	// WHY: A PEM block with an empty DER payload (zero bytes) must produce a
+	// clear error, not a panic in the ASN.1 parser.
+	t.Parallel()
+
+	emptyBlock := pem.EncodeToMemory(&pem.Block{
+		Type:  "PRIVATE KEY",
+		Bytes: []byte{},
+	})
+
+	_, err := ParsePEMPrivateKey(emptyBlock)
+	if err == nil {
+		t.Fatal("expected error for PEM block with empty DER bytes, got nil")
+	}
+}
+
+func TestMarshalPrivateKeyToPEM_RoundTrip_PreservesKeyMaterial(t *testing.T) {
+	// WHY: MarshalPrivateKeyToPEM is the sole serialization point for key
+	// storage. A round-trip (marshal → parse → compare) must preserve key
+	// material for every supported type, including Ed25519 pointer form.
+	t.Parallel()
+
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, edKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		key  crypto.PrivateKey
+	}{
+		{"RSA 2048", rsaKey},
+		{"ECDSA P-256", ecKey},
+		{"Ed25519 value", edKey},
+		{"Ed25519 pointer", &edKey},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			pemStr, err := MarshalPrivateKeyToPEM(tt.key)
+			if err != nil {
+				t.Fatalf("MarshalPrivateKeyToPEM: %v", err)
+			}
+
+			parsed, err := ParsePEMPrivateKey([]byte(pemStr))
+			if err != nil {
+				t.Fatalf("ParsePEMPrivateKey: %v", err)
+			}
+
+			// Verify the round-tripped key equals the original (normalize
+			// Ed25519 pointer form for comparison).
+			orig := tt.key
+			if ptr, ok := orig.(*ed25519.PrivateKey); ok {
+				orig = *ptr
+			}
+
+			switch o := orig.(type) {
+			case *rsa.PrivateKey:
+				p, ok := parsed.(*rsa.PrivateKey)
+				if !ok {
+					t.Fatalf("parsed type %T, want *rsa.PrivateKey", parsed)
+				}
+				if !o.Equal(p) {
+					t.Error("RSA key material not preserved through round-trip")
+				}
+			case *ecdsa.PrivateKey:
+				p, ok := parsed.(*ecdsa.PrivateKey)
+				if !ok {
+					t.Fatalf("parsed type %T, want *ecdsa.PrivateKey", parsed)
+				}
+				if !o.Equal(p) {
+					t.Error("ECDSA key material not preserved through round-trip")
+				}
+			case ed25519.PrivateKey:
+				p, ok := parsed.(ed25519.PrivateKey)
+				if !ok {
+					t.Fatalf("parsed type %T, want ed25519.PrivateKey", parsed)
+				}
+				if !o.Equal(p) {
+					t.Error("Ed25519 key material not preserved through round-trip")
+				}
+			}
+		})
+	}
+}

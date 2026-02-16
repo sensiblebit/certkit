@@ -1275,6 +1275,68 @@ func TestMemStore_HandleCertificate_NilCert(t *testing.T) {
 	}
 }
 
+func TestMemStore_HandleKey_StoredPEMParseableAndPKCS8(t *testing.T) {
+	// WHY: KeyRecord.PEM is the canonical serialized form used by export
+	// (GenerateBundleFiles writes it directly to .key files and re-parses
+	// it for PKCS#12 encoding). If stored PEM is unparseable or uses a
+	// non-PKCS#8 block type, exports silently fail or produce wrong output.
+	t.Parallel()
+
+	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	_, edKey, _ := ed25519.GenerateKey(rand.Reader)
+
+	tests := []struct {
+		name    string
+		key     any
+		keyType string
+	}{
+		{"RSA", rsaKey, "RSA"},
+		{"ECDSA", ecKey, "ECDSA"},
+		{"Ed25519", edKey, "Ed25519"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			store := NewMemStore()
+
+			keyPEM, err := certkit.MarshalPrivateKeyToPEM(tt.key)
+			if err != nil {
+				t.Fatalf("MarshalPrivateKeyToPEM: %v", err)
+			}
+
+			if err := store.HandleKey(tt.key, []byte(keyPEM), "test.pem"); err != nil {
+				t.Fatalf("HandleKey: %v", err)
+			}
+
+			keys := store.AllKeysFlat()
+			if len(keys) != 1 {
+				t.Fatalf("expected 1 key, got %d", len(keys))
+			}
+			rec := keys[0]
+
+			// Verify PEM block type is PKCS#8
+			block, _ := pem.Decode(rec.PEM)
+			if block == nil {
+				t.Fatal("stored PEM has no decodable block")
+			}
+			if block.Type != "PRIVATE KEY" {
+				t.Errorf("stored PEM block type = %q, want \"PRIVATE KEY\"", block.Type)
+			}
+
+			// Verify stored PEM is parseable and round-trips to equivalent key
+			parsed, err := certkit.ParsePEMPrivateKey(rec.PEM)
+			if err != nil {
+				t.Fatalf("stored PEM not parseable: %v", err)
+			}
+			if !keysEqual(t, rec.Key, parsed) {
+				t.Error("parsed key from stored PEM does not equal KeyRecord.Key")
+			}
+		})
+	}
+}
+
 func TestMemStore_MatchedPairs_RootCertWithKeyExcluded(t *testing.T) {
 	// WHY: MatchedPairs must only return SKIs with leaf certs — a root CA cert with
 	// its key must NOT appear, even though both cert and key share the same SKI.

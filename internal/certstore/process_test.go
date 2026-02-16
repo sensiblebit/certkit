@@ -2776,6 +2776,300 @@ func TestProcessData_DSAPrivateKeyBlock_SilentlySkipped(t *testing.T) {
 	}
 }
 
+func TestProcessData_DER_32ByteDataRejected(t *testing.T) {
+	// WHY: Exactly 32 bytes (just an Ed25519 seed, no public half) must not
+	// be identified as a valid Ed25519 raw key. The code checks
+	// len(data) == ed25519.PrivateKeySize (64), so 32 bytes should fall
+	// through and be silently rejected.
+	t.Parallel()
+	store := NewMemStore()
+
+	_, edKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seed := edKey.Seed() // 32 bytes
+
+	if err := ProcessData(ProcessInput{
+		Data:      seed,
+		Path:      "seed-only.der",
+		Handler:   store,
+		Passwords: certkit.DefaultPasswords(),
+	}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	keys := store.AllKeysFlat()
+	if len(keys) != 0 {
+		t.Errorf("expected 0 keys for 32-byte seed-only data, got %d", len(keys))
+	}
+}
+
+func TestProcessData_CrossFormatSKIEquality_RSA(t *testing.T) {
+	// WHY: The same RSA key ingested from PKCS#1 PEM, PKCS#8 PEM, PKCS#8 DER,
+	// PKCS#12, and JKS must produce the same SKI and equivalent KeyRecord. A
+	// bug in any normalization path would cause key duplication or orphaned certs.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "crossformat.example.com", []string{"crossformat.example.com"})
+	rsaKey := leaf.key.(*rsa.PrivateKey)
+
+	// PKCS#1 PEM
+	pkcs1PEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(rsaKey),
+	})
+
+	// PKCS#8 PEM
+	pkcs8DER, err := x509.MarshalPKCS8PrivateKey(rsaKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkcs8PEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8DER})
+
+	// Collect SKIs from each format
+	formats := []struct {
+		name string
+		data []byte
+		path string
+	}{
+		{"PKCS#1 PEM", pkcs1PEM, "key.pem"},
+		{"PKCS#8 PEM", pkcs8PEM, "key.pem"},
+		{"PKCS#8 DER", pkcs8DER, "key.der"},
+		{"PKCS#1 DER", x509.MarshalPKCS1PrivateKey(rsaKey), "key.der"},
+		{"PKCS#12", newPKCS12Bundle(t, leaf, ca, "test"), "bundle.p12"},
+		{"JKS", newJKSBundle(t, leaf, ca, "changeit"), "bundle.jks"},
+	}
+
+	var skis []string
+	for _, f := range formats {
+		store := NewMemStore()
+		if err := ProcessData(ProcessInput{
+			Data:      f.data,
+			Path:      f.path,
+			Handler:   store,
+			Passwords: []string{"", "test", "changeit"},
+		}); err != nil {
+			t.Fatalf("%s: ProcessData: %v", f.name, err)
+		}
+
+		keys := store.AllKeysFlat()
+		found := false
+		for _, rec := range keys {
+			if rec.KeyType == "RSA" {
+				skis = append(skis, rec.SKI)
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("%s: no RSA key found in store", f.name)
+		}
+	}
+
+	// All SKIs must be identical
+	for i := 1; i < len(skis); i++ {
+		if skis[i] != skis[0] {
+			t.Errorf("SKI mismatch: %s=%s vs %s=%s",
+				formats[0].name, skis[0], formats[i].name, skis[i])
+		}
+	}
+}
+
+func TestProcessData_CrossFormatSKIEquality_ECDSA(t *testing.T) {
+	// WHY: The same ECDSA key ingested from SEC1 PEM, PKCS#8 PEM, PKCS#8 DER,
+	// SEC1 DER, PKCS#12, and JKS must produce the same SKI. Cross-format SKI
+	// divergence would break key-cert matching.
+	t.Parallel()
+
+	ca := newECDSACA(t)
+	leaf := newECDSALeaf(t, ca, "ecdsa-cross.example.com", []string{"ecdsa-cross.example.com"})
+	ecKey := leaf.key.(*ecdsa.PrivateKey)
+
+	// SEC1 PEM
+	sec1DER, err := x509.MarshalECPrivateKey(ecKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec1PEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: sec1DER})
+
+	// PKCS#8 PEM
+	pkcs8DER, err := x509.MarshalPKCS8PrivateKey(ecKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkcs8PEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8DER})
+
+	formats := []struct {
+		name string
+		data []byte
+		path string
+	}{
+		{"SEC1 PEM", sec1PEM, "key.pem"},
+		{"PKCS#8 PEM", pkcs8PEM, "key.pem"},
+		{"PKCS#8 DER", pkcs8DER, "key.der"},
+		{"SEC1 DER", sec1DER, "key.der"},
+		{"PKCS#12", newPKCS12Bundle(t, leaf, ca, "test"), "bundle.p12"},
+		{"JKS", newJKSBundle(t, leaf, ca, "changeit"), "bundle.jks"},
+	}
+
+	var skis []string
+	for _, f := range formats {
+		store := NewMemStore()
+		if err := ProcessData(ProcessInput{
+			Data:      f.data,
+			Path:      f.path,
+			Handler:   store,
+			Passwords: []string{"", "test", "changeit"},
+		}); err != nil {
+			t.Fatalf("%s: ProcessData: %v", f.name, err)
+		}
+
+		keys := store.AllKeysFlat()
+		found := false
+		for _, rec := range keys {
+			if rec.KeyType == "ECDSA" {
+				skis = append(skis, rec.SKI)
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("%s: no ECDSA key found in store", f.name)
+		}
+	}
+
+	for i := 1; i < len(skis); i++ {
+		if skis[i] != skis[0] {
+			t.Errorf("SKI mismatch: %s=%s vs %s=%s",
+				formats[0].name, skis[0], formats[i].name, skis[i])
+		}
+	}
+}
+
+func TestProcessData_CrossFormatSKIEquality_Ed25519(t *testing.T) {
+	// WHY: The same Ed25519 key ingested from PKCS#8 PEM, PKCS#8 DER, raw 64-byte,
+	// OpenSSH, PKCS#12, and JKS must produce the same SKI. Ed25519 normalization
+	// (pointer → value) at each entry point is critical for SKI consistency.
+	t.Parallel()
+
+	ca := newRSACA(t) // use RSA CA to sign Ed25519 leaf
+	leaf := newEd25519Leaf(t, ca, "ed25519-cross.example.com", []string{"ed25519-cross.example.com"})
+	edKey := leaf.key.(ed25519.PrivateKey)
+
+	// PKCS#8 PEM
+	pkcs8DER, err := x509.MarshalPKCS8PrivateKey(edKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkcs8PEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8DER})
+
+	// Raw 64-byte format (seed || public)
+	raw64 := make([]byte, ed25519.PrivateKeySize)
+	copy(raw64, edKey)
+
+	// OpenSSH format
+	sshKey, err := ssh.MarshalPrivateKey(edKey, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshPEM := pem.EncodeToMemory(sshKey)
+
+	formats := []struct {
+		name string
+		data []byte
+		path string
+	}{
+		{"PKCS#8 PEM", pkcs8PEM, "key.pem"},
+		{"PKCS#8 DER", pkcs8DER, "key.der"},
+		{"Raw 64-byte", raw64, "key.der"},
+		{"OpenSSH", sshPEM, "key.pem"},
+		{"PKCS#12", newPKCS12Bundle(t, leaf, ca, "test"), "bundle.p12"},
+		{"JKS", newJKSBundle(t, leaf, ca, "changeit"), "bundle.jks"},
+	}
+
+	var skis []string
+	for _, f := range formats {
+		store := NewMemStore()
+		if err := ProcessData(ProcessInput{
+			Data:      f.data,
+			Path:      f.path,
+			Handler:   store,
+			Passwords: []string{"", "test", "changeit"},
+		}); err != nil {
+			t.Fatalf("%s: ProcessData: %v", f.name, err)
+		}
+
+		keys := store.AllKeysFlat()
+		found := false
+		for _, rec := range keys {
+			if rec.KeyType == "Ed25519" {
+				skis = append(skis, rec.SKI)
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("%s: no Ed25519 key found in store", f.name)
+		}
+	}
+
+	for i := 1; i < len(skis); i++ {
+		if skis[i] != skis[0] {
+			t.Errorf("SKI mismatch: %s=%s vs %s=%s",
+				formats[0].name, skis[0], formats[i].name, skis[i])
+		}
+	}
+}
+
+func TestProcessData_StoredPEMAlwaysPKCS8(t *testing.T) {
+	// WHY: All stored key PEM must use "PRIVATE KEY" (PKCS#8) block type
+	// regardless of the input format. If legacy format leaks through
+	// (e.g., "RSA PRIVATE KEY"), downstream PKCS#8-only parsers break.
+	t.Parallel()
+
+	formats := []struct {
+		name    string
+		keyPEM  func(t *testing.T) []byte
+		keyType string
+	}{
+		{"RSA PKCS#1", rsaKeyPEM, "RSA"},
+		{"ECDSA SEC1", ecdsaKeyPEM, "ECDSA"},
+		{"Ed25519 PKCS#8", ed25519KeyPEM, "Ed25519"},
+	}
+
+	for _, f := range formats {
+		t.Run(f.name, func(t *testing.T) {
+			t.Parallel()
+			store := NewMemStore()
+			data := f.keyPEM(t)
+
+			if err := ProcessData(ProcessInput{
+				Data:    data,
+				Path:    "key.pem",
+				Handler: store,
+			}); err != nil {
+				t.Fatalf("ProcessData: %v", err)
+			}
+
+			keys := store.AllKeysFlat()
+			if len(keys) != 1 {
+				t.Fatalf("expected 1 key, got %d", len(keys))
+			}
+
+			rec := keys[0]
+			block, _ := pem.Decode(rec.PEM)
+			if block == nil {
+				t.Fatal("stored PEM has no decodable block")
+			}
+			if block.Type != "PRIVATE KEY" {
+				t.Errorf("stored PEM block type = %q, want \"PRIVATE KEY\"", block.Type)
+			}
+		})
+	}
+}
+
 func TestNormalizePrivateKey(t *testing.T) {
 	// WHY: normalizePrivateKey is the process-level normalization that ensures
 	// all keys dispatched to handlers are in canonical form. It must convert
