@@ -75,9 +75,9 @@ const ALLOWED_DOMAINS: string[] = [
   // E-Tugra (Turkish CA)
   "www.e-tugra.com",
   // ── US Federal PKI (.gov / .mil) ──
-  // FPKI repository (GSA)
-  "repo.fpki.gov",
-  "http.fpki.gov",
+  // FPKI repository and test infra (GSA) — suffix covers repo.fpki.gov,
+  // http.fpki.gov, cite.fpki.gov (conformance test environment).
+  "fpki.gov",
   // US DoD PKI (DISA) — suffix covers crl.disa.mil, crl.nit.disa.mil,
   // crl.gds.disa.mil, crl.gds.nit.disa.mil, and future subdomains.
   "disa.mil",

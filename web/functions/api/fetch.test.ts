@@ -76,6 +76,13 @@ describe("isAllowedDomain", () => {
     expect(isAllowedDomain("rootweb.managed.entrust.com")).toBe(true);
     expect(isAllowedDomain("managed.entrust.com")).toBe(true);
   });
+
+  it("matches fpki.gov subdomains (repo, http, cite)", () => {
+    expect(isAllowedDomain("repo.fpki.gov")).toBe(true);
+    expect(isAllowedDomain("http.fpki.gov")).toBe(true);
+    expect(isAllowedDomain("cite.fpki.gov")).toBe(true);
+    expect(isAllowedDomain("fpki.gov")).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

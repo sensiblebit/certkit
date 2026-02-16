@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Consolidate `repo.fpki.gov` and `http.fpki.gov` into `fpki.gov` suffix in AIA proxy allow list — also covers `cite.fpki.gov` (FPKI conformance test environment)
+
 ## [0.7.5] - 2026-02-15
 
 ### Added
