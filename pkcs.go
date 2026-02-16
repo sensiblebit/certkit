@@ -48,7 +48,7 @@ func DecodePKCS12(pfxData []byte, password string) (crypto.PrivateKey, *x509.Cer
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("decoding PKCS#12: %w", err)
 	}
-	return privateKey, leaf, caCerts, nil
+	return normalizeKey(privateKey), leaf, caCerts, nil
 }
 
 // EncodePKCS7 creates a certs-only PKCS#7/P7B bundle from a certificate chain.

@@ -405,13 +405,12 @@ func GenerateCSR(leaf *x509.Certificate, keyPEM []byte, subject *CSRSubjectOverr
 	}
 
 	template := &x509.CertificateRequest{
-		Subject:            buildCSRSubject(leaf, subject),
-		DNSNames:           csrDNSNames,
-		IPAddresses:        leaf.IPAddresses,
-		EmailAddresses:     leaf.EmailAddresses,
-		URIs:               leaf.URIs,
-		SignatureAlgorithm: leaf.SignatureAlgorithm,
-		ExtraExtensions:    []pkix.Extension{},
+		Subject:         buildCSRSubject(leaf, subject),
+		DNSNames:        csrDNSNames,
+		IPAddresses:     leaf.IPAddresses,
+		EmailAddresses:  leaf.EmailAddresses,
+		URIs:            leaf.URIs,
+		ExtraExtensions: []pkix.Extension{},
 	}
 
 	csrDER, err := x509.CreateCertificateRequest(rand.Reader, template, privKey)

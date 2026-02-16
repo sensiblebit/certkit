@@ -3,8 +3,10 @@
 package certstore
 
 import (
+	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
@@ -80,6 +82,9 @@ func TestSaveToSQLite_RoundTrip(t *testing.T) {
 	}
 	if keys[0].KeyType != "RSA" {
 		t.Errorf("key type: got %q, want %q", keys[0].KeyType, "RSA")
+	}
+	if _, ok := keys[0].Key.(*rsa.PrivateKey); !ok {
+		t.Errorf("stored key Go type = %T, want *rsa.PrivateKey", keys[0].Key)
 	}
 
 	// Verify summary is consistent
@@ -264,6 +269,9 @@ func TestSaveToSQLite_RoundTrip_ECDSA(t *testing.T) {
 	if keys[0].KeyType != "ECDSA" {
 		t.Errorf("key type: got %q, want %q", keys[0].KeyType, "ECDSA")
 	}
+	if _, ok := keys[0].Key.(*ecdsa.PrivateKey); !ok {
+		t.Errorf("stored key Go type = %T, want *ecdsa.PrivateKey", keys[0].Key)
+	}
 
 	summary := store2.ScanSummary()
 	if summary.Roots != 1 {
@@ -370,6 +378,9 @@ func TestSaveToSQLite_RoundTrip_Ed25519(t *testing.T) {
 	}
 	if keys[0].KeyType != "Ed25519" {
 		t.Errorf("key type: got %q, want %q", keys[0].KeyType, "Ed25519")
+	}
+	if _, ok := keys[0].Key.(ed25519.PrivateKey); !ok {
+		t.Errorf("stored key Go type = %T, want ed25519.PrivateKey (value, not pointer)", keys[0].Key)
 	}
 
 	summary := store2.ScanSummary()

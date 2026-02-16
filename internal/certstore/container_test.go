@@ -1,6 +1,7 @@
 package certstore
 
 import (
+	"crypto/rsa"
 	"crypto/x509"
 	"strings"
 	"testing"
@@ -78,6 +79,9 @@ func TestParseContainerData_PEMCertAndKey(t *testing.T) {
 	if contents.Key == nil {
 		t.Fatal("expected Key to be non-nil for cert+key PEM")
 	}
+	if _, ok := contents.Key.(*rsa.PrivateKey); !ok {
+		t.Errorf("Key type = %T, want *rsa.PrivateKey", contents.Key)
+	}
 }
 
 func TestParseContainerData_DERCertificate(t *testing.T) {
@@ -128,6 +132,9 @@ func TestParseContainerData_PKCS12_CorrectPassword(t *testing.T) {
 	if contents.Key == nil {
 		t.Fatal("expected Key to be non-nil for PKCS#12")
 	}
+	if _, ok := contents.Key.(*rsa.PrivateKey); !ok {
+		t.Errorf("Key type = %T, want *rsa.PrivateKey", contents.Key)
+	}
 	if len(contents.ExtraCerts) != 1 {
 		t.Fatalf("expected 1 ExtraCert (CA cert), got %d", len(contents.ExtraCerts))
 	}
@@ -173,6 +180,9 @@ func TestParseContainerData_JKS_CorrectPassword(t *testing.T) {
 	}
 	if contents.Key == nil {
 		t.Fatal("expected Key to be non-nil for JKS")
+	}
+	if _, ok := contents.Key.(*rsa.PrivateKey); !ok {
+		t.Errorf("Key type = %T, want *rsa.PrivateKey", contents.Key)
 	}
 	if len(contents.ExtraCerts) != 1 {
 		t.Fatalf("expected 1 ExtraCert (CA cert), got %d", len(contents.ExtraCerts))
@@ -228,6 +238,9 @@ func TestParseContainerData_PEMKeyOnly(t *testing.T) {
 	}
 	if contents.Key == nil {
 		t.Fatal("expected Key to be non-nil for key-only PEM")
+	}
+	if _, ok := contents.Key.(*rsa.PrivateKey); !ok {
+		t.Errorf("Key type = %T, want *rsa.PrivateKey", contents.Key)
 	}
 	if len(contents.ExtraCerts) != 0 {
 		t.Errorf("expected 0 ExtraCerts, got %d", len(contents.ExtraCerts))

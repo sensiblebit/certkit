@@ -128,6 +128,8 @@ func (s *MemStore) HandleKey(key any, pemData []byte, source string) error {
 	case ed25519.PrivateKey:
 		rec.KeyType = "Ed25519"
 		rec.BitLength = 256
+	default:
+		slog.Debug("HandleKey: unrecognized private key type", "type", fmt.Sprintf("%T", key), "source", source)
 	}
 
 	s.keys[ski] = rec

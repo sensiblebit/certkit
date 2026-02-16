@@ -80,6 +80,17 @@ func ParseCertificatesAny(data []byte) ([]*x509.Certificate, error) {
 	return nil, fmt.Errorf("not DER (%v) or PEM (%v) or PKCS#7 (%v)", derErr, pemErr, p7Err)
 }
 
+// normalizeKey converts non-standard private key representations to their
+// canonical Go form. Currently this dereferences *ed25519.PrivateKey (returned
+// by ssh.ParseRawPrivateKey) to the value type ed25519.PrivateKey, ensuring
+// downstream type switches only need one case.
+func normalizeKey(key crypto.PrivateKey) crypto.PrivateKey {
+	if ptr, ok := key.(*ed25519.PrivateKey); ok {
+		return *ptr
+	}
+	return key
+}
+
 // ParsePEMPrivateKey parses a PEM-encoded private key (PKCS#1, PKCS#8, or EC).
 // For "PRIVATE KEY" blocks it tries PKCS#8 first, then falls back to PKCS#1
 // and EC parsers to handle mislabeled keys (e.g., from pkcs12.ToPEM).
@@ -112,12 +123,7 @@ func ParsePEMPrivateKey(pemData []byte) (crypto.PrivateKey, error) {
 		if err != nil {
 			return nil, fmt.Errorf("parsing OpenSSH private key: %w", err)
 		}
-		// ssh.ParseRawPrivateKey returns *ed25519.PrivateKey; normalize to
-		// value form so downstream type switches only need one case.
-		if ptr, ok := key.(*ed25519.PrivateKey); ok {
-			return *ptr, nil
-		}
-		return key, nil
+		return normalizeKey(key), nil
 	default:
 		return nil, fmt.Errorf("unsupported PEM block type %q", block.Type)
 	}
@@ -169,10 +175,7 @@ func ParsePEMPrivateKeyWithPasswords(pemData []byte, passwords []string) (crypto
 			}
 			key, err := ssh.ParseRawPrivateKeyWithPassphrase(pemData, []byte(password))
 			if err == nil {
-				if ptr, ok := key.(*ed25519.PrivateKey); ok {
-					return *ptr, nil
-				}
-				return key, nil
+				return normalizeKey(key), nil
 			}
 		}
 		return nil, errors.New("parsing OpenSSH private key with any provided password")

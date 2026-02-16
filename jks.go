@@ -62,7 +62,7 @@ func DecodeJKS(data []byte, passwords []string) ([]*x509.Certificate, []crypto.P
 				if err != nil {
 					break // key data is bad, no point trying other passwords
 				}
-				keys = append(keys, key)
+				keys = append(keys, normalizeKey(key))
 
 				// Parse the certificate chain
 				for _, certEntry := range entry.CertificateChain {

@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Fix WASM export ZIP files having unix epoch (1970-01-01) timestamps — use `CreateHeader` with current time instead of `Create` ([`273e806`])
 - Normalize `*ed25519.PrivateKey` to value form in `ParsePEMPrivateKey` and `HandleKey` — fixes downstream type switches returning "unknown" for OpenSSH Ed25519 keys ([`0acbada`])
+- Normalize private keys at all public entry points (`DecodePKCS12`, `DecodeJKS`) via `normalizeKey` helper — ensures callers always receive canonical Go types ([`b20cfb3`])
+- Fix `GenerateCSR` copying issuing CA's `SignatureAlgorithm` into CSR template — auto-detect from private key instead, fixing Ed25519 keys with RSA-signed certs ([`b20cfb3`])
 
 ## [0.7.6] - 2026-02-15
 
@@ -452,6 +454,7 @@ Initial release.
 [`c4a91cb`]: https://github.com/sensiblebit/certkit/commit/c4a91cb
 [`273e806`]: https://github.com/sensiblebit/certkit/commit/273e806
 [`0acbada`]: https://github.com/sensiblebit/certkit/commit/0acbada
+[`b20cfb3`]: https://github.com/sensiblebit/certkit/commit/b20cfb3
 [#24]: https://github.com/sensiblebit/certkit/pull/24
 [#25]: https://github.com/sensiblebit/certkit/pull/25
 [#26]: https://github.com/sensiblebit/certkit/pull/26

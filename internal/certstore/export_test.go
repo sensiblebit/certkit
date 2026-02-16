@@ -2,9 +2,13 @@ package certstore
 
 import (
 	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/rand"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"math/big"
 	"net"
 	"strings"
 	"testing"
@@ -882,6 +886,82 @@ func TestGenerateBundleFiles_ECDSAKey(t *testing.T) {
 			origKey := leaf.key.(*ecdsa.PrivateKey)
 			if !origKey.Equal(ecKey) {
 				t.Error("exported ECDSA key does not match original")
+			}
+		}
+	}
+}
+
+func TestGenerateBundleFiles_Ed25519Key(t *testing.T) {
+	// WHY: Verifies that Ed25519 keys work through the full export pipeline
+	// and that the exported key is the normalized value type, not a pointer.
+	t.Parallel()
+
+	ca := newRSACA(t)
+
+	// Generate Ed25519 key and leaf cert manually (no Ed25519 leaf helper).
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("generate Ed25519 key: %v", err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber:   big.NewInt(500),
+		Subject:        pkix.Name{CommonName: "ed25519-export.example.com", Organization: []string{"TestOrg"}},
+		DNSNames:       []string{"ed25519-export.example.com"},
+		NotBefore:      time.Now().Add(-time.Hour),
+		NotAfter:       time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:       x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:    []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		AuthorityKeyId: ca.cert.SubjectKeyId,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, ca.cert, pub, ca.key)
+	if err != nil {
+		t.Fatalf("create cert: %v", err)
+	}
+	leafCert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatalf("parse cert: %v", err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatalf("marshal key: %v", err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+
+	bundle := &certkit.BundleResult{
+		Leaf:  leafCert,
+		Roots: []*x509.Certificate{ca.cert},
+	}
+
+	files, err := GenerateBundleFiles(BundleExportInput{
+		Bundle:     bundle,
+		KeyPEM:     keyPEM,
+		KeyType:    "Ed25519",
+		BitLength:  256,
+		Prefix:     "ed25519",
+		SecretName: "ed25519-tls",
+	})
+	if err != nil {
+		t.Fatalf("GenerateBundleFiles with Ed25519: %v", err)
+	}
+
+	// Without intermediates: 12 - 1 (no intermediates.pem) = 11 files
+	if len(files) != 11 {
+		t.Errorf("expected 11 files, got %d", len(files))
+	}
+
+	// Verify key file contains a parseable Ed25519 key (value type)
+	for _, f := range files {
+		if f.Name == "ed25519.key" {
+			parsed, err := certkit.ParsePEMPrivateKey(f.Data)
+			if err != nil {
+				t.Fatalf("parsing exported Ed25519 key: %v", err)
+			}
+			edKey, ok := parsed.(ed25519.PrivateKey)
+			if !ok {
+				t.Fatalf("expected ed25519.PrivateKey (value), got %T", parsed)
+			}
+			if !priv.Equal(edKey) {
+				t.Error("exported Ed25519 key does not match original")
 			}
 		}
 	}

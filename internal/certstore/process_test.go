@@ -58,6 +58,14 @@ func TestProcessData_PEMPrivateKey(t *testing.T) {
 	if len(store.AllKeys()) != 1 {
 		t.Fatalf("expected 1 key, got %d", len(store.AllKeys()))
 	}
+	for _, rec := range store.AllKeys() {
+		if rec.KeyType != "RSA" {
+			t.Errorf("KeyType = %q, want RSA", rec.KeyType)
+		}
+		if _, ok := rec.Key.(*rsa.PrivateKey); !ok {
+			t.Errorf("stored key type = %T, want *rsa.PrivateKey", rec.Key)
+		}
+	}
 }
 
 func TestProcessData_PEMEncryptedKey_CorrectPassword(t *testing.T) {
@@ -87,6 +95,14 @@ func TestProcessData_PEMEncryptedKey_CorrectPassword(t *testing.T) {
 
 	if len(store.AllKeys()) != 1 {
 		t.Fatalf("expected 1 key with correct password, got %d", len(store.AllKeys()))
+	}
+	for _, rec := range store.AllKeys() {
+		if rec.KeyType != "RSA" {
+			t.Errorf("KeyType = %q, want RSA", rec.KeyType)
+		}
+		if _, ok := rec.Key.(*rsa.PrivateKey); !ok {
+			t.Errorf("stored key type = %T, want *rsa.PrivateKey", rec.Key)
+		}
 	}
 }
 
@@ -191,7 +207,8 @@ func TestProcessData_PKCS7(t *testing.T) {
 }
 
 func TestProcessData_PKCS12_CorrectPassword(t *testing.T) {
-	// WHY: PKCS#12 files contain cert+key; verifies both extracted with correct password.
+	// WHY: PKCS#12 files contain cert+key; verifies both extracted with correct password
+	// and that the key is stored in its canonical Go type.
 	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "p12.example.com", []string{"p12.example.com"})
@@ -212,6 +229,14 @@ func TestProcessData_PKCS12_CorrectPassword(t *testing.T) {
 	}
 	if len(store.AllKeys()) != 1 {
 		t.Errorf("expected 1 key from PKCS#12, got %d", len(store.AllKeys()))
+	}
+	for _, rec := range store.AllKeys() {
+		if rec.KeyType != "RSA" {
+			t.Errorf("KeyType = %q, want RSA", rec.KeyType)
+		}
+		if _, ok := rec.Key.(*rsa.PrivateKey); !ok {
+			t.Errorf("stored key type = %T, want *rsa.PrivateKey", rec.Key)
+		}
 	}
 }
 
@@ -241,7 +266,8 @@ func TestProcessData_PKCS12_WrongPassword(t *testing.T) {
 }
 
 func TestProcessData_JKS(t *testing.T) {
-	// WHY: JKS format must be parsed correctly with cert and key extraction.
+	// WHY: JKS format must be parsed correctly with cert and key extraction,
+	// and the key must be stored in its canonical Go type.
 	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "jks.example.com", []string{"jks.example.com"})
@@ -263,6 +289,14 @@ func TestProcessData_JKS(t *testing.T) {
 	if len(store.AllKeys()) != 1 {
 		t.Errorf("expected 1 key from JKS, got %d", len(store.AllKeys()))
 	}
+	for _, rec := range store.AllKeys() {
+		if rec.KeyType != "RSA" {
+			t.Errorf("KeyType = %q, want RSA", rec.KeyType)
+		}
+		if _, ok := rec.Key.(*rsa.PrivateKey); !ok {
+			t.Errorf("stored key type = %T, want *rsa.PrivateKey", rec.Key)
+		}
+	}
 }
 
 func TestProcessData_PKCS8DERKey(t *testing.T) {
@@ -282,6 +316,14 @@ func TestProcessData_PKCS8DERKey(t *testing.T) {
 
 	if len(store.AllKeys()) != 1 {
 		t.Fatalf("expected 1 key from PKCS#8 DER, got %d", len(store.AllKeys()))
+	}
+	for _, rec := range store.AllKeys() {
+		if rec.KeyType != "RSA" {
+			t.Errorf("KeyType = %q, want RSA", rec.KeyType)
+		}
+		if _, ok := rec.Key.(*rsa.PrivateKey); !ok {
+			t.Errorf("stored key type = %T, want *rsa.PrivateKey", rec.Key)
+		}
 	}
 }
 
@@ -303,6 +345,14 @@ func TestProcessData_SEC1ECDERKey(t *testing.T) {
 	if len(store.AllKeys()) != 1 {
 		t.Fatalf("expected 1 key from SEC1 EC DER, got %d", len(store.AllKeys()))
 	}
+	for _, rec := range store.AllKeys() {
+		if rec.KeyType != "ECDSA" {
+			t.Errorf("KeyType = %q, want ECDSA", rec.KeyType)
+		}
+		if _, ok := rec.Key.(*ecdsa.PrivateKey); !ok {
+			t.Errorf("stored key type = %T, want *ecdsa.PrivateKey", rec.Key)
+		}
+	}
 }
 
 func TestProcessData_Ed25519RawKey_Valid(t *testing.T) {
@@ -321,6 +371,14 @@ func TestProcessData_Ed25519RawKey_Valid(t *testing.T) {
 
 	if len(store.AllKeys()) != 1 {
 		t.Fatalf("expected 1 key from valid Ed25519, got %d", len(store.AllKeys()))
+	}
+	for _, rec := range store.AllKeys() {
+		if rec.KeyType != "Ed25519" {
+			t.Errorf("KeyType = %q, want Ed25519", rec.KeyType)
+		}
+		if _, ok := rec.Key.(ed25519.PrivateKey); !ok {
+			t.Errorf("stored key type = %T, want ed25519.PrivateKey (value)", rec.Key)
+		}
 	}
 }
 
@@ -470,6 +528,21 @@ func TestProcessData_PEMMultipleKeys(t *testing.T) {
 	if len(store.AllKeys()) != 2 {
 		t.Fatalf("expected 2 keys, got %d", len(store.AllKeys()))
 	}
+	var gotRSA, gotECDSA bool
+	for _, rec := range store.AllKeys() {
+		switch rec.Key.(type) {
+		case *rsa.PrivateKey:
+			gotRSA = true
+		case *ecdsa.PrivateKey:
+			gotECDSA = true
+		}
+	}
+	if !gotRSA {
+		t.Error("expected an RSA key in multi-key PEM")
+	}
+	if !gotECDSA {
+		t.Error("expected an ECDSA key in multi-key PEM")
+	}
 }
 
 func TestProcessData_ExpiredCertNotFiltered(t *testing.T) {
@@ -512,6 +585,9 @@ func TestProcessData_Ed25519PEMKey(t *testing.T) {
 	for _, rec := range store.AllKeys() {
 		if rec.KeyType != "Ed25519" {
 			t.Errorf("KeyType = %q, want Ed25519", rec.KeyType)
+		}
+		if _, ok := rec.Key.(ed25519.PrivateKey); !ok {
+			t.Errorf("stored key type = %T, want ed25519.PrivateKey (value)", rec.Key)
 		}
 	}
 }
@@ -582,6 +658,9 @@ func TestProcessData_Ed25519PKCS8DER(t *testing.T) {
 	for _, rec := range store.AllKeys() {
 		if rec.KeyType != "Ed25519" {
 			t.Errorf("KeyType = %q, want Ed25519", rec.KeyType)
+		}
+		if _, ok := rec.Key.(ed25519.PrivateKey); !ok {
+			t.Errorf("stored key type = %T, want ed25519.PrivateKey (value)", rec.Key)
 		}
 	}
 }
