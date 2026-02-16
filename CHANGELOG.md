@@ -29,6 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Tests
 
+- Ralph Loop pass 3 — key handling normalization focus:
+  - Add `ProcessData_PKCS8DER_Ed25519_ValueForm` asserting stored key is value type, not pointer
+  - Add `SameECDSAKey_SEC1AndPKCS8_Equality` cross-format test (all NIST curves at parse level + pipeline level)
+  - Add `SameEd25519Key_OpenSSHAndPKCS8_Equality` cross-format test verifying key equality and SKI match
+  - Add `GetKeyType` Ed25519 pointer form test documenting current behavior
 - Ralph Loop pass 2: strengthen count-only assertions with key material equality checks in `MultipleCertsAndKeys`, `AllKeysFlat`; add error message assertions for nil key/cert; add PEM round-trip verification in `DecodeJKS_PrivateKeyEntry`; fix WHY comment placement ([`dec8949`], [`19ee683`])
 - Ralph Loop key handling test hardening: corrupt DER in RSA/EC PEM blocks, same-key-all-formats equality, ComputeSKILegacy RSA/Ed25519, Ed25519-vs-RSA cross-type mismatch, JKS magic byte boundaries, PKCS#12 multi-password iteration, encrypted PEM with nil passwords, duplicate test consolidation ([`7652404`])
 - Comprehensive key handling test hardening via Ralph Loop (5 passes, 2 review iterations) covering all key handling paths: parsing, normalization, matching, encoding, and cross-format round-trips ([`ff58d2b`])
@@ -46,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Log marshal errors in `processDER` PKCS#8 and SEC1 EC paths instead of silently dropping keys — aligns with PKCS#1 RSA path behavior
 - Normalize PKCS#8 parsed keys via `normalizeKey` in `ParsePEMPrivateKey` — ensures Ed25519 value form from the earliest point in the pipeline instead of relying on Go stdlib behavior ([`0031f7a`])
 - Fix `privateKeySize` in inspect returning "unknown" for `*ed25519.PrivateKey` pointer form ([`0031f7a`])
 - Reorder `HandleKey` normalization before `GetPublicKey` call for correctness clarity ([`0031f7a`])

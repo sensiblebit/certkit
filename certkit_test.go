@@ -4291,3 +4291,111 @@ func TestGenerateECKey_NilCurve(t *testing.T) {
 		t.Error("expected error for nil curve")
 	}
 }
+
+func TestParsePEMPrivateKey_SameECDSAKey_SEC1AndPKCS8(t *testing.T) {
+	// WHY: The same ECDSA key can arrive as SEC1 ("EC PRIVATE KEY") or PKCS#8
+	// ("PRIVATE KEY"). Both formats must produce Equal() keys. A format-
+	// dependent parse mangling would be invisible without this cross-format
+	// equality check. Covers all NIST curves.
+	t.Parallel()
+	curves := []struct {
+		name  string
+		curve elliptic.Curve
+	}{
+		{"P-256", elliptic.P256()},
+		{"P-384", elliptic.P384()},
+		{"P-521", elliptic.P521()},
+	}
+	for _, tc := range curves {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			key, err := ecdsa.GenerateKey(tc.curve, rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			sec1DER, err := x509.MarshalECPrivateKey(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			sec1PEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: sec1DER})
+
+			pkcs8DER, err := x509.MarshalPKCS8PrivateKey(key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			pkcs8PEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8DER})
+
+			fromSEC1, err := ParsePEMPrivateKey(sec1PEM)
+			if err != nil {
+				t.Fatalf("SEC1: %v", err)
+			}
+			fromPKCS8, err := ParsePEMPrivateKey(pkcs8PEM)
+			if err != nil {
+				t.Fatalf("PKCS#8: %v", err)
+			}
+
+			ec1, ok := fromSEC1.(*ecdsa.PrivateKey)
+			if !ok {
+				t.Fatalf("SEC1 returned %T, want *ecdsa.PrivateKey", fromSEC1)
+			}
+			ec8, ok := fromPKCS8.(*ecdsa.PrivateKey)
+			if !ok {
+				t.Fatalf("PKCS#8 returned %T, want *ecdsa.PrivateKey", fromPKCS8)
+			}
+			if !ec1.Equal(ec8) {
+				t.Error("same ECDSA key parsed from SEC1 and PKCS#8 should be Equal")
+			}
+		})
+	}
+}
+
+func TestParsePEMPrivateKey_SameEd25519Key_OpenSSHAndPKCS8(t *testing.T) {
+	// WHY: The same Ed25519 key can arrive as OpenSSH or PKCS#8 PEM. The
+	// OpenSSH path goes through normalizeKey (pointer→value) while PKCS#8
+	// also normalizes. Both must produce the same value-type key. A
+	// normalization asymmetry would make Equal() fail on identical key
+	// material.
+	t.Parallel()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// OpenSSH format
+	sshBlock, err := ssh.MarshalPrivateKey(priv, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshPEM := pem.EncodeToMemory(sshBlock)
+
+	// PKCS#8 format
+	pkcs8DER, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkcs8PEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8DER})
+
+	fromSSH, err := ParsePEMPrivateKey(sshPEM)
+	if err != nil {
+		t.Fatalf("OpenSSH: %v", err)
+	}
+	fromPKCS8, err := ParsePEMPrivateKey(pkcs8PEM)
+	if err != nil {
+		t.Fatalf("PKCS#8: %v", err)
+	}
+
+	// Both must be value type
+	if _, ok := fromSSH.(ed25519.PrivateKey); !ok {
+		t.Errorf("OpenSSH returned %T, want ed25519.PrivateKey (value)", fromSSH)
+	}
+	if _, ok := fromPKCS8.(ed25519.PrivateKey); !ok {
+		t.Errorf("PKCS#8 returned %T, want ed25519.PrivateKey (value)", fromPKCS8)
+	}
+
+	edSSH := fromSSH.(ed25519.PrivateKey)
+	edPKCS8 := fromPKCS8.(ed25519.PrivateKey)
+	if !edSSH.Equal(edPKCS8) {
+		t.Error("same Ed25519 key parsed from OpenSSH and PKCS#8 should be Equal")
+	}
+}

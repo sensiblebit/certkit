@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"slices"
 	"testing"
@@ -2233,5 +2234,166 @@ func TestProcessData_PEMEncryptedKey_NilPasswords(t *testing.T) {
 	})
 	if len(store.AllKeys()) != 0 {
 		t.Error("encrypted PEM with nil passwords should produce no keys")
+	}
+}
+
+func TestProcessData_PKCS8DER_Ed25519_ValueForm(t *testing.T) {
+	// WHY: processDER passes the raw x509.ParsePKCS8PrivateKey result to
+	// HandleKey. For Ed25519, HandleKey normalizes the pointer form, but we
+	// must verify the stored key is the canonical value type, not a pointer —
+	// a regression here would break downstream type switches that only match
+	// ed25519.PrivateKey (value).
+	t.Parallel()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkcs8DER, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{
+		Data:    pkcs8DER,
+		Path:    "ed25519.der",
+		Handler: store,
+	}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	if len(store.AllKeys()) != 1 {
+		t.Fatalf("expected 1 key, got %d", len(store.AllKeys()))
+	}
+	for _, rec := range store.AllKeys() {
+		gotType := fmt.Sprintf("%T", rec.Key)
+		if gotType != "ed25519.PrivateKey" {
+			t.Errorf("stored key type = %s, want ed25519.PrivateKey (value form)", gotType)
+		}
+		if rec.KeyType != "Ed25519" {
+			t.Errorf("KeyType = %q, want Ed25519", rec.KeyType)
+		}
+		if !keysEqual(t, priv, rec.Key) {
+			t.Error("stored Ed25519 key does not Equal original")
+		}
+	}
+}
+
+func TestProcessData_SameECDSAKey_SEC1AndPKCS8_Equality(t *testing.T) {
+	// WHY: The same ECDSA key can arrive as SEC1 ("EC PRIVATE KEY") or PKCS#8
+	// ("PRIVATE KEY"). Both formats must produce Equal() keys after processing.
+	// A format-dependent parse mangling would be invisible without this cross-
+	// format equality check.
+	t.Parallel()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// SEC1 PEM
+	sec1DER, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec1PEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: sec1DER})
+
+	// PKCS#8 PEM
+	pkcs8DER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkcs8PEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8DER})
+
+	storeSEC1 := NewMemStore()
+	if err := ProcessData(ProcessInput{Data: sec1PEM, Path: "ec-sec1.pem", Handler: storeSEC1}); err != nil {
+		t.Fatal(err)
+	}
+	storePKCS8 := NewMemStore()
+	if err := ProcessData(ProcessInput{Data: pkcs8PEM, Path: "ec-pkcs8.pem", Handler: storePKCS8}); err != nil {
+		t.Fatal(err)
+	}
+
+	sec1Keys := storeSEC1.AllKeys()
+	pkcs8Keys := storePKCS8.AllKeys()
+	if len(sec1Keys) != 1 || len(pkcs8Keys) != 1 {
+		t.Fatalf("expected 1 key each, got SEC1=%d PKCS8=%d", len(sec1Keys), len(pkcs8Keys))
+	}
+
+	var sec1Rec, pkcs8Rec *KeyRecord
+	for _, r := range sec1Keys {
+		sec1Rec = r
+	}
+	for _, r := range pkcs8Keys {
+		pkcs8Rec = r
+	}
+
+	if !keysEqual(t, sec1Rec.Key, pkcs8Rec.Key) {
+		t.Error("same ECDSA key parsed from SEC1 and PKCS#8 should be Equal")
+	}
+	if sec1Rec.SKI != pkcs8Rec.SKI {
+		t.Errorf("SKI mismatch: SEC1=%s PKCS8=%s", sec1Rec.SKI, pkcs8Rec.SKI)
+	}
+}
+
+func TestProcessData_SameEd25519Key_OpenSSHAndPKCS8_Equality(t *testing.T) {
+	// WHY: The same Ed25519 key can arrive as OpenSSH format or PKCS#8 PEM.
+	// Both must produce Equal() keys after processing. The OpenSSH path
+	// involves normalizeKey while PKCS#8 does not — a normalization
+	// inconsistency would make the same key appear as two different entries.
+	t.Parallel()
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// OpenSSH PEM
+	sshBlock, err := ssh.MarshalPrivateKey(priv, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshPEM := pem.EncodeToMemory(sshBlock)
+
+	// PKCS#8 PEM
+	pkcs8DER, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkcs8PEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8DER})
+
+	storeSSH := NewMemStore()
+	if err := ProcessData(ProcessInput{Data: sshPEM, Path: "ed25519-ssh.pem", Handler: storeSSH}); err != nil {
+		t.Fatal(err)
+	}
+	storePKCS8 := NewMemStore()
+	if err := ProcessData(ProcessInput{Data: pkcs8PEM, Path: "ed25519-pkcs8.pem", Handler: storePKCS8}); err != nil {
+		t.Fatal(err)
+	}
+
+	sshKeys := storeSSH.AllKeys()
+	pkcs8Keys := storePKCS8.AllKeys()
+	if len(sshKeys) != 1 || len(pkcs8Keys) != 1 {
+		t.Fatalf("expected 1 key each, got SSH=%d PKCS8=%d", len(sshKeys), len(pkcs8Keys))
+	}
+
+	var sshRec, pkcs8Rec *KeyRecord
+	for _, r := range sshKeys {
+		sshRec = r
+	}
+	for _, r := range pkcs8Keys {
+		pkcs8Rec = r
+	}
+
+	if !keysEqual(t, sshRec.Key, pkcs8Rec.Key) {
+		t.Error("same Ed25519 key parsed from OpenSSH and PKCS#8 should be Equal")
+	}
+	if sshRec.SKI != pkcs8Rec.SKI {
+		t.Errorf("SKI mismatch: SSH=%s PKCS8=%s", sshRec.SKI, pkcs8Rec.SKI)
+	}
+	// Both must be stored as value type
+	if fmt.Sprintf("%T", sshRec.Key) != "ed25519.PrivateKey" {
+		t.Errorf("SSH-parsed key type = %T, want ed25519.PrivateKey", sshRec.Key)
+	}
+	if fmt.Sprintf("%T", pkcs8Rec.Key) != "ed25519.PrivateKey" {
+		t.Errorf("PKCS8-parsed key type = %T, want ed25519.PrivateKey", pkcs8Rec.Key)
 	}
 }

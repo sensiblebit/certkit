@@ -125,10 +125,12 @@ func processDER(data []byte, source string, passwords []string, handler CertHand
 	if key, err := x509.ParsePKCS8PrivateKey(data); err == nil && key != nil {
 		slog.Debug("parsed PKCS#8 private key")
 		keyPEM, err := certkit.MarshalPrivateKeyToPEM(key)
-		if err == nil {
-			if err := handler.HandleKey(key, []byte(keyPEM), source); err != nil {
-				slog.Debug("handler rejected PKCS#8 key", "path", source, "error", err)
-			}
+		if err != nil {
+			slog.Debug("marshaling PKCS#8 key to PEM", "error", err)
+			return
+		}
+		if err := handler.HandleKey(key, []byte(keyPEM), source); err != nil {
+			slog.Debug("handler rejected PKCS#8 key", "path", source, "error", err)
 		}
 		return
 	}
@@ -151,10 +153,12 @@ func processDER(data []byte, source string, passwords []string, handler CertHand
 	if key, err := x509.ParseECPrivateKey(data); err == nil {
 		slog.Debug("parsed SEC1 EC private key")
 		keyPEM, err := certkit.MarshalPrivateKeyToPEM(key)
-		if err == nil {
-			if err := handler.HandleKey(key, []byte(keyPEM), source); err != nil {
-				slog.Debug("handler rejected SEC1 EC key", "path", source, "error", err)
-			}
+		if err != nil {
+			slog.Debug("marshaling SEC1 EC key to PEM", "error", err)
+			return
+		}
+		if err := handler.HandleKey(key, []byte(keyPEM), source); err != nil {
+			slog.Debug("handler rejected SEC1 EC key", "path", source, "error", err)
 		}
 		return
 	}
