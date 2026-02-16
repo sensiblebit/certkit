@@ -7,18 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.5] - 2026-02-15
+
 ### Added
 
-- Add `ParseCertificatesAny()` for parsing certificates from DER, PEM, or PKCS#7 (`.p7c`) data — resolves AIA responses from DISA, FPKI, and bridge CAs that serve PKCS#7-wrapped cross-certificates
+- Add `ParseCertificatesAny()` for parsing certificates from DER, PEM, or PKCS#7 (`.p7c`) data — resolves AIA responses from DISA, FPKI, and bridge CAs that serve PKCS#7-wrapped cross-certificates ([`b69caef`])
 
 ### Changed
 
-- **Breaking:** Remove `ParseCertificateAny()` — use `ParseCertificatesAny()` instead (returns all certificates, not just the first)
+- **Breaking:** Remove `ParseCertificateAny()` — use `ParseCertificatesAny()` instead (returns all certificates, not just the first) ([`b69caef`])
 
 ### Fixed
 
-- Fix AIA resolution silently dropping certificates from PKCS#7 (`.p7c`) AIA responses — affects DISA `issuedto/*.p7c`, FPKI `caCertsIssuedTo*.p7c`, STRAC, Symantec bridge, and other CA endpoints
-- Fix `FetchAIACertificates()` (CLI bundle command) silently dropping extra certificates from PKCS#7 AIA responses
+- Fix AIA resolution silently dropping certificates from PKCS#7 (`.p7c`) AIA responses — affects DISA `issuedto/*.p7c`, FPKI `caCertsIssuedTo*.p7c`, STRAC, Symantec bridge, and other CA endpoints ([`b69caef`])
+- Fix `FetchAIACertificates()` (CLI bundle command) silently dropping extra certificates from PKCS#7 AIA responses ([`b69caef`])
 
 ## [0.7.4] - 2026-02-15
 
@@ -361,7 +363,8 @@ Initial release.
 - PKCS#12, PKCS#7, and JKS encode/decode support
 - Homebrew distribution via GoReleaser
 
-[Unreleased]: https://github.com/sensiblebit/certkit/compare/v0.7.4...HEAD
+[Unreleased]: https://github.com/sensiblebit/certkit/compare/v0.7.5...HEAD
+[0.7.5]: https://github.com/sensiblebit/certkit/compare/v0.7.4...v0.7.5
 [0.7.4]: https://github.com/sensiblebit/certkit/compare/v0.7.3...v0.7.4
 [0.7.3]: https://github.com/sensiblebit/certkit/compare/v0.7.2...v0.7.3
 [0.7.2]: https://github.com/sensiblebit/certkit/compare/v0.7.1...v0.7.2
@@ -389,6 +392,7 @@ Initial release.
 [0.1.1]: https://github.com/sensiblebit/certkit/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/sensiblebit/certkit/releases/tag/v0.1.0
 
+[`b69caef`]: https://github.com/sensiblebit/certkit/commit/b69caef
 [`404e1d7`]: https://github.com/sensiblebit/certkit/commit/404e1d7
 [`847fe95`]: https://github.com/sensiblebit/certkit/commit/847fe95
 [`ee2749b`]: https://github.com/sensiblebit/certkit/commit/ee2749b
