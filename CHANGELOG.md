@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix false confidence in PKCS#12 tests: add key equality checks to `TestEncodePKCS12_withChain`, `TestDecodePKCS12_withChain`, `TestEncodePKCS12_MultiCertChain`, and `TestEncodeJKS_EmptyPassword` — previously discarded decoded keys ([`1661e53`])
 - Fix stale WHY comment in `TestMarshalPrivateKeyToPEM_Ed25519Pointer` — incorrectly stated `normalizeKey` is not called ([`1661e53`])
 - Add Ed25519 PKCS#12 container test, `EncodePKCS12Legacy` pointer-form test, and OpenSSH→JKS cross-format round-trip — fills iteration 2 gaps for Ed25519 normalization through all container paths ([`f23f8ab`])
-- Add `GetPublicKey` test for `*ed25519.PrivateKey` pointer form, key-cert matching verification in PEM container tests, and multi-key PEM first-key-wins behavior test ([`PLACEHOLDER`])
+- Add `GetPublicKey` test for `*ed25519.PrivateKey` pointer form, key-cert matching verification in PEM container tests, and multi-key PEM first-key-wins behavior test ([`2fc570c`])
 - Harden key handling tests: add direct `normalizeKey` unit tests, `validatePKCS12KeyType` coverage for Ed25519 pointer rejection, cross-format PEM round-trips (PKCS#1/SEC1 → PKCS#8), end-to-end ProcessData → export pipeline verification, key deduplication behavior, and container tests for ECDSA/Ed25519 key types ([`39a5ece`])
 - Harden key handling tests with normalization and round-trip coverage: Ed25519 pointer-form marshaling, OpenSSH ECDSA parsing, cross-format OpenSSH→PKCS#12 round-trip, encrypted PKCS#8 error clarity, JKS key equality with separate store/key passwords, corrupted cert chain handling, ECDSA/Ed25519 through PKCS#12 and JKS pipelines, DER key round-trips with equality checks, stored PEM PKCS#8 format verification ([`0fa55af`])
 - Accept `"NEW CERTIFICATE REQUEST"` PEM block type in `ParsePEMCertificateRequest` — supports CSRs from legacy tools (Netscape, MSIE) that use the older header format ([`2221a47`])
@@ -474,6 +474,7 @@ Initial release.
 [`2221a47`]: https://github.com/sensiblebit/certkit/commit/2221a47
 [`1661e53`]: https://github.com/sensiblebit/certkit/commit/1661e53
 [`f23f8ab`]: https://github.com/sensiblebit/certkit/commit/f23f8ab
+[`2fc570c`]: https://github.com/sensiblebit/certkit/commit/2fc570c
 [`39a5ece`]: https://github.com/sensiblebit/certkit/commit/e6a5a39
 [#24]: https://github.com/sensiblebit/certkit/pull/24
 [#25]: https://github.com/sensiblebit/certkit/pull/25
