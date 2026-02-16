@@ -557,6 +557,40 @@ func TestProcessData_GarbageBinary_WithoutExtension(t *testing.T) {
 	}
 }
 
+func TestProcessData_ValidDERKey_UnrecognizedExtension(t *testing.T) {
+	// WHY: ProcessData only tries binary format parsing for files with
+	// recognized crypto extensions (via HasBinaryExtension). A valid DER
+	// key in a file named "data.txt" must be silently skipped — this is
+	// intentional security behavior to avoid feeding arbitrary binary files
+	// to ASN.1 parsers. This test documents that design decision.
+	t.Parallel()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkcs8DER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{
+		Data:    pkcs8DER,
+		Path:    "privatekey.txt", // unrecognized extension
+		Handler: store,
+	}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	// Valid DER key should be skipped because .txt is not a crypto extension
+	if len(store.AllKeys()) != 0 {
+		t.Errorf("expected 0 keys for valid DER with .txt extension, got %d — "+
+			"ProcessData should only attempt binary parsing for recognized extensions",
+			len(store.AllKeys()))
+	}
+}
+
 func TestProcessData_PEMWithIgnoredBlocks(t *testing.T) {
 	// WHY: Non-cert/non-key PEM blocks (e.g. DH PARAMETERS) must be silently
 	// skipped while certs and keys in the same file are still ingested.
