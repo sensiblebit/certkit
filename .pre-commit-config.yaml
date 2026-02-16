@@ -55,7 +55,7 @@ repos:
         name: wasm
         entry: python3 scripts/checks.py wasm
         language: system
-        files: (^cmd/wasm/|^internal/|^certkit\.go|^bundle\.go|^csr\.go|^pkcs\.go|^jks\.go)
+        types: [go]
         pass_filenames: false
 
   # ── JS / TS ──

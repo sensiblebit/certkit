@@ -297,25 +297,19 @@ Examples: `feat: add PKCS#7 export`, `fix(jks): handle empty alias`, `ci: add go
 
 ### CI checks
 
-Every PR runs 16 parallel checks (`.github/workflows/ci.yml`):
+Every PR runs 10 parallel checks (`.github/workflows/ci.yml`):
 
 | Check | What it validates |
 |---|---|
 | PR Title | Conventional Commits format |
-| Branch Name | `type/description` format |
-| Commit Messages | Conventional Commits on all commits |
-| Verified Commits | All commits are signed/verified |
-| Go Build | `go build -trimpath ./...` |
-| Go Vet | `go vet ./...` |
+| PR Conventions | Branch name, commit messages, verified commits |
+| Go Checks | `go build`, `go vet`, goimports |
 | Go Test | `go test -race -count=1 ./...` |
 | Lint (golangci-lint) | errcheck, staticcheck, unused, etc. |
-| Lint (goimports) | Import ordering/formatting |
 | Vulnerability Check | `govulncheck ./...` |
 | WASM Build | `GOOS=js GOARCH=wasm` vet + build |
-| Web Tests (vitest) | JS/TS unit tests |
-| Web Lint (prettier) | JS/TS/CSS/HTML formatting |
-| Wrangler Build | Cloudflare Pages functions compile |
-| Markdown Lint | markdownlint against `.markdownlint.yaml` |
+| Web | vitest + wrangler build |
+| Lint | prettier + markdownlint |
 | CI | Gate — fails if any above failed |
 
 - **CI-1 (MUST)** All checks must pass before merging. The `CI` gate job aggregates results.

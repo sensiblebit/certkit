@@ -14,6 +14,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 
@@ -29,15 +30,24 @@ BRANCH_RE = re.compile(rf"^({TYPES_PATTERN})/")
 EXEMPT_RE = re.compile(r"^(dependabot|release)/")
 
 
-def run(cmd, **kwargs):
-    """Run a command and return the CompletedProcess."""
+def run(cmd, *, capture=False, **kwargs):
+    """Run a command and return the CompletedProcess.
+
+    With capture=True, sets capture_output=True and text=True so
+    result.stdout / result.stderr are decoded strings.
+    """
+    if capture:
+        kwargs.setdefault("capture_output", True)
+        kwargs.setdefault("text", True)
     return subprocess.run(cmd, **kwargs)
 
 
-def run_output(cmd):
-    """Run a command and return its stdout as a string."""
-    result = subprocess.run(cmd, capture_output=True, text=True)
-    return result.stdout.strip(), result.returncode
+def require_tool(name):
+    """Exit with a clear message if a required tool is not on PATH."""
+    if shutil.which(name) is None:
+        print(f"Required tool not found: {name}", file=sys.stderr)
+        print(f"Install {name} and ensure it is on your PATH.", file=sys.stderr)
+        sys.exit(1)
 
 
 def fail(message):
@@ -54,10 +64,10 @@ def cmd_branch_name(args):
     if args.name:
         branch = args.name
     else:
-        output, rc = run_output(["git", "rev-parse", "--abbrev-ref", "HEAD"])
-        if rc != 0:
+        result = run(["git", "rev-parse", "--abbrev-ref", "HEAD"], capture=True)
+        if result.returncode != 0:
             fail("Could not determine branch name.")
-        branch = output
+        branch = result.stdout.strip()
 
     if EXEMPT_RE.match(branch):
         return
@@ -97,17 +107,19 @@ def cmd_commit_message(args):
     if args.ci:
         # CI mode: check all commits between base and HEAD.
         base = args.base_ref or "origin/main"
-        output, rc = run_output(["git", "rev-list", f"{base}..HEAD"])
-        if rc != 0:
+        result = run(["git", "rev-list", f"{base}..HEAD"], capture=True)
+        if result.returncode != 0:
             fail(f"Could not list commits from {base}..HEAD")
 
+        output = result.stdout.strip()
         if not output:
             print("No commits to check.")
             return
 
         failed = False
         for sha in output.splitlines():
-            subject, _ = run_output(["git", "log", "--format=%s", "-n1", sha])
+            r = run(["git", "log", "--format=%s", "-n1", sha], capture=True)
+            subject = r.stdout.strip()
             if not check_subject(subject):
                 print_commit_error(subject)
                 print(f"  commit: {sha[:7]}")
@@ -136,12 +148,14 @@ def cmd_commit_message(args):
 
 def cmd_goimports(args):
     """Check or fix Go import ordering."""
-    gopath, _ = run_output(["go", "env", "GOPATH"])
+    require_tool("go")
+
+    result = run(["go", "env", "GOPATH"], capture=True)
+    gopath = result.stdout.strip()
     os.environ["PATH"] = f"{gopath}/bin:{os.environ.get('PATH', '')}"
 
     # Install goimports if not available.
-    result = run(["which", "goimports"], capture_output=True)
-    if result.returncode != 0:
+    if shutil.which("goimports") is None:
         print("Installing goimports...")
         run(["go", "install", "golang.org/x/tools/cmd/goimports@latest"], check=True)
 
@@ -151,10 +165,13 @@ def cmd_goimports(args):
         run(["goimports", "-w"] + targets, check=True)
     else:
         # Check mode: list files with incorrect imports.
-        output, _ = run_output(["goimports", "-l", "."])
+        result = run(["goimports", "-l", "."], capture=True)
+        output = result.stdout.strip()
         if output:
             print("The following files have incorrect imports:")
             print(output)
+            print()
+            print("Run to fix: python3 scripts/checks.py goimports --fix")
             sys.exit(1)
 
 
@@ -163,6 +180,8 @@ def cmd_goimports(args):
 
 def cmd_wasm(args):
     """Verify WASM target compiles cleanly (vet + build)."""
+    require_tool("go")
+
     env = {**os.environ, "GOOS": "js", "GOARCH": "wasm"}
 
     print("Running go vet (WASM)...")
@@ -181,12 +200,14 @@ def cmd_wasm(args):
 
 def cmd_verified_commits(args):
     """Verify all commits in a PR are signed/verified."""
-    result = subprocess.run(
+    require_tool("gh")
+
+    result = run(
         [
             "gh", "api", "--paginate",
             f"repos/{args.repo}/pulls/{args.pr}/commits",
         ],
-        capture_output=True, text=True,
+        capture=True,
     )
     if result.returncode != 0:
         fail(f"GitHub API error: {result.stderr}")

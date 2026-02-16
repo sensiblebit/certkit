@@ -7,8 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Consolidate CI from 16 jobs to 10 by merging jobs with identical setup: branch-name + commit-messages + verified-commits → PR Conventions, go-build + go-vet + goimports → Go Checks, web-test + wrangler-build → Web, web-lint + markdownlint → Lint
+- Remove redundant `go vet` and `go test` steps from release workflow — tags are created from main which already passed CI
+- Consolidate Dependabot GitHub Actions PRs into a single grouped PR instead of one per action
+- Replace fragile hardcoded file list in WASM pre-commit hook with `types: [go]`
+- Consolidate `run()` and `run_output()` into single `run(cmd, *, capture=False)` in `checks.py`
+
+### Added
+
+- Add Dependabot npm ecosystem monitoring for `web/` dependencies
+- Add GitHub issue templates (bug report and feature request) with YAML form format
+- Add pull request template with summary, test plan, and checklist
+- Add `--fix` suggestion to `checks.py` goimports failure output
+- Add `require_tool()` guard in `checks.py` for `go`, `gh` — gives clear errors when tools are missing locally
+
 ### Fixed
 
+- Fix CI commit-message check ignoring `--base-ref` argument — base ref was parsed as positional `file` arg instead of the named `--base-ref` flag, always defaulting to `origin/main`
 - Normalize Ed25519 pointer-form keys in `EncodePKCS12` and `EncodePKCS12Legacy` before validation — previously rejected `*ed25519.PrivateKey` with a confusing "unsupported private key type" error instead of normalizing like `EncodeJKS` does ([`1661e53`])
 - Fix `ClassifyHosts` email detection using `mail.ParseAddress` instead of `strings.Contains(h, "@")` — rejects invalid inputs like `"user@"`, `"@example.com"`, and display-name forms ([`2221a47`])
 
