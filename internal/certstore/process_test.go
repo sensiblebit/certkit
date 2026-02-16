@@ -1,6 +1,7 @@
 package certstore
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -16,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/pavlo-v-chernykh/keystore-go/v4"
 	"github.com/sensiblebit/certkit"
 	"golang.org/x/crypto/ssh"
 )
@@ -1291,6 +1293,69 @@ func TestProcessData_JKS_Ed25519Key(t *testing.T) {
 	}
 }
 
+func TestProcessData_JKS_DifferentKeyPassword(t *testing.T) {
+	// WHY: JKS supports different store and key passwords. ProcessData passes
+	// the password list to DecodeJKS, which tries each password independently
+	// for key entries. If only the store password is tried for keys, the key
+	// is silently skipped. This test verifies that keys with non-store
+	// passwords are extracted and normalized to PKCS#8.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "jks-diffpw.example.com", []string{"jks-diffpw.example.com"})
+
+	// Build JKS manually with different store/key passwords.
+	pkcs8Key, err := x509.MarshalPKCS8PrivateKey(leaf.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ks := keystore.New()
+	if err := ks.SetPrivateKeyEntry("server", keystore.PrivateKeyEntry{
+		CreationTime: time.Now(),
+		PrivateKey:   pkcs8Key,
+		CertificateChain: []keystore.Certificate{
+			{Type: "X.509", Content: leaf.certDER},
+			{Type: "X.509", Content: ca.certDER},
+		},
+	}, []byte("keypass")); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := ks.Store(&buf, []byte("storepass")); err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{
+		Data:      buf.Bytes(),
+		Path:      "diffpw.jks",
+		Passwords: []string{"storepass", "keypass"},
+		Handler:   store,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	keys := store.AllKeysFlat()
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key from JKS with different passwords, got %d", len(keys))
+	}
+	rec := keys[0]
+	if rec.KeyType != "RSA" {
+		t.Errorf("KeyType = %q, want RSA", rec.KeyType)
+	}
+	if !keysEqual(t, leaf.key, rec.Key) {
+		t.Error("stored key does not Equal original after JKS dual-password extraction")
+	}
+	// Verify stored PEM is PKCS#8
+	block, _ := pem.Decode(rec.PEM)
+	if block == nil {
+		t.Fatal("stored PEM not decodable")
+	}
+	if block.Type != "PRIVATE KEY" {
+		t.Errorf("stored PEM type = %q, want PRIVATE KEY (PKCS#8)", block.Type)
+	}
+}
+
 func TestProcessData_DER_KeyRoundTrip(t *testing.T) {
 	// WHY: Existing DER key tests check type only, not key equality. A subtle
 	// DER-to-PEM encoding bug that changes key material would pass all prior tests.
@@ -1634,6 +1699,14 @@ func TestProcessData_OpenSSH_Encrypted(t *testing.T) {
 		if !priv.Equal(edKey) {
 			t.Error("stored key does not Equal original encrypted OpenSSH Ed25519 key")
 		}
+		// Verify stored PEM is PKCS#8 (normalized from encrypted OpenSSH)
+		block, _ := pem.Decode(rec.PEM)
+		if block == nil {
+			t.Fatal("stored PEM is not parseable")
+		}
+		if block.Type != "PRIVATE KEY" {
+			t.Errorf("stored PEM type = %q, want PRIVATE KEY (PKCS#8)", block.Type)
+		}
 	}
 }
 
@@ -1706,6 +1779,21 @@ func TestProcessData_ECDSAP384(t *testing.T) {
 		if !keysEqual(t, key, rec.Key) {
 			t.Error("stored P-384 key does not Equal original")
 		}
+		// Verify stored PEM is PKCS#8 and round-trips
+		block, _ := pem.Decode(rec.PEM)
+		if block == nil {
+			t.Fatal("stored PEM not decodable")
+		}
+		if block.Type != "PRIVATE KEY" {
+			t.Errorf("stored PEM type = %q, want PRIVATE KEY (PKCS#8)", block.Type)
+		}
+		parsed, err := certkit.ParsePEMPrivateKey(rec.PEM)
+		if err != nil {
+			t.Fatalf("stored PEM not parseable: %v", err)
+		}
+		if !keysEqual(t, key, parsed) {
+			t.Error("re-parsed P-384 key from stored PEM does not Equal original")
+		}
 	}
 }
 
@@ -1746,6 +1834,21 @@ func TestProcessData_ECDSAP521(t *testing.T) {
 		}
 		if !keysEqual(t, key, rec.Key) {
 			t.Error("stored P-521 key does not Equal original")
+		}
+		// Verify stored PEM is PKCS#8 and round-trips
+		block, _ := pem.Decode(rec.PEM)
+		if block == nil {
+			t.Fatal("stored PEM not decodable")
+		}
+		if block.Type != "PRIVATE KEY" {
+			t.Errorf("stored PEM type = %q, want PRIVATE KEY (PKCS#8)", block.Type)
+		}
+		parsed, err := certkit.ParsePEMPrivateKey(rec.PEM)
+		if err != nil {
+			t.Fatalf("stored PEM not parseable: %v", err)
+		}
+		if !keysEqual(t, key, parsed) {
+			t.Error("re-parsed P-521 key from stored PEM does not Equal original")
 		}
 	}
 }
