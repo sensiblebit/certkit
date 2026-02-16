@@ -25,7 +25,9 @@ func validatePKCS12KeyType(privateKey crypto.PrivateKey) error {
 
 // EncodePKCS12 creates a PKCS#12/PFX bundle from a private key, leaf cert,
 // CA chain, and password. Returns the DER-encoded PKCS#12 data.
+// Normalizes Ed25519 pointer form to value form before encoding.
 func EncodePKCS12(privateKey crypto.PrivateKey, leaf *x509.Certificate, caCerts []*x509.Certificate, password string) ([]byte, error) {
+	privateKey = normalizeKey(privateKey)
 	if err := validatePKCS12KeyType(privateKey); err != nil {
 		return nil, err
 	}
@@ -34,7 +36,9 @@ func EncodePKCS12(privateKey crypto.PrivateKey, leaf *x509.Certificate, caCerts 
 
 // EncodePKCS12Legacy creates a PKCS#12/PFX bundle using the legacy RC2 cipher for
 // compatibility with older Java keystores. Returns the DER-encoded PKCS#12 data.
+// Normalizes Ed25519 pointer form to value form before encoding.
 func EncodePKCS12Legacy(privateKey crypto.PrivateKey, leaf *x509.Certificate, caCerts []*x509.Certificate, password string) ([]byte, error) {
+	privateKey = normalizeKey(privateKey)
 	if err := validatePKCS12KeyType(privateKey); err != nil {
 		return nil, err
 	}

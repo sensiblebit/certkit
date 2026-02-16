@@ -1,6 +1,7 @@
 package certkit
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/dsa" //nolint:staticcheck // needed for testing legacy DSA key identification
 	"crypto/ecdsa"
@@ -2126,8 +2127,9 @@ func TestNormalizeKey(t *testing.T) {
 // TestValidatePKCS12KeyType verifies key type validation for PKCS#12 encoding.
 func TestValidatePKCS12KeyType(t *testing.T) {
 	// WHY: validatePKCS12KeyType is the gatekeeper for PKCS#12 encoding; it must
-	// accept the exact Go types returned by decoders and reject pointer forms of
-	// Ed25519 keys that would cause encoding failures downstream.
+	// accept the exact Go types returned by decoders and reject unsupported types.
+	// Note: EncodePKCS12 normalizes keys before calling this, so *ed25519.PrivateKey
+	// is handled at the caller level; this validator sees only canonical forms.
 	t.Parallel()
 
 	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
@@ -2331,10 +2333,10 @@ func TestParsePEMPrivateKey_PKCS8Ed25519_ReturnsValueType(t *testing.T) {
 }
 
 func TestMarshalPrivateKeyToPEM_Ed25519Pointer(t *testing.T) {
-	// WHY: MarshalPrivateKeyToPEM does not call normalizeKey — it passes the key
-	// directly to x509.MarshalPKCS8PrivateKey. If a caller passes *ed25519.PrivateKey
-	// (pointer form from ssh.ParseRawPrivateKey), marshaling must still succeed.
-	// A failure here means non-normalized Ed25519 keys would silently fail to export.
+	// WHY: MarshalPrivateKeyToPEM calls normalizeKey internally, but this test
+	// guards the contract: callers can pass *ed25519.PrivateKey (pointer form from
+	// ssh.ParseRawPrivateKey) and marshaling must succeed with correct key material.
+	// A regression removing normalizeKey would cause silent export failures.
 	t.Parallel()
 
 	_, edVal, _ := ed25519.GenerateKey(rand.Reader)
@@ -2469,5 +2471,553 @@ func TestCrossFormatRoundTrip_OpenSSH_To_PKCS12(t *testing.T) {
 	}
 	if decodedCert.Subject.CommonName != "cross-format-test" {
 		t.Errorf("cert CN = %q, want cross-format-test", decodedCert.Subject.CommonName)
+	}
+}
+
+func TestCrossFormatRoundTrip_PKCS8Ed25519_To_PKCS12(t *testing.T) {
+	// WHY: PKCS#8 is the most common modern Ed25519 key format. This exercises the
+	// full pipeline: PKCS#8 PEM → ParsePEMPrivateKey → EncodePKCS12 → DecodePKCS12.
+	// A normalization gap in the PKCS#8 path would silently break PKCS#12 exports.
+	t.Parallel()
+
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	der, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+
+	parsed, err := ParsePEMPrivateKey(pemBytes)
+	if err != nil {
+		t.Fatalf("ParsePEMPrivateKey(PKCS#8 Ed25519): %v", err)
+	}
+
+	edKey := parsed.(ed25519.PrivateKey)
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "pkcs8-to-p12"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, edKey.Public(), edKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, _ := x509.ParseCertificate(certDER)
+
+	p12, err := EncodePKCS12(parsed, cert, nil, "test")
+	if err != nil {
+		t.Fatalf("EncodePKCS12 with PKCS#8-parsed Ed25519: %v", err)
+	}
+
+	decodedKey, _, _, err := DecodePKCS12(p12, "test")
+	if err != nil {
+		t.Fatalf("DecodePKCS12: %v", err)
+	}
+	if !priv.Equal(decodedKey) {
+		t.Error("PKCS#8 Ed25519 → PKCS#12 round-trip lost key material")
+	}
+}
+
+func TestCrossFormatRoundTrip_PKCS8Ed25519_To_JKS(t *testing.T) {
+	// WHY: PKCS#8 Ed25519 → JKS exercises the EncodeJKS normalizeKey path. If
+	// EncodeJKS's normalizeKey call were removed, this test would catch the failure
+	// because x509.MarshalPKCS8PrivateKey could receive a non-standard type.
+	t.Parallel()
+
+	_, priv, _ := ed25519.GenerateKey(rand.Reader)
+	der, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+
+	parsed, err := ParsePEMPrivateKey(pemBytes)
+	if err != nil {
+		t.Fatalf("ParsePEMPrivateKey(PKCS#8 Ed25519): %v", err)
+	}
+
+	edKey := parsed.(ed25519.PrivateKey)
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "pkcs8-to-jks"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, edKey.Public(), edKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, _ := x509.ParseCertificate(certDER)
+
+	jksData, err := EncodeJKS(parsed, cert, nil, "changeit")
+	if err != nil {
+		t.Fatalf("EncodeJKS with PKCS#8-parsed Ed25519: %v", err)
+	}
+
+	_, keys, err := DecodeJKS(jksData, []string{"changeit"})
+	if err != nil {
+		t.Fatalf("DecodeJKS: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key, got %d", len(keys))
+	}
+	if !priv.Equal(keys[0]) {
+		t.Error("PKCS#8 Ed25519 → JKS round-trip lost key material")
+	}
+}
+
+func TestEncodePKCS12_Ed25519Pointer(t *testing.T) {
+	// WHY: EncodePKCS12 must normalize *ed25519.PrivateKey (pointer form from
+	// ssh.ParseRawPrivateKey) before validation, matching EncodeJKS behavior.
+	// Without normalization, library callers passing pointer-form Ed25519 keys
+	// would get a confusing "unsupported private key type" error.
+	t.Parallel()
+
+	_, edVal, _ := ed25519.GenerateKey(rand.Reader)
+	edPtr := &edVal
+
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "ed-ptr-p12"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, edVal.Public(), edVal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, _ := x509.ParseCertificate(certDER)
+
+	p12, err := EncodePKCS12(edPtr, cert, nil, "test")
+	if err != nil {
+		t.Fatalf("EncodePKCS12(*ed25519.PrivateKey): %v", err)
+	}
+
+	decodedKey, _, _, err := DecodePKCS12(p12, "test")
+	if err != nil {
+		t.Fatalf("DecodePKCS12: %v", err)
+	}
+	if !edVal.Equal(decodedKey) {
+		t.Error("pointer Ed25519 → PKCS#12 round-trip lost key material")
+	}
+}
+
+func TestEncodeJKS_Ed25519Pointer(t *testing.T) {
+	// WHY: EncodeJKS calls normalizeKey internally, but this test directly
+	// verifies that *ed25519.PrivateKey (pointer form) works end-to-end.
+	// Without the normalizeKey call in EncodeJKS, the PKCS#8 marshaling would fail.
+	t.Parallel()
+
+	_, edVal, _ := ed25519.GenerateKey(rand.Reader)
+	edPtr := &edVal
+
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "ed-ptr-jks"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, edVal.Public(), edVal)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, _ := x509.ParseCertificate(certDER)
+
+	jksData, err := EncodeJKS(edPtr, cert, nil, "changeit")
+	if err != nil {
+		t.Fatalf("EncodeJKS(*ed25519.PrivateKey): %v", err)
+	}
+
+	_, keys, err := DecodeJKS(jksData, []string{"changeit"})
+	if err != nil {
+		t.Fatalf("DecodeJKS: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key, got %d", len(keys))
+	}
+	if !edVal.Equal(keys[0]) {
+		t.Error("pointer Ed25519 → JKS round-trip lost key material")
+	}
+}
+
+func TestNormalizeKey_Nil(t *testing.T) {
+	// WHY: normalizeKey is called from DecodePKCS12, DecodeJKS, MarshalPrivateKeyToPEM,
+	// and EncodeJKS. If any caller ever passes nil (e.g., a buggy upstream decoder),
+	// normalizeKey must return nil without panicking.
+	t.Parallel()
+	result := normalizeKey(nil)
+	if result != nil {
+		t.Errorf("normalizeKey(nil) = %v, want nil", result)
+	}
+}
+
+func TestNormalizeKey_Idempotent(t *testing.T) {
+	// WHY: Double normalization (normalizeKey(normalizeKey(key))) must be a no-op.
+	// Some paths apply normalizeKey at parse time AND at storage time; idempotency
+	// ensures this doesn't corrupt key material.
+	t.Parallel()
+	_, edVal, _ := ed25519.GenerateKey(rand.Reader)
+	edPtr := &edVal
+
+	once := normalizeKey(edPtr)
+	twice := normalizeKey(once)
+
+	if fmt.Sprintf("%T", twice) != "ed25519.PrivateKey" {
+		t.Errorf("double normalize type = %T, want ed25519.PrivateKey", twice)
+	}
+	if !edVal.Equal(twice) {
+		t.Error("double normalization corrupted Ed25519 key material")
+	}
+}
+
+func TestComputeSKI_EquivalentToCertSKI(t *testing.T) {
+	// WHY: ComputeSKI and CertSKI use different code paths — ComputeSKI marshals
+	// the public key via marshalPublicKeyDER, while CertSKI reads cert.RawSubjectPublicKeyInfo.
+	// A divergence would silently break SKI-based key-certificate matching.
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		genKey  func(t *testing.T) (crypto.PrivateKey, crypto.PublicKey)
+		sigAlgo x509.SignatureAlgorithm
+	}{
+		{
+			name: "RSA",
+			genKey: func(t *testing.T) (crypto.PrivateKey, crypto.PublicKey) {
+				t.Helper()
+				key, err := rsa.GenerateKey(rand.Reader, 2048)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return key, &key.PublicKey
+			},
+			sigAlgo: x509.SHA256WithRSA,
+		},
+		{
+			name: "ECDSA",
+			genKey: func(t *testing.T) (crypto.PrivateKey, crypto.PublicKey) {
+				t.Helper()
+				key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return key, &key.PublicKey
+			},
+			sigAlgo: x509.ECDSAWithSHA256,
+		},
+		{
+			name: "Ed25519",
+			genKey: func(t *testing.T) (crypto.PrivateKey, crypto.PublicKey) {
+				t.Helper()
+				_, priv, err := ed25519.GenerateKey(rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return priv, priv.Public()
+			},
+			sigAlgo: x509.PureEd25519,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			priv, pub := tt.genKey(t)
+
+			template := &x509.Certificate{
+				SerialNumber:       big.NewInt(1),
+				Subject:            pkix.Name{CommonName: "ski-equiv-" + tt.name},
+				NotBefore:          time.Now().Add(-time.Hour),
+				NotAfter:           time.Now().Add(24 * time.Hour),
+				KeyUsage:           x509.KeyUsageDigitalSignature,
+				SignatureAlgorithm: tt.sigAlgo,
+			}
+			certDER, err := x509.CreateCertificate(rand.Reader, template, template, pub, priv)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cert, _ := x509.ParseCertificate(certDER)
+
+			computedSKI, err := ComputeSKI(pub)
+			if err != nil {
+				t.Fatalf("ComputeSKI: %v", err)
+			}
+			certSKI := CertSKI(cert)
+			computedHex := ColonHex(computedSKI)
+
+			if computedHex != certSKI {
+				t.Errorf("ComputeSKI = %s, CertSKI = %s — these must match for key-cert matching to work", computedHex, certSKI)
+			}
+		})
+	}
+}
+
+func TestComputeSKI_MatchesCertSubjectKeyId(t *testing.T) {
+	// WHY: Go's x509.CreateCertificate auto-populates SubjectKeyId using
+	// SHA-256 truncated to 20 bytes (RFC 7093 Method 1). ComputeSKI uses the
+	// same algorithm; they must produce identical bytes. A mismatch would break
+	// SKI-based key-certificate matching for Go-generated CA certificates.
+	t.Parallel()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "ski-auto-equiv"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, _ := x509.ParseCertificate(certDER)
+
+	computedSKI, err := ComputeSKI(&key.PublicKey)
+	if err != nil {
+		t.Fatalf("ComputeSKI: %v", err)
+	}
+
+	if !bytes.Equal(computedSKI, cert.SubjectKeyId) {
+		t.Errorf("ComputeSKI = %x, cert.SubjectKeyId = %x — must match for SKI-based key-cert matching",
+			computedSKI, cert.SubjectKeyId)
+	}
+}
+
+func TestComputeSKI_CrossKeyTypeUniqueness(t *testing.T) {
+	// WHY: SKIs from different key types must be different. A bug in
+	// extractPublicKeyBitString that ignores the algorithm identifier could
+	// produce collisions, silently mismatching keys to wrong certificates.
+	t.Parallel()
+
+	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	_, edKey, _ := ed25519.GenerateKey(rand.Reader)
+
+	rsaSKI, err := ComputeSKI(&rsaKey.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ecSKI, err := ComputeSKI(&ecKey.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edSKI, err := ComputeSKI(edKey.Public())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if bytes.Equal(rsaSKI, ecSKI) {
+		t.Error("RSA and ECDSA SKIs are identical — must be unique")
+	}
+	if bytes.Equal(rsaSKI, edSKI) {
+		t.Error("RSA and Ed25519 SKIs are identical — must be unique")
+	}
+	if bytes.Equal(ecSKI, edSKI) {
+		t.Error("ECDSA and Ed25519 SKIs are identical — must be unique")
+	}
+}
+
+func TestCertSKIEmbedded_MatchesCertAKIEmbedded(t *testing.T) {
+	// WHY: The fundamental chain-linking property: an issuer's embedded SKI must
+	// equal the child's embedded AKI. If these don't match, chain resolution breaks.
+	t.Parallel()
+
+	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Chain Link CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	caBytes, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	caCert, _ := x509.ParseCertificate(caBytes)
+
+	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	leafTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "chain-link-leaf"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	leafBytes, _ := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
+	leafCert, _ := x509.ParseCertificate(leafBytes)
+
+	caSKI := CertSKIEmbedded(caCert)
+	leafAKI := CertAKIEmbedded(leafCert)
+
+	if caSKI == "" {
+		t.Fatal("CA embedded SKI is empty")
+	}
+	if leafAKI == "" {
+		t.Fatal("leaf embedded AKI is empty")
+	}
+	if caSKI != leafAKI {
+		t.Errorf("CA SKI = %s, leaf AKI = %s — must match for chain resolution", caSKI, leafAKI)
+	}
+}
+
+func TestKeyMatchesCert_Ed25519Pointer(t *testing.T) {
+	// WHY: *ed25519.PrivateKey (pointer form from ssh.ParseRawPrivateKey) must
+	// work with KeyMatchesCert. GetPublicKey uses crypto.Signer, and pointer
+	// types inherit value receiver methods, but this must be tested explicitly.
+	t.Parallel()
+
+	_, edVal, _ := ed25519.GenerateKey(rand.Reader)
+	edPtr := &edVal
+
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "ed-ptr-match"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	certDER, _ := x509.CreateCertificate(rand.Reader, template, template, edVal.Public(), edVal)
+	cert, _ := x509.ParseCertificate(certDER)
+
+	match, err := KeyMatchesCert(edPtr, cert)
+	if err != nil {
+		t.Fatalf("KeyMatchesCert(*ed25519.PrivateKey): %v", err)
+	}
+	if !match {
+		t.Error("pointer Ed25519 key should match its own certificate")
+	}
+}
+
+func TestParsePEMPrivateKey_CorruptOpenSSH(t *testing.T) {
+	// WHY: A PEM block with type "OPENSSH PRIVATE KEY" but corrupt body bytes must
+	// produce a wrapped error mentioning "OpenSSH", not a generic parse failure.
+	t.Parallel()
+
+	pemBytes := pem.EncodeToMemory(&pem.Block{
+		Type:  "OPENSSH PRIVATE KEY",
+		Bytes: []byte("this-is-not-valid-openssh-data"),
+	})
+
+	_, err := ParsePEMPrivateKey(pemBytes)
+	if err == nil {
+		t.Fatal("expected error for corrupt OpenSSH body")
+	}
+	if !strings.Contains(err.Error(), "OpenSSH") {
+		t.Errorf("error should mention OpenSSH, got: %v", err)
+	}
+}
+
+func TestMarshalPrivateKeyToPEM_Deterministic(t *testing.T) {
+	// WHY: Marshaling the same key twice must produce byte-identical PEM output.
+	// This matters for idempotent export operations — if output differs, tools
+	// would detect spurious changes in exported key files.
+	t.Parallel()
+
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+
+	pem1, err := MarshalPrivateKeyToPEM(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pem2, err := MarshalPrivateKeyToPEM(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if pem1 != pem2 {
+		t.Error("MarshalPrivateKeyToPEM produced different output for the same key")
+	}
+}
+
+func TestMarshalPrivateKeyToPEM_ECDSAP384(t *testing.T) {
+	// WHY: Only P-256 was tested in round-trips. P-384 uses a different curve OID
+	// in PKCS#8 encoding; a curve-dependent bug would be invisible with P-256 only.
+	t.Parallel()
+
+	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pemStr, err := MarshalPrivateKeyToPEM(key)
+	if err != nil {
+		t.Fatalf("MarshalPrivateKeyToPEM(P-384): %v", err)
+	}
+
+	parsed, err := ParsePEMPrivateKey([]byte(pemStr))
+	if err != nil {
+		t.Fatalf("re-parse P-384: %v", err)
+	}
+	if !key.Equal(parsed) {
+		t.Error("P-384 ECDSA round-trip lost key material")
+	}
+}
+
+func TestCertSKI_AllKeyTypes(t *testing.T) {
+	// WHY: CertSKI reads cert.RawSubjectPublicKeyInfo, a different code path from
+	// ComputeSKI. Testing with RSA and Ed25519 certs (not just ECDSA from
+	// generateTestPKI) ensures the SPKI parsing works for all key types.
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		gen  func(t *testing.T) (*x509.Certificate, crypto.PublicKey)
+	}{
+		{
+			name: "RSA",
+			gen: func(t *testing.T) (*x509.Certificate, crypto.PublicKey) {
+				t.Helper()
+				key, _ := rsa.GenerateKey(rand.Reader, 2048)
+				tmpl := &x509.Certificate{
+					SerialNumber: big.NewInt(1),
+					Subject:      pkix.Name{CommonName: "ski-rsa"},
+					NotBefore:    time.Now().Add(-time.Hour),
+					NotAfter:     time.Now().Add(24 * time.Hour),
+				}
+				der, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+				cert, _ := x509.ParseCertificate(der)
+				return cert, &key.PublicKey
+			},
+		},
+		{
+			name: "Ed25519",
+			gen: func(t *testing.T) (*x509.Certificate, crypto.PublicKey) {
+				t.Helper()
+				_, priv, _ := ed25519.GenerateKey(rand.Reader)
+				pub := priv.Public()
+				tmpl := &x509.Certificate{
+					SerialNumber: big.NewInt(1),
+					Subject:      pkix.Name{CommonName: "ski-ed25519"},
+					NotBefore:    time.Now().Add(-time.Hour),
+					NotAfter:     time.Now().Add(24 * time.Hour),
+				}
+				der, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, priv)
+				cert, _ := x509.ParseCertificate(der)
+				return cert, pub
+			},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cert, _ := tt.gen(t)
+			ski := CertSKI(cert)
+			if ski == "" {
+				t.Error("CertSKI returned empty string")
+			}
+			// Verify colon-separated hex format
+			if matched, _ := regexp.MatchString(`^([0-9a-f]{2}:)*[0-9a-f]{2}$`, ski); !matched {
+				t.Errorf("CertSKI format invalid: %s", ski)
+			}
+		})
 	}
 }

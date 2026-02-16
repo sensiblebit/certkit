@@ -14,7 +14,6 @@ import (
 	"time"
 
 	smPkcs7 "github.com/smallstep/pkcs7"
-	gopkcs12 "software.sslmate.com/src/go-pkcs12"
 )
 
 func TestEncodePKCS12_withChain(t *testing.T) {
@@ -48,7 +47,7 @@ func TestEncodePKCS12_withChain(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, decodedCert, caCerts, err := gopkcs12.DecodeChain(pfxData, "pass")
+	decodedKey, decodedCert, caCerts, err := DecodePKCS12(pfxData, "pass")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -57,6 +56,13 @@ func TestEncodePKCS12_withChain(t *testing.T) {
 	}
 	if len(caCerts) != 1 {
 		t.Errorf("expected 1 CA cert, got %d", len(caCerts))
+	}
+	decodedECKey, ok := decodedKey.(*ecdsa.PrivateKey)
+	if !ok {
+		t.Fatalf("expected *ecdsa.PrivateKey, got %T", decodedKey)
+	}
+	if !leafKey.Equal(decodedECKey) {
+		t.Error("decoded key does not match original")
 	}
 }
 
@@ -153,7 +159,7 @@ func TestDecodePKCS12_withChain(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, decodedCert, decodedCAs, err := DecodePKCS12(pfxData, "pass")
+	decodedKey, decodedCert, decodedCAs, err := DecodePKCS12(pfxData, "pass")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -162,6 +168,13 @@ func TestDecodePKCS12_withChain(t *testing.T) {
 	}
 	if len(decodedCAs) != 1 {
 		t.Errorf("expected 1 CA cert, got %d", len(decodedCAs))
+	}
+	decodedECKey, ok := decodedKey.(*ecdsa.PrivateKey)
+	if !ok {
+		t.Fatalf("expected *ecdsa.PrivateKey, got %T", decodedKey)
+	}
+	if !leafKey.Equal(decodedECKey) {
+		t.Error("decoded key does not match original")
 	}
 }
 
@@ -470,7 +483,7 @@ func TestEncodePKCS12_MultiCertChain(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, decodedCert, caCerts, err := DecodePKCS12(pfxData, "chain-pass")
+	decodedKey, decodedCert, caCerts, err := DecodePKCS12(pfxData, "chain-pass")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -479,6 +492,13 @@ func TestEncodePKCS12_MultiCertChain(t *testing.T) {
 	}
 	if len(caCerts) != 2 {
 		t.Fatalf("expected 2 CA certs, got %d", len(caCerts))
+	}
+	decodedECKey, ok := decodedKey.(*ecdsa.PrivateKey)
+	if !ok {
+		t.Fatalf("expected *ecdsa.PrivateKey, got %T", decodedKey)
+	}
+	if !leafKey.Equal(decodedECKey) {
+		t.Error("multi-chain decoded key does not match original")
 	}
 }
 

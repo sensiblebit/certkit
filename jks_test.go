@@ -726,6 +726,13 @@ func TestEncodeJKS_EmptyPassword(t *testing.T) {
 	if len(certs) != 1 {
 		t.Fatalf("expected 1 cert, got %d", len(certs))
 	}
+	decodedRSA, ok := keys[0].(*rsa.PrivateKey)
+	if !ok {
+		t.Fatalf("expected *rsa.PrivateKey, got %T", keys[0])
+	}
+	if !key.Equal(decodedRSA) {
+		t.Error("empty-password JKS key round-trip mismatch")
+	}
 }
 
 func TestDecodeJKS_EmptyPasswords(t *testing.T) {
