@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- Restore authorization checks on Claude Code workflow to prevent unauthorized users from triggering the workflow and exposing OAuth token secret ([#46])
+
 ### Changed
 
+- Migrate CI workflows and pre-commit hooks to organization-wide reusable workflows in `sensiblebit/.github` ([#45])
 - Consolidate CI from 16 jobs to 10 by merging jobs with identical setup: branch-name + commit-messages + verified-commits → PR Conventions, go-build + go-vet + goimports → Go Checks, web-test + wrangler-build → Web, web-lint + markdownlint → Lint
 - Remove redundant `go vet` and `go test` steps from release workflow — tags are created from main which already passed CI
 - Consolidate Dependabot GitHub Actions PRs into a single grouped PR instead of one per action
@@ -544,6 +549,8 @@ Initial release.
 [`a62908f`]: https://github.com/sensiblebit/certkit/commit/a62908f
 [`55b5c1e`]: https://github.com/sensiblebit/certkit/commit/55b5c1e
 [`8cf81d9`]: https://github.com/sensiblebit/certkit/commit/8cf81d9
+[#46]: https://github.com/sensiblebit/certkit/pull/46
+[#45]: https://github.com/sensiblebit/certkit/pull/45
 [#24]: https://github.com/sensiblebit/certkit/pull/24
 [#25]: https://github.com/sensiblebit/certkit/pull/25
 [#26]: https://github.com/sensiblebit/certkit/pull/26
