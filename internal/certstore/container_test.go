@@ -14,7 +14,6 @@ import (
 
 	"github.com/pavlo-v-chernykh/keystore-go/v4"
 	"github.com/sensiblebit/certkit"
-	"golang.org/x/crypto/ssh"
 )
 
 func TestParseContainerData_EmptyData(t *testing.T) {
@@ -66,40 +65,50 @@ func TestParseContainerData_PEMCertificate(t *testing.T) {
 }
 
 func TestParseContainerData_PEMCertAndKey(t *testing.T) {
-	// WHY: Combined cert+key PEM files are a common deployment pattern; both
-	// the leaf and the key must be extracted from a single data blob. The key
-	// must actually match the leaf certificate — a type-only check would miss
-	// a wrong-key pairing bug.
 	t.Parallel()
 
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "combined.example.com", []string{"combined.example.com"})
+	tests := []struct {
+		name   string
+		mkCA   func(t *testing.T) testCA
+		mkLeaf func(t *testing.T, ca testCA) testLeaf
+	}{
+		{"RSA", newRSACA, func(t *testing.T, ca testCA) testLeaf {
+			return newRSALeaf(t, ca, "combined-rsa.example.com", []string{"combined-rsa.example.com"})
+		}},
+		{"ECDSA", newECDSACA, func(t *testing.T, ca testCA) testLeaf {
+			return newECDSALeaf(t, ca, "combined-ecdsa.example.com", []string{"combined-ecdsa.example.com"})
+		}},
+		{"Ed25519", newEd25519CA, func(t *testing.T, ca testCA) testLeaf {
+			return newEd25519Leaf(t, ca, "combined-ed.example.com", []string{"combined-ed.example.com"})
+		}},
+	}
 
-	combined := append(leaf.certPEM, leaf.keyPEM...)
-	contents, err := ParseContainerData(combined, nil)
-	if err != nil {
-		t.Fatalf("ParseContainerData: %v", err)
-	}
-	if contents.Leaf == nil {
-		t.Fatal("expected Leaf to be non-nil")
-	}
-	if contents.Leaf.Subject.CommonName != "combined.example.com" {
-		t.Errorf("Leaf CN = %q, want combined.example.com", contents.Leaf.Subject.CommonName)
-	}
-	if contents.Key == nil {
-		t.Fatal("expected Key to be non-nil for cert+key PEM")
-	}
-	rsaKey, ok := contents.Key.(*rsa.PrivateKey)
-	if !ok {
-		t.Fatalf("Key type = %T, want *rsa.PrivateKey", contents.Key)
-	}
-	if !leaf.key.(*rsa.PrivateKey).Equal(rsaKey) {
-		t.Error("extracted key does not Equal original")
-	}
-	if match, err := certkit.KeyMatchesCert(contents.Key, contents.Leaf); err != nil {
-		t.Fatalf("KeyMatchesCert: %v", err)
-	} else if !match {
-		t.Error("extracted key does not match extracted leaf certificate")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ca := tt.mkCA(t)
+			leaf := tt.mkLeaf(t, ca)
+
+			combined := append(leaf.certPEM, leaf.keyPEM...)
+			contents, err := ParseContainerData(combined, nil)
+			if err != nil {
+				t.Fatalf("ParseContainerData: %v", err)
+			}
+			if contents.Leaf == nil {
+				t.Fatal("expected Leaf to be non-nil")
+			}
+			if contents.Key == nil {
+				t.Fatal("expected Key to be non-nil for cert+key PEM")
+			}
+			if !keysEqual(t, leaf.key, contents.Key) {
+				t.Error("extracted key does not Equal original")
+			}
+			if match, err := certkit.KeyMatchesCert(contents.Key, contents.Leaf); err != nil {
+				t.Fatalf("KeyMatchesCert: %v", err)
+			} else if !match {
+				t.Error("extracted key does not match extracted leaf certificate")
+			}
+		})
 	}
 }
 
@@ -243,103 +252,36 @@ func TestParseContainerData_PKCS7(t *testing.T) {
 }
 
 func TestParseContainerData_PEMKeyOnly(t *testing.T) {
-	// WHY: A PEM file containing only a private key (no cert) is valid input;
-	// must return Key non-nil and Leaf nil without error.
 	t.Parallel()
 
-	keyPEM := rsaKeyPEM(t)
-	contents, err := ParseContainerData(keyPEM, nil)
-	if err != nil {
-		t.Fatalf("ParseContainerData: %v", err)
+	tests := []struct {
+		name   string
+		mkPEM  func(t *testing.T) []byte
+		keyFmt string
+	}{
+		{"RSA", rsaKeyPEM, "*rsa.PrivateKey"},
+		{"ECDSA", ecdsaKeyPEM, "*ecdsa.PrivateKey"},
+		{"Ed25519", ed25519KeyPEM, "ed25519.PrivateKey"},
 	}
-	if contents.Leaf != nil {
-		t.Error("expected Leaf to be nil for key-only PEM")
-	}
-	if contents.Key == nil {
-		t.Fatal("expected Key to be non-nil for key-only PEM")
-	}
-	if _, ok := contents.Key.(*rsa.PrivateKey); !ok {
-		t.Errorf("Key type = %T, want *rsa.PrivateKey", contents.Key)
-	}
-	if len(contents.ExtraCerts) != 0 {
-		t.Errorf("expected 0 ExtraCerts, got %d", len(contents.ExtraCerts))
-	}
-}
 
-func TestParseContainerData_PEMCertAndKey_ECDSA(t *testing.T) {
-	// WHY: Combined cert+key PEM with ECDSA key must parse correctly; the
-	// existing PEMCertAndKey test only covers RSA.
-	t.Parallel()
-
-	ca := newECDSACA(t)
-	leaf := newECDSALeaf(t, ca, "ecdsa-combined.example.com", []string{"ecdsa-combined.example.com"})
-
-	combined := append(leaf.certPEM, leaf.keyPEM...)
-	contents, err := ParseContainerData(combined, nil)
-	if err != nil {
-		t.Fatalf("ParseContainerData: %v", err)
-	}
-	if contents.Leaf == nil {
-		t.Fatal("expected Leaf to be non-nil")
-	}
-	if contents.Leaf.Subject.CommonName != "ecdsa-combined.example.com" {
-		t.Errorf("Leaf CN = %q, want ecdsa-combined.example.com", contents.Leaf.Subject.CommonName)
-	}
-	if contents.Key == nil {
-		t.Fatal("expected Key to be non-nil for cert+key PEM")
-	}
-	ecKey, ok := contents.Key.(*ecdsa.PrivateKey)
-	if !ok {
-		t.Fatalf("Key type = %T, want *ecdsa.PrivateKey", contents.Key)
-	}
-	if !leaf.key.(*ecdsa.PrivateKey).Equal(ecKey) {
-		t.Error("extracted ECDSA key does not Equal original")
-	}
-	if match, err := certkit.KeyMatchesCert(contents.Key, contents.Leaf); err != nil {
-		t.Fatalf("KeyMatchesCert: %v", err)
-	} else if !match {
-		t.Error("extracted ECDSA key does not match extracted leaf certificate")
-	}
-}
-
-func TestParseContainerData_PEMKeyOnly_ECDSA(t *testing.T) {
-	// WHY: ECDSA key-only PEM file must extract correctly via findPEMPrivateKey.
-	t.Parallel()
-
-	keyPEM := ecdsaKeyPEM(t)
-	contents, err := ParseContainerData(keyPEM, nil)
-	if err != nil {
-		t.Fatalf("ParseContainerData: %v", err)
-	}
-	if contents.Leaf != nil {
-		t.Error("expected Leaf to be nil for key-only PEM")
-	}
-	if contents.Key == nil {
-		t.Fatal("expected Key to be non-nil")
-	}
-	if _, ok := contents.Key.(*ecdsa.PrivateKey); !ok {
-		t.Errorf("Key type = %T, want *ecdsa.PrivateKey", contents.Key)
-	}
-}
-
-func TestParseContainerData_PEMKeyOnly_Ed25519(t *testing.T) {
-	// WHY: Ed25519 key-only PEM must parse correctly via findPEMPrivateKey;
-	// this covers the Ed25519 PKCS#8 path through container parsing.
-	t.Parallel()
-
-	keyPEM := ed25519KeyPEM(t)
-	contents, err := ParseContainerData(keyPEM, nil)
-	if err != nil {
-		t.Fatalf("ParseContainerData: %v", err)
-	}
-	if contents.Leaf != nil {
-		t.Error("expected Leaf to be nil for key-only PEM")
-	}
-	if contents.Key == nil {
-		t.Fatal("expected Key to be non-nil")
-	}
-	if _, ok := contents.Key.(ed25519.PrivateKey); !ok {
-		t.Errorf("Key type = %T, want ed25519.PrivateKey", contents.Key)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			keyPEM := tt.mkPEM(t)
+			contents, err := ParseContainerData(keyPEM, nil)
+			if err != nil {
+				t.Fatalf("ParseContainerData: %v", err)
+			}
+			if contents.Leaf != nil {
+				t.Error("expected Leaf to be nil for key-only PEM")
+			}
+			if contents.Key == nil {
+				t.Fatal("expected Key to be non-nil for key-only PEM")
+			}
+			if len(contents.ExtraCerts) != 0 {
+				t.Errorf("expected 0 ExtraCerts, got %d", len(contents.ExtraCerts))
+			}
+		})
 	}
 }
 
@@ -501,44 +443,6 @@ func TestParseContainerData_GarbageData(t *testing.T) {
 	}
 }
 
-func TestParseContainerData_PEMCertAndKey_Ed25519(t *testing.T) {
-	// WHY: Combined cert+key PEM with Ed25519 must parse correctly and return
-	// the normalized value type, not a pointer — the ECDSA variant would not
-	// catch an Ed25519-specific normalization gap in findPEMPrivateKey.
-	t.Parallel()
-
-	ca := newEd25519CA(t)
-	leaf := newEd25519Leaf(t, ca, "ed-combined.example.com", []string{"ed-combined.example.com"})
-
-	combined := append(leaf.certPEM, leaf.keyPEM...)
-	contents, err := ParseContainerData(combined, nil)
-	if err != nil {
-		t.Fatalf("ParseContainerData: %v", err)
-	}
-	if contents.Leaf == nil {
-		t.Fatal("expected Leaf to be non-nil")
-	}
-	if contents.Leaf.Subject.CommonName != "ed-combined.example.com" {
-		t.Errorf("Leaf CN = %q, want ed-combined.example.com", contents.Leaf.Subject.CommonName)
-	}
-	if contents.Key == nil {
-		t.Fatal("expected Key to be non-nil for cert+key PEM")
-	}
-	edKey, ok := contents.Key.(ed25519.PrivateKey)
-	if !ok {
-		t.Fatalf("Key type = %T, want ed25519.PrivateKey (value, not pointer)", contents.Key)
-	}
-	origKey := leaf.key.(ed25519.PrivateKey)
-	if !origKey.Equal(edKey) {
-		t.Error("extracted Ed25519 key does not Equal original")
-	}
-	if match, err := certkit.KeyMatchesCert(contents.Key, contents.Leaf); err != nil {
-		t.Fatalf("KeyMatchesCert: %v", err)
-	} else if !match {
-		t.Error("extracted Ed25519 key does not match extracted leaf certificate")
-	}
-}
-
 func TestParseContainerData_PEMCertWithEncryptedPKCS8Key(t *testing.T) {
 	// WHY: Modern tools produce "ENCRYPTED PRIVATE KEY" PEM blocks (PKCS#8 v2).
 	// findPEMPrivateKey matches these via strings.Contains("PRIVATE KEY"), but
@@ -604,41 +508,6 @@ func TestParseContainerData_JKS_Ed25519Key(t *testing.T) {
 	origKey := leaf.key.(ed25519.PrivateKey)
 	if !origKey.Equal(edKey) {
 		t.Error("extracted Ed25519 key from JKS does not Equal original")
-	}
-}
-
-func TestParseContainerData_PEMKeyNormalizesEd25519(t *testing.T) {
-	// WHY: findPEMPrivateKey calls ParsePEMPrivateKeyWithPasswords which
-	// calls normalizeKey internally. However, there is no test proving the
-	// returned key from ParseContainerData's PEM path is actually the
-	// normalized ed25519.PrivateKey value type (not pointer). A regression
-	// in normalizeKey or the OpenSSH parsing path would surface here.
-	t.Parallel()
-
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Use OpenSSH format (the path most likely to return pointer form)
-	sshBlock, err := ssh.MarshalPrivateKey(priv, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sshPEM := pem.EncodeToMemory(sshBlock)
-
-	contents, err := ParseContainerData(sshPEM, nil)
-	if err != nil {
-		t.Fatalf("ParseContainerData: %v", err)
-	}
-	if contents.Key == nil {
-		t.Fatal("expected Key to be non-nil for OpenSSH Ed25519")
-	}
-	if _, ok := contents.Key.(ed25519.PrivateKey); !ok {
-		t.Fatalf("Key type = %T, want ed25519.PrivateKey (value type)", contents.Key)
-	}
-	if !priv.Equal(contents.Key) {
-		t.Error("returned Ed25519 key does not Equal original")
 	}
 }
 

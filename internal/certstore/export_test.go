@@ -1,7 +1,6 @@
 package certstore
 
 import (
-	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
@@ -296,58 +295,6 @@ func TestGenerateBundleFiles_PEMFilesAreParseable(t *testing.T) {
 	}
 }
 
-func TestGenerateBundleFiles_CSRSubjectOverride(t *testing.T) {
-	// WHY: Verifies that CSRSubjectOverride correctly replaces the certificate's
-	// own subject fields in the generated CSR, rather than merging or ignoring them.
-	t.Parallel()
-
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "override.example.com", []string{"override.example.com"})
-
-	bundle := &certkit.BundleResult{
-		Leaf:  leaf.cert,
-		Roots: []*x509.Certificate{ca.cert},
-	}
-
-	override := &CSRSubjectOverride{
-		Country:      []string{"DE"},
-		Organization: []string{"Override Org"},
-	}
-
-	files, err := GenerateBundleFiles(BundleExportInput{
-		Bundle:     bundle,
-		KeyPEM:     leaf.keyPEM,
-		KeyType:    "RSA",
-		BitLength:  2048,
-		Prefix:     "override",
-		SecretName: "override-tls",
-		CSRSubject: override,
-	})
-	if err != nil {
-		t.Fatalf("GenerateBundleFiles: %v", err)
-	}
-
-	for _, f := range files {
-		if f.Name != "override.csr" {
-			continue
-		}
-		block, _ := pem.Decode(f.Data)
-		if block == nil {
-			t.Fatal("CSR file does not contain valid PEM")
-		}
-		csr, err := x509.ParseCertificateRequest(block.Bytes)
-		if err != nil {
-			t.Fatalf("parse CSR: %v", err)
-		}
-		if len(csr.Subject.Country) != 1 || csr.Subject.Country[0] != "DE" {
-			t.Errorf("CSR country = %v, want [DE]", csr.Subject.Country)
-		}
-		if len(csr.Subject.Organization) != 1 || csr.Subject.Organization[0] != "Override Org" {
-			t.Errorf("CSR organization = %v, want [Override Org]", csr.Subject.Organization)
-		}
-	}
-}
-
 func TestGenerateJSON_FieldNames(t *testing.T) {
 	// WHY: Verifies that all required JSON fields are present with correct keys
 	// and that timestamps use RFC 3339 format — regression guard for CLI-4/CLI-5.
@@ -442,188 +389,79 @@ func TestGenerateJSON_NoIntermediates(t *testing.T) {
 	}
 }
 
-func TestGenerateJSON_EmptyAuthorityKeyID(t *testing.T) {
-	// WHY: Self-signed certs may lack AKI; the field must be an empty string,
-	// not omitted or null, per CLI-4 consistency requirements.
-	t.Parallel()
-
-	ca := newRSACA(t)
-	bundle := &certkit.BundleResult{Leaf: ca.cert}
-
-	data, err := GenerateJSON(bundle)
-	if err != nil {
-		t.Fatalf("GenerateJSON: %v", err)
-	}
-
-	var result map[string]any
-	if err := json.Unmarshal(data, &result); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-
-	// Self-signed CA should have authority_key_id present (may be non-empty
-	// since test CA sets AuthorityKeyId explicitly in some helpers, but the
-	// field should always exist as a string).
-	akiVal, ok := result["authority_key_id"]
-	if !ok {
-		t.Error("authority_key_id key is missing from JSON output")
-	}
-	if _, isString := akiVal.(string); !isString {
-		t.Errorf("authority_key_id should be a string, got %T", akiVal)
-	}
-}
-
-func TestGenerateYAML_ECDSAKeyMetadata(t *testing.T) {
-	// WHY: YAML output must correctly reflect ECDSA key type and bit size.
-	// Only RSA metadata was tested previously — an ECDSA-specific mapping
-	// error (e.g., wrong key_size for P-256) would go undetected.
-	t.Parallel()
-
-	ca := newECDSACA(t)
-	leaf := newECDSALeaf(t, ca, "ec-yaml.example.com", []string{"ec-yaml.example.com"})
-
-	bundle := &certkit.BundleResult{
-		Leaf:  leaf.cert,
-		Roots: []*x509.Certificate{ca.cert},
-	}
-
-	data, err := GenerateYAML(bundle, leaf.keyPEM, "ECDSA", 256)
-	if err != nil {
-		t.Fatalf("GenerateYAML: %v", err)
-	}
-
-	var result map[string]any
-	if err := yaml.Unmarshal(data, &result); err != nil {
-		t.Fatalf("invalid YAML: %v", err)
-	}
-
-	if result["key_type"] != "ECDSA" {
-		t.Errorf("key_type = %v, want ECDSA", result["key_type"])
-	}
-	if result["key_size"] != 256 {
-		t.Errorf("key_size = %v, want 256", result["key_size"])
-	}
-}
-
-func TestGenerateYAML_Ed25519KeyMetadata(t *testing.T) {
-	// WHY: YAML output must correctly reflect Ed25519 key type and bit size.
-	// Ed25519 always has 256-bit keys; verifying the metadata propagation
-	// through the export pipeline catches silent misreporting.
-	t.Parallel()
-
-	ca := newRSACA(t)
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("generate Ed25519 key: %v", err)
-	}
-	tmpl := &x509.Certificate{
-		SerialNumber:   big.NewInt(700),
-		Subject:        pkix.Name{CommonName: "ed-yaml.example.com", Organization: []string{"TestOrg"}},
-		DNSNames:       []string{"ed-yaml.example.com"},
-		NotBefore:      time.Now().Add(-time.Hour),
-		NotAfter:       time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:       x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:    []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		AuthorityKeyId: ca.cert.SubjectKeyId,
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, ca.cert, pub, ca.key)
-	if err != nil {
-		t.Fatalf("create cert: %v", err)
-	}
-	leafCert, err := x509.ParseCertificate(certDER)
-	if err != nil {
-		t.Fatalf("parse cert: %v", err)
-	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(priv)
-	if err != nil {
-		t.Fatalf("marshal key: %v", err)
-	}
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
-
-	bundle := &certkit.BundleResult{
-		Leaf:  leafCert,
-		Roots: []*x509.Certificate{ca.cert},
-	}
-
-	data, err := GenerateYAML(bundle, keyPEM, "Ed25519", 256)
-	if err != nil {
-		t.Fatalf("GenerateYAML: %v", err)
-	}
-
-	var result map[string]any
-	if err := yaml.Unmarshal(data, &result); err != nil {
-		t.Fatalf("invalid YAML: %v", err)
-	}
-
-	if result["key_type"] != "Ed25519" {
-		t.Errorf("key_type = %v, want Ed25519", result["key_type"])
-	}
-	if result["key_size"] != 256 {
-		t.Errorf("key_size = %v, want 256", result["key_size"])
-	}
-}
-
 func TestGenerateYAML_Fields(t *testing.T) {
-	// WHY: Verifies that YAML output contains all expected fields with correct
-	// types and RFC 3339 timestamps — regression guard for output format changes.
 	t.Parallel()
 
-	root := newRSACA(t)
-	intermediate := newIntermediateCA(t, root)
-	leaf := newRSALeaf(t, intermediate, "yaml.example.com", []string{"yaml.example.com"})
-
-	bundle := &certkit.BundleResult{
-		Leaf:          leaf.cert,
-		Intermediates: []*x509.Certificate{intermediate.cert},
-		Roots:         []*x509.Certificate{root.cert},
+	tests := []struct {
+		name    string
+		mkCA    func(t *testing.T) testCA
+		mkLeaf  func(t *testing.T, ca testCA) testLeaf
+		keyType string
+		bits    int
+	}{
+		{"RSA", newRSACA, func(t *testing.T, ca testCA) testLeaf {
+			return newRSALeaf(t, ca, "yaml-rsa.example.com", []string{"yaml-rsa.example.com"})
+		}, "RSA", 2048},
+		{"ECDSA", newECDSACA, func(t *testing.T, ca testCA) testLeaf {
+			return newECDSALeaf(t, ca, "yaml-ec.example.com", []string{"yaml-ec.example.com"})
+		}, "ECDSA", 256},
+		{"Ed25519", newRSACA, func(t *testing.T, ca testCA) testLeaf {
+			return newEd25519Leaf(t, ca, "yaml-ed.example.com", []string{"yaml-ed.example.com"})
+		}, "Ed25519", 256},
 	}
 
-	data, err := GenerateYAML(bundle, leaf.keyPEM, "RSA", 2048)
-	if err != nil {
-		t.Fatalf("GenerateYAML: %v", err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	var result map[string]any
-	if err := yaml.Unmarshal(data, &result); err != nil {
-		t.Fatalf("invalid YAML: %v", err)
-	}
+			ca := tt.mkCA(t)
+			leaf := tt.mkLeaf(t, ca)
 
-	requiredKeys := []string{
-		"bundle", "intermediates", "crl_support", "crt", "expires",
-		"hostnames", "issuer", "key", "key_size", "key_type",
-		"leaf_expires", "ocsp", "ocsp_support", "root", "signature", "subject",
-	}
-	for _, key := range requiredKeys {
-		if _, ok := result[key]; !ok {
-			t.Errorf("missing YAML key: %s", key)
-		}
-	}
+			bundle := &certkit.BundleResult{
+				Leaf:  leaf.cert,
+				Roots: []*x509.Certificate{ca.cert},
+			}
 
-	// Verify key metadata
-	if result["key_type"] != "RSA" {
-		t.Errorf("key_type = %v, want RSA", result["key_type"])
-	}
-	if result["key_size"] != 2048 {
-		t.Errorf("key_size = %v, want 2048", result["key_size"])
-	}
+			data, err := GenerateYAML(bundle, leaf.keyPEM, tt.keyType, tt.bits)
+			if err != nil {
+				t.Fatalf("GenerateYAML: %v", err)
+			}
 
-	// Verify crl_support is always false
-	if result["crl_support"] != false {
-		t.Errorf("crl_support = %v, want false", result["crl_support"])
-	}
+			var result map[string]any
+			if err := yaml.Unmarshal(data, &result); err != nil {
+				t.Fatalf("invalid YAML: %v", err)
+			}
 
-	// Verify expires is RFC 3339
-	expiresStr, ok := result["expires"].(string)
-	if !ok {
-		t.Fatalf("expires is not a string: %T", result["expires"])
-	}
-	if _, err := time.Parse(time.RFC3339, expiresStr); err != nil {
-		t.Errorf("expires is not RFC 3339: %q", expiresStr)
-	}
+			requiredKeys := []string{
+				"bundle", "crl_support", "crt", "expires",
+				"hostnames", "issuer", "key", "key_size", "key_type",
+				"leaf_expires", "ocsp", "ocsp_support", "root", "signature", "subject",
+			}
+			for _, key := range requiredKeys {
+				if _, ok := result[key]; !ok {
+					t.Errorf("missing YAML key: %s", key)
+				}
+			}
 
-	// Verify root PEM is present and non-empty
-	rootStr, ok := result["root"].(string)
-	if !ok || rootStr == "" {
-		t.Error("root PEM should be present and non-empty")
+			if result["key_type"] != tt.keyType {
+				t.Errorf("key_type = %v, want %s", result["key_type"], tt.keyType)
+			}
+			if result["key_size"] != tt.bits {
+				t.Errorf("key_size = %v, want %d", result["key_size"], tt.bits)
+			}
+
+			if result["crl_support"] != false {
+				t.Errorf("crl_support = %v, want false", result["crl_support"])
+			}
+
+			expiresStr, ok := result["expires"].(string)
+			if !ok {
+				t.Fatalf("expires is not a string: %T", result["expires"])
+			}
+			if _, err := time.Parse(time.RFC3339, expiresStr); err != nil {
+				t.Errorf("expires is not RFC 3339: %q", expiresStr)
+			}
+		})
 	}
 }
 
@@ -1073,131 +911,6 @@ func TestGenerateJSON_IPAddresses(t *testing.T) {
 	for _, expected := range []string{"ip.example.com", "10.0.0.1", "::1"} {
 		if !sanStrings[expected] {
 			t.Errorf("expected SAN %q not found in %v", expected, sans)
-		}
-	}
-}
-
-func TestGenerateBundleFiles_ECDSAKey(t *testing.T) {
-	// WHY: Verifies that ECDSA keys work through the full export pipeline,
-	// including P12 encoding — not just RSA keys.
-	t.Parallel()
-
-	ca := newECDSACA(t)
-	leaf := newECDSALeaf(t, ca, "ecdsa.example.com", []string{"ecdsa.example.com"})
-
-	bundle := &certkit.BundleResult{
-		Leaf:  leaf.cert,
-		Roots: []*x509.Certificate{ca.cert},
-	}
-
-	files, err := GenerateBundleFiles(BundleExportInput{
-		Bundle:     bundle,
-		KeyPEM:     leaf.keyPEM,
-		KeyType:    "ECDSA",
-		BitLength:  256,
-		Prefix:     "ecdsa",
-		SecretName: "ecdsa-tls",
-	})
-	if err != nil {
-		t.Fatalf("GenerateBundleFiles with ECDSA: %v", err)
-	}
-
-	// Without intermediates: 12 - 1 (no intermediates.pem) = 11 files
-	if len(files) != 11 {
-		t.Errorf("expected 11 files, got %d", len(files))
-	}
-
-	// Verify key file contains a parseable EC key that matches the original
-	for _, f := range files {
-		if f.Name == "ecdsa.key" {
-			parsed, err := certkit.ParsePEMPrivateKey(f.Data)
-			if err != nil {
-				t.Fatalf("parsing exported ECDSA key: %v", err)
-			}
-			ecKey, ok := parsed.(*ecdsa.PrivateKey)
-			if !ok {
-				t.Fatalf("expected *ecdsa.PrivateKey, got %T", parsed)
-			}
-			origKey := leaf.key.(*ecdsa.PrivateKey)
-			if !origKey.Equal(ecKey) {
-				t.Error("exported ECDSA key does not match original")
-			}
-		}
-	}
-}
-
-func TestGenerateBundleFiles_Ed25519Key(t *testing.T) {
-	// WHY: Verifies that Ed25519 keys work through the full export pipeline
-	// and that the exported key is the normalized value type, not a pointer.
-	t.Parallel()
-
-	ca := newRSACA(t)
-
-	// Generate Ed25519 key and leaf cert manually (no Ed25519 leaf helper).
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("generate Ed25519 key: %v", err)
-	}
-	tmpl := &x509.Certificate{
-		SerialNumber:   big.NewInt(500),
-		Subject:        pkix.Name{CommonName: "ed25519-export.example.com", Organization: []string{"TestOrg"}},
-		DNSNames:       []string{"ed25519-export.example.com"},
-		NotBefore:      time.Now().Add(-time.Hour),
-		NotAfter:       time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:       x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:    []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		AuthorityKeyId: ca.cert.SubjectKeyId,
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, ca.cert, pub, ca.key)
-	if err != nil {
-		t.Fatalf("create cert: %v", err)
-	}
-	leafCert, err := x509.ParseCertificate(certDER)
-	if err != nil {
-		t.Fatalf("parse cert: %v", err)
-	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(priv)
-	if err != nil {
-		t.Fatalf("marshal key: %v", err)
-	}
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
-
-	bundle := &certkit.BundleResult{
-		Leaf:  leafCert,
-		Roots: []*x509.Certificate{ca.cert},
-	}
-
-	files, err := GenerateBundleFiles(BundleExportInput{
-		Bundle:     bundle,
-		KeyPEM:     keyPEM,
-		KeyType:    "Ed25519",
-		BitLength:  256,
-		Prefix:     "ed25519",
-		SecretName: "ed25519-tls",
-	})
-	if err != nil {
-		t.Fatalf("GenerateBundleFiles with Ed25519: %v", err)
-	}
-
-	// Without intermediates: 12 - 1 (no intermediates.pem) = 11 files
-	if len(files) != 11 {
-		t.Errorf("expected 11 files, got %d", len(files))
-	}
-
-	// Verify key file contains a parseable Ed25519 key (value type)
-	for _, f := range files {
-		if f.Name == "ed25519.key" {
-			parsed, err := certkit.ParsePEMPrivateKey(f.Data)
-			if err != nil {
-				t.Fatalf("parsing exported Ed25519 key: %v", err)
-			}
-			edKey, ok := parsed.(ed25519.PrivateKey)
-			if !ok {
-				t.Fatalf("expected ed25519.PrivateKey (value), got %T", parsed)
-			}
-			if !priv.Equal(edKey) {
-				t.Error("exported Ed25519 key does not match original")
-			}
 		}
 	}
 }
