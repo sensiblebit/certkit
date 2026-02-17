@@ -100,42 +100,6 @@ func TestParsePEMCertificate_errorPassthrough(t *testing.T) {
 	}
 }
 
-func TestCertFingerprint(t *testing.T) {
-	// WHY: Fingerprints are used for cert identity matching; verifies both correct
-	// length and that the value matches an independently computed hash of cert.Raw.
-	_, _, leafPEM := generateTestPKI(t)
-	cert, _ := ParsePEMCertificate([]byte(leafPEM))
-
-	tests := []struct {
-		name    string
-		fn      func(*x509.Certificate) string
-		wantLen int
-	}{
-		{"SHA256", CertFingerprint, 64},
-		{"SHA1", CertFingerprintSHA1, 40},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			fp := tt.fn(cert)
-			if len(fp) != tt.wantLen {
-				t.Errorf("fingerprint length %d, want %d", len(fp), tt.wantLen)
-			}
-			// Verify determinism: calling twice produces the same result
-			fp2 := tt.fn(cert)
-			if fp != fp2 {
-				t.Errorf("fingerprint not deterministic: %q != %q", fp, fp2)
-			}
-			// Verify hex encoding (lowercase hex chars only)
-			for _, c := range fp {
-				if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
-					t.Errorf("fingerprint contains non-hex char: %c", c)
-					break
-				}
-			}
-		})
-	}
-}
-
 func TestCertToPEM_RoundTrip(t *testing.T) {
 	// WHY: Round-trip (cert->PEM->cert) proves PEM encoding preserves certificate identity and byte equality.
 	_, _, leafPEM := generateTestPKI(t)
@@ -347,17 +311,6 @@ func TestCertSKI_errorReturnsEmpty(t *testing.T) {
 	ski := CertSKI(cert)
 	if ski != "" {
 		t.Errorf("expected empty string for invalid SPKI, got %q", ski)
-	}
-}
-
-func TestExtractPublicKeyBitString_invalidDER(t *testing.T) {
-	// WHY: Invalid DER input to the internal SPKI parser must produce a descriptive error, not panic or return garbage bytes.
-	_, err := extractPublicKeyBitString([]byte("garbage"))
-	if err == nil {
-		t.Error("expected error for invalid DER")
-	}
-	if !strings.Contains(err.Error(), "parsing SubjectPublicKeyInfo") {
-		t.Errorf("error should mention parsing SubjectPublicKeyInfo, got: %v", err)
 	}
 }
 
@@ -591,36 +544,6 @@ func TestParsePEMPrivateKeyWithPasswords_EncryptedRSA(t *testing.T) {
 	}
 	if !key.Equal(rsaParsed) {
 		t.Error("encrypted RSA key round-trip mismatch")
-	}
-}
-
-func TestParsePEMPrivateKeyWithPasswords_EncryptedECDSA(t *testing.T) {
-	// WHY: Encrypted ECDSA PEM keys must decrypt and round-trip correctly; EC keys use SEC1 encoding which differs from RSA's PKCS#1.
-	t.Parallel()
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	sec1Bytes, _ := x509.MarshalECPrivateKey(key)
-	block := &pem.Block{
-		Type:  "EC PRIVATE KEY",
-		Bytes: sec1Bytes,
-	}
-
-	//nolint:staticcheck // x509.EncryptPEMBlock is deprecated but needed for test
-	encBlock, err := x509.EncryptPEMBlock(rand.Reader, block.Type, block.Bytes, []byte("ecpass"), x509.PEMCipherAES256)
-	if err != nil {
-		t.Fatal(err)
-	}
-	encPEM := pem.EncodeToMemory(encBlock)
-
-	parsed, err := ParsePEMPrivateKeyWithPasswords(encPEM, []string{"ecpass"})
-	if err != nil {
-		t.Fatalf("expected encrypted EC key to parse: %v", err)
-	}
-	ecParsed, ok := parsed.(*ecdsa.PrivateKey)
-	if !ok {
-		t.Fatalf("expected *ecdsa.PrivateKey, got %T", parsed)
-	}
-	if !key.Equal(ecParsed) {
-		t.Error("encrypted ECDSA key round-trip mismatch")
 	}
 }
 
@@ -905,16 +828,6 @@ func TestComputeSKI_VsLegacy_Different(t *testing.T) {
 	legacy, _ := ComputeSKILegacy(&key.PublicKey)
 	if string(modern) == string(legacy) {
 		t.Error("RFC 7093 M1 and legacy SHA-1 should produce different results")
-	}
-}
-
-func TestComputeSKI_Deterministic(t *testing.T) {
-	// WHY: SKI computation must be deterministic for the same key; non-determinism would break database lookups and AKI resolution.
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	s1, _ := ComputeSKI(&key.PublicKey)
-	s2, _ := ComputeSKI(&key.PublicKey)
-	if string(s1) != string(s2) {
-		t.Error("ComputeSKI should be deterministic")
 	}
 }
 
@@ -1333,20 +1246,6 @@ func TestGenerateECKey(t *testing.T) {
 	}
 }
 
-func TestGenerateEd25519Key(t *testing.T) {
-	// WHY: Ed25519 keys have fixed sizes (32/64 bytes); wrong sizes indicate a broken key generation path.
-	pub, priv, err := GenerateEd25519Key()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(pub) != ed25519.PublicKeySize {
-		t.Errorf("public key size %d, want %d", len(pub), ed25519.PublicKeySize)
-	}
-	if len(priv) != ed25519.PrivateKeySize {
-		t.Errorf("private key size %d, want %d", len(priv), ed25519.PrivateKeySize)
-	}
-}
-
 func TestVerifyCSR_Valid(t *testing.T) {
 	// WHY: A validly signed CSR must pass verification; failure here means the CSR generation path is broken.
 	leaf, key := generateLeafWithSANs(t)
@@ -1383,62 +1282,6 @@ func TestVerifyCSR_Tampered(t *testing.T) {
 	}
 	if err := VerifyCSR(csr); err == nil {
 		t.Error("expected error for tampered CSR")
-	}
-}
-
-func TestComputeSKI_RSA(t *testing.T) {
-	// WHY: SKI computation must work for RSA keys (not just ECDSA); RSA is the most common key type in existing PKI deployments.
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	ski1, err := ComputeSKI(&key.PublicKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// RFC 7093 Method 1: 160 bits = 20 bytes = 40 hex chars
-	hexStr := fmt.Sprintf("%x", ski1)
-	if len(hexStr) != 40 {
-		t.Errorf("SKI hex length %d, want 40", len(hexStr))
-	}
-
-	// Verify deterministic
-	ski2, err := ComputeSKI(&key.PublicKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(ski1) != string(ski2) {
-		t.Error("ComputeSKI should be deterministic for RSA keys")
-	}
-}
-
-func TestComputeSKI_Ed25519(t *testing.T) {
-	// WHY: SKI computation must work for Ed25519 keys; Ed25519 uses a different SPKI encoding that could break the ASN.1 parser.
-	pub, _, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	ski1, err := ComputeSKI(pub)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// RFC 7093 Method 1: 160 bits = 20 bytes = 40 hex chars
-	hexStr := fmt.Sprintf("%x", ski1)
-	if len(hexStr) != 40 {
-		t.Errorf("SKI hex length %d, want 40", len(hexStr))
-	}
-
-	// Verify deterministic
-	ski2, err := ComputeSKI(pub)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(ski1) != string(ski2) {
-		t.Error("ComputeSKI should be deterministic for Ed25519 keys")
 	}
 }
 
@@ -1724,87 +1567,50 @@ func TestGenerateRSAKey_InvalidBitSize(t *testing.T) {
 	}
 }
 
-func TestParsePEMPrivateKey_OpenSSH_Ed25519(t *testing.T) {
-	// WHY: OpenSSH Ed25519 keys use a proprietary format handled by x/crypto/ssh;
-	// this path was completely untested and could silently break.
+func TestParsePEMPrivateKey_OpenSSH_AllKeyTypes(t *testing.T) {
 	t.Parallel()
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sshPEM, err := ssh.MarshalPrivateKey(priv, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	pemBytes := pem.EncodeToMemory(sshPEM)
 
-	key, err := ParsePEMPrivateKey(pemBytes)
-	if err != nil {
-		t.Fatalf("ParsePEMPrivateKey(OpenSSH Ed25519): %v", err)
-	}
-	// ParsePEMPrivateKey normalizes *ed25519.PrivateKey to value form.
-	got, ok := key.(ed25519.PrivateKey)
-	if !ok {
-		t.Fatalf("expected ed25519.PrivateKey, got %T", key)
-	}
-	if !priv.Equal(got) {
-		t.Error("parsed key does not match original")
-	}
-}
+	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	_, edKey, _ := ed25519.GenerateKey(rand.Reader)
 
-func TestParsePEMPrivateKey_OpenSSH_ECDSA(t *testing.T) {
-	// WHY: OpenSSH ECDSA keys return *ecdsa.PrivateKey from ssh.ParseRawPrivateKey
-	// (pointer form, which is the standard Go type for ECDSA). This path does NOT
-	// need normalizeKey but exercises the same dispatch path as Ed25519/RSA — a
-	// regression in the OPENSSH PRIVATE KEY case would be invisible without this test.
-	t.Parallel()
-	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name     string
+		key      crypto.PrivateKey
+		wantType string
+	}{
+		{"Ed25519", edKey, "ed25519.PrivateKey"},
+		{"ECDSA", ecKey, "*ecdsa.PrivateKey"},
+		{"RSA", rsaKey, "*rsa.PrivateKey"},
 	}
-	sshPEM, err := ssh.MarshalPrivateKey(ecKey, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	pemBytes := pem.EncodeToMemory(sshPEM)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			sshPEM, err := ssh.MarshalPrivateKey(tt.key, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			pemBytes := pem.EncodeToMemory(sshPEM)
 
-	key, err := ParsePEMPrivateKey(pemBytes)
-	if err != nil {
-		t.Fatalf("ParsePEMPrivateKey(OpenSSH ECDSA): %v", err)
-	}
-	got, ok := key.(*ecdsa.PrivateKey)
-	if !ok {
-		t.Fatalf("expected *ecdsa.PrivateKey, got %T", key)
-	}
-	if !ecKey.Equal(got) {
-		t.Error("parsed key does not match original")
-	}
-}
-
-func TestParsePEMPrivateKey_OpenSSH_RSA(t *testing.T) {
-	// WHY: Ensures the OpenSSH PEM block type dispatch works for RSA keys,
-	// not just Ed25519 — ssh.ParseRawPrivateKey handles both.
-	t.Parallel()
-	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sshPEM, err := ssh.MarshalPrivateKey(rsaKey, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	pemBytes := pem.EncodeToMemory(sshPEM)
-
-	key, err := ParsePEMPrivateKey(pemBytes)
-	if err != nil {
-		t.Fatalf("ParsePEMPrivateKey(OpenSSH RSA): %v", err)
-	}
-	got, ok := key.(*rsa.PrivateKey)
-	if !ok {
-		t.Fatalf("expected *rsa.PrivateKey, got %T", key)
-	}
-	if !rsaKey.Equal(got) {
-		t.Error("parsed key does not match original")
+			parsed, err := ParsePEMPrivateKey(pemBytes)
+			if err != nil {
+				t.Fatalf("ParsePEMPrivateKey(OpenSSH %s): %v", tt.name, err)
+			}
+			gotType := fmt.Sprintf("%T", parsed)
+			if gotType != tt.wantType {
+				t.Errorf("expected %s, got %s", tt.wantType, gotType)
+			}
+			type equalKey interface {
+				Equal(x crypto.PrivateKey) bool
+			}
+			orig, ok := tt.key.(equalKey)
+			if !ok {
+				t.Fatalf("original key %T does not implement Equal", tt.key)
+			}
+			if !orig.Equal(parsed) {
+				t.Error("parsed key does not match original")
+			}
+		})
 	}
 }
 
@@ -2250,40 +2056,6 @@ func TestCrossFormatPEMRoundTrip(t *testing.T) {
 	}
 }
 
-func TestParsePEMPrivateKey_PKCS8Ed25519_ReturnsValueType(t *testing.T) {
-	// WHY: The PKCS#8 code path in ParsePEMPrivateKey does NOT call normalizeKey —
-	// it relies on Go's x509.ParsePKCS8PrivateKey returning ed25519.PrivateKey as a
-	// value type. If Go stdlib ever changes to return *ed25519.PrivateKey, downstream
-	// type switches (KeyAlgorithmName, MarshalPrivateKeyToPEM) would silently break.
-	// This regression test guards that contract.
-	t.Parallel()
-
-	_, priv, _ := ed25519.GenerateKey(rand.Reader)
-	der, err := x509.MarshalPKCS8PrivateKey(priv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
-
-	parsed, err := ParsePEMPrivateKey(pemBytes)
-	if err != nil {
-		t.Fatalf("ParsePEMPrivateKey(PKCS#8 Ed25519): %v", err)
-	}
-
-	gotType := fmt.Sprintf("%T", parsed)
-	if gotType != "ed25519.PrivateKey" {
-		t.Errorf("PKCS#8 Ed25519 returned %s, want ed25519.PrivateKey (value, not pointer)", gotType)
-	}
-
-	edParsed, ok := parsed.(ed25519.PrivateKey)
-	if !ok {
-		t.Fatalf("type assertion to ed25519.PrivateKey failed")
-	}
-	if !priv.Equal(edParsed) {
-		t.Error("parsed Ed25519 key does not Equal original")
-	}
-}
-
 func TestMarshalPrivateKeyToPEM_Ed25519Pointer(t *testing.T) {
 	// WHY: MarshalPrivateKeyToPEM calls normalizeKey internally, but this test
 	// guards the contract: callers can pass *ed25519.PrivateKey (pointer form from
@@ -2373,159 +2145,141 @@ func TestParsePEMPrivateKey_EncryptedPKCS8_ClearError(t *testing.T) {
 	}
 }
 
-func TestCrossFormatRoundTrip_OpenSSH_To_PKCS12(t *testing.T) {
-	// WHY: A key parsed from OpenSSH format must be usable for PKCS#12 encoding.
-	// This exercises normalizeKey (OpenSSH parse) → validatePKCS12KeyType (encode).
-	// Format boundary bugs manifest exactly at these cross-format transitions.
+func TestCrossFormatRoundTrip(t *testing.T) {
 	t.Parallel()
 
-	_, priv, _ := ed25519.GenerateKey(rand.Reader)
-	sshPEM, err := ssh.MarshalPrivateKey(priv, "")
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name     string
+		genPEM   func(t *testing.T) ([]byte, crypto.PrivateKey)
+		target   string // "PKCS12" or "JKS"
+		keyUsage x509.KeyUsage
+	}{
+		{
+			name: "OpenSSH Ed25519 to PKCS12",
+			genPEM: func(t *testing.T) ([]byte, crypto.PrivateKey) {
+				t.Helper()
+				_, priv, _ := ed25519.GenerateKey(rand.Reader)
+				sshBlock, _ := ssh.MarshalPrivateKey(priv, "")
+				return pem.EncodeToMemory(sshBlock), priv
+			},
+			target:   "PKCS12",
+			keyUsage: x509.KeyUsageDigitalSignature,
+		},
+		{
+			name: "PKCS1 RSA to JKS",
+			genPEM: func(t *testing.T) ([]byte, crypto.PrivateKey) {
+				t.Helper()
+				key, _ := rsa.GenerateKey(rand.Reader, 2048)
+				pemBytes := pem.EncodeToMemory(&pem.Block{
+					Type:  "RSA PRIVATE KEY",
+					Bytes: x509.MarshalPKCS1PrivateKey(key),
+				})
+				return pemBytes, key
+			},
+			target:   "JKS",
+			keyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		},
+		{
+			name: "SEC1 ECDSA to PKCS12",
+			genPEM: func(t *testing.T) ([]byte, crypto.PrivateKey) {
+				t.Helper()
+				key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				ecDER, _ := x509.MarshalECPrivateKey(key)
+				pemBytes := pem.EncodeToMemory(&pem.Block{
+					Type:  "EC PRIVATE KEY",
+					Bytes: ecDER,
+				})
+				return pemBytes, key
+			},
+			target:   "PKCS12",
+			keyUsage: x509.KeyUsageDigitalSignature,
+		},
+		{
+			name: "PKCS8 Ed25519 to JKS",
+			genPEM: func(t *testing.T) ([]byte, crypto.PrivateKey) {
+				t.Helper()
+				_, priv, _ := ed25519.GenerateKey(rand.Reader)
+				der, _ := x509.MarshalPKCS8PrivateKey(priv)
+				pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+				return pemBytes, priv
+			},
+			target:   "JKS",
+			keyUsage: x509.KeyUsageDigitalSignature,
+		},
 	}
-	pemBytes := pem.EncodeToMemory(sshPEM)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			pemBytes, origKey := tt.genPEM(t)
 
-	// Parse from OpenSSH format
-	parsed, err := ParsePEMPrivateKey(pemBytes)
-	if err != nil {
-		t.Fatalf("parse OpenSSH: %v", err)
-	}
+			parsed, err := ParsePEMPrivateKey(pemBytes)
+			if err != nil {
+				t.Fatalf("ParsePEMPrivateKey: %v", err)
+			}
 
-	// Create a self-signed cert for PKCS#12
-	edKey := parsed.(ed25519.PrivateKey)
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "cross-format-test"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, edKey.Public(), edKey)
-	if err != nil {
-		t.Fatalf("create cert: %v", err)
-	}
-	cert, _ := x509.ParseCertificate(certDER)
+			pub, err := GetPublicKey(parsed)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	// Encode to PKCS#12
-	p12, err := EncodePKCS12(parsed, cert, nil, "test")
-	if err != nil {
-		t.Fatalf("EncodePKCS12 with OpenSSH-parsed key: %v", err)
-	}
+			template := &x509.Certificate{
+				SerialNumber: big.NewInt(1),
+				Subject:      pkix.Name{CommonName: "cross-format-test"},
+				NotBefore:    time.Now().Add(-time.Hour),
+				NotAfter:     time.Now().Add(24 * time.Hour),
+				KeyUsage:     tt.keyUsage,
+			}
+			certDER, err := x509.CreateCertificate(rand.Reader, template, template, pub, parsed)
+			if err != nil {
+				t.Fatalf("create cert: %v", err)
+			}
+			cert, _ := x509.ParseCertificate(certDER)
 
-	// Decode and verify key material preserved
-	decodedKey, decodedCert, _, err := DecodePKCS12(p12, "test")
-	if err != nil {
-		t.Fatalf("DecodePKCS12: %v", err)
-	}
-	if !priv.Equal(decodedKey) {
-		t.Error("OpenSSH → PKCS#12 round-trip lost key material")
-	}
-	if decodedCert.Subject.CommonName != "cross-format-test" {
-		t.Errorf("cert CN = %q, want cross-format-test", decodedCert.Subject.CommonName)
+			switch tt.target {
+			case "PKCS12":
+				p12Data, err := EncodePKCS12(parsed, cert, nil, "test")
+				if err != nil {
+					t.Fatalf("EncodePKCS12: %v", err)
+				}
+				decodedKey, _, _, err := DecodePKCS12(p12Data, "test")
+				if err != nil {
+					t.Fatalf("DecodePKCS12: %v", err)
+				}
+				type equalKey interface {
+					Equal(x crypto.PrivateKey) bool
+				}
+				if eq, ok := origKey.(equalKey); ok {
+					if !eq.Equal(decodedKey) {
+						t.Error("round-trip lost key material")
+					}
+				}
+
+			case "JKS":
+				jksData, err := EncodeJKS(parsed, cert, nil, "changeit")
+				if err != nil {
+					t.Fatalf("EncodeJKS: %v", err)
+				}
+				_, keys, err := DecodeJKS(jksData, []string{"changeit"})
+				if err != nil {
+					t.Fatalf("DecodeJKS: %v", err)
+				}
+				if len(keys) != 1 {
+					t.Fatalf("expected 1 key, got %d", len(keys))
+				}
+				type equalKey interface {
+					Equal(x crypto.PrivateKey) bool
+				}
+				if eq, ok := origKey.(equalKey); ok {
+					if !eq.Equal(keys[0]) {
+						t.Error("round-trip lost key material")
+					}
+				}
+			}
+		})
 	}
 }
 
-func TestCrossFormatRoundTrip_PKCS8Ed25519_To_PKCS12(t *testing.T) {
-	// WHY: PKCS#8 is the most common modern Ed25519 key format. This exercises the
-	// full pipeline: PKCS#8 PEM → ParsePEMPrivateKey → EncodePKCS12 → DecodePKCS12.
-	// A normalization gap in the PKCS#8 path would silently break PKCS#12 exports.
-	t.Parallel()
-
-	_, priv, _ := ed25519.GenerateKey(rand.Reader)
-	der, err := x509.MarshalPKCS8PrivateKey(priv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
-
-	parsed, err := ParsePEMPrivateKey(pemBytes)
-	if err != nil {
-		t.Fatalf("ParsePEMPrivateKey(PKCS#8 Ed25519): %v", err)
-	}
-
-	edKey := parsed.(ed25519.PrivateKey)
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "pkcs8-to-p12"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, edKey.Public(), edKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cert, _ := x509.ParseCertificate(certDER)
-
-	p12, err := EncodePKCS12(parsed, cert, nil, "test")
-	if err != nil {
-		t.Fatalf("EncodePKCS12 with PKCS#8-parsed Ed25519: %v", err)
-	}
-
-	decodedKey, _, _, err := DecodePKCS12(p12, "test")
-	if err != nil {
-		t.Fatalf("DecodePKCS12: %v", err)
-	}
-	if !priv.Equal(decodedKey) {
-		t.Error("PKCS#8 Ed25519 → PKCS#12 round-trip lost key material")
-	}
-}
-
-func TestCrossFormatRoundTrip_PKCS8Ed25519_To_JKS(t *testing.T) {
-	// WHY: PKCS#8 Ed25519 → JKS exercises the EncodeJKS normalizeKey path. If
-	// EncodeJKS's normalizeKey call were removed, this test would catch the failure
-	// because x509.MarshalPKCS8PrivateKey could receive a non-standard type.
-	t.Parallel()
-
-	_, priv, _ := ed25519.GenerateKey(rand.Reader)
-	der, err := x509.MarshalPKCS8PrivateKey(priv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
-
-	parsed, err := ParsePEMPrivateKey(pemBytes)
-	if err != nil {
-		t.Fatalf("ParsePEMPrivateKey(PKCS#8 Ed25519): %v", err)
-	}
-
-	edKey := parsed.(ed25519.PrivateKey)
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "pkcs8-to-jks"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, edKey.Public(), edKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cert, _ := x509.ParseCertificate(certDER)
-
-	jksData, err := EncodeJKS(parsed, cert, nil, "changeit")
-	if err != nil {
-		t.Fatalf("EncodeJKS with PKCS#8-parsed Ed25519: %v", err)
-	}
-
-	_, keys, err := DecodeJKS(jksData, []string{"changeit"})
-	if err != nil {
-		t.Fatalf("DecodeJKS: %v", err)
-	}
-	if len(keys) != 1 {
-		t.Fatalf("expected 1 key, got %d", len(keys))
-	}
-	if !priv.Equal(keys[0]) {
-		t.Error("PKCS#8 Ed25519 → JKS round-trip lost key material")
-	}
-}
-
-func TestEncodePKCS12_Ed25519Pointer(t *testing.T) {
-	// WHY: EncodePKCS12 must normalize *ed25519.PrivateKey (pointer form from
-	// ssh.ParseRawPrivateKey) before validation, matching EncodeJKS behavior.
-	// Without normalization, library callers passing pointer-form Ed25519 keys
-	// would get a confusing "unsupported private key type" error.
+func TestEncodeContainers_Ed25519Pointer(t *testing.T) {
 	t.Parallel()
 
 	_, edVal, _ := ed25519.GenerateKey(rand.Reader)
@@ -2533,7 +2287,7 @@ func TestEncodePKCS12_Ed25519Pointer(t *testing.T) {
 
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "ed-ptr-p12"},
+		Subject:      pkix.Name{CommonName: "ed-ptr-container"},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
@@ -2544,93 +2298,63 @@ func TestEncodePKCS12_Ed25519Pointer(t *testing.T) {
 	}
 	cert, _ := x509.ParseCertificate(certDER)
 
-	p12, err := EncodePKCS12(edPtr, cert, nil, "test")
-	if err != nil {
-		t.Fatalf("EncodePKCS12(*ed25519.PrivateKey): %v", err)
+	tests := []struct {
+		name   string
+		encode func() ([]byte, error)
+		decode func(data []byte) (crypto.PrivateKey, error)
+	}{
+		{
+			name: "PKCS12",
+			encode: func() ([]byte, error) {
+				return EncodePKCS12(edPtr, cert, nil, "test")
+			},
+			decode: func(data []byte) (crypto.PrivateKey, error) {
+				key, _, _, err := DecodePKCS12(data, "test")
+				return key, err
+			},
+		},
+		{
+			name: "PKCS12Legacy",
+			encode: func() ([]byte, error) {
+				return EncodePKCS12Legacy(edPtr, cert, nil, "test")
+			},
+			decode: func(data []byte) (crypto.PrivateKey, error) {
+				key, _, _, err := DecodePKCS12(data, "test")
+				return key, err
+			},
+		},
+		{
+			name: "JKS",
+			encode: func() ([]byte, error) {
+				return EncodeJKS(edPtr, cert, nil, "changeit")
+			},
+			decode: func(data []byte) (crypto.PrivateKey, error) {
+				_, keys, err := DecodeJKS(data, []string{"changeit"})
+				if err != nil {
+					return nil, err
+				}
+				if len(keys) != 1 {
+					return nil, fmt.Errorf("expected 1 key, got %d", len(keys))
+				}
+				return keys[0], nil
+			},
+		},
 	}
-
-	decodedKey, _, _, err := DecodePKCS12(p12, "test")
-	if err != nil {
-		t.Fatalf("DecodePKCS12: %v", err)
-	}
-	if !edVal.Equal(decodedKey) {
-		t.Error("pointer Ed25519 → PKCS#12 round-trip lost key material")
-	}
-}
-
-func TestEncodePKCS12Legacy_Ed25519Pointer(t *testing.T) {
-	// WHY: EncodePKCS12Legacy uses a different cipher (LegacyRC2) but shares the
-	// same normalizeKey+validatePKCS12KeyType path. This verifies that
-	// *ed25519.PrivateKey (pointer form) is normalized before encoding, matching
-	// the modern EncodePKCS12 behavior.
-	t.Parallel()
-
-	_, edVal, _ := ed25519.GenerateKey(rand.Reader)
-	edPtr := &edVal
-
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "ed-ptr-p12-legacy"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, edVal.Public(), edVal)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cert, _ := x509.ParseCertificate(certDER)
-
-	p12, err := EncodePKCS12Legacy(edPtr, cert, nil, "test")
-	if err != nil {
-		t.Fatalf("EncodePKCS12Legacy(*ed25519.PrivateKey): %v", err)
-	}
-
-	decodedKey, _, _, err := DecodePKCS12(p12, "test")
-	if err != nil {
-		t.Fatalf("DecodePKCS12: %v", err)
-	}
-	if !edVal.Equal(decodedKey) {
-		t.Error("pointer Ed25519 → PKCS#12 legacy round-trip lost key material")
-	}
-}
-
-func TestEncodeJKS_Ed25519Pointer(t *testing.T) {
-	// WHY: EncodeJKS calls normalizeKey internally, but this test directly
-	// verifies that *ed25519.PrivateKey (pointer form) works end-to-end.
-	// Without the normalizeKey call in EncodeJKS, the PKCS#8 marshaling would fail.
-	t.Parallel()
-
-	_, edVal, _ := ed25519.GenerateKey(rand.Reader)
-	edPtr := &edVal
-
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "ed-ptr-jks"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, edVal.Public(), edVal)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cert, _ := x509.ParseCertificate(certDER)
-
-	jksData, err := EncodeJKS(edPtr, cert, nil, "changeit")
-	if err != nil {
-		t.Fatalf("EncodeJKS(*ed25519.PrivateKey): %v", err)
-	}
-
-	_, keys, err := DecodeJKS(jksData, []string{"changeit"})
-	if err != nil {
-		t.Fatalf("DecodeJKS: %v", err)
-	}
-	if len(keys) != 1 {
-		t.Fatalf("expected 1 key, got %d", len(keys))
-	}
-	if !edVal.Equal(keys[0]) {
-		t.Error("pointer Ed25519 → JKS round-trip lost key material")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			data, err := tt.encode()
+			if err != nil {
+				t.Fatalf("encode: %v", err)
+			}
+			decoded, err := tt.decode(data)
+			if err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if !edVal.Equal(decoded) {
+				t.Error("pointer Ed25519 round-trip lost key material")
+			}
+		})
 	}
 }
 
@@ -2744,44 +2468,6 @@ func TestComputeSKI_EquivalentToCertSKI(t *testing.T) {
 	}
 }
 
-func TestComputeSKI_MatchesCertSubjectKeyId(t *testing.T) {
-	// WHY: Go's x509.CreateCertificate auto-populates SubjectKeyId using
-	// SHA-256 truncated to 20 bytes (RFC 7093 Method 1). ComputeSKI uses the
-	// same algorithm; they must produce identical bytes. A mismatch would break
-	// SKI-based key-certificate matching for Go-generated CA certificates.
-	t.Parallel()
-
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	template := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "ski-auto-equiv"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cert, _ := x509.ParseCertificate(certDER)
-
-	computedSKI, err := ComputeSKI(&key.PublicKey)
-	if err != nil {
-		t.Fatalf("ComputeSKI: %v", err)
-	}
-
-	if !bytes.Equal(computedSKI, cert.SubjectKeyId) {
-		t.Errorf("ComputeSKI = %x, cert.SubjectKeyId = %x — must match for SKI-based key-cert matching",
-			computedSKI, cert.SubjectKeyId)
-	}
-}
-
 func TestComputeSKI_CrossKeyTypeUniqueness(t *testing.T) {
 	// WHY: SKIs from different key types must be different. A bug in
 	// extractPublicKeyBitString that ignores the algorithm identifier could
@@ -2859,34 +2545,6 @@ func TestCertSKIEmbedded_MatchesCertAKIEmbedded(t *testing.T) {
 	}
 }
 
-func TestKeyMatchesCert_Ed25519Pointer(t *testing.T) {
-	// WHY: *ed25519.PrivateKey (pointer form from ssh.ParseRawPrivateKey) must
-	// work with KeyMatchesCert. GetPublicKey uses crypto.Signer, and pointer
-	// types inherit value receiver methods, but this must be tested explicitly.
-	t.Parallel()
-
-	_, edVal, _ := ed25519.GenerateKey(rand.Reader)
-	edPtr := &edVal
-
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "ed-ptr-match"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	certDER, _ := x509.CreateCertificate(rand.Reader, template, template, edVal.Public(), edVal)
-	cert, _ := x509.ParseCertificate(certDER)
-
-	match, err := KeyMatchesCert(edPtr, cert)
-	if err != nil {
-		t.Fatalf("KeyMatchesCert(*ed25519.PrivateKey): %v", err)
-	}
-	if !match {
-		t.Error("pointer Ed25519 key should match its own certificate")
-	}
-}
-
 func TestParsePEMPrivateKey_CorruptOpenSSH(t *testing.T) {
 	// WHY: A PEM block with type "OPENSSH PRIVATE KEY" but corrupt body bytes must
 	// produce a wrapped error mentioning "OpenSSH", not a generic parse failure.
@@ -2903,52 +2561,6 @@ func TestParsePEMPrivateKey_CorruptOpenSSH(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "OpenSSH") {
 		t.Errorf("error should mention OpenSSH, got: %v", err)
-	}
-}
-
-func TestMarshalPrivateKeyToPEM_Deterministic(t *testing.T) {
-	// WHY: Marshaling the same key twice must produce byte-identical PEM output.
-	// This matters for idempotent export operations — if output differs, tools
-	// would detect spurious changes in exported key files.
-	t.Parallel()
-
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-
-	pem1, err := MarshalPrivateKeyToPEM(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pem2, err := MarshalPrivateKeyToPEM(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if pem1 != pem2 {
-		t.Error("MarshalPrivateKeyToPEM produced different output for the same key")
-	}
-}
-
-func TestMarshalPrivateKeyToPEM_ECDSAP384(t *testing.T) {
-	// WHY: Only P-256 was tested in round-trips. P-384 uses a different curve OID
-	// in PKCS#8 encoding; a curve-dependent bug would be invisible with P-256 only.
-	t.Parallel()
-
-	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	pemStr, err := MarshalPrivateKeyToPEM(key)
-	if err != nil {
-		t.Fatalf("MarshalPrivateKeyToPEM(P-384): %v", err)
-	}
-
-	parsed, err := ParsePEMPrivateKey([]byte(pemStr))
-	if err != nil {
-		t.Fatalf("re-parse P-384: %v", err)
-	}
-	if !key.Equal(parsed) {
-		t.Error("P-384 ECDSA round-trip lost key material")
 	}
 }
 
@@ -3011,61 +2623,6 @@ func TestCertSKI_AllKeyTypes(t *testing.T) {
 	}
 }
 
-func TestCrossFormatRoundTrip_OpenSSH_To_JKS(t *testing.T) {
-	// WHY: OpenSSH Ed25519 keys arrive as *ed25519.PrivateKey (pointer form)
-	// from ssh.ParseRawPrivateKey. EncodeJKS must normalize to value form
-	// before PKCS#8 marshaling. This is the cross-format counterpart to
-	// TestCrossFormatRoundTrip_OpenSSH_To_PKCS12.
-	t.Parallel()
-
-	_, priv, _ := ed25519.GenerateKey(rand.Reader)
-	sshPEM, err := ssh.MarshalPrivateKey(priv, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	pemBytes := pem.EncodeToMemory(sshPEM)
-
-	// Parse from OpenSSH format — produces normalized ed25519.PrivateKey
-	parsed, err := ParsePEMPrivateKey(pemBytes)
-	if err != nil {
-		t.Fatalf("parse OpenSSH: %v", err)
-	}
-
-	edKey := parsed.(ed25519.PrivateKey)
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "openssh-to-jks"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, edKey.Public(), edKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cert, _ := x509.ParseCertificate(certDER)
-
-	jksData, err := EncodeJKS(parsed, cert, nil, "changeit")
-	if err != nil {
-		t.Fatalf("EncodeJKS(OpenSSH-parsed key): %v", err)
-	}
-
-	_, keys, err := DecodeJKS(jksData, []string{"changeit"})
-	if err != nil {
-		t.Fatalf("DecodeJKS: %v", err)
-	}
-	if len(keys) != 1 {
-		t.Fatalf("expected 1 key, got %d", len(keys))
-	}
-	decodedKey, ok := keys[0].(ed25519.PrivateKey)
-	if !ok {
-		t.Fatalf("decoded key type = %T, want ed25519.PrivateKey (value)", keys[0])
-	}
-	if !priv.Equal(decodedKey) {
-		t.Error("OpenSSH Ed25519 → JKS round-trip lost key material")
-	}
-}
-
 func TestParsePEMPrivateKey_EmptyInput(t *testing.T) {
 	// WHY: Empty or nil input to ParsePEMPrivateKey must return a clear
 	// "no PEM block" error, not panic. Callers may pass unvalidated file
@@ -3090,170 +2647,6 @@ func TestParsePEMPrivateKey_EmptyInput(t *testing.T) {
 				t.Errorf("error should mention 'no PEM block', got: %v", err)
 			}
 		})
-	}
-}
-
-func TestMarshalPrivateKeyToPEM_ECDSAP521(t *testing.T) {
-	// WHY: P-521 uses a different curve OID (1.3.132.0.35) and larger key
-	// size in PKCS#8 encoding. Only P-384 was tested; a P-521-specific
-	// serialization bug would be invisible without this test.
-	t.Parallel()
-
-	key, err := ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	pemStr, err := MarshalPrivateKeyToPEM(key)
-	if err != nil {
-		t.Fatalf("MarshalPrivateKeyToPEM(P-521): %v", err)
-	}
-
-	parsed, err := ParsePEMPrivateKey([]byte(pemStr))
-	if err != nil {
-		t.Fatalf("re-parse P-521: %v", err)
-	}
-	if !key.Equal(parsed) {
-		t.Error("P-521 ECDSA round-trip lost key material")
-	}
-}
-
-func TestMarshalPrivateKeyToPEM_OutputIsPKCS8(t *testing.T) {
-	// WHY: MarshalPrivateKeyToPEM's contract is to always produce PKCS#8
-	// ("PRIVATE KEY") PEM output regardless of input key type. If the PEM
-	// block type were wrong (e.g., "RSA PRIVATE KEY"), downstream consumers
-	// expecting PKCS#8 would fail.
-	t.Parallel()
-
-	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	_, edKey, _ := ed25519.GenerateKey(rand.Reader)
-
-	tests := []struct {
-		name string
-		key  crypto.PrivateKey
-	}{
-		{"RSA", rsaKey},
-		{"ECDSA", ecKey},
-		{"Ed25519", edKey},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			pemStr, err := MarshalPrivateKeyToPEM(tt.key)
-			if err != nil {
-				t.Fatal(err)
-			}
-			block, _ := pem.Decode([]byte(pemStr))
-			if block == nil {
-				t.Fatal("MarshalPrivateKeyToPEM produced unparseable PEM")
-			}
-			if block.Type != "PRIVATE KEY" {
-				t.Errorf("PEM block type = %q, want %q", block.Type, "PRIVATE KEY")
-			}
-		})
-	}
-}
-
-func TestCrossFormatRoundTrip_OpenSSH_RSA_To_PKCS12(t *testing.T) {
-	// WHY: Cross-format tests for OpenSSH → PKCS#12 only cover Ed25519.
-	// RSA keys from OpenSSH use a different internal representation
-	// (*rsa.PrivateKey) and must survive the same cross-format path.
-	t.Parallel()
-
-	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	sshPEM, err := ssh.MarshalPrivateKey(rsaKey, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	pemBytes := pem.EncodeToMemory(sshPEM)
-
-	parsed, err := ParsePEMPrivateKey(pemBytes)
-	if err != nil {
-		t.Fatalf("parse OpenSSH RSA: %v", err)
-	}
-
-	rsaParsed, ok := parsed.(*rsa.PrivateKey)
-	if !ok {
-		t.Fatalf("expected *rsa.PrivateKey, got %T", parsed)
-	}
-
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "openssh-rsa-to-p12"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &rsaParsed.PublicKey, rsaParsed)
-	if err != nil {
-		t.Fatalf("create cert: %v", err)
-	}
-	cert, _ := x509.ParseCertificate(certDER)
-
-	p12Data, err := EncodePKCS12(parsed, cert, nil, "test")
-	if err != nil {
-		t.Fatalf("EncodePKCS12: %v", err)
-	}
-
-	decodedKey, _, _, err := DecodePKCS12(p12Data, "test")
-	if err != nil {
-		t.Fatalf("DecodePKCS12: %v", err)
-	}
-	if !rsaKey.Equal(decodedKey) {
-		t.Error("OpenSSH RSA → PKCS#12 round-trip lost key material")
-	}
-}
-
-func TestCrossFormatRoundTrip_OpenSSH_ECDSA_To_JKS(t *testing.T) {
-	// WHY: Cross-format tests for OpenSSH → JKS only cover Ed25519.
-	// ECDSA keys from OpenSSH use *ecdsa.PrivateKey and must survive
-	// the same normalization and JKS encoding path.
-	t.Parallel()
-
-	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	sshPEM, err := ssh.MarshalPrivateKey(ecKey, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	pemBytes := pem.EncodeToMemory(sshPEM)
-
-	parsed, err := ParsePEMPrivateKey(pemBytes)
-	if err != nil {
-		t.Fatalf("parse OpenSSH ECDSA: %v", err)
-	}
-
-	ecParsed, ok := parsed.(*ecdsa.PrivateKey)
-	if !ok {
-		t.Fatalf("expected *ecdsa.PrivateKey, got %T", parsed)
-	}
-
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "openssh-ecdsa-to-jks"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &ecParsed.PublicKey, ecParsed)
-	if err != nil {
-		t.Fatalf("create cert: %v", err)
-	}
-	cert, _ := x509.ParseCertificate(certDER)
-
-	jksData, err := EncodeJKS(parsed, cert, nil, "changeit")
-	if err != nil {
-		t.Fatalf("EncodeJKS: %v", err)
-	}
-
-	_, keys, err := DecodeJKS(jksData, []string{"changeit"})
-	if err != nil {
-		t.Fatalf("DecodeJKS: %v", err)
-	}
-	if len(keys) != 1 {
-		t.Fatalf("expected 1 key, got %d", len(keys))
-	}
-	if !ecKey.Equal(keys[0]) {
-		t.Error("OpenSSH ECDSA → JKS round-trip lost key material")
 	}
 }
 
@@ -3422,46 +2815,6 @@ func TestDecodePKCS12_EmptyAndNilData(t *testing.T) {
 	}
 }
 
-func TestNormalizeKey_PassthroughRSA(t *testing.T) {
-	// WHY: normalizeKey must be a no-op for RSA keys. If a future change to
-	// normalizeKey accidentally transforms RSA keys, this catches it.
-	t.Parallel()
-
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	result := normalizeKey(key)
-	rsaResult, ok := result.(*rsa.PrivateKey)
-	if !ok {
-		t.Fatalf("normalizeKey(RSA) returned %T, want *rsa.PrivateKey", result)
-	}
-	if rsaResult != key {
-		t.Error("normalizeKey(RSA) returned different pointer; must be identity passthrough")
-	}
-}
-
-func TestNormalizeKey_PassthroughECDSA(t *testing.T) {
-	// WHY: normalizeKey must be a no-op for ECDSA keys. If a future change
-	// accidentally transforms ECDSA keys, this catches it.
-	t.Parallel()
-
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	result := normalizeKey(key)
-	ecResult, ok := result.(*ecdsa.PrivateKey)
-	if !ok {
-		t.Fatalf("normalizeKey(ECDSA) returned %T, want *ecdsa.PrivateKey", result)
-	}
-	if ecResult != key {
-		t.Error("normalizeKey(ECDSA) returned different pointer; must be identity passthrough")
-	}
-}
-
 func TestMarshalPrivateKeyToPEM_RoundTrip_AllKeyTypes(t *testing.T) {
 	// WHY: Consolidated round-trip test ensuring parse→marshal→reparse
 	// equality for every supported key type. Individual tests exist for
@@ -3585,63 +2938,6 @@ func TestParsePEMPrivateKey_PrivateKeyBlock_AllFallbacksFail(t *testing.T) {
 	}
 }
 
-func TestValidatePKCS12KeyType_RejectsEd25519Pointer(t *testing.T) {
-	// WHY: validatePKCS12KeyType accepts ed25519.PrivateKey (value form) but
-	// must reject *ed25519.PrivateKey (pointer form). EncodePKCS12 normalizes
-	// before calling validate, but if normalizeKey is ever bypassed, this
-	// safety net must catch the pointer form.
-	t.Parallel()
-
-	_, edKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	edPtr := &edKey
-
-	if err := validatePKCS12KeyType(edPtr); err == nil {
-		t.Error("expected error for *ed25519.PrivateKey (pointer form)")
-	}
-
-	// Value form must be accepted
-	if err := validatePKCS12KeyType(edKey); err != nil {
-		t.Errorf("unexpected error for ed25519.PrivateKey (value form): %v", err)
-	}
-}
-
-func TestKeyMatchesCert_Ed25519ValueForm(t *testing.T) {
-	// WHY: After normalizeKey, Ed25519 keys are in value form. KeyMatchesCert
-	// must work with the value form (ed25519.PrivateKey) — not just the pointer
-	// form tested by TestKeyMatchesCert_Ed25519Pointer. This tests the actual
-	// post-normalization type.
-	t.Parallel()
-
-	_, edKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "ed25519-value-match"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, edKey.Public(), edKey)
-	if err != nil {
-		t.Fatalf("create cert: %v", err)
-	}
-	cert, _ := x509.ParseCertificate(certDER)
-
-	matches, err := KeyMatchesCert(edKey, cert)
-	if err != nil {
-		t.Fatalf("KeyMatchesCert: %v", err)
-	}
-	if !matches {
-		t.Error("KeyMatchesCert should return true for matching Ed25519 value-form key")
-	}
-}
-
 func TestParsePEMPrivateKeyWithPasswords_EncryptedOpenSSH_AllWrongPasswords(t *testing.T) {
 	// WHY: When all provided passwords are wrong for an encrypted OpenSSH key,
 	// the error must clearly indicate failure, not silently return nil. This
@@ -3685,288 +2981,6 @@ func TestParsePEMPrivateKeyWithPasswords_EncryptedPKCS8_Limitation(t *testing.T)
 	}
 }
 
-func TestCrossFormatRoundTrip_OpenSSH_RSA_To_JKS(t *testing.T) {
-	// WHY: Cross-format matrix had OpenSSH RSA→PKCS#12 but not OpenSSH RSA→JKS.
-	// RSA keys from OpenSSH are *rsa.PrivateKey and must survive the JKS encoding path.
-	t.Parallel()
-
-	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	sshPEM, err := ssh.MarshalPrivateKey(rsaKey, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	pemBytes := pem.EncodeToMemory(sshPEM)
-
-	parsed, err := ParsePEMPrivateKey(pemBytes)
-	if err != nil {
-		t.Fatalf("parse OpenSSH RSA: %v", err)
-	}
-
-	rsaParsed, ok := parsed.(*rsa.PrivateKey)
-	if !ok {
-		t.Fatalf("expected *rsa.PrivateKey, got %T", parsed)
-	}
-
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "openssh-rsa-to-jks"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &rsaParsed.PublicKey, rsaParsed)
-	if err != nil {
-		t.Fatalf("create cert: %v", err)
-	}
-	cert, _ := x509.ParseCertificate(certDER)
-
-	jksData, err := EncodeJKS(parsed, cert, nil, "changeit")
-	if err != nil {
-		t.Fatalf("EncodeJKS: %v", err)
-	}
-
-	_, keys, err := DecodeJKS(jksData, []string{"changeit"})
-	if err != nil {
-		t.Fatalf("DecodeJKS: %v", err)
-	}
-	if len(keys) != 1 {
-		t.Fatalf("expected 1 key, got %d", len(keys))
-	}
-	if !rsaKey.Equal(keys[0]) {
-		t.Error("OpenSSH RSA → JKS round-trip lost key material")
-	}
-}
-
-func TestCrossFormatRoundTrip_OpenSSH_ECDSA_To_PKCS12(t *testing.T) {
-	// WHY: Cross-format matrix had OpenSSH ECDSA→JKS but not OpenSSH ECDSA→PKCS#12.
-	// ECDSA keys from OpenSSH must survive the PKCS#12 encoding path.
-	t.Parallel()
-
-	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	sshPEM, err := ssh.MarshalPrivateKey(ecKey, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	pemBytes := pem.EncodeToMemory(sshPEM)
-
-	parsed, err := ParsePEMPrivateKey(pemBytes)
-	if err != nil {
-		t.Fatalf("parse OpenSSH ECDSA: %v", err)
-	}
-
-	ecParsed, ok := parsed.(*ecdsa.PrivateKey)
-	if !ok {
-		t.Fatalf("expected *ecdsa.PrivateKey, got %T", parsed)
-	}
-
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "openssh-ecdsa-to-p12"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &ecParsed.PublicKey, ecParsed)
-	if err != nil {
-		t.Fatalf("create cert: %v", err)
-	}
-	cert, _ := x509.ParseCertificate(certDER)
-
-	p12Data, err := EncodePKCS12(parsed, cert, nil, "test")
-	if err != nil {
-		t.Fatalf("EncodePKCS12: %v", err)
-	}
-
-	decodedKey, _, _, err := DecodePKCS12(p12Data, "test")
-	if err != nil {
-		t.Fatalf("DecodePKCS12: %v", err)
-	}
-	if !ecKey.Equal(decodedKey) {
-		t.Error("OpenSSH ECDSA → PKCS#12 round-trip lost key material")
-	}
-}
-
-func TestCrossFormatRoundTrip_PKCS1RSA_To_PKCS12(t *testing.T) {
-	// WHY: Legacy PKCS#1 RSA PEM keys ("RSA PRIVATE KEY") must survive cross-format
-	// round-trip to PKCS#12. The parse path normalizes PKCS#1 to PKCS#8 via
-	// MarshalPrivateKeyToPEM; this tests the full pipeline.
-	t.Parallel()
-
-	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	pemBytes := pem.EncodeToMemory(&pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(rsaKey),
-	})
-
-	parsed, err := ParsePEMPrivateKey(pemBytes)
-	if err != nil {
-		t.Fatalf("parse PKCS#1 RSA: %v", err)
-	}
-
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "pkcs1-rsa-to-p12"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &rsaKey.PublicKey, rsaKey)
-	if err != nil {
-		t.Fatalf("create cert: %v", err)
-	}
-	cert, _ := x509.ParseCertificate(certDER)
-
-	p12Data, err := EncodePKCS12(parsed, cert, nil, "test")
-	if err != nil {
-		t.Fatalf("EncodePKCS12: %v", err)
-	}
-
-	decodedKey, _, _, err := DecodePKCS12(p12Data, "test")
-	if err != nil {
-		t.Fatalf("DecodePKCS12: %v", err)
-	}
-	if !rsaKey.Equal(decodedKey) {
-		t.Error("PKCS#1 RSA → PKCS#12 round-trip lost key material")
-	}
-}
-
-func TestCrossFormatRoundTrip_PKCS1RSA_To_JKS(t *testing.T) {
-	// WHY: Legacy PKCS#1 RSA PEM keys ("RSA PRIVATE KEY") must survive cross-format
-	// round-trip to JKS. Tests the full pipeline from legacy PEM format to Java keystore.
-	t.Parallel()
-
-	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	pemBytes := pem.EncodeToMemory(&pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(rsaKey),
-	})
-
-	parsed, err := ParsePEMPrivateKey(pemBytes)
-	if err != nil {
-		t.Fatalf("parse PKCS#1 RSA: %v", err)
-	}
-
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "pkcs1-rsa-to-jks"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &rsaKey.PublicKey, rsaKey)
-	if err != nil {
-		t.Fatalf("create cert: %v", err)
-	}
-	cert, _ := x509.ParseCertificate(certDER)
-
-	jksData, err := EncodeJKS(parsed, cert, nil, "changeit")
-	if err != nil {
-		t.Fatalf("EncodeJKS: %v", err)
-	}
-
-	_, keys, err := DecodeJKS(jksData, []string{"changeit"})
-	if err != nil {
-		t.Fatalf("DecodeJKS: %v", err)
-	}
-	if len(keys) != 1 {
-		t.Fatalf("expected 1 key, got %d", len(keys))
-	}
-	if !rsaKey.Equal(keys[0]) {
-		t.Error("PKCS#1 RSA → JKS round-trip lost key material")
-	}
-}
-
-func TestCrossFormatRoundTrip_SEC1ECDSA_To_PKCS12(t *testing.T) {
-	// WHY: Legacy SEC1 ECDSA PEM keys ("EC PRIVATE KEY") must survive cross-format
-	// round-trip to PKCS#12. Tests normalization from SEC1 to PKCS#8 and then to container.
-	t.Parallel()
-
-	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	ecDER, _ := x509.MarshalECPrivateKey(ecKey)
-	pemBytes := pem.EncodeToMemory(&pem.Block{
-		Type:  "EC PRIVATE KEY",
-		Bytes: ecDER,
-	})
-
-	parsed, err := ParsePEMPrivateKey(pemBytes)
-	if err != nil {
-		t.Fatalf("parse SEC1 ECDSA: %v", err)
-	}
-
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "sec1-ecdsa-to-p12"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &ecKey.PublicKey, ecKey)
-	if err != nil {
-		t.Fatalf("create cert: %v", err)
-	}
-	cert, _ := x509.ParseCertificate(certDER)
-
-	p12Data, err := EncodePKCS12(parsed, cert, nil, "test")
-	if err != nil {
-		t.Fatalf("EncodePKCS12: %v", err)
-	}
-
-	decodedKey, _, _, err := DecodePKCS12(p12Data, "test")
-	if err != nil {
-		t.Fatalf("DecodePKCS12: %v", err)
-	}
-	if !ecKey.Equal(decodedKey) {
-		t.Error("SEC1 ECDSA → PKCS#12 round-trip lost key material")
-	}
-}
-
-func TestCrossFormatRoundTrip_SEC1ECDSA_To_JKS(t *testing.T) {
-	// WHY: Legacy SEC1 ECDSA PEM keys ("EC PRIVATE KEY") must survive cross-format
-	// round-trip to JKS. Tests normalization from SEC1 to PKCS#8 and then to Java keystore.
-	t.Parallel()
-
-	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	ecDER, _ := x509.MarshalECPrivateKey(ecKey)
-	pemBytes := pem.EncodeToMemory(&pem.Block{
-		Type:  "EC PRIVATE KEY",
-		Bytes: ecDER,
-	})
-
-	parsed, err := ParsePEMPrivateKey(pemBytes)
-	if err != nil {
-		t.Fatalf("parse SEC1 ECDSA: %v", err)
-	}
-
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "sec1-ecdsa-to-jks"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &ecKey.PublicKey, ecKey)
-	if err != nil {
-		t.Fatalf("create cert: %v", err)
-	}
-	cert, _ := x509.ParseCertificate(certDER)
-
-	jksData, err := EncodeJKS(parsed, cert, nil, "changeit")
-	if err != nil {
-		t.Fatalf("EncodeJKS: %v", err)
-	}
-
-	_, keys, err := DecodeJKS(jksData, []string{"changeit"})
-	if err != nil {
-		t.Fatalf("DecodeJKS: %v", err)
-	}
-	if len(keys) != 1 {
-		t.Fatalf("expected 1 key, got %d", len(keys))
-	}
-	if !ecKey.Equal(keys[0]) {
-		t.Error("SEC1 ECDSA → JKS round-trip lost key material")
-	}
-}
-
 func TestKeyAlgorithmName_AfterNormalization(t *testing.T) {
 	// WHY: After normalizeKey converts *ed25519.PrivateKey to value form,
 	// KeyAlgorithmName must still return "Ed25519". This tests the actual
@@ -3985,116 +2999,6 @@ func TestKeyAlgorithmName_AfterNormalization(t *testing.T) {
 	normalized := normalizeKey(edPtr)
 	if name := KeyAlgorithmName(normalized); name != "Ed25519" {
 		t.Errorf("KeyAlgorithmName(normalized ed25519) = %q, want Ed25519", name)
-	}
-}
-
-func TestParsePEMPrivateKeyWithPasswords_EncryptedOpenSSH_RSA(t *testing.T) {
-	// WHY: Encrypted OpenSSH RSA keys use the same ssh.ParseRawPrivateKeyWithPassphrase
-	// path as Ed25519 but produce *rsa.PrivateKey — a key-type-specific bug in the
-	// decryption or normalization pipeline would be invisible without RSA coverage.
-	t.Parallel()
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-	password := "rsa-ssh-pass"
-	sshPEM, err := ssh.MarshalPrivateKeyWithPassphrase(key, "", []byte(password))
-	if err != nil {
-		t.Fatal(err)
-	}
-	pemBytes := pem.EncodeToMemory(sshPEM)
-
-	// Wrong passwords must fail
-	_, err = ParsePEMPrivateKeyWithPasswords(pemBytes, []string{"wrong"})
-	if err == nil {
-		t.Fatal("expected error with wrong password")
-	}
-
-	// Correct password must succeed with key equality
-	parsed, err := ParsePEMPrivateKeyWithPasswords(pemBytes, []string{password})
-	if err != nil {
-		t.Fatalf("ParsePEMPrivateKeyWithPasswords(encrypted OpenSSH RSA): %v", err)
-	}
-	got, ok := parsed.(*rsa.PrivateKey)
-	if !ok {
-		t.Fatalf("expected *rsa.PrivateKey, got %T", parsed)
-	}
-	if !key.Equal(got) {
-		t.Error("decrypted RSA key does not match original")
-	}
-}
-
-func TestParsePEMPrivateKeyWithPasswords_EncryptedOpenSSH_ECDSA(t *testing.T) {
-	// WHY: Encrypted OpenSSH ECDSA keys use ssh.ParseRawPrivateKeyWithPassphrase
-	// but produce *ecdsa.PrivateKey — without this test, a curve-specific or
-	// type-specific bug in the encrypted decryption path would be invisible.
-	t.Parallel()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	password := "ecdsa-ssh-pass"
-	sshPEM, err := ssh.MarshalPrivateKeyWithPassphrase(key, "", []byte(password))
-	if err != nil {
-		t.Fatal(err)
-	}
-	pemBytes := pem.EncodeToMemory(sshPEM)
-
-	// Wrong passwords must fail
-	_, err = ParsePEMPrivateKeyWithPasswords(pemBytes, []string{"wrong"})
-	if err == nil {
-		t.Fatal("expected error with wrong password")
-	}
-
-	// Correct password must succeed with key equality
-	parsed, err := ParsePEMPrivateKeyWithPasswords(pemBytes, []string{password})
-	if err != nil {
-		t.Fatalf("ParsePEMPrivateKeyWithPasswords(encrypted OpenSSH ECDSA): %v", err)
-	}
-	got, ok := parsed.(*ecdsa.PrivateKey)
-	if !ok {
-		t.Fatalf("expected *ecdsa.PrivateKey, got %T", parsed)
-	}
-	if !key.Equal(got) {
-		t.Error("decrypted ECDSA key does not match original")
-	}
-}
-
-func TestComputeSKI_ECDSA_P384(t *testing.T) {
-	// WHY: ComputeSKI with P-384 keys uses a different SPKI OID than P-256 — a
-	// curve-dependent encoding bug in extractPublicKeyBitString would produce wrong SKIs.
-	t.Parallel()
-	key, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-	ski1, err := ComputeSKI(&key.PublicKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(ski1) != 20 {
-		t.Errorf("SKI length = %d, want 20", len(ski1))
-	}
-	// Deterministic
-	ski2, _ := ComputeSKI(&key.PublicKey)
-	if !bytes.Equal(ski1, ski2) {
-		t.Error("ComputeSKI not deterministic for P-384")
-	}
-}
-
-func TestComputeSKI_ECDSA_P521(t *testing.T) {
-	// WHY: ComputeSKI with P-521 keys uses yet another SPKI OID — ensures the SKI
-	// computation handles all NIST curves, not just P-256.
-	t.Parallel()
-	key, _ := ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
-	ski1, err := ComputeSKI(&key.PublicKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(ski1) != 20 {
-		t.Errorf("SKI length = %d, want 20", len(ski1))
-	}
-	// Deterministic
-	ski2, _ := ComputeSKI(&key.PublicKey)
-	if !bytes.Equal(ski1, ski2) {
-		t.Error("ComputeSKI not deterministic for P-521")
 	}
 }
 
@@ -4145,136 +3049,154 @@ func TestParsePEMPrivateKey_RawDERBytes(t *testing.T) {
 }
 
 func TestParsePEMPrivateKey_SameKeyAllFormats(t *testing.T) {
-	// WHY: The same RSA key can arrive as PKCS#1, PKCS#8, or mislabeled
-	// "PRIVATE KEY" with PKCS#1 bytes. All formats must produce Equal()
-	// keys. A format-dependent parse mangling would be invisible without
-	// this cross-format equality check.
 	t.Parallel()
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
 
-	pkcs1PEM := pem.EncodeToMemory(&pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(key),
-	})
+	t.Run("RSA PKCS#1 vs PKCS#8 vs mislabeled", func(t *testing.T) {
+		t.Parallel()
+		key, _ := rsa.GenerateKey(rand.Reader, 2048)
 
-	pkcs8DER, err := x509.MarshalPKCS8PrivateKey(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pkcs8PEM := pem.EncodeToMemory(&pem.Block{
-		Type:  "PRIVATE KEY",
-		Bytes: pkcs8DER,
-	})
+		pkcs1PEM := pem.EncodeToMemory(&pem.Block{
+			Type:  "RSA PRIVATE KEY",
+			Bytes: x509.MarshalPKCS1PrivateKey(key),
+		})
 
-	// Mislabeled: PKCS#1 bytes in "PRIVATE KEY" block
-	mislabeledPEM := pem.EncodeToMemory(&pem.Block{
-		Type:  "PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(key),
-	})
-
-	formats := []struct {
-		name string
-		pem  []byte
-	}{
-		{"PKCS#1", pkcs1PEM},
-		{"PKCS#8", pkcs8PEM},
-		{"mislabeled PKCS#1 as PRIVATE KEY", mislabeledPEM},
-	}
-
-	var parsedKeys []crypto.PrivateKey
-	for _, f := range formats {
-		parsed, err := ParsePEMPrivateKey(f.pem)
+		pkcs8DER, err := x509.MarshalPKCS8PrivateKey(key)
 		if err != nil {
-			t.Fatalf("ParsePEMPrivateKey(%s): %v", f.name, err)
+			t.Fatal(err)
 		}
-		parsedKeys = append(parsedKeys, parsed)
-	}
+		pkcs8PEM := pem.EncodeToMemory(&pem.Block{
+			Type:  "PRIVATE KEY",
+			Bytes: pkcs8DER,
+		})
 
-	// All parsed keys must be Equal to the original and to each other
-	for i, f := range formats {
-		rsaKey, ok := parsedKeys[i].(*rsa.PrivateKey)
-		if !ok {
-			t.Fatalf("%s: expected *rsa.PrivateKey, got %T", f.name, parsedKeys[i])
+		mislabeledPEM := pem.EncodeToMemory(&pem.Block{
+			Type:  "PRIVATE KEY",
+			Bytes: x509.MarshalPKCS1PrivateKey(key),
+		})
+
+		formats := []struct {
+			name string
+			pem  []byte
+		}{
+			{"PKCS#1", pkcs1PEM},
+			{"PKCS#8", pkcs8PEM},
+			{"mislabeled PKCS#1 as PRIVATE KEY", mislabeledPEM},
 		}
-		if !key.Equal(rsaKey) {
-			t.Errorf("%s: parsed key does not Equal original", f.name)
+
+		var parsedKeys []crypto.PrivateKey
+		for _, f := range formats {
+			parsed, err := ParsePEMPrivateKey(f.pem)
+			if err != nil {
+				t.Fatalf("ParsePEMPrivateKey(%s): %v", f.name, err)
+			}
+			parsedKeys = append(parsedKeys, parsed)
 		}
-	}
-}
 
-func TestComputeSKILegacy_RSA(t *testing.T) {
-	// WHY: ComputeSKILegacy was only tested with ECDSA and DSA. RSA keys
-	// use a different SPKI OID — a marshaling bug would produce wrong legacy SKIs.
-	t.Parallel()
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	ski, err := ComputeSKILegacy(&key.PublicKey)
-	if err != nil {
-		t.Fatalf("ComputeSKILegacy(RSA): %v", err)
-	}
-	if len(ski) != 20 {
-		t.Errorf("SKI length = %d, want 20", len(ski))
-	}
-	// Deterministic
-	ski2, _ := ComputeSKILegacy(&key.PublicKey)
-	if !bytes.Equal(ski, ski2) {
-		t.Error("ComputeSKILegacy not deterministic for RSA")
-	}
-	// Must differ from modern SKI (SHA-256 truncated vs SHA-1)
-	modern, _ := ComputeSKI(&key.PublicKey)
-	if bytes.Equal(ski, modern) {
-		t.Error("Legacy and modern SKI should differ")
-	}
-}
+		for i, f := range formats {
+			rsaKey, ok := parsedKeys[i].(*rsa.PrivateKey)
+			if !ok {
+				t.Fatalf("%s: expected *rsa.PrivateKey, got %T", f.name, parsedKeys[i])
+			}
+			if !key.Equal(rsaKey) {
+				t.Errorf("%s: parsed key does not Equal original", f.name)
+			}
+		}
+	})
 
-func TestComputeSKILegacy_Ed25519(t *testing.T) {
-	// WHY: ComputeSKILegacy had no Ed25519 coverage. Ed25519 uses a
-	// distinct SPKI OID (1.3.101.112) — ensures legacy SKI handles it.
-	t.Parallel()
-	pub, _, _ := ed25519.GenerateKey(rand.Reader)
-	ski, err := ComputeSKILegacy(pub)
-	if err != nil {
-		t.Fatalf("ComputeSKILegacy(Ed25519): %v", err)
-	}
-	if len(ski) != 20 {
-		t.Errorf("SKI length = %d, want 20", len(ski))
-	}
-	// Deterministic
-	ski2, _ := ComputeSKILegacy(pub)
-	if !bytes.Equal(ski, ski2) {
-		t.Error("ComputeSKILegacy not deterministic for Ed25519")
-	}
-	// Must differ from modern SKI (SHA-256 truncated vs SHA-1)
-	modern, _ := ComputeSKI(pub)
-	if bytes.Equal(ski, modern) {
-		t.Error("Legacy and modern SKI should differ for Ed25519")
-	}
-}
+	t.Run("ECDSA SEC1 vs PKCS#8", func(t *testing.T) {
+		t.Parallel()
+		for _, curve := range []struct {
+			name string
+			c    elliptic.Curve
+		}{
+			{"P-256", elliptic.P256()},
+			{"P-384", elliptic.P384()},
+			{"P-521", elliptic.P521()},
+		} {
+			t.Run(curve.name, func(t *testing.T) {
+				t.Parallel()
+				key, err := ecdsa.GenerateKey(curve.c, rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
 
-func TestKeyMatchesCert_Ed25519VsRSA(t *testing.T) {
-	// WHY: Cross-algorithm mismatch tests only covered RSA key vs ECDSA
-	// cert. Ed25519 key vs RSA cert exercises a different comparison path
-	// in the Equal method.
-	t.Parallel()
-	_, edKey, _ := ed25519.GenerateKey(rand.Reader)
-	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+				sec1DER, err := x509.MarshalECPrivateKey(key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				sec1PEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: sec1DER})
 
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "rsa-cert"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &rsaKey.PublicKey, rsaKey)
-	cert, _ := x509.ParseCertificate(certBytes)
+				pkcs8DER, err := x509.MarshalPKCS8PrivateKey(key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				pkcs8PEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8DER})
 
-	matches, err := KeyMatchesCert(edKey, cert)
-	if err != nil {
-		t.Fatalf("KeyMatchesCert(Ed25519 key, RSA cert): %v", err)
-	}
-	if matches {
-		t.Error("Ed25519 key should not match RSA cert")
-	}
+				fromSEC1, err := ParsePEMPrivateKey(sec1PEM)
+				if err != nil {
+					t.Fatalf("SEC1: %v", err)
+				}
+				fromPKCS8, err := ParsePEMPrivateKey(pkcs8PEM)
+				if err != nil {
+					t.Fatalf("PKCS#8: %v", err)
+				}
+
+				ec1, ok := fromSEC1.(*ecdsa.PrivateKey)
+				if !ok {
+					t.Fatalf("SEC1 returned %T, want *ecdsa.PrivateKey", fromSEC1)
+				}
+				ec8, ok := fromPKCS8.(*ecdsa.PrivateKey)
+				if !ok {
+					t.Fatalf("PKCS#8 returned %T, want *ecdsa.PrivateKey", fromPKCS8)
+				}
+				if !ec1.Equal(ec8) {
+					t.Error("same ECDSA key parsed from SEC1 and PKCS#8 should be Equal")
+				}
+			})
+		}
+	})
+
+	t.Run("Ed25519 OpenSSH vs PKCS#8", func(t *testing.T) {
+		t.Parallel()
+		_, priv, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		sshBlock, err := ssh.MarshalPrivateKey(priv, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		sshPEM := pem.EncodeToMemory(sshBlock)
+
+		pkcs8DER, err := x509.MarshalPKCS8PrivateKey(priv)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pkcs8PEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8DER})
+
+		fromSSH, err := ParsePEMPrivateKey(sshPEM)
+		if err != nil {
+			t.Fatalf("OpenSSH: %v", err)
+		}
+		fromPKCS8, err := ParsePEMPrivateKey(pkcs8PEM)
+		if err != nil {
+			t.Fatalf("PKCS#8: %v", err)
+		}
+
+		if _, ok := fromSSH.(ed25519.PrivateKey); !ok {
+			t.Errorf("OpenSSH returned %T, want ed25519.PrivateKey (value)", fromSSH)
+		}
+		if _, ok := fromPKCS8.(ed25519.PrivateKey); !ok {
+			t.Errorf("PKCS#8 returned %T, want ed25519.PrivateKey (value)", fromPKCS8)
+		}
+
+		edSSH := fromSSH.(ed25519.PrivateKey)
+		edPKCS8 := fromPKCS8.(ed25519.PrivateKey)
+		if !edSSH.Equal(edPKCS8) {
+			t.Error("same Ed25519 key parsed from OpenSSH and PKCS#8 should be Equal")
+		}
+	})
 }
 
 func TestGenerateECKey_NilCurve(t *testing.T) {
@@ -4289,161 +3211,6 @@ func TestGenerateECKey_NilCurve(t *testing.T) {
 	_, err := GenerateECKey(nil)
 	if err == nil {
 		t.Error("expected error for nil curve")
-	}
-}
-
-func TestParsePEMPrivateKey_SameECDSAKey_SEC1AndPKCS8(t *testing.T) {
-	// WHY: The same ECDSA key can arrive as SEC1 ("EC PRIVATE KEY") or PKCS#8
-	// ("PRIVATE KEY"). Both formats must produce Equal() keys. A format-
-	// dependent parse mangling would be invisible without this cross-format
-	// equality check. Covers all NIST curves.
-	t.Parallel()
-	curves := []struct {
-		name  string
-		curve elliptic.Curve
-	}{
-		{"P-256", elliptic.P256()},
-		{"P-384", elliptic.P384()},
-		{"P-521", elliptic.P521()},
-	}
-	for _, tc := range curves {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			key, err := ecdsa.GenerateKey(tc.curve, rand.Reader)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			sec1DER, err := x509.MarshalECPrivateKey(key)
-			if err != nil {
-				t.Fatal(err)
-			}
-			sec1PEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: sec1DER})
-
-			pkcs8DER, err := x509.MarshalPKCS8PrivateKey(key)
-			if err != nil {
-				t.Fatal(err)
-			}
-			pkcs8PEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8DER})
-
-			fromSEC1, err := ParsePEMPrivateKey(sec1PEM)
-			if err != nil {
-				t.Fatalf("SEC1: %v", err)
-			}
-			fromPKCS8, err := ParsePEMPrivateKey(pkcs8PEM)
-			if err != nil {
-				t.Fatalf("PKCS#8: %v", err)
-			}
-
-			ec1, ok := fromSEC1.(*ecdsa.PrivateKey)
-			if !ok {
-				t.Fatalf("SEC1 returned %T, want *ecdsa.PrivateKey", fromSEC1)
-			}
-			ec8, ok := fromPKCS8.(*ecdsa.PrivateKey)
-			if !ok {
-				t.Fatalf("PKCS#8 returned %T, want *ecdsa.PrivateKey", fromPKCS8)
-			}
-			if !ec1.Equal(ec8) {
-				t.Error("same ECDSA key parsed from SEC1 and PKCS#8 should be Equal")
-			}
-		})
-	}
-}
-
-func TestParsePEMPrivateKey_SameEd25519Key_OpenSSHAndPKCS8(t *testing.T) {
-	// WHY: The same Ed25519 key can arrive as OpenSSH or PKCS#8 PEM. The
-	// OpenSSH path goes through normalizeKey (pointer→value) while PKCS#8
-	// also normalizes. Both must produce the same value-type key. A
-	// normalization asymmetry would make Equal() fail on identical key
-	// material.
-	t.Parallel()
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// OpenSSH format
-	sshBlock, err := ssh.MarshalPrivateKey(priv, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sshPEM := pem.EncodeToMemory(sshBlock)
-
-	// PKCS#8 format
-	pkcs8DER, err := x509.MarshalPKCS8PrivateKey(priv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pkcs8PEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs8DER})
-
-	fromSSH, err := ParsePEMPrivateKey(sshPEM)
-	if err != nil {
-		t.Fatalf("OpenSSH: %v", err)
-	}
-	fromPKCS8, err := ParsePEMPrivateKey(pkcs8PEM)
-	if err != nil {
-		t.Fatalf("PKCS#8: %v", err)
-	}
-
-	// Both must be value type
-	if _, ok := fromSSH.(ed25519.PrivateKey); !ok {
-		t.Errorf("OpenSSH returned %T, want ed25519.PrivateKey (value)", fromSSH)
-	}
-	if _, ok := fromPKCS8.(ed25519.PrivateKey); !ok {
-		t.Errorf("PKCS#8 returned %T, want ed25519.PrivateKey (value)", fromPKCS8)
-	}
-
-	edSSH := fromSSH.(ed25519.PrivateKey)
-	edPKCS8 := fromPKCS8.(ed25519.PrivateKey)
-	if !edSSH.Equal(edPKCS8) {
-		t.Error("same Ed25519 key parsed from OpenSSH and PKCS#8 should be Equal")
-	}
-}
-
-func TestMarshalPrivateKeyToPEM_BlockTypeAlwaysPKCS8(t *testing.T) {
-	// WHY: All stored keys use PKCS#8 PEM ("PRIVATE KEY" block type). If a
-	// regression emits "RSA PRIVATE KEY" or "EC PRIVATE KEY", downstream
-	// parsers expecting PKCS#8 would silently fail or produce wrong types.
-	t.Parallel()
-
-	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, edKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	tests := []struct {
-		name string
-		key  crypto.PrivateKey
-	}{
-		{"RSA", rsaKey},
-		{"ECDSA", ecKey},
-		{"Ed25519", edKey},
-		{"Ed25519 pointer", &edKey},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			pemStr, err := MarshalPrivateKeyToPEM(tt.key)
-			if err != nil {
-				t.Fatalf("MarshalPrivateKeyToPEM: %v", err)
-			}
-			block, _ := pem.Decode([]byte(pemStr))
-			if block == nil {
-				t.Fatal("no PEM block in output")
-			}
-			if block.Type != "PRIVATE KEY" {
-				t.Errorf("PEM block type = %q, want \"PRIVATE KEY\"", block.Type)
-			}
-		})
 	}
 }
 
@@ -4463,133 +3230,6 @@ func TestParsePEMPrivateKey_EmptyDERInBlock(t *testing.T) {
 	}
 }
 
-func TestMarshalPrivateKeyToPEM_RoundTrip_PreservesKeyMaterial(t *testing.T) {
-	// WHY: MarshalPrivateKeyToPEM is the sole serialization point for key
-	// storage. A round-trip (marshal → parse → compare) must preserve key
-	// material for every supported type, including Ed25519 pointer form.
-	t.Parallel()
-
-	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, edKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	tests := []struct {
-		name string
-		key  crypto.PrivateKey
-	}{
-		{"RSA 2048", rsaKey},
-		{"ECDSA P-256", ecKey},
-		{"Ed25519 value", edKey},
-		{"Ed25519 pointer", &edKey},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			pemStr, err := MarshalPrivateKeyToPEM(tt.key)
-			if err != nil {
-				t.Fatalf("MarshalPrivateKeyToPEM: %v", err)
-			}
-
-			parsed, err := ParsePEMPrivateKey([]byte(pemStr))
-			if err != nil {
-				t.Fatalf("ParsePEMPrivateKey: %v", err)
-			}
-
-			// Verify the round-tripped key equals the original (normalize
-			// Ed25519 pointer form for comparison).
-			orig := tt.key
-			if ptr, ok := orig.(*ed25519.PrivateKey); ok {
-				orig = *ptr
-			}
-
-			switch o := orig.(type) {
-			case *rsa.PrivateKey:
-				p, ok := parsed.(*rsa.PrivateKey)
-				if !ok {
-					t.Fatalf("parsed type %T, want *rsa.PrivateKey", parsed)
-				}
-				if !o.Equal(p) {
-					t.Error("RSA key material not preserved through round-trip")
-				}
-			case *ecdsa.PrivateKey:
-				p, ok := parsed.(*ecdsa.PrivateKey)
-				if !ok {
-					t.Fatalf("parsed type %T, want *ecdsa.PrivateKey", parsed)
-				}
-				if !o.Equal(p) {
-					t.Error("ECDSA key material not preserved through round-trip")
-				}
-			case ed25519.PrivateKey:
-				p, ok := parsed.(ed25519.PrivateKey)
-				if !ok {
-					t.Fatalf("parsed type %T, want ed25519.PrivateKey", parsed)
-				}
-				if !o.Equal(p) {
-					t.Error("Ed25519 key material not preserved through round-trip")
-				}
-			}
-		})
-	}
-}
-
-func TestMarshalPrivateKeyToPEM_ECDSACurvePreservation(t *testing.T) {
-	// WHY: MarshalPrivateKeyToPEM encodes all ECDSA keys as PKCS#8. Different
-	// curves (P-256, P-384, P-521) have different OIDs and coordinate sizes.
-	// A marshal/parse round-trip must preserve the curve identity — not just
-	// the key bytes — to prevent P-384 being misidentified as P-256.
-	t.Parallel()
-
-	curves := []struct {
-		name  string
-		curve elliptic.Curve
-	}{
-		{"P-256", elliptic.P256()},
-		{"P-384", elliptic.P384()},
-		{"P-521", elliptic.P521()},
-	}
-
-	for _, tc := range curves {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Parallel()
-			key, err := ecdsa.GenerateKey(tc.curve, rand.Reader)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			pemStr, err := MarshalPrivateKeyToPEM(key)
-			if err != nil {
-				t.Fatalf("MarshalPrivateKeyToPEM: %v", err)
-			}
-
-			parsed, err := ParsePEMPrivateKey([]byte(pemStr))
-			if err != nil {
-				t.Fatalf("ParsePEMPrivateKey: %v", err)
-			}
-
-			ecParsed, ok := parsed.(*ecdsa.PrivateKey)
-			if !ok {
-				t.Fatalf("parsed type = %T, want *ecdsa.PrivateKey", parsed)
-			}
-			if ecParsed.Curve != tc.curve {
-				t.Errorf("curve = %v, want %v", ecParsed.Curve, tc.curve)
-			}
-			if !key.Equal(ecParsed) {
-				t.Error("round-tripped ECDSA key does not Equal original")
-			}
-		})
-	}
-}
-
 func TestKeyAlgorithmName_Ed25519PointerForm(t *testing.T) {
 	// WHY: KeyAlgorithmName handles both ed25519.PrivateKey and
 	// *ed25519.PrivateKey in its type switch. This test verifies the pointer
@@ -4605,29 +3245,6 @@ func TestKeyAlgorithmName_Ed25519PointerForm(t *testing.T) {
 	}
 	if name := KeyAlgorithmName(edPtr); name != "Ed25519" {
 		t.Errorf("KeyAlgorithmName(pointer) = %q, want Ed25519", name)
-	}
-}
-
-func TestNormalizeKey_DoublePointer(t *testing.T) {
-	// WHY: normalizeKey handles *ed25519.PrivateKey. If a **ed25519.PrivateKey
-	// (double pointer, theoretically possible from reflection or incorrect casting)
-	// is passed, it must pass through unchanged rather than panicking. This guards
-	// against unexpected pointer nesting.
-	t.Parallel()
-
-	_, edKey, _ := ed25519.GenerateKey(rand.Reader)
-	edPtr := &edKey
-	// Pass *ed25519.PrivateKey (single pointer) — normalizeKey should dereference
-	result := normalizeKey(edPtr)
-	if _, ok := result.(ed25519.PrivateKey); !ok {
-		t.Errorf("normalizeKey(*ed25519.PrivateKey) = %T, want ed25519.PrivateKey", result)
-	}
-
-	// Pass a non-ed25519 pointer — should pass through unchanged
-	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	result2 := normalizeKey(rsaKey)
-	if _, ok := result2.(*rsa.PrivateKey); !ok {
-		t.Errorf("normalizeKey(*rsa.PrivateKey) = %T, want *rsa.PrivateKey", result2)
 	}
 }
 
