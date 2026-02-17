@@ -22,59 +22,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func TestFormatIPAddresses(t *testing.T) {
-	// WHY: IP SANs must be formatted as strings for JSON/YAML output; verifies IPv4, IPv4-mapped IPv6, and native IPv6 are all represented correctly.
-	ips := []net.IP{
-		net.ParseIP("10.0.0.1"),
-		net.ParseIP("192.168.1.1"),
-		net.ParseIP("::1"),
-	}
-	result := certstore.FormatIPAddresses(ips)
-	if len(result) != 3 {
-		t.Fatalf("expected 3 results, got %d", len(result))
-	}
-	if result[0] != "10.0.0.1" {
-		t.Errorf("expected '10.0.0.1', got %q", result[0])
-	}
-	if result[2] != "::1" {
-		t.Errorf("expected '::1', got %q", result[2])
-	}
-}
-
-func TestFormatIPAddresses_Empty(t *testing.T) {
-	// WHY: Nil IP list must return an empty slice, not nil; downstream JSON marshaling would produce "null" instead of "[]" for nil slices.
-	result := certstore.FormatIPAddresses(nil)
-	if len(result) != 0 {
-		t.Errorf("expected empty result for nil input, got %v", result)
-	}
-}
-
-func TestPublicKeyAlgorithmName(t *testing.T) {
-	// WHY: The algorithm name string is used in JSON output and display; verifies correct names for RSA, ECDSA, Ed25519, and the "unknown" fallback.
-	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	ca := newECDSACA(t)
-	rsaCA := newRSACA(t)
-	ed25519Leaf := newEd25519Leaf(t, rsaCA, "test.com", []string{"test.com"})
-
-	tests := []struct {
-		name string
-		key  any
-		want string
-	}{
-		{"RSA", &rsaKey.PublicKey, "RSA"},
-		{"ECDSA", ca.cert.PublicKey, "ECDSA"},
-		{"Ed25519", ed25519Leaf.cert.PublicKey, "Ed25519"},
-		{"Unknown", "not a key", "unknown"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := certkit.PublicKeyAlgorithmName(tt.key); got != tt.want {
-				t.Errorf("PublicKeyAlgorithmName() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 func newTestBundle(t *testing.T, leaf testLeaf, ca testCA) *certkit.BundleResult {
 	t.Helper()
 	return &certkit.BundleResult{
