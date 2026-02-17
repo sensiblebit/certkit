@@ -3,6 +3,7 @@ package internal
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -128,6 +129,9 @@ func TestLoadBundleConfigs_InvalidYAML(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for invalid YAML, got nil")
 	}
+	if !strings.Contains(err.Error(), "yaml:") {
+		t.Errorf("unexpected error: %v", err)
+	}
 }
 
 func TestLoadBundleConfigs_MissingFile(t *testing.T) {
@@ -135,6 +139,9 @@ func TestLoadBundleConfigs_MissingFile(t *testing.T) {
 	_, err := LoadBundleConfigs("/nonexistent/bundles.yaml")
 	if err == nil {
 		t.Error("expected error for missing file, got nil")
+	}
+	if !strings.Contains(err.Error(), "no such file") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 
@@ -284,5 +291,8 @@ bundles: []
 	_, err := LoadBundleConfigs(path)
 	if err == nil {
 		t.Error("expected error for empty bundles with new format structure, got nil")
+	}
+	if !strings.Contains(err.Error(), "cannot unmarshal") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }

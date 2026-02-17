@@ -42,6 +42,29 @@ Use this whenever a feature, fix, or module needs comprehensive test validation.
 - **RL-9 (MUST)** Clear context between loop iterations to preserve context window runway. Summarize findings and fixes from the current pass before starting the next.
 - **RL-10 (SHOULD)** Cap at 3 iterations for a single package. If issues persist after 3 passes, stop and document remaining gaps as TODOs with `// TODO(ralph):` tags.
 
+## Logging
+
+- **RL-11 (MUST)** Maintain a `RALPH.md` log in the repo root (gitignored). Append an entry for each loop iteration with the following structure:
+
+  ```markdown
+  ## Loop N — YYYY-MM-DD HH:MM
+
+  ### Findings
+  - [list of issues found in Phase 1]
+
+  ### Actions
+  - [list of fixes/consolidations/deletions in Phase 2]
+
+  ### Commits
+  - `short-sha` commit message
+
+  ### Remaining
+  - [open gaps carried to next iteration, or "Clean pass — no findings"]
+  ```
+
+- **RL-12 (MUST)** Create the file on the first iteration if it doesn't exist. Never commit it — it is for local reference only.
+- **RL-13 (SHOULD)** Include test counts before/after each iteration (e.g., `Tests: 142 → 128 (-14)`) so progress is quantifiable.
+
 ## Anti-patterns (reject on sight)
 
 - Tests that only assert `err == nil` with no output validation.

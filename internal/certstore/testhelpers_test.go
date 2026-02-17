@@ -420,17 +420,3 @@ func keysEqual(t *testing.T, a, b any) bool {
 		return false
 	}
 }
-
-// ed25519KeyPEM returns PEM-encoded Ed25519 private key bytes.
-func ed25519KeyPEM(t *testing.T) []byte {
-	t.Helper()
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("generate Ed25519 key: %v", err)
-	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(priv)
-	if err != nil {
-		t.Fatalf("marshal Ed25519 key: %v", err)
-	}
-	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
-}

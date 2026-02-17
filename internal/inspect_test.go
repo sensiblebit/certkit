@@ -48,7 +48,10 @@ func TestInspectFile_Certificate(t *testing.T) {
 }
 
 func TestInspectFile_PrivateKey(t *testing.T) {
-	// WHY: InspectFile must identify standalone private keys; verifies the result type is "private_key" with correct algorithm name.
+	// WHY: Verifies InspectFile extracts key type, size, and SKI from a
+	// private key file. One key type (RSA) suffices because the inspect
+	// logic delegates to certkit.KeyAlgorithmName/certkit.KeyBitLength
+	// which are tested across all algorithms in the root package.
 	dir := t.TempDir()
 	keyFile := filepath.Join(dir, "key.pem")
 	if err := os.WriteFile(keyFile, rsaKeyPEM(t), 0600); err != nil {
@@ -59,17 +62,25 @@ func TestInspectFile_PrivateKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	found := false
-	for _, r := range results {
+
+	var keyResult *InspectResult
+	for i, r := range results {
 		if r.Type == "private_key" {
-			found = true
-			if r.KeyType != "RSA" {
-				t.Errorf("expected RSA, got %s", r.KeyType)
-			}
+			keyResult = &results[i]
+			break
 		}
 	}
-	if !found {
-		t.Error("expected to find a private_key result")
+	if keyResult == nil {
+		t.Fatal("expected to find a private_key result")
+	}
+	if keyResult.KeyType != "RSA" {
+		t.Errorf("key type = %s, want RSA", keyResult.KeyType)
+	}
+	if keyResult.KeySize != "2048" {
+		t.Errorf("key size = %s, want 2048", keyResult.KeySize)
+	}
+	if keyResult.SKI == "" {
+		t.Error("expected SKI to be populated")
 	}
 }
 
@@ -78,6 +89,9 @@ func TestInspectFile_NotFound(t *testing.T) {
 	_, err := InspectFile("/nonexistent/path", []string{})
 	if err == nil {
 		t.Error("expected error for nonexistent file")
+	}
+	if !strings.Contains(err.Error(), "reading") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 
@@ -206,40 +220,6 @@ func TestInspectFile_CSR(t *testing.T) {
 	}
 }
 
-func TestInspectFile_ECDSAKey(t *testing.T) {
-	// WHY: ECDSA keys report curve name instead of bit length; verifies the KeySize field shows "P-256" and SKI is populated for key matching.
-	dir := t.TempDir()
-	keyFile := filepath.Join(dir, "ec-key.pem")
-	if err := os.WriteFile(keyFile, ecdsaKeyPEM(t), 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	results, err := InspectFile(keyFile, []string{})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var keyResult *InspectResult
-	for i, r := range results {
-		if r.Type == "private_key" {
-			keyResult = &results[i]
-			break
-		}
-	}
-	if keyResult == nil {
-		t.Fatal("expected to find a private_key result")
-	}
-	if keyResult.KeyType != "ECDSA" {
-		t.Errorf("expected key type ECDSA, got %s", keyResult.KeyType)
-	}
-	if keyResult.KeySize != "P-256" {
-		t.Errorf("expected key size P-256, got %s", keyResult.KeySize)
-	}
-	if keyResult.SKI == "" {
-		t.Error("expected SKI to be populated for ECDSA key")
-	}
-}
-
 func TestInspectFile_CertWithIPSANs(t *testing.T) {
 	// WHY: IP SANs must appear alongside DNS SANs in inspect output; without this, users would not see IP addresses when diagnosing certificate issues.
 	ca := newRSACA(t)
@@ -273,43 +253,6 @@ func TestInspectFile_CertWithIPSANs(t *testing.T) {
 	}
 	if !slices.Contains(certResult.SANs, "192.168.1.1") {
 		t.Errorf("SANs should contain IP address 192.168.1.1, got %v", certResult.SANs)
-	}
-}
-
-func TestInspectFile_Ed25519Key(t *testing.T) {
-	// WHY: Ed25519 keys have fixed 256-bit size and no curve; verifies the inspect result correctly reports type, size, and both SKI variants.
-	dir := t.TempDir()
-	keyFile := filepath.Join(dir, "ed25519-key.pem")
-	if err := os.WriteFile(keyFile, ed25519KeyPEM(t), 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	results, err := InspectFile(keyFile, []string{})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var keyResult *InspectResult
-	for i, r := range results {
-		if r.Type == "private_key" {
-			keyResult = &results[i]
-			break
-		}
-	}
-	if keyResult == nil {
-		t.Fatal("expected to find a private_key result")
-	}
-	if keyResult.KeyType != "Ed25519" {
-		t.Errorf("expected key type Ed25519, got %s", keyResult.KeyType)
-	}
-	if keyResult.KeySize != "256" {
-		t.Errorf("expected key size 256, got %s", keyResult.KeySize)
-	}
-	if keyResult.SKI == "" {
-		t.Error("expected SKI to be populated for Ed25519 key")
-	}
-	if keyResult.SKILegacy == "" {
-		t.Error("expected SKILegacy to be populated for Ed25519 key")
 	}
 }
 

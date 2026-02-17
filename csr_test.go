@@ -2,10 +2,8 @@ package certkit
 
 import (
 	"crypto/ecdsa"
-	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -552,115 +550,6 @@ func TestGenerateCSRFromCSR_DifferentKey(t *testing.T) {
 	newPub := newCSR.PublicKey.(*ecdsa.PublicKey)
 	if srcPub.Equal(newPub) {
 		t.Error("new CSR should have a different public key than source")
-	}
-}
-
-func TestGenerateCSR_RSA(t *testing.T) {
-	// WHY: CSR generation must work with RSA keys, not just ECDSA; RSA is still the most common key type in enterprise PKI.
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Create a self-signed cert with the RSA key
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject: pkix.Name{
-			CommonName:   "rsa-test.example.com",
-			Organization: []string{"RSA Test Org"},
-		},
-		DNSNames:  []string{"rsa-test.example.com"},
-		NotBefore: time.Now().Add(-1 * time.Hour),
-		NotAfter:  time.Now().Add(24 * time.Hour),
-		KeyUsage:  x509.KeyUsageDigitalSignature,
-	}
-	certBytes, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cert, err := x509.ParseCertificate(certBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	csrPEM, keyPEM, err := GenerateCSR(cert, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if keyPEM != "" {
-		t.Error("expected empty keyPEM when private key is provided")
-	}
-
-	csr, err := ParsePEMCertificateRequest([]byte(csrPEM))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Verify signature is valid
-	if err := VerifyCSR(csr); err != nil {
-		t.Fatalf("RSA CSR signature invalid: %v", err)
-	}
-
-	// Verify subject matches
-	if csr.Subject.CommonName != "rsa-test.example.com" {
-		t.Errorf("CN=%q, want rsa-test.example.com", csr.Subject.CommonName)
-	}
-	if len(csr.Subject.Organization) != 1 || csr.Subject.Organization[0] != "RSA Test Org" {
-		t.Errorf("Organization=%v, want [RSA Test Org]", csr.Subject.Organization)
-	}
-	if len(csr.DNSNames) != 1 || csr.DNSNames[0] != "rsa-test.example.com" {
-		t.Errorf("DNSNames=%v, want [rsa-test.example.com]", csr.DNSNames)
-	}
-}
-
-func TestGenerateCSR_Ed25519(t *testing.T) {
-	// WHY: CSR generation must work with Ed25519 keys; Ed25519 uses a different signing interface that could break the crypto.Signer path.
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Create a self-signed cert with the Ed25519 key
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject: pkix.Name{
-			CommonName: "ed25519-test.example.com",
-		},
-		DNSNames:  []string{"ed25519-test.example.com"},
-		NotBefore: time.Now().Add(-1 * time.Hour),
-		NotAfter:  time.Now().Add(24 * time.Hour),
-		KeyUsage:  x509.KeyUsageDigitalSignature,
-	}
-	certBytes, err := x509.CreateCertificate(rand.Reader, template, template, pub, priv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cert, err := x509.ParseCertificate(certBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	csrPEM, keyPEM, err := GenerateCSR(cert, priv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if keyPEM != "" {
-		t.Error("expected empty keyPEM when private key is provided")
-	}
-
-	csr, err := ParsePEMCertificateRequest([]byte(csrPEM))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Verify signature is valid
-	if err := VerifyCSR(csr); err != nil {
-		t.Fatalf("Ed25519 CSR signature invalid: %v", err)
-	}
-
-	// Verify subject matches
-	if csr.Subject.CommonName != "ed25519-test.example.com" {
-		t.Errorf("CN=%q, want ed25519-test.example.com", csr.Subject.CommonName)
 	}
 }
 

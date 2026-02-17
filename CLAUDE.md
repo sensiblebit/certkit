@@ -143,6 +143,19 @@ Test helpers are in `testhelpers_test.go` (both root and internal). All use `t.H
 
 - **T-8 (MUST)** Tests must cover: wrong/missing passwords (encrypted formats), different store vs key passwords (JKS), empty containers (no certs, no keys), expired certificates (with and without `--allow-expired`), self-signed certificates, missing intermediate chains, multiple certs/keys in a single file, corrupted or invalid input data.
 
+### Test scope — what to test
+
+- **T-9 (MUST)** Test certkit's logic, not upstream behavior. If a test would still pass with certkit's code replaced by a direct stdlib/library call, it is testing the wrong thing. Examples of what NOT to test:
+  - That `crypto/sha256` is deterministic
+  - That `rsa.GenerateKey` returns the requested bit size
+  - That `x509.ParsePKCS8PrivateKey` returns a value type vs pointer
+  - That a third-party PKCS#12 library round-trips correctly in isolation
+- **T-10 (MUST)** No duplicate coverage across packages. A function exported from the root package is tested in `certkit_test.go` OR `internal/*_test.go` — never both. Choose the package closest to the implementation. Delete the duplicate.
+- **T-11 (MUST)** Test behavior, not unexported functions. If an unexported helper (`normalizeKey`, `validatePKCS12KeyType`, `extractPublicKeyBitString`) is already exercised through its public caller, do not add a direct test for the helper. Remove direct tests of unexported functions when behavioral coverage exists.
+- **T-12 (MUST)** One parametric test over N inputs, not N copy-paste tests. When the same assertion applies across key types, curves, or formats, use a single table-driven test. Do not create per-algorithm test functions that assert identical properties (e.g., `TestComputeSKI_RSA` + `_Ed25519` + `_P384` + `_P521` when a table test already covers all four).
+- **T-13 (MUST)** Cross-format and round-trip tests must exercise certkit logic at every step. A round-trip that is encode(certkit) → decode(stdlib) only tests that certkit didn't corrupt data — which is valid for thin wrappers but does not need per-key-type exhaustive coverage. One key type suffices for thin wrappers.
+- **T-14 (SHOULD)** When consolidating tests, prefer deleting the weaker test rather than merging. If a table-driven test covers all cases, delete the standalone per-case tests entirely.
+
 ### Test style
 
 - One assertion per logical check — don't bundle unrelated assertions.

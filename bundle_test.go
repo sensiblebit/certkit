@@ -320,6 +320,9 @@ func TestFetchLeafFromURL_badHost(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for non-existent host")
 	}
+	if !strings.Contains(err.Error(), "tls dial to") {
+		t.Errorf("unexpected error: %v", err)
+	}
 }
 
 func TestFetchLeafFromURL_invalidURL(t *testing.T) {
@@ -724,35 +727,42 @@ func TestMozillaRootPool(t *testing.T) {
 }
 
 func TestCheckSHA1Signatures(t *testing.T) {
-	// WHY: SHA-1 signed certs are deprecated and insecure; the warning system must detect them so users know to replace affected certs.
-	// Test the helper directly with hand-set SignatureAlgorithm
-	certs := []*x509.Certificate{
-		{Subject: pkix.Name{CommonName: "sha1-cert"}, SignatureAlgorithm: x509.SHA1WithRSA},
-		{Subject: pkix.Name{CommonName: "sha256-cert"}, SignatureAlgorithm: x509.SHA256WithRSA},
-		{Subject: pkix.Name{CommonName: "ecdsa-sha1"}, SignatureAlgorithm: x509.ECDSAWithSHA1},
+	// WHY: SHA-1 detection must warn on SHA-1 certs and not false-positive on SHA-256 certs.
+	tests := []struct {
+		name      string
+		certs     []*x509.Certificate
+		wantCount int
+	}{
+		{
+			name: "SHA-1 certs produce warnings",
+			certs: []*x509.Certificate{
+				{Subject: pkix.Name{CommonName: "sha1-cert"}, SignatureAlgorithm: x509.SHA1WithRSA},
+				{Subject: pkix.Name{CommonName: "sha256-cert"}, SignatureAlgorithm: x509.SHA256WithRSA},
+				{Subject: pkix.Name{CommonName: "ecdsa-sha1"}, SignatureAlgorithm: x509.ECDSAWithSHA1},
+			},
+			wantCount: 2,
+		},
+		{
+			name: "SHA-256 certs produce no warnings",
+			certs: []*x509.Certificate{
+				{Subject: pkix.Name{CommonName: "modern"}, SignatureAlgorithm: x509.SHA256WithRSA},
+				{Subject: pkix.Name{CommonName: "ecdsa"}, SignatureAlgorithm: x509.ECDSAWithSHA256},
+			},
+			wantCount: 0,
+		},
 	}
-
-	warnings := checkSHA1Signatures(certs)
-	if len(warnings) != 2 {
-		t.Errorf("expected 2 SHA-1 warnings, got %d: %v", len(warnings), warnings)
-	}
-	for _, w := range warnings {
-		if !strings.Contains(w, "SHA-1") {
-			t.Errorf("warning should mention SHA-1: %s", w)
-		}
-	}
-}
-
-func TestCheckSHA1Signatures_NoWarning(t *testing.T) {
-	// WHY: Modern SHA-256 certs must not trigger false SHA-1 warnings; false positives would cause unnecessary alarm.
-	certs := []*x509.Certificate{
-		{Subject: pkix.Name{CommonName: "modern"}, SignatureAlgorithm: x509.SHA256WithRSA},
-		{Subject: pkix.Name{CommonName: "ecdsa"}, SignatureAlgorithm: x509.ECDSAWithSHA256},
-	}
-
-	warnings := checkSHA1Signatures(certs)
-	if len(warnings) != 0 {
-		t.Errorf("expected no warnings for SHA-256 certs, got %d", len(warnings))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			warnings := checkSHA1Signatures(tt.certs)
+			if len(warnings) != tt.wantCount {
+				t.Errorf("expected %d warnings, got %d: %v", tt.wantCount, len(warnings), warnings)
+			}
+			for _, w := range warnings {
+				if !strings.Contains(w, "SHA-1") {
+					t.Errorf("warning should mention SHA-1: %s", w)
+				}
+			}
+		})
 	}
 }
 
@@ -1023,17 +1033,6 @@ func TestMozillaRootSubjects_NonEmpty(t *testing.T) {
 	// Mozilla bundle typically has 100+ roots
 	if len(subjects) < 50 {
 		t.Errorf("suspiciously few root subjects: %d", len(subjects))
-	}
-}
-
-func TestMozillaRootSubjects_Idempotent(t *testing.T) {
-	// WHY: MozillaRootSubjects is sync.Once cached; multiple calls must return
-	// the same map instance, not re-parse the PEM bundle.
-	t.Parallel()
-	s1 := MozillaRootSubjects()
-	s2 := MozillaRootSubjects()
-	if len(s1) != len(s2) {
-		t.Errorf("subsequent calls returned different sizes: %d vs %d", len(s1), len(s2))
 	}
 }
 

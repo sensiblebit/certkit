@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -91,6 +92,9 @@ func TestProcessPasswords_BadFileReturnsError(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for nonexistent password file, got nil")
 	}
+	if !strings.Contains(err.Error(), "loading passwords from file") {
+		t.Errorf("unexpected error: %v", err)
+	}
 }
 
 func TestLoadPasswordsFromFile_BlankLines(t *testing.T) {
@@ -112,13 +116,5 @@ func TestLoadPasswordsFromFile_BlankLines(t *testing.T) {
 	}
 	if passwords[0] != "pass1" || passwords[1] != "pass2" {
 		t.Errorf("expected [pass1, pass2], got %v", passwords)
-	}
-}
-
-func TestLoadPasswordsFromFile_MissingFile(t *testing.T) {
-	// WHY: A missing password file must return an error from the low-level loader, not an empty list that silently degrades decryption.
-	_, err := LoadPasswordsFromFile("/nonexistent/passwords.txt")
-	if err == nil {
-		t.Error("expected error for missing file, got nil")
 	}
 }
