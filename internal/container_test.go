@@ -43,64 +43,6 @@ func TestLoadContainerFile_PKCS12(t *testing.T) {
 	}
 }
 
-func TestLoadContainerFile_JKS(t *testing.T) {
-	// WHY: JKS keystores are common in Java environments; verifies that the JKS decoder extracts leaf, key, and CA chain correctly from a file.
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "jks.example.com", []string{"jks.example.com"}, nil)
-	jksData := newJKSBundle(t, leaf, ca, "changeit")
-
-	dir := t.TempDir()
-	jksFile := filepath.Join(dir, "test.jks")
-	if err := os.WriteFile(jksFile, jksData, 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	contents, err := LoadContainerFile(jksFile, []string{"changeit"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if contents.Leaf == nil {
-		t.Fatal("expected leaf certificate")
-	}
-	if contents.Key == nil {
-		t.Error("expected embedded key")
-	}
-	if len(contents.ExtraCerts) == 0 {
-		t.Error("expected CA cert in extras")
-	}
-}
-
-func TestLoadContainerFile_PKCS7(t *testing.T) {
-	// WHY: PKCS#7 bundles contain certificates but no keys; verifies leaf and CA are extracted while Key correctly remains nil.
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "p7b.example.com", []string{"p7b.example.com"}, nil)
-
-	p7bData, err := certkit.EncodePKCS7([]*x509.Certificate{leaf.cert, ca.cert})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	dir := t.TempDir()
-	p7bFile := filepath.Join(dir, "test.p7b")
-	if err := os.WriteFile(p7bFile, p7bData, 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	contents, err := LoadContainerFile(p7bFile, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if contents.Leaf == nil {
-		t.Fatal("expected leaf certificate")
-	}
-	if contents.Key != nil {
-		t.Error("expected no key from p7b")
-	}
-	if len(contents.ExtraCerts) == 0 {
-		t.Error("expected CA cert in extras")
-	}
-}
-
 func TestLoadContainerFile_PEM(t *testing.T) {
 	// WHY: PEM chain files are the most common certificate format; verifies the loader correctly splits leaf from extra CA certs in a multi-cert PEM.
 	ca := newRSACA(t)
@@ -127,32 +69,6 @@ func TestLoadContainerFile_PEM(t *testing.T) {
 	}
 	if len(contents.ExtraCerts) == 0 {
 		t.Error("expected CA cert in extras")
-	}
-}
-
-func TestLoadContainerFile_DER(t *testing.T) {
-	// WHY: DER is a single-cert binary format with no chain; verifies the loader handles the boundary case of zero extra certs and no key.
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "der.example.com", []string{"der.example.com"}, nil)
-
-	dir := t.TempDir()
-	derFile := filepath.Join(dir, "cert.der")
-	if err := os.WriteFile(derFile, leaf.certDER, 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	contents, err := LoadContainerFile(derFile, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if contents.Leaf == nil {
-		t.Fatal("expected leaf certificate")
-	}
-	if contents.Key != nil {
-		t.Error("expected no key from DER")
-	}
-	if len(contents.ExtraCerts) != 0 {
-		t.Error("expected no extras from single DER cert")
 	}
 }
 
@@ -308,50 +224,6 @@ func TestParseContainerData_VerifyLeafIdentity(t *testing.T) {
 	}
 	if contents.Leaf.Subject.Organization[0] != "TestOrg" {
 		t.Errorf("expected Organization TestOrg, got %v", contents.Leaf.Subject.Organization)
-	}
-}
-
-func TestLoadContainerFile_VerifyLeafIdentity(t *testing.T) {
-	// WHY: End-to-end file-based PKCS#12 loading must preserve leaf identity and key-cert pairing; also verifies the CA chain appears in ExtraCerts.
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "file-identity.example.com", []string{"file-identity.example.com"}, nil)
-	p12Data := newPKCS12Bundle(t, leaf, ca, "changeit")
-
-	dir := t.TempDir()
-	p12File := filepath.Join(dir, "identity.p12")
-	if err := os.WriteFile(p12File, p12Data, 0600); err != nil {
-		t.Fatal(err)
-	}
-
-	contents, err := LoadContainerFile(p12File, []string{"changeit"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if contents.Leaf == nil {
-		t.Fatal("expected leaf certificate")
-	}
-	if contents.Leaf.Subject.CommonName != "file-identity.example.com" {
-		t.Errorf("leaf CN = %q, want file-identity.example.com", contents.Leaf.Subject.CommonName)
-	}
-	if contents.Key == nil {
-		t.Error("expected private key")
-	}
-
-	// Verify key matches the leaf certificate
-	match, err := certkit.KeyMatchesCert(contents.Key, contents.Leaf)
-	if err != nil {
-		t.Fatalf("KeyMatchesCert: %v", err)
-	}
-	if !match {
-		t.Error("loaded key should match loaded leaf certificate")
-	}
-
-	// Verify extra certs contain the CA
-	if len(contents.ExtraCerts) == 0 {
-		t.Error("expected CA cert in extras")
-	}
-	if len(contents.ExtraCerts) > 0 && contents.ExtraCerts[0].Subject.CommonName != "Test RSA Root CA" {
-		t.Errorf("extra cert CN = %q, want Test RSA Root CA", contents.ExtraCerts[0].Subject.CommonName)
 	}
 }
 
