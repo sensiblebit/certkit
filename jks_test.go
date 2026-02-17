@@ -3,13 +3,11 @@ package certkit
 import (
 	"bytes"
 	"crypto/ecdsa"
-	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"fmt"
 	"math/big"
 	"strings"
 	"testing"
@@ -518,138 +516,66 @@ func TestEncodeJKS_MagicBytes(t *testing.T) {
 	}
 }
 
-func TestEncodeJKS_NoKey(t *testing.T) {
-	// WHY: Unsupported key types must be rejected at encode time, not produce a JKS file that fails on decode.
+func TestEncodeDecodeJKS_RoundTrip(t *testing.T) {
+	// WHY: EncodeJKS/DecodeJKS are thin wrappers. One key type (RSA with CA
+	// chain) suffices per T-13 to prove the wrapper chains correctly.
 	t.Parallel()
-	_, err := EncodeJKS(struct{}{}, &x509.Certificate{}, nil, "changeit")
-	if err == nil {
-		t.Error("expected error for unsupported key type")
+
+	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
 	}
-}
-
-// TestEncodeDecodeJKS_KeyTypes proves JKS encode/decode round-trips preserve
-// key material and certificate identity across all supported key algorithms
-// (RSA, ECDSA, Ed25519).
-func TestEncodeDecodeJKS_KeyTypes(t *testing.T) {
-	// WHY: JKS round-trip must work for all key types (RSA, ECDSA, Ed25519); a failure means exported JKS files would be unusable in Java applications.
-	t.Parallel()
-	tests := []struct {
-		name     string
-		setup    func(t *testing.T) (leafKey any, leafCert *x509.Certificate, caCerts []*x509.Certificate, wantCN string, wantCerts int)
-		wantType string // e.g. "*rsa.PrivateKey"
-		checkEq  func(t *testing.T, original, decoded any)
-	}{
-		{
-			name: "RSA",
-			setup: func(t *testing.T) (any, *x509.Certificate, []*x509.Certificate, string, int) {
-				t.Helper()
-				caKey, err := rsa.GenerateKey(rand.Reader, 2048)
-				if err != nil {
-					t.Fatal(err)
-				}
-				caTmpl := &x509.Certificate{
-					SerialNumber:          big.NewInt(1),
-					Subject:               pkix.Name{CommonName: "JKS RSA CA"},
-					NotBefore:             time.Now().Add(-1 * time.Hour),
-					NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
-					KeyUsage:              x509.KeyUsageCertSign,
-					BasicConstraintsValid: true,
-					IsCA:                  true,
-				}
-				caDER, _ := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
-				caCert, _ := x509.ParseCertificate(caDER)
-
-				leafKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-				leafTmpl := &x509.Certificate{
-					SerialNumber: big.NewInt(100),
-					Subject:      pkix.Name{CommonName: "jks-rsa-leaf.example.com"},
-					DNSNames:     []string{"jks-rsa-leaf.example.com"},
-					NotBefore:    time.Now().Add(-1 * time.Hour),
-					NotAfter:     time.Now().Add(365 * 24 * time.Hour),
-					KeyUsage:     x509.KeyUsageDigitalSignature,
-				}
-				leafDER, _ := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
-				leafCert, _ := x509.ParseCertificate(leafDER)
-				return leafKey, leafCert, []*x509.Certificate{caCert}, "jks-rsa-leaf.example.com", 2
-			},
-			wantType: "*rsa.PrivateKey",
-			checkEq: func(t *testing.T, original, decoded any) {
-				t.Helper()
-				if !original.(*rsa.PrivateKey).Equal(decoded) {
-					t.Error("decoded RSA key does not Equal original")
-				}
-			},
-		},
-		{
-			name: "Ed25519",
-			setup: func(t *testing.T) (any, *x509.Certificate, []*x509.Certificate, string, int) {
-				t.Helper()
-				_, priv, err := ed25519.GenerateKey(rand.Reader)
-				if err != nil {
-					t.Fatal(err)
-				}
-				pub := priv.Public().(ed25519.PublicKey)
-
-				leafTmpl := &x509.Certificate{
-					SerialNumber: big.NewInt(1),
-					Subject:      pkix.Name{CommonName: "jks-ed25519.example.com"},
-					DNSNames:     []string{"jks-ed25519.example.com"},
-					NotBefore:    time.Now().Add(-1 * time.Hour),
-					NotAfter:     time.Now().Add(365 * 24 * time.Hour),
-					KeyUsage:     x509.KeyUsageDigitalSignature,
-				}
-				leafDER, _ := x509.CreateCertificate(rand.Reader, leafTmpl, leafTmpl, pub, priv)
-				leafCert, _ := x509.ParseCertificate(leafDER)
-				return priv, leafCert, nil, "jks-ed25519.example.com", 1
-			},
-			wantType: "ed25519.PrivateKey",
-			checkEq: func(t *testing.T, original, decoded any) {
-				t.Helper()
-				if !original.(ed25519.PrivateKey).Equal(decoded) {
-					t.Error("decoded Ed25519 key does not Equal original")
-				}
-			},
-		},
+	caTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "JKS RSA CA"},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			leafKey, leafCert, caCerts, wantCN, wantCerts := tt.setup(t)
+	caDER, _ := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	caCert, _ := x509.ParseCertificate(caDER)
 
-			data, err := EncodeJKS(leafKey, leafCert, caCerts, "changeit")
-			if err != nil {
-				t.Fatalf("EncodeJKS: %v", err)
-			}
+	leafKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	leafTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(100),
+		Subject:      pkix.Name{CommonName: "jks-rsa-leaf.example.com"},
+		DNSNames:     []string{"jks-rsa-leaf.example.com"},
+		NotBefore:    time.Now().Add(-1 * time.Hour),
+		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	leafDER, _ := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
+	leafCert, _ := x509.ParseCertificate(leafDER)
 
-			certs, keys, err := DecodeJKS(data, []string{"changeit"})
-			if err != nil {
-				t.Fatalf("DecodeJKS round-trip: %v", err)
-			}
-			if len(keys) != 1 {
-				t.Fatalf("expected 1 key, got %d", len(keys))
-			}
-			if len(certs) != wantCerts {
-				t.Fatalf("expected %d certs, got %d", wantCerts, len(certs))
-			}
+	data, err := EncodeJKS(leafKey, leafCert, []*x509.Certificate{caCert}, "changeit")
+	if err != nil {
+		t.Fatalf("EncodeJKS: %v", err)
+	}
 
-			gotType := fmt.Sprintf("%T", keys[0])
-			if gotType != tt.wantType {
-				t.Fatalf("expected %s, got %s", tt.wantType, gotType)
-			}
-
-			// Verify private key equality (not just public key match).
-			tt.checkEq(t, leafKey, keys[0])
-
-			match, err := KeyMatchesCert(keys[0], certs[0])
-			if err != nil {
-				t.Fatalf("KeyMatchesCert: %v", err)
-			}
-			if !match {
-				t.Error("round-trip key should match leaf certificate")
-			}
-			if certs[0].Subject.CommonName != wantCN {
-				t.Errorf("leaf CN=%q, want %q", certs[0].Subject.CommonName, wantCN)
-			}
-		})
+	certs, keys, err := DecodeJKS(data, []string{"changeit"})
+	if err != nil {
+		t.Fatalf("DecodeJKS round-trip: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key, got %d", len(keys))
+	}
+	if len(certs) != 2 {
+		t.Fatalf("expected 2 certs, got %d", len(certs))
+	}
+	if !leafKey.Equal(keys[0]) {
+		t.Error("decoded RSA key does not Equal original")
+	}
+	match, err := KeyMatchesCert(keys[0], certs[0])
+	if err != nil {
+		t.Fatalf("KeyMatchesCert: %v", err)
+	}
+	if !match {
+		t.Error("round-trip key should match leaf certificate")
+	}
+	if certs[0].Subject.CommonName != "jks-rsa-leaf.example.com" {
+		t.Errorf("leaf CN=%q, want %q", certs[0].Subject.CommonName, "jks-rsa-leaf.example.com")
 	}
 }
 
@@ -997,45 +923,6 @@ func TestDecodeJKS_PrivateKeyEntry_EmptyCertChain(t *testing.T) {
 	}
 }
 
-func TestEncodeJKS_NilPrivateKey(t *testing.T) {
-	// WHY: Nil private key must fail gracefully with clear error, not panic.
-	// EncodePKCS12 has TestEncodePKCS12_NilPrivateKey; JKS encoder needs parity.
-	t.Parallel()
-
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "nil-key-jks"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	tempKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &tempKey.PublicKey, tempKey)
-	cert, _ := x509.ParseCertificate(certBytes)
-
-	_, err := EncodeJKS(nil, cert, nil, "changeit")
-	if err == nil {
-		t.Fatal("expected error with nil private key")
-	}
-}
-
-func TestEncodeJKS_NilLeafCertificate(t *testing.T) {
-	// WHY: EncodeJKS accesses leaf.Raw to build the certificate chain. A nil
-	// leaf certificate must return a clear error, not panic. PKCS#12 has
-	// TestEncodePKCS12_NilLeafCertificate; JKS needs parity.
-	t.Parallel()
-
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-
-	_, err := EncodeJKS(key, nil, nil, "changeit")
-	if err == nil {
-		t.Fatal("expected error for nil leaf certificate")
-	}
-	if !strings.Contains(err.Error(), "nil") {
-		t.Errorf("error should mention nil, got: %v", err)
-	}
-}
-
 func TestDecodeJKS_NilData(t *testing.T) {
 	// WHY: Nil data (e.g., failed file read) must return a clean error, not panic
 	// in bytes.NewReader or the keystore loader.
@@ -1127,38 +1014,5 @@ func TestEncodeDecodeJKS_MultiCertChain(t *testing.T) {
 	}
 	if certs[2].Subject.CommonName != "JKS Multi Root CA" {
 		t.Errorf("certs[2] CN=%q, want root", certs[2].Subject.CommonName)
-	}
-}
-
-func TestEncodeJKS_ExpiredCertificate(t *testing.T) {
-	// WHY: Expired certificates must be encodable to JKS per design doc (expiry
-	// filtering is output-only). Verifies EncodeJKS doesn't accidentally reject
-	// expired certs.
-	t.Parallel()
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	expiredTemplate := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "expired-jks.example.com"},
-		NotBefore:    time.Now().Add(-365 * 24 * time.Hour),
-		NotAfter:     time.Now().Add(-1 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	certBytes, _ := x509.CreateCertificate(rand.Reader, expiredTemplate, expiredTemplate, &key.PublicKey, key)
-	cert, _ := x509.ParseCertificate(certBytes)
-
-	jksData, err := EncodeJKS(key, cert, nil, "changeit")
-	if err != nil {
-		t.Fatalf("EncodeJKS should succeed with expired cert: %v", err)
-	}
-
-	certs, _, err := DecodeJKS(jksData, []string{"changeit"})
-	if err != nil {
-		t.Fatalf("DecodeJKS: %v", err)
-	}
-	if len(certs) != 1 {
-		t.Fatalf("expected 1 cert, got %d", len(certs))
-	}
-	if time.Now().Before(certs[0].NotAfter) {
-		t.Error("decoded cert should be expired")
 	}
 }

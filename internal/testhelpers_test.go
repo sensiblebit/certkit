@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/ecdsa"
-	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
@@ -201,49 +200,6 @@ func newECDSALeaf(t *testing.T, ca testCA, cn string, sans []string) testLeaf {
 	return testLeaf{cert: cert, certPEM: certPEM, certDER: certDER, key: key, keyPEM: keyPEM}
 }
 
-// newEd25519Leaf generates an Ed25519 leaf certificate signed by the given CA.
-func newEd25519Leaf(t *testing.T, ca testCA, cn string, sans []string) testLeaf {
-	t.Helper()
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("generate Ed25519 leaf key: %v", err)
-	}
-
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(300),
-		Subject: pkix.Name{
-			CommonName:   cn,
-			Organization: []string{"TestOrg"},
-		},
-		DNSNames:    sans,
-		NotBefore:   time.Now().Add(-1 * time.Hour),
-		NotAfter:    time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:    x509.KeyUsageDigitalSignature,
-		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		SubjectKeyId: []byte{
-			0xe1, 0xe2, 0xe3, 0xe4, 0xe5, 0xe6, 0xe7, 0xe8, 0xe9, 0xea,
-			0xeb, 0xec, 0xed, 0xee, 0xef, 0xf0, 0xf1, 0xf2, 0xf3, 0xf4,
-		},
-		AuthorityKeyId: ca.cert.SubjectKeyId,
-	}
-
-	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, ca.cert, pub, ca.key)
-	if err != nil {
-		t.Fatalf("create Ed25519 leaf cert: %v", err)
-	}
-
-	cert, err := x509.ParseCertificate(certDER)
-	if err != nil {
-		t.Fatalf("parse Ed25519 leaf cert: %v", err)
-	}
-
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-	keyDER, _ := x509.MarshalPKCS8PrivateKey(priv)
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
-
-	return testLeaf{cert: cert, certPEM: certPEM, certDER: certDER, key: priv, keyPEM: keyPEM}
-}
-
 // newExpiredLeaf generates an expired RSA leaf certificate.
 func newExpiredLeaf(t *testing.T, ca testCA) testLeaf {
 	t.Helper()
@@ -321,34 +277,6 @@ func rsaKeyPEM(t *testing.T) []byte {
 		Type:  "RSA PRIVATE KEY",
 		Bytes: x509.MarshalPKCS1PrivateKey(key),
 	})
-}
-
-// ecdsaKeyPEM returns PEM-encoded ECDSA private key bytes.
-func ecdsaKeyPEM(t *testing.T) []byte {
-	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("generate ECDSA key: %v", err)
-	}
-	ecBytes, err := x509.MarshalECPrivateKey(key)
-	if err != nil {
-		t.Fatalf("marshal ECDSA key: %v", err)
-	}
-	return pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: ecBytes})
-}
-
-// ed25519KeyPEM returns PEM-encoded Ed25519 private key bytes.
-func ed25519KeyPEM(t *testing.T) []byte {
-	t.Helper()
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("generate Ed25519 key: %v", err)
-	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(priv)
-	if err != nil {
-		t.Fatalf("marshal Ed25519 key: %v", err)
-	}
-	return pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 }
 
 // newJKSBundle creates a JKS keystore containing a private key entry with a leaf

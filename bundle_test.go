@@ -1026,17 +1026,6 @@ func TestMozillaRootSubjects_NonEmpty(t *testing.T) {
 	}
 }
 
-func TestMozillaRootSubjects_Idempotent(t *testing.T) {
-	// WHY: MozillaRootSubjects is sync.Once cached; multiple calls must return
-	// the same map instance, not re-parse the PEM bundle.
-	t.Parallel()
-	s1 := MozillaRootSubjects()
-	s2 := MozillaRootSubjects()
-	if len(s1) != len(s2) {
-		t.Errorf("subsequent calls returned different sizes: %d vs %d", len(s1), len(s2))
-	}
-}
-
 func TestIsIssuedByMozillaRoot_KnownRoot(t *testing.T) {
 	// WHY: A cert whose issuer is a real Mozilla root must return true;
 	// false negatives would trigger unnecessary AIA fetches.

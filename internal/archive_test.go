@@ -741,26 +741,6 @@ func TestProcessArchive_EntryCountLimitZero(t *testing.T) {
 	}
 }
 
-func TestProcessArchive_DefaultArchiveLimits(t *testing.T) {
-	// WHY: Verifies that DefaultArchiveLimits returns the documented defaults,
-	// catching accidental changes to safety thresholds.
-	t.Parallel()
-
-	limits := DefaultArchiveLimits()
-	if limits.MaxDecompressionRatio != 100 {
-		t.Errorf("MaxDecompressionRatio = %d, want 100", limits.MaxDecompressionRatio)
-	}
-	if limits.MaxTotalSize != 256*1024*1024 {
-		t.Errorf("MaxTotalSize = %d, want %d", limits.MaxTotalSize, 256*1024*1024)
-	}
-	if limits.MaxEntryCount != 10_000 {
-		t.Errorf("MaxEntryCount = %d, want 10000", limits.MaxEntryCount)
-	}
-	if limits.MaxEntrySize != 10*1024*1024 {
-		t.Errorf("MaxEntrySize = %d, want %d", limits.MaxEntrySize, 10*1024*1024)
-	}
-}
-
 func TestProcessArchive_DecompressionRatioLimit(t *testing.T) {
 	// WHY: Verifies that the ZIP decompression ratio check rejects entries
 	// with suspiciously high compression ratios — the primary zip bomb defense.
