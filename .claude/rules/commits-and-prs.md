@@ -1,11 +1,5 @@
 ---
-paths:
-  - ".github/**"
-  - "CHANGELOG.md"
-  - "*"
 description: Git conventions for commits, branches, and PRs
-globs:
-  - "**"
 ---
 
 # Commit & PR Conventions
