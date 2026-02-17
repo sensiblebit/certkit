@@ -5,6 +5,7 @@ package certstore
 import (
 	"encoding/hex"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/sensiblebit/certkit"
@@ -100,6 +101,9 @@ func TestSaveToSQLite_ExistingFileErrors(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error when saving to existing file, got nil")
 	}
+	if !strings.Contains(err.Error(), "saving database to") {
+		t.Errorf("unexpected error: %v", err)
+	}
 }
 
 func TestLoadFromSQLite_NonexistentFile(t *testing.T) {
@@ -109,6 +113,9 @@ func TestLoadFromSQLite_NonexistentFile(t *testing.T) {
 	err := LoadFromSQLite(store, "/nonexistent/path/to/db.sqlite")
 	if err == nil {
 		t.Fatal("expected error for nonexistent file, got nil")
+	}
+	if !strings.Contains(err.Error(), "attaching database") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 

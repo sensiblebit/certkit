@@ -436,6 +436,9 @@ func TestMemStore_HandleCertificate_UnsupportedKeyType(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for unsupported key type")
 	}
+	if !strings.Contains(err.Error(), "computing SKI") {
+		t.Errorf("unexpected error: %v", err)
+	}
 }
 
 func TestMemStore_HandleKey_UnsupportedKeyType(t *testing.T) {
@@ -446,6 +449,9 @@ func TestMemStore_HandleKey_UnsupportedKeyType(t *testing.T) {
 	err := store.HandleKey("not-a-key", nil, "bad.pem")
 	if err == nil {
 		t.Error("expected error for unsupported key type")
+	}
+	if !strings.Contains(err.Error(), "extracting public key") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 

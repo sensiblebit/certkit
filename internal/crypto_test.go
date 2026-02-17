@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -12,6 +13,9 @@ func TestProcessFile_NonexistentFile(t *testing.T) {
 	err := ProcessFile("/nonexistent/path/cert.pem", cfg.Store, cfg.Passwords)
 	if err == nil {
 		t.Error("expected error for nonexistent file")
+	}
+	if !strings.Contains(err.Error(), "no such file") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 

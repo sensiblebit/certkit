@@ -268,6 +268,9 @@ func TestDecodeJKS_WrongPassword(t *testing.T) {
 	if err == nil {
 		t.Error("expected error with wrong password")
 	}
+	if !strings.Contains(err.Error(), "none of the provided passwords worked") {
+		t.Errorf("unexpected error: %v", err)
+	}
 }
 
 func TestDecodeJKS_DifferentKeyPassword(t *testing.T) {
@@ -359,8 +362,7 @@ func TestDecodeJKS_DifferentKeyPassword(t *testing.T) {
 		t.Errorf("expected 2 certs (leaf + CA), got %d", len(certs))
 	}
 
-	// Verify the decoded key material matches the original when store and key
-	// passwords differ. A password-mixing bug could decrypt with the wrong key.
+	// Verify key material matches original with different passwords.
 	if len(keys) == 1 {
 		decodedRSA, ok := keys[0].(*rsa.PrivateKey)
 		if !ok {
@@ -578,6 +580,9 @@ func TestDecodeJKS_TruncatedWithCorrectMagic(t *testing.T) {
 	_, _, err := DecodeJKS(truncated, []string{"changeit"})
 	if err == nil {
 		t.Error("expected error for truncated JKS with correct magic bytes")
+	}
+	if !strings.Contains(err.Error(), "loading JKS") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 

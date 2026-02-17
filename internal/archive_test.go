@@ -643,6 +643,9 @@ func TestProcessArchive_CorruptedArchive(t *testing.T) {
 			if err == nil {
 				t.Errorf("expected error for corrupted %s, got nil", tt.format)
 			}
+			if err.Error() == "" {
+				t.Error("error message should not be empty")
+			}
 		})
 	}
 }

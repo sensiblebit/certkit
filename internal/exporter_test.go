@@ -13,6 +13,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -388,6 +389,9 @@ func TestWriteBundleFiles_PKCS12Password(t *testing.T) {
 	_, _, _, err = certkit.DecodePKCS12(p12Data, "wrong-password")
 	if err == nil {
 		t.Error("expected error decoding p12 with wrong password")
+	}
+	if !strings.Contains(err.Error(), "decoding PKCS#12") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 

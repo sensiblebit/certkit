@@ -259,4 +259,7 @@ func TestGenerateCSRFiles_MultipleInputError(t *testing.T) {
 	if err == nil {
 		t.Error("expected error when multiple input sources specified")
 	}
+	if !strings.Contains(err.Error(), "exactly one of") {
+		t.Errorf("unexpected error: %v", err)
+	}
 }

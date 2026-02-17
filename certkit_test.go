@@ -43,6 +43,9 @@ func TestParsePEMCertificates_empty(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for invalid PEM")
 	}
+	if !strings.Contains(err.Error(), "no certificates found") {
+		t.Errorf("unexpected error: %v", err)
+	}
 }
 
 func TestParsePEMCertificates_mixedBlockTypes(t *testing.T) {
@@ -542,6 +545,9 @@ func TestParsePEMPrivateKey_invalid(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for invalid PEM")
 	}
+	if !strings.Contains(err.Error(), "no PEM block found") {
+		t.Errorf("unexpected error: %v", err)
+	}
 }
 
 func TestKeyAlgorithmName(t *testing.T) {
@@ -704,6 +710,9 @@ func TestMarshalPrivateKeyToPEM_ErrorCases(t *testing.T) {
 			if err == nil {
 				t.Errorf("expected error for %s key", tt.name)
 			}
+			if !strings.Contains(err.Error(), "marshaling private key to PKCS#8") {
+				t.Errorf("unexpected error: %v", err)
+			}
 		})
 	}
 }
@@ -777,6 +786,9 @@ func TestGetPublicKey(t *testing.T) {
 			if tt.wantErr {
 				if err == nil {
 					t.Error("expected error")
+				}
+				if !strings.Contains(err.Error(), "unsupported private key type") {
+					t.Errorf("unexpected error: %v", err)
 				}
 				return
 			}
@@ -890,6 +902,9 @@ func TestKeyMatchesCert_UnsupportedKey(t *testing.T) {
 	_, err := KeyMatchesCert(struct{}{}, cert)
 	if err == nil {
 		t.Error("expected error for unsupported key type")
+	}
+	if !strings.Contains(err.Error(), "unsupported private key type") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 
@@ -1224,6 +1239,9 @@ func TestParsePEMPrivateKeyWithPasswords_NoPasswordsEncryptedKey(t *testing.T) {
 			if err == nil {
 				t.Error("expected error when password list is nil/empty for encrypted key")
 			}
+			if !strings.Contains(err.Error(), "decrypting private key") {
+				t.Errorf("unexpected error: %v", err)
+			}
 		})
 	}
 }
@@ -1311,6 +1329,9 @@ func TestComputeSKI_NilPublicKey(t *testing.T) {
 			if err == nil {
 				t.Error("expected error for nil public key")
 			}
+			if !strings.Contains(err.Error(), "marshal PKIX") {
+				t.Errorf("unexpected error: %v", err)
+			}
 		})
 	}
 }
@@ -1373,6 +1394,9 @@ func TestParsePEMPrivateKeyWithPasswords_OpenSSH_Encrypted(t *testing.T) {
 	_, err = ParsePEMPrivateKeyWithPasswords(pemBytes, []string{"wrong1", "wrong2"})
 	if err == nil {
 		t.Fatal("expected error with wrong passwords")
+	}
+	if !strings.Contains(err.Error(), "parsing OpenSSH private key") {
+		t.Errorf("unexpected error: %v", err)
 	}
 
 	// Should succeed with correct password
@@ -1842,6 +1866,9 @@ func TestKeyMatchesCert_NilKey(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for nil key")
 	}
+	if !strings.Contains(err.Error(), "unsupported private key type") {
+		t.Errorf("unexpected error: %v", err)
+	}
 }
 
 func TestKeyMatchesCert_NilCert(t *testing.T) {
@@ -1854,6 +1881,9 @@ func TestKeyMatchesCert_NilCert(t *testing.T) {
 	_, err := KeyMatchesCert(key, nil)
 	if err == nil {
 		t.Fatal("expected error for nil cert")
+	}
+	if !strings.Contains(err.Error(), "certificate is nil") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 
@@ -1978,6 +2008,9 @@ func TestParsePEMPrivateKey_CorruptDER(t *testing.T) {
 			if err == nil {
 				t.Fatalf("expected error for corrupt DER in %s block", tt.pemType)
 			}
+			if err.Error() == "" {
+				t.Error("error message should not be empty")
+			}
 		})
 	}
 }
@@ -1995,6 +2028,9 @@ func TestGenerateECKey_NilCurve(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for nil curve")
 	}
+	if !strings.Contains(err.Error(), "curve cannot be nil") {
+		t.Errorf("unexpected error: %v", err)
+	}
 }
 
 func TestParsePEMPrivateKey_EmptyDERInBlock(t *testing.T) {
@@ -2010,6 +2046,9 @@ func TestParsePEMPrivateKey_EmptyDERInBlock(t *testing.T) {
 	_, err := ParsePEMPrivateKey(emptyBlock)
 	if err == nil {
 		t.Fatal("expected error for PEM block with empty DER bytes, got nil")
+	}
+	if !strings.Contains(err.Error(), "PRIVATE KEY") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 
@@ -2028,6 +2067,9 @@ func TestParsePEMPrivateKeyWithPasswords_CorruptNotEncrypted(t *testing.T) {
 	_, err := ParsePEMPrivateKeyWithPasswords(corruptPEM, []string{"pass1", "pass2"})
 	if err == nil {
 		t.Fatal("expected error for corrupt non-encrypted PEM key")
+	}
+	if err.Error() == "" {
+		t.Error("error message should not be empty")
 	}
 	// The error should come from ParsePEMPrivateKey, not from decryption
 	if strings.Contains(err.Error(), "decrypting") {

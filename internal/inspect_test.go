@@ -90,6 +90,9 @@ func TestInspectFile_NotFound(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for nonexistent file")
 	}
+	if !strings.Contains(err.Error(), "reading") {
+		t.Errorf("unexpected error: %v", err)
+	}
 }
 
 func TestInspectFile_PKCS12(t *testing.T) {

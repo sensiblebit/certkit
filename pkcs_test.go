@@ -31,12 +31,13 @@ func TestEncodeContainers_UnsupportedKeyType(t *testing.T) {
 	cert, _ := x509.ParseCertificate(certBytes)
 
 	tests := []struct {
-		name   string
-		encode func() ([]byte, error)
+		name    string
+		wantSub string
+		encode  func() ([]byte, error)
 	}{
-		{"PKCS12", func() ([]byte, error) { return EncodePKCS12(struct{}{}, cert, nil, "pass") }},
-		{"PKCS12Legacy", func() ([]byte, error) { return EncodePKCS12Legacy(struct{}{}, cert, nil, "pass") }},
-		{"JKS", func() ([]byte, error) { return EncodeJKS(struct{}{}, cert, nil, "changeit") }},
+		{"PKCS12", "unsupported private key type", func() ([]byte, error) { return EncodePKCS12(struct{}{}, cert, nil, "pass") }},
+		{"PKCS12Legacy", "unsupported private key type", func() ([]byte, error) { return EncodePKCS12Legacy(struct{}{}, cert, nil, "pass") }},
+		{"JKS", "unknown key type", func() ([]byte, error) { return EncodeJKS(struct{}{}, cert, nil, "changeit") }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -44,6 +45,9 @@ func TestEncodeContainers_UnsupportedKeyType(t *testing.T) {
 			_, err := tt.encode()
 			if err == nil {
 				t.Fatal("expected error for unsupported key type")
+			}
+			if !strings.Contains(err.Error(), tt.wantSub) {
+				t.Fatalf("unexpected error message: got %q, want substring %q", err.Error(), tt.wantSub)
 			}
 		})
 	}
@@ -122,6 +126,9 @@ func TestDecodePKCS12_wrongPassword(t *testing.T) {
 	_, _, _, err := DecodePKCS12(pfxData, "wrong")
 	if err == nil {
 		t.Error("expected error for wrong password")
+	}
+	if !strings.Contains(err.Error(), "decoding PKCS#12") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 
@@ -284,6 +291,9 @@ func TestDecodePKCS12_TruncatedData(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for truncated PKCS#12 data")
 	}
+	if !strings.Contains(err.Error(), "decoding PKCS#12") {
+		t.Errorf("unexpected error: %v", err)
+	}
 }
 
 func TestEncodePKCS7_SingleCert(t *testing.T) {
@@ -417,12 +427,13 @@ func TestEncodeContainers_NilPrivateKey(t *testing.T) {
 	cert, _ := x509.ParseCertificate(certBytes)
 
 	tests := []struct {
-		name   string
-		encode func() ([]byte, error)
+		name    string
+		wantSub string
+		encode  func() ([]byte, error)
 	}{
-		{"PKCS12", func() ([]byte, error) { return EncodePKCS12(nil, cert, nil, "pass") }},
-		{"PKCS12Legacy", func() ([]byte, error) { return EncodePKCS12Legacy(nil, cert, nil, "pass") }},
-		{"JKS", func() ([]byte, error) { return EncodeJKS(nil, cert, nil, "changeit") }},
+		{"PKCS12", "unsupported private key type", func() ([]byte, error) { return EncodePKCS12(nil, cert, nil, "pass") }},
+		{"PKCS12Legacy", "unsupported private key type", func() ([]byte, error) { return EncodePKCS12Legacy(nil, cert, nil, "pass") }},
+		{"JKS", "unknown key type", func() ([]byte, error) { return EncodeJKS(nil, cert, nil, "changeit") }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -430,6 +441,9 @@ func TestEncodeContainers_NilPrivateKey(t *testing.T) {
 			_, err := tt.encode()
 			if err == nil {
 				t.Fatal("expected error with nil private key")
+			}
+			if !strings.Contains(err.Error(), tt.wantSub) {
+				t.Fatalf("unexpected error: got %q, want substring %q", err.Error(), tt.wantSub)
 			}
 		})
 	}
@@ -456,6 +470,9 @@ func TestEncodeContainers_NilLeafCertificate(t *testing.T) {
 			_, err := tt.encode()
 			if err == nil {
 				t.Fatal("expected error with nil leaf certificate")
+			}
+			if !strings.Contains(err.Error(), "leaf certificate cannot be nil") {
+				t.Fatalf("unexpected error: %v", err)
 			}
 		})
 	}

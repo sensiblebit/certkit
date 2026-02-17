@@ -41,6 +41,9 @@ func TestGenerateKey_UnsupportedAlgorithm(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for unsupported algorithm")
 	}
+	if !strings.Contains(err.Error(), "unsupported algorithm") {
+		t.Errorf("unexpected error: %v", err)
+	}
 }
 
 func TestGenerateKey_InvalidCurve(t *testing.T) {
@@ -48,6 +51,9 @@ func TestGenerateKey_InvalidCurve(t *testing.T) {
 	_, err := GenerateKey("ecdsa", 0, "invalid-curve")
 	if err == nil {
 		t.Error("expected error for invalid curve")
+	}
+	if !strings.Contains(err.Error(), "unsupported curve") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 
@@ -173,6 +179,9 @@ func TestGenerateKeyFiles_UnsupportedAlgorithm(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("expected error for unsupported algorithm")
+	}
+	if !strings.Contains(err.Error(), "unsupported algorithm") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }
 

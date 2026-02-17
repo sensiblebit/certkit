@@ -165,6 +165,9 @@ func TestParseContainerData_PKCS12_WrongPassword(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for PKCS#12 with wrong password")
 	}
+	if !strings.Contains(err.Error(), "could not parse") {
+		t.Errorf("unexpected error: %v", err)
+	}
 }
 
 func TestParseContainerData_JKS_CorrectPassword(t *testing.T) {
@@ -598,5 +601,8 @@ func TestParseContainerData_EmptyJKS_FallsThrough(t *testing.T) {
 	_, err := ParseContainerData(emptyJKSData, []string{"changeit"})
 	if err == nil {
 		t.Fatal("expected error for empty JKS (no certs, no keys)")
+	}
+	if !strings.Contains(err.Error(), "could not parse") {
+		t.Errorf("unexpected error: %v", err)
 	}
 }

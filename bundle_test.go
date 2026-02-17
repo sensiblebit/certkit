@@ -320,6 +320,9 @@ func TestFetchLeafFromURL_badHost(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for non-existent host")
 	}
+	if !strings.Contains(err.Error(), "tls dial to") {
+		t.Errorf("unexpected error: %v", err)
+	}
 }
 
 func TestFetchLeafFromURL_invalidURL(t *testing.T) {
