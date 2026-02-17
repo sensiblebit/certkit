@@ -236,49 +236,43 @@ func TestBadSSL_KeyTypes(t *testing.T) {
 
 // --- Group 3: Edge Cases ---
 
-func TestBadSSL_1000SANs(t *testing.T) {
-	// WHY: Large SAN lists (~1000) are a stress test for PEM encoding/parsing; verifies no SAN data is lost through round-trip and fingerprints still compute.
-	chain := fetchBadSSLChain(t, "1000-sans.badssl.com")
-	leaf := chain.leaf
+func TestBadSSL_LargeSANs(t *testing.T) {
+	// WHY: Large SAN lists stress PEM encoding/parsing and SKI/fingerprint
+	// computation; verifies no SAN data is lost and operations don't panic.
+	skipIfBadSSLUnavailable(t)
 
-	// Should have a large number of SANs
-	if len(leaf.DNSNames) < 900 {
-		t.Errorf("expected >= 900 DNS SANs, got %d", len(leaf.DNSNames))
+	tests := []struct {
+		name    string
+		host    string
+		minSANs int
+	}{
+		{"1000-SANs", "1000-sans.badssl.com", 900},
+		{"10000-SANs", "10000-sans.badssl.com", 9000},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			chain := fetchBadSSLChain(t, tt.host)
+			leaf := chain.leaf
 
-	// PEM round-trip should preserve all SANs
-	pemData := CertToPEM(leaf)
-	parsed, err := ParsePEMCertificate([]byte(pemData))
-	if err != nil {
-		t.Fatalf("PEM round-trip failed: %v", err)
-	}
-	if len(parsed.DNSNames) != len(leaf.DNSNames) {
-		t.Errorf("PEM round-trip changed SAN count: %d -> %d", len(leaf.DNSNames), len(parsed.DNSNames))
-	}
+			if len(leaf.DNSNames) < tt.minSANs {
+				t.Errorf("expected >= %d DNS SANs, got %d", tt.minSANs, len(leaf.DNSNames))
+			}
 
-	// Fingerprint should work on large certs
-	if fp := CertFingerprint(leaf); fp == "" {
-		t.Error("fingerprint should be computable")
-	}
-}
+			if fp := CertFingerprint(leaf); fp == "" {
+				t.Error("fingerprint should be computable")
+			}
+			if ski := CertSKI(leaf); ski == "" {
+				t.Error("SKI should be computable")
+			}
 
-func TestBadSSL_10000SANs(t *testing.T) {
-	// WHY: Extreme SAN count (~10000) tests that SKI and fingerprint computations don't degrade or panic on very large certificates.
-	chain := fetchBadSSLChain(t, "10000-sans.badssl.com")
-	leaf := chain.leaf
-
-	// Should have a very large number of SANs
-	if len(leaf.DNSNames) < 9000 {
-		t.Errorf("expected >= 9000 DNS SANs, got %d", len(leaf.DNSNames))
-	}
-
-	// SKI should be computable without panic on very large certs
-	if ski := CertSKI(leaf); ski == "" {
-		t.Error("SKI should be computable")
-	}
-
-	// Fingerprint should work
-	if fp := CertFingerprint(leaf); fp == "" {
-		t.Error("fingerprint should be computable")
+			pemData := CertToPEM(leaf)
+			parsed, err := ParsePEMCertificate([]byte(pemData))
+			if err != nil {
+				t.Fatalf("PEM round-trip failed: %v", err)
+			}
+			if len(parsed.DNSNames) != len(leaf.DNSNames) {
+				t.Errorf("PEM round-trip changed SAN count: %d -> %d", len(leaf.DNSNames), len(parsed.DNSNames))
+			}
+		})
 	}
 }

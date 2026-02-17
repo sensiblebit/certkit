@@ -2,7 +2,6 @@ package certstore
 
 import (
 	"bytes"
-	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
@@ -481,8 +480,8 @@ func TestParseContainerData_JKS_Ed25519Key(t *testing.T) {
 
 func TestParseContainerData_PEMEncryptedKey_WithPassword(t *testing.T) {
 	// WHY: Encrypted PEM keys must be decrypted when the correct password is
-	// provided through ParseContainerData; both RSA and ECDSA use different
-	// legacy PEM encryption paths.
+	// provided through ParseContainerData. One key type (RSA) suffices since
+	// ParseContainerData is a thin wrapper over findPEMPrivateKey.
 	t.Parallel()
 
 	rsaCA := newRSACA(t)
@@ -498,54 +497,25 @@ func TestParseContainerData_PEMEncryptedKey_WithPassword(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ecCA := newECDSACA(t)
-	ecLeaf := newECDSALeaf(t, ecCA, "enc-ec.example.com", []string{"enc-ec.example.com"})
-	ecKey := ecLeaf.key.(*ecdsa.PrivateKey)
-	ecDER, err := x509.MarshalECPrivateKey(ecKey)
+	encKeyPEM := pem.EncodeToMemory(rsaEncBlock)
+	combined := append(rsaLeaf.certPEM, encKeyPEM...)
+
+	contents, err := ParseContainerData(combined, []string{"mypass"})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("ParseContainerData: %v", err)
 	}
-	ecBlock := &pem.Block{Type: "EC PRIVATE KEY", Bytes: ecDER}
-	//nolint:staticcheck // testing legacy encrypted PEM
-	ecEncBlock, err := x509.EncryptPEMBlock(rand.Reader, ecBlock.Type, ecBlock.Bytes, []byte("ecpass"), x509.PEMCipherAES256)
+	if contents.Leaf == nil {
+		t.Fatal("expected Leaf to be non-nil")
+	}
+	if contents.Key == nil {
+		t.Fatal("expected Key to be non-nil — encrypted key should decrypt with correct password")
+	}
+	match, err := certkit.KeyMatchesCert(contents.Key, contents.Leaf)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("KeyMatchesCert: %v", err)
 	}
-
-	tests := []struct {
-		name     string
-		certPEM  []byte
-		encBlock *pem.Block
-		password string
-	}{
-		{"RSA", rsaLeaf.certPEM, rsaEncBlock, "mypass"},
-		{"ECDSA", ecLeaf.certPEM, ecEncBlock, "ecpass"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			encKeyPEM := pem.EncodeToMemory(tt.encBlock)
-			combined := append(tt.certPEM, encKeyPEM...)
-
-			contents, err := ParseContainerData(combined, []string{tt.password})
-			if err != nil {
-				t.Fatalf("ParseContainerData: %v", err)
-			}
-			if contents.Leaf == nil {
-				t.Fatal("expected Leaf to be non-nil")
-			}
-			if contents.Key == nil {
-				t.Fatal("expected Key to be non-nil — encrypted key should decrypt with correct password")
-			}
-			match, err := certkit.KeyMatchesCert(contents.Key, contents.Leaf)
-			if err != nil {
-				t.Fatalf("KeyMatchesCert: %v", err)
-			}
-			if !match {
-				t.Error("decrypted key should match leaf certificate")
-			}
-		})
+	if !match {
+		t.Error("decrypted key should match leaf certificate")
 	}
 }
 

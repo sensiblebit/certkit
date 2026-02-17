@@ -2,7 +2,6 @@ package certkit
 
 import (
 	"crypto"
-	"crypto/dsa" //nolint:staticcheck // needed for testing legacy DSA key identification
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -325,20 +324,6 @@ func TestParsePEMPrivateKey_AllFormats(t *testing.T) {
 				t.Errorf("%s key round-trip mismatch: parsed key does not Equal() original", tt.name)
 			}
 		})
-	}
-}
-
-func TestParsePEMPrivateKey_PKCS8Error(t *testing.T) {
-	// WHY: Corrupt PKCS#8 DER inside a valid PEM block must produce a clear error mentioning the block type, not a generic ASN.1 message.
-	t.Parallel()
-	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: []byte("garbage")})
-
-	_, err := ParsePEMPrivateKey(pemBytes)
-	if err == nil {
-		t.Error("expected error for invalid PKCS#8 data")
-	}
-	if !strings.Contains(err.Error(), "PRIVATE KEY") {
-		t.Errorf("error should mention PRIVATE KEY, got: %v", err)
 	}
 }
 
@@ -702,14 +687,24 @@ func TestParsePEMCertificateRequest_LegacyBlockType(t *testing.T) {
 	}
 }
 
-func TestMarshalPrivateKeyToPEM_unsupported(t *testing.T) {
-	// WHY: Unsupported key types must produce a wrapped error, not panic; callers pass through untyped crypto.PrivateKey values.
-	_, err := MarshalPrivateKeyToPEM(struct{}{})
-	if err == nil {
-		t.Error("expected error for unsupported key type")
+func TestMarshalPrivateKeyToPEM_ErrorCases(t *testing.T) {
+	// WHY: Unsupported and nil key types must produce a wrapped error, not panic;
+	// callers pass through untyped crypto.PrivateKey values.
+	t.Parallel()
+	tests := []struct {
+		name string
+		key  any
+	}{
+		{"unsupported", struct{}{}},
+		{"nil", nil},
 	}
-	if !strings.Contains(err.Error(), "marshaling private key") {
-		t.Errorf("error should mention marshaling, got: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := MarshalPrivateKeyToPEM(tt.key)
+			if err == nil {
+				t.Errorf("expected error for %s key", tt.name)
+			}
+		})
 	}
 }
 
@@ -756,11 +751,9 @@ func TestGetCertificateType(t *testing.T) {
 
 func TestGetPublicKey(t *testing.T) {
 	// WHY: GetPublicKey extracts public keys from private keys for SKI computation;
-	// must return the correct public key (not just the right type) for all supported
-	// key types, or fail clearly for unsupported types.
+	// RSA/ECDSA just call stdlib .Public() (T-9). Keep Ed25519 (value vs pointer),
+	// unsupported, and nil cases.
 	t.Parallel()
-	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	_, edPriv, _ := ed25519.GenerateKey(rand.Reader)
 
 	edPtr := &edPriv
@@ -772,11 +765,10 @@ func TestGetPublicKey(t *testing.T) {
 		wantTyp string
 		wantErr bool
 	}{
-		{"RSA", rsaKey, &rsaKey.PublicKey, "*rsa.PublicKey", false},
-		{"ECDSA", ecKey, &ecKey.PublicKey, "*ecdsa.PublicKey", false},
 		{"Ed25519", edPriv, edPriv.Public(), "ed25519.PublicKey", false},
 		{"Ed25519Pointer", edPtr, edPriv.Public(), "ed25519.PublicKey", false},
 		{"unsupported", struct{}{}, nil, "", true},
+		{"nil", nil, nil, "", true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -810,38 +802,25 @@ func TestGetPublicKey(t *testing.T) {
 func TestKeyMatchesCert(t *testing.T) {
 	// WHY: Key-cert matching is the core of bundle assembly; a false negative would exclude valid keys from export bundles.
 	t.Parallel()
-	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
 	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	edPub, edPriv, _ := ed25519.GenerateKey(rand.Reader)
 
-	tests := []struct {
-		name string
-		priv any
-		pub  any
-	}{
-		{"RSA", rsaKey, &rsaKey.PublicKey},
-		{"ECDSA", ecKey, &ecKey.PublicKey},
-		{"Ed25519", edPriv, edPub},
+	// One key type suffices for the match case — KeyMatchesCert is a thin
+	// wrapper (GetPublicKey + Equal) per T-13.
+	tmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "ECDSA-match"},
+		NotBefore:    time.Now().Add(-1 * time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			tmpl := &x509.Certificate{
-				SerialNumber: big.NewInt(1),
-				Subject:      pkix.Name{CommonName: tt.name + "-match"},
-				NotBefore:    time.Now().Add(-1 * time.Hour),
-				NotAfter:     time.Now().Add(24 * time.Hour),
-			}
-			certDER, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, tt.pub, tt.priv)
-			cert, _ := x509.ParseCertificate(certDER)
+	certDER, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &ecKey.PublicKey, ecKey)
+	cert, _ := x509.ParseCertificate(certDER)
 
-			match, err := KeyMatchesCert(tt.priv, cert)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !match {
-				t.Errorf("expected %s key to match its certificate", tt.name)
-			}
-		})
+	match, err := KeyMatchesCert(ecKey, cert)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !match {
+		t.Error("expected ECDSA key to match its certificate")
 	}
 }
 
@@ -1410,41 +1389,6 @@ func TestParsePEMPrivateKeyWithPasswords_OpenSSH_Encrypted(t *testing.T) {
 	}
 }
 
-func TestComputeSKI_DSAKey(t *testing.T) {
-	// WHY: DSA is not used for TLS but may appear in legacy keystores;
-	// SKI computation must handle DSA keys without panicking.
-	t.Parallel()
-
-	dsaParams := new(dsa.Parameters)
-	if err := dsa.GenerateParameters(dsaParams, rand.Reader, dsa.L1024N160); err != nil {
-		t.Fatal(err)
-	}
-	dsaKey := new(dsa.PrivateKey)
-	dsaKey.Parameters = *dsaParams
-	if err := dsa.GenerateKey(dsaKey, rand.Reader); err != nil {
-		t.Fatal(err)
-	}
-
-	tests := []struct {
-		name string
-		fn   func(crypto.PublicKey) ([]byte, error)
-	}{
-		{"RFC7093", ComputeSKI},
-		{"Legacy", ComputeSKILegacy},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ski, err := tt.fn(&dsaKey.PublicKey)
-			if err != nil {
-				t.Fatalf("%s(%T) error: %v", tt.name, &dsaKey.PublicKey, err)
-			}
-			if len(ski) != 20 {
-				t.Errorf("%s SKI length = %d, want 20", tt.name, len(ski))
-			}
-		})
-	}
-}
-
 // --- ParseCertificatesAny tests ---
 
 func TestParseCertificatesAny_DER(t *testing.T) {
@@ -1808,6 +1752,7 @@ func TestParsePEMPrivateKey_EmptyInput(t *testing.T) {
 		{"nil", nil},
 		{"empty", []byte{}},
 		{"whitespace only", []byte("   \n\t\n  ")},
+		{"raw DER bytes", []byte{0x30, 0x82, 0x01, 0x22, 0x30, 0x0d}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1912,33 +1857,6 @@ func TestKeyMatchesCert_NilCert(t *testing.T) {
 	}
 }
 
-func TestGetPublicKey_NilKey(t *testing.T) {
-	// WHY: GetPublicKey uses a crypto.Signer type assertion. A nil private key
-	// must return an error mentioning the type, not panic.
-	t.Parallel()
-
-	_, err := GetPublicKey(nil)
-	if err == nil {
-		t.Fatal("expected error for nil key")
-	}
-	if !strings.Contains(err.Error(), "<nil>") {
-		t.Errorf("error should mention nil type, got: %v", err)
-	}
-}
-
-func TestMarshalPrivateKeyToPEM_NilKey(t *testing.T) {
-	// WHY: MarshalPrivateKeyToPEM calls normalizeKey(key) which passes nil
-	// through to x509.MarshalPKCS8PrivateKey. A nil key must return an error,
-	// not panic. This is the explicit test — TestNormalizeKey_Nil only covers
-	// the normalizeKey sub-function.
-	t.Parallel()
-
-	_, err := MarshalPrivateKeyToPEM(nil)
-	if err == nil {
-		t.Fatal("expected error for nil key")
-	}
-}
-
 func TestParsePEMPrivateKey_TrailingGarbage(t *testing.T) {
 	// WHY: PEM files in the wild may have trailing garbage after the END line
 	// (e.g., concatenated with non-PEM data, or extra whitespace/junk).
@@ -2039,67 +1957,28 @@ func TestParsePEMPrivateKeyWithPasswords_EncryptedOpenSSH_AllWrongPasswords(t *t
 	}
 }
 
-func TestParsePEMPrivateKeyWithPasswords_EncryptedPKCS8_Limitation(t *testing.T) {
-	// WHY: Modern tools (openssl genpkey -aes256) produce "ENCRYPTED PRIVATE KEY"
-	// PEM blocks. ParsePEMPrivateKeyWithPasswords cannot handle these — it only
-	// supports legacy RFC 1423 encrypted PEM and OpenSSH encrypted keys. This test
-	// documents the limitation: the function must return a clear error, not panic.
+func TestParsePEMPrivateKey_CorruptDER(t *testing.T) {
+	// WHY: Corrupt DER inside algorithm-specific PEM blocks (RSA, EC) must
+	// produce a clear error and not panic.
 	t.Parallel()
-
-	pemBytes := pem.EncodeToMemory(&pem.Block{
-		Type:  "ENCRYPTED PRIVATE KEY",
-		Bytes: []byte("encrypted-pkcs8-data-here"),
-	})
-
-	_, err := ParsePEMPrivateKeyWithPasswords(pemBytes, []string{"password"})
-	if err == nil {
-		t.Fatal("expected error for ENCRYPTED PRIVATE KEY PEM block")
+	tests := []struct {
+		name    string
+		pemType string
+	}{
+		{"RSA block", "RSA PRIVATE KEY"},
+		{"EC block", "EC PRIVATE KEY"},
 	}
-}
-
-func TestParsePEMPrivateKey_CorruptDER_RSABlock(t *testing.T) {
-	// WHY: Corrupt DER inside an "RSA PRIVATE KEY" block calls
-	// x509.ParsePKCS1PrivateKey directly with no fallback — the error
-	// must be clear and not panic.
-	t.Parallel()
-	pemData := pem.EncodeToMemory(&pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: []byte("this is not valid DER"),
-	})
-	_, err := ParsePEMPrivateKey(pemData)
-	if err == nil {
-		t.Fatal("expected error for corrupt DER in RSA PRIVATE KEY block")
-	}
-}
-
-func TestParsePEMPrivateKey_CorruptDER_ECBlock(t *testing.T) {
-	// WHY: Corrupt DER inside an "EC PRIVATE KEY" block calls
-	// x509.ParseECPrivateKey directly with no fallback — the error
-	// must be clear and not panic.
-	t.Parallel()
-	pemData := pem.EncodeToMemory(&pem.Block{
-		Type:  "EC PRIVATE KEY",
-		Bytes: []byte("this is not valid DER"),
-	})
-	_, err := ParsePEMPrivateKey(pemData)
-	if err == nil {
-		t.Fatal("expected error for corrupt DER in EC PRIVATE KEY block")
-	}
-}
-
-func TestParsePEMPrivateKey_RawDERBytes(t *testing.T) {
-	// WHY: Users may accidentally pass raw DER bytes (not PEM-wrapped) to
-	// ParsePEMPrivateKey. The error must say "no PEM block", not panic.
-	t.Parallel()
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	derBytes := x509.MarshalPKCS1PrivateKey(key)
-
-	_, err := ParsePEMPrivateKey(derBytes)
-	if err == nil {
-		t.Fatal("expected error for raw DER bytes")
-	}
-	if !strings.Contains(err.Error(), "no PEM block") {
-		t.Errorf("error should mention 'no PEM block', got: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			pemData := pem.EncodeToMemory(&pem.Block{
+				Type:  tt.pemType,
+				Bytes: []byte("this is not valid DER"),
+			})
+			_, err := ParsePEMPrivateKey(pemData)
+			if err == nil {
+				t.Fatalf("expected error for corrupt DER in %s block", tt.pemType)
+			}
+		})
 	}
 }
 

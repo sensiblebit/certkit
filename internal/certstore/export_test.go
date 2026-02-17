@@ -491,69 +491,53 @@ func TestGenerateYAML_RootExpiresBeforeLeaf(t *testing.T) {
 func TestGenerateCSR_RoundTrip(t *testing.T) {
 	// WHY: Verifies that a generated CSR can be parsed back and retains the
 	// correct subject fields, DNS names, and key algorithm — full encode/decode
-	// round-trip per T-6. All three key types are tested in one table since
-	// each uses a different signing path through GenerateCSR.
+	// round-trip per T-6. One key type (RSA) suffices since the per-key-type
+	// dispatch is entirely in stdlib.
 	t.Parallel()
 
 	rsaCA := newRSACA(t)
-	ecCA := newECDSACA(t)
+	leaf := newRSALeaf(t, rsaCA, "csr.example.com", []string{"csr.example.com", "api.example.com"})
 
-	tests := []struct {
-		name    string
-		leaf    testLeaf
-		wantAlg string
-	}{
-		{"RSA", newRSALeaf(t, rsaCA, "csr.example.com", []string{"csr.example.com", "api.example.com"}), "RSA"},
-		{"ECDSA", newECDSALeaf(t, ecCA, "ecdsa-csr.example.com", []string{"ecdsa-csr.example.com", "api.example.com"}), "ECDSA"},
-		{"Ed25519", newEd25519Leaf(t, rsaCA, "ed-csr.example.com", []string{"ed-csr.example.com", "api.example.com"}), "Ed25519"},
+	csrPEM, csrJSON, err := GenerateCSR(leaf.cert, leaf.keyPEM, nil)
+	if err != nil {
+		t.Fatalf("GenerateCSR: %v", err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+	// Parse CSR PEM
+	block, _ := pem.Decode(csrPEM)
+	if block == nil {
+		t.Fatal("CSR PEM does not contain valid PEM block")
+	}
+	csr, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		t.Fatalf("parse CSR: %v", err)
+	}
 
-			csrPEM, csrJSON, err := GenerateCSR(tt.leaf.cert, tt.leaf.keyPEM, nil)
-			if err != nil {
-				t.Fatalf("GenerateCSR: %v", err)
-			}
+	if err := csr.CheckSignature(); err != nil {
+		t.Errorf("CSR signature invalid: %v", err)
+	}
 
-			// Parse CSR PEM
-			block, _ := pem.Decode(csrPEM)
-			if block == nil {
-				t.Fatal("CSR PEM does not contain valid PEM block")
-			}
-			csr, err := x509.ParseCertificateRequest(block.Bytes)
-			if err != nil {
-				t.Fatalf("parse CSR: %v", err)
-			}
+	// Verify subject fields are copied from cert
+	if len(csr.Subject.Organization) != 1 || csr.Subject.Organization[0] != "TestOrg" {
+		t.Errorf("CSR organization = %v, want [TestOrg]", csr.Subject.Organization)
+	}
 
-			if err := csr.CheckSignature(); err != nil {
-				t.Errorf("CSR signature invalid: %v", err)
-			}
+	// Verify DNS names
+	if len(csr.DNSNames) != 2 {
+		t.Errorf("CSR DNS names = %v, want 2 entries", csr.DNSNames)
+	}
 
-			// Verify subject fields are copied from cert
-			if len(csr.Subject.Organization) != 1 || csr.Subject.Organization[0] != "TestOrg" {
-				t.Errorf("CSR organization = %v, want [TestOrg]", csr.Subject.Organization)
-			}
+	// Verify CSR JSON is valid and reports correct algorithm
+	var jsonResult map[string]any
+	if err := json.Unmarshal(csrJSON, &jsonResult); err != nil {
+		t.Fatalf("CSR JSON is not valid: %v", err)
+	}
 
-			// Verify DNS names
-			if len(csr.DNSNames) != 2 {
-				t.Errorf("CSR DNS names = %v, want 2 entries", csr.DNSNames)
-			}
-
-			// Verify CSR JSON is valid and reports correct algorithm
-			var jsonResult map[string]any
-			if err := json.Unmarshal(csrJSON, &jsonResult); err != nil {
-				t.Fatalf("CSR JSON is not valid: %v", err)
-			}
-
-			if _, ok := jsonResult["dns_names"]; !ok {
-				t.Error("CSR JSON missing dns_names field")
-			}
-			if algo, ok := jsonResult["key_algorithm"].(string); !ok || algo != tt.wantAlg {
-				t.Errorf("key_algorithm = %v, want %s", jsonResult["key_algorithm"], tt.wantAlg)
-			}
-		})
+	if _, ok := jsonResult["dns_names"]; !ok {
+		t.Error("CSR JSON missing dns_names field")
+	}
+	if algo, ok := jsonResult["key_algorithm"].(string); !ok || algo != "RSA" {
+		t.Errorf("key_algorithm = %v, want RSA", jsonResult["key_algorithm"])
 	}
 }
 

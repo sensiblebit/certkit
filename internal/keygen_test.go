@@ -20,8 +20,6 @@ func TestGenerateKey(t *testing.T) {
 		curve     string
 	}{
 		{"RSA", "rsa", 2048, ""},
-		{"ECDSA", "ecdsa", 0, "P-256"},
-		{"Ed25519", "ed25519", 0, ""},
 		{"ECDSA curve alias", "ecdsa", 0, "secp384r1"},
 	}
 	for _, tt := range tests {

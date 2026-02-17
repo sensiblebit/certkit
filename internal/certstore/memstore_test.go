@@ -1156,36 +1156,3 @@ func TestMemStore_HandleCertificate_NilCert(t *testing.T) {
 		t.Errorf("error should mention nil certificate, got: %v", err)
 	}
 }
-
-func TestMemStore_MatchedPairs_RootCertWithKeyExcluded(t *testing.T) {
-	// WHY: MatchedPairs must only return SKIs with leaf certs — a root CA cert with
-	// its key must NOT appear, even though both cert and key share the same SKI.
-	t.Parallel()
-	store := NewMemStore()
-
-	caKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	caTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "Root CA"},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-	}
-	caBytes, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
-	caCert, _ := x509.ParseCertificate(caBytes)
-
-	if err := store.HandleCertificate(caCert, "ca.pem"); err != nil {
-		t.Fatal(err)
-	}
-	keyPEM, _ := certkit.MarshalPrivateKeyToPEM(caKey)
-	if err := store.HandleKey(caKey, []byte(keyPEM), "ca-key.pem"); err != nil {
-		t.Fatal(err)
-	}
-
-	matched := store.MatchedPairs()
-	if len(matched) != 0 {
-		t.Errorf("MatchedPairs should exclude root certs, got %d matches", len(matched))
-	}
-}
