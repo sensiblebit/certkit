@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.7] - 2026-02-17
+
 ### Security
 
 - Restore authorization checks on Claude Code workflow to prevent unauthorized users from triggering the workflow and exposing OAuth token secret ([#46])
@@ -14,26 +16,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Migrate CI workflows and pre-commit hooks to organization-wide reusable workflows in `sensiblebit/.github` ([#45])
-- Consolidate CI from 16 jobs to 10 by merging jobs with identical setup: branch-name + commit-messages + verified-commits → PR Conventions, go-build + go-vet + goimports → Go Checks, web-test + wrangler-build → Web, web-lint + markdownlint → Lint
-- Remove redundant `go vet` and `go test` steps from release workflow — tags are created from main which already passed CI
-- Consolidate Dependabot GitHub Actions PRs into a single grouped PR instead of one per action
-- Add `build(deps)` commit-message prefix to Dependabot so PR titles and commits follow Conventional Commits
-- Run all steps in consolidated CI jobs even when earlier steps fail (`if: success() || failure()`) so all failures are reported at once
-- Replace fragile hardcoded file list in WASM pre-commit hook with `types: [go]`
-- Consolidate `run()` and `run_output()` into single `run(cmd, *, capture=False)` in `checks.py`
+- Consolidate CI from 16 jobs to 10 by merging jobs with identical setup: branch-name + commit-messages + verified-commits → PR Conventions, go-build + go-vet + goimports → Go Checks, web-test + wrangler-build → Web, web-lint + markdownlint → Lint ([#45])
+- Remove redundant `go vet` and `go test` steps from release workflow — tags are created from main which already passed CI ([#45])
+- Consolidate Dependabot GitHub Actions PRs into a single grouped PR instead of one per action ([#32])
+- Add `build(deps)` commit-message prefix to Dependabot so PR titles and commits follow Conventional Commits ([#32])
+- Run all steps in consolidated CI jobs even when earlier steps fail (`if: success() || failure()`) so all failures are reported at once ([#32])
+- Replace fragile hardcoded file list in WASM pre-commit hook with `types: [go]` ([#45])
+- Consolidate `run()` and `run_output()` into single `run(cmd, *, capture=False)` in `checks.py` ([#29])
 
 ### Added
 
-- Add Dependabot npm ecosystem monitoring for `web/` dependencies
-- Add GitHub issue templates (bug report and feature request) with YAML form format
-- Add pull request template with summary, test plan, and checklist
-- Add `--fix` suggestion to `checks.py` goimports failure output
-- Add `require_tool()` guard in `checks.py` for `go`, `gh` — gives clear errors when tools are missing locally
-- Add Claude Code automatic PR review and `@claude` mention workflows
-- Add Copilot review instructions (`.github/copilot-instructions.md`) with project coding standards
+- Add Dependabot npm ecosystem monitoring for `web/` dependencies ([#32])
+- Add GitHub issue templates (bug report and feature request) with YAML form format ([#29])
+- Add pull request template with summary, test plan, and checklist ([#29])
+- Add `--fix` suggestion to `checks.py` goimports failure output ([#29])
+- Add `require_tool()` guard in `checks.py` for `go`, `gh` — gives clear errors when tools are missing locally ([#29])
+- Add Claude Code automatic PR review and `@claude` mention workflows ([#35])
+- Add Copilot review instructions (`.github/copilot-instructions.md`) with project coding standards ([#35])
 
 ### Tests
 
+- Streamline test suite per T-9 through T-14: remove redundant tests, consolidate per-algorithm tests into table-driven, reduce thin-wrapper exhaustiveness ([#48])
 - Ralph Loop pass 6 — process-level key normalization and DSA skip coverage ([`55b5c1e`]):
   - Add `TestNormalizePrivateKey` testing Ed25519 pointer→value, value no-op, RSA/ECDSA/nil passthrough
   - Add `TestProcessData_DSAPrivateKeyBlock_SilentlySkipped` testing DSA PRIVATE KEY block is silently skipped without blocking valid keys
@@ -85,7 +88,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add nil certificate validation in `EncodePKCS12` and `EncodePKCS12Legacy` — prevents panic from underlying library when leaf certificate is nil ([`1ea20c4`])
 - Normalize Ed25519 pointer-form keys in `EncodePKCS12` and `EncodePKCS12Legacy` before validation — previously rejected `*ed25519.PrivateKey` with a confusing "unsupported private key type" error ([`1ea20c4`])
 - Add PKCS#1 RSA DER key detection to binary format pipeline — previously PKCS#1 RSA DER files were silently skipped during ingestion ([`1ea20c4`])
-- Fix CI commit-message check ignoring `--base-ref` argument — base ref was parsed as positional `file` arg instead of the named `--base-ref` flag, always defaulting to `origin/main`
+- Fix CI commit-message check ignoring `--base-ref` argument — base ref was parsed as positional `file` arg instead of the named `--base-ref` flag, always defaulting to `origin/main` ([#29])
 - Fix `ClassifyHosts` email detection using `mail.ParseAddress` instead of `strings.Contains(h, "@")` — rejects invalid inputs like `"user@"`, `"@example.com"`, and display-name forms ([`2221a47`])
 - Accept `"NEW CERTIFICATE REQUEST"` PEM block type in `ParsePEMCertificateRequest` — supports CSRs from legacy tools (Netscape, MSIE) that use the older header format ([`2221a47`])
 - Fix `MarshalPrivateKeyToPEM` failing with `*ed25519.PrivateKey` pointer form — add `normalizeKey` before PKCS#8 marshaling ([`0fa55af`])
@@ -466,7 +469,8 @@ Initial release.
 - PKCS#12, PKCS#7, and JKS encode/decode support
 - Homebrew distribution via GoReleaser
 
-[Unreleased]: https://github.com/sensiblebit/certkit/compare/v0.7.6...HEAD
+[Unreleased]: https://github.com/sensiblebit/certkit/compare/v0.7.7...HEAD
+[0.7.7]: https://github.com/sensiblebit/certkit/compare/v0.7.6...v0.7.7
 [0.7.6]: https://github.com/sensiblebit/certkit/compare/v0.7.5...v0.7.6
 [0.7.5]: https://github.com/sensiblebit/certkit/compare/v0.7.4...v0.7.5
 [0.7.4]: https://github.com/sensiblebit/certkit/compare/v0.7.3...v0.7.4
@@ -549,8 +553,12 @@ Initial release.
 [`a62908f`]: https://github.com/sensiblebit/certkit/commit/a62908f
 [`55b5c1e`]: https://github.com/sensiblebit/certkit/commit/55b5c1e
 [`8cf81d9`]: https://github.com/sensiblebit/certkit/commit/8cf81d9
+[#48]: https://github.com/sensiblebit/certkit/pull/48
 [#46]: https://github.com/sensiblebit/certkit/pull/46
 [#45]: https://github.com/sensiblebit/certkit/pull/45
+[#35]: https://github.com/sensiblebit/certkit/pull/35
+[#32]: https://github.com/sensiblebit/certkit/pull/32
+[#29]: https://github.com/sensiblebit/certkit/pull/29
 [#24]: https://github.com/sensiblebit/certkit/pull/24
 [#25]: https://github.com/sensiblebit/certkit/pull/25
 [#26]: https://github.com/sensiblebit/certkit/pull/26
