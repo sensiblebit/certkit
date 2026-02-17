@@ -14,7 +14,7 @@ jobs:
   # ── Org-wide reusable workflows ───────────────────────
 
   pr-conventions:
-    if: github.event_name == 'pull_request'
+    if: github.event_name == 'pull_request' && github.actor != 'dependabot[bot]'
     uses: sensiblebit/.github/.github/workflows/pr-conventions.yml@main
 
   go-ci:
