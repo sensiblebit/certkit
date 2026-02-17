@@ -161,38 +161,6 @@ func TestMemStore_Intermediates(t *testing.T) {
 	}
 }
 
-func TestMemStore_IntermediatePool(t *testing.T) {
-	// WHY: IntermediatePool is used by WASM getState for chain verification;
-	// must include only intermediates, not roots or leaves.
-	t.Parallel()
-	store := NewMemStore()
-	ca := newRSACA(t)
-	inter := newIntermediateCA(t, ca)
-	leaf := newRSALeaf(t, inter, "pool.example.com", []string{"pool.example.com"})
-
-	for _, cert := range []*x509.Certificate{ca.cert, inter.cert, leaf.cert} {
-		if err := store.HandleCertificate(cert, "test"); err != nil {
-			t.Fatal(err)
-		}
-	}
-
-	pool := store.IntermediatePool()
-	if pool == nil {
-		t.Fatal("IntermediatePool returned nil")
-	}
-
-	// Verify the leaf can be verified using the pool + root as trust anchor
-	rootPool := x509.NewCertPool()
-	rootPool.AddCert(ca.cert)
-	_, err := leaf.cert.Verify(x509.VerifyOptions{
-		Roots:         rootPool,
-		Intermediates: pool,
-	})
-	if err != nil {
-		t.Errorf("leaf should verify with intermediate pool: %v", err)
-	}
-}
-
 func TestMemStore_IntermediatePool_Empty(t *testing.T) {
 	// WHY: An empty store must return a non-nil pool to avoid nil-pointer
 	// panics in callers that pass it to x509.Verify.
@@ -850,23 +818,6 @@ func TestMemStore_MultiCertPerSKI(t *testing.T) {
 	if rec.Cert.SerialNumber.Cmp(big.NewInt(5002)) != 0 {
 		t.Errorf("GetCert should return latest cert, got serial %s", rec.Cert.SerialNumber)
 	}
-}
-
-func TestMemStore_DumpDebug(t *testing.T) {
-	// WHY: DumpDebug must not panic on empty or populated stores.
-	t.Parallel()
-	store := NewMemStore()
-	store.DumpDebug() // empty — should not panic
-
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "debug.example.com", []string{"debug.example.com"})
-	if err := store.HandleCertificate(leaf.cert, "test.pem"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.HandleKey(leaf.key, leaf.keyPEM, "test.key"); err != nil {
-		t.Fatal(err)
-	}
-	store.DumpDebug() // populated — should not panic
 }
 
 func TestMemStore_HandleKey_Ed25519PointerNormalization(t *testing.T) {

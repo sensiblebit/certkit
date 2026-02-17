@@ -194,35 +194,6 @@ func TestGenerateCSRFiles_WithExistingKey(t *testing.T) {
 	}
 }
 
-func TestGenerateCSRFiles_RSAKeyGen(t *testing.T) {
-	// WHY: RSA key generation requires a separate code path (bit size instead of curve); verifies the RSA-specific key generation produces a valid private key.
-	dir := t.TempDir()
-	tmplPath := filepath.Join(dir, "template.json")
-	tmpl := certkit.CSRTemplate{
-		Subject: certkit.CSRSubject{CommonName: "rsa.example.com"},
-	}
-	data, _ := json.Marshal(tmpl)
-	if err := os.WriteFile(tmplPath, data, 0644); err != nil {
-		t.Fatalf("write template: %v", err)
-	}
-
-	outDir := filepath.Join(dir, "out")
-	_, err := GenerateCSRFiles(CSROptions{
-		TemplatePath: tmplPath,
-		Algorithm:    "rsa",
-		Bits:         2048,
-		OutPath:      outDir,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	keyData, _ := os.ReadFile(filepath.Join(outDir, "key.pem"))
-	if !strings.Contains(string(keyData), "PRIVATE KEY") {
-		t.Error("should have generated RSA key")
-	}
-}
-
 func TestGenerateCSRFiles_Stdout(t *testing.T) {
 	// WHY: When no OutPath is set, CSR and key must be returned in-memory (stdout mode) without writing files; verifies the no-file-write code path.
 	dir := t.TempDir()

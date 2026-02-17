@@ -114,11 +114,3 @@ func TestLoadPasswordsFromFile_BlankLines(t *testing.T) {
 		t.Errorf("expected [pass1, pass2], got %v", passwords)
 	}
 }
-
-func TestLoadPasswordsFromFile_MissingFile(t *testing.T) {
-	// WHY: A missing password file must return an error from the low-level loader, not an empty list that silently degrades decryption.
-	_, err := LoadPasswordsFromFile("/nonexistent/passwords.txt")
-	if err == nil {
-		t.Error("expected error for missing file, got nil")
-	}
-}

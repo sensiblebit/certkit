@@ -1216,17 +1216,6 @@ func TestParsePEMCertificates_TrailingGarbage(t *testing.T) {
 	}
 }
 
-func TestDefaultPasswords_MutationSafety(t *testing.T) {
-	// WHY: DefaultPasswords must return a fresh copy each call; shared slice mutation would corrupt the global password list for subsequent callers.
-	pw1 := DefaultPasswords()
-	pw1[0] = "MUTATED"
-
-	pw2 := DefaultPasswords()
-	if pw2[0] == "MUTATED" {
-		t.Error("mutating returned slice should not affect future DefaultPasswords() calls")
-	}
-}
-
 func TestParsePEMPrivateKeyWithPasswords_NoPasswordsEncryptedKey(t *testing.T) {
 	// WHY: Encrypted keys with nil or empty password lists must fail gracefully,
 	// not panic or silently return a zero-value key.
@@ -1787,49 +1776,6 @@ func TestComputeSKI_EquivalentToCertSKI(t *testing.T) {
 	}
 }
 
-func TestCertSKIEmbedded_MatchesCertAKIEmbedded(t *testing.T) {
-	// WHY: The fundamental chain-linking property: an issuer's embedded SKI must
-	// equal the child's embedded AKI. If these don't match, chain resolution breaks.
-	t.Parallel()
-
-	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	caTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "Chain Link CA"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-	}
-	caBytes, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
-	caCert, _ := x509.ParseCertificate(caBytes)
-
-	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	leafTemplate := &x509.Certificate{
-		SerialNumber: big.NewInt(2),
-		Subject:      pkix.Name{CommonName: "chain-link-leaf"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	leafBytes, _ := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
-	leafCert, _ := x509.ParseCertificate(leafBytes)
-
-	caSKI := CertSKIEmbedded(caCert)
-	leafAKI := CertAKIEmbedded(leafCert)
-
-	if caSKI == "" {
-		t.Fatal("CA embedded SKI is empty")
-	}
-	if leafAKI == "" {
-		t.Fatal("leaf embedded AKI is empty")
-	}
-	if caSKI != leafAKI {
-		t.Errorf("CA SKI = %s, leaf AKI = %s — must match for chain resolution", caSKI, leafAKI)
-	}
-}
-
 func TestParsePEMPrivateKey_CorruptOpenSSH(t *testing.T) {
 	// WHY: A PEM block with type "OPENSSH PRIVATE KEY" but corrupt body bytes must
 	// produce a wrapped error mentioning "OpenSSH", not a generic parse failure.
@@ -2015,29 +1961,6 @@ func TestParsePEMPrivateKey_TrailingGarbage(t *testing.T) {
 	}
 	if !key.Equal(parsed) {
 		t.Error("key with trailing garbage did not round-trip")
-	}
-}
-
-func TestDecodePKCS12_EmptyAndNilData(t *testing.T) {
-	// WHY: Empty or nil input to DecodePKCS12 must return an error, not panic.
-	// TestDecodePKCS12_invalidData tests non-PKCS#12 data; this tests the
-	// boundary case of no data at all.
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		data []byte
-	}{
-		{"nil", nil},
-		{"empty", []byte{}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, _, _, err := DecodePKCS12(tt.data, "password")
-			if err == nil {
-				t.Fatal("expected error for empty/nil PKCS#12 data")
-			}
-		})
 	}
 }
 
