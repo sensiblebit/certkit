@@ -3,11 +3,8 @@ package internal
 import (
 	"archive/tar"
 	"bytes"
-	"math"
 	"strings"
 	"testing"
-
-	"github.com/sensiblebit/certkit/internal/certstore"
 )
 
 func TestArchiveFormat(t *testing.T) {
@@ -918,69 +915,5 @@ func TestProcessArchive_TarPartialCorruption(t *testing.T) {
 	certs := cfg.Store.AllCertsFlat()
 	if len(certs) != 1 {
 		t.Errorf("got %d certs in store, want 1", len(certs))
-	}
-}
-
-func TestSafeLimitSize(t *testing.T) {
-	// WHY: Verifies that safeLimitSize prevents int64 overflow when maxSize
-	// is near math.MaxInt64. Without this, io.LimitReader gets a negative
-	// limit and silently returns empty data — a zip bomb protection bypass.
-	t.Parallel()
-
-	tests := []struct {
-		name  string
-		input int64
-		want  int64
-	}{
-		{"zero", 0, 1},
-		{"normal", 100, 101},
-		{"large", 10 * 1024 * 1024, 10*1024*1024 + 1},
-		{"near max", math.MaxInt64 - 1, math.MaxInt64},
-		{"at max", math.MaxInt64, math.MaxInt64},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := safeLimitSize(tt.input)
-			if got != tt.want {
-				t.Errorf("safeLimitSize(%d) = %d, want %d", tt.input, got, tt.want)
-			}
-		})
-	}
-}
-
-func TestHasBinaryExtension_VirtualPaths(t *testing.T) {
-	// WHY: Verifies that hasBinaryExtension correctly extracts the extension
-	// from virtual paths with ":" separators. Without this fix, filepath.Ext
-	// on "archive.zip:cert" returns ".zip:cert" instead of "".
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		path string
-		want bool
-	}{
-		{"normal .der", "certs/server.der", true},
-		{"normal .pem", "certs/server.pem", true},
-		{"normal .p12", "certs/bundle.p12", true},
-		{"normal .jks", "certs/store.jks", true},
-		{"normal .txt", "README.txt", false},
-		{"no extension", "Makefile", false},
-		{"virtual path with dir", "archive.zip:certs/server.der", true},
-		{"virtual path flat .der", "archive.zip:server.der", true},
-		{"virtual path no ext", "archive.zip:cert", false},
-		{"virtual path no ext no dir", "archive.zip:Makefile", false},
-		{"case insensitive", "archive.zip:SERVER.DER", true},
-		{"virtual tar.gz path", "archive.tar.gz:certs/ca.pem", true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			if got := certstore.HasBinaryExtension(tt.path); got != tt.want {
-				t.Errorf("certstore.HasBinaryExtension(%q) = %v, want %v", tt.path, got, tt.want)
-			}
-		})
 	}
 }

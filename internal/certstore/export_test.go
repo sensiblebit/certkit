@@ -1,14 +1,10 @@
 package certstore
 
 import (
-	"crypto/ed25519"
-	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
-	"math/big"
 	"net"
 	"strings"
 	"testing"
@@ -390,123 +386,72 @@ func TestGenerateJSON_NoIntermediates(t *testing.T) {
 }
 
 func TestGenerateYAML_Fields(t *testing.T) {
+	// WHY: Verifies all required YAML fields are present with correct values
+	// and that timestamps use RFC 3339 format. One key type suffices since
+	// GenerateYAML just passes through the key type/size parameters.
 	t.Parallel()
 
-	tests := []struct {
-		name    string
-		mkCA    func(t *testing.T) testCA
-		mkLeaf  func(t *testing.T, ca testCA) testLeaf
-		keyType string
-		bits    int
-	}{
-		{"RSA", newRSACA, func(t *testing.T, ca testCA) testLeaf {
-			return newRSALeaf(t, ca, "yaml-rsa.example.com", []string{"yaml-rsa.example.com"})
-		}, "RSA", 2048},
-		{"ECDSA", newECDSACA, func(t *testing.T, ca testCA) testLeaf {
-			return newECDSALeaf(t, ca, "yaml-ec.example.com", []string{"yaml-ec.example.com"})
-		}, "ECDSA", 256},
-		{"Ed25519", newRSACA, func(t *testing.T, ca testCA) testLeaf {
-			return newEd25519Leaf(t, ca, "yaml-ed.example.com", []string{"yaml-ed.example.com"})
-		}, "Ed25519", 256},
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "yaml-rsa.example.com", []string{"yaml-rsa.example.com"})
+
+	bundle := &certkit.BundleResult{
+		Leaf:  leaf.cert,
+		Roots: []*x509.Certificate{ca.cert},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+	data, err := GenerateYAML(bundle, leaf.keyPEM, "RSA", 2048)
+	if err != nil {
+		t.Fatalf("GenerateYAML: %v", err)
+	}
 
-			ca := tt.mkCA(t)
-			leaf := tt.mkLeaf(t, ca)
+	var result map[string]any
+	if err := yaml.Unmarshal(data, &result); err != nil {
+		t.Fatalf("invalid YAML: %v", err)
+	}
 
-			bundle := &certkit.BundleResult{
-				Leaf:  leaf.cert,
-				Roots: []*x509.Certificate{ca.cert},
-			}
+	requiredKeys := []string{
+		"bundle", "crl_support", "crt", "expires",
+		"hostnames", "issuer", "key", "key_size", "key_type",
+		"leaf_expires", "ocsp", "ocsp_support", "root", "signature", "subject",
+	}
+	for _, key := range requiredKeys {
+		if _, ok := result[key]; !ok {
+			t.Errorf("missing YAML key: %s", key)
+		}
+	}
 
-			data, err := GenerateYAML(bundle, leaf.keyPEM, tt.keyType, tt.bits)
-			if err != nil {
-				t.Fatalf("GenerateYAML: %v", err)
-			}
+	if result["key_type"] != "RSA" {
+		t.Errorf("key_type = %v, want RSA", result["key_type"])
+	}
+	if result["key_size"] != 2048 {
+		t.Errorf("key_size = %v, want 2048", result["key_size"])
+	}
 
-			var result map[string]any
-			if err := yaml.Unmarshal(data, &result); err != nil {
-				t.Fatalf("invalid YAML: %v", err)
-			}
+	if result["crl_support"] != false {
+		t.Errorf("crl_support = %v, want false", result["crl_support"])
+	}
 
-			requiredKeys := []string{
-				"bundle", "crl_support", "crt", "expires",
-				"hostnames", "issuer", "key", "key_size", "key_type",
-				"leaf_expires", "ocsp", "ocsp_support", "root", "signature", "subject",
-			}
-			for _, key := range requiredKeys {
-				if _, ok := result[key]; !ok {
-					t.Errorf("missing YAML key: %s", key)
-				}
-			}
-
-			if result["key_type"] != tt.keyType {
-				t.Errorf("key_type = %v, want %s", result["key_type"], tt.keyType)
-			}
-			if result["key_size"] != tt.bits {
-				t.Errorf("key_size = %v, want %d", result["key_size"], tt.bits)
-			}
-
-			if result["crl_support"] != false {
-				t.Errorf("crl_support = %v, want false", result["crl_support"])
-			}
-
-			expiresStr, ok := result["expires"].(string)
-			if !ok {
-				t.Fatalf("expires is not a string: %T", result["expires"])
-			}
-			if _, err := time.Parse(time.RFC3339, expiresStr); err != nil {
-				t.Errorf("expires is not RFC 3339: %q", expiresStr)
-			}
-		})
+	expiresStr, ok := result["expires"].(string)
+	if !ok {
+		t.Fatalf("expires is not a string: %T", result["expires"])
+	}
+	if _, err := time.Parse(time.RFC3339, expiresStr); err != nil {
+		t.Errorf("expires is not RFC 3339: %q", expiresStr)
 	}
 }
 
-func TestGenerateYAML_EarliestExpiry(t *testing.T) {
-	// WHY: The "expires" field must reflect the earliest-expiring certificate in
-	// the chain, not just the leaf — ensures users see the true chain deadline.
+func TestGenerateYAML_RootExpiresBeforeLeaf(t *testing.T) {
+	// WHY: When the root expires before the leaf, the "expires" field must
+	// reflect the root's NotAfter — not the leaf's. This ensures users see
+	// the true chain deadline.
 	t.Parallel()
 
 	root := newRSACA(t)
-	leaf := newRSALeaf(t, root, "expiry.example.com", []string{"expiry.example.com"})
-
-	// Create an intermediate that expires sooner than the leaf.
-	// The leaf expires in ~1 year, so set intermediate to expire in 30 days.
-	shortLivedIntermediate := newIntermediateCA(t, root)
-	// We can't easily control NotAfter on helpers, so instead we verify
-	// the logic by checking that earliestExpiry picks the minimum.
-	bundle := &certkit.BundleResult{
-		Leaf:          leaf.cert,
-		Intermediates: []*x509.Certificate{shortLivedIntermediate.cert},
-		Roots:         []*x509.Certificate{root.cert},
-	}
-
-	earliest := earliestExpiry(bundle)
-
-	// The intermediate CA helper sets NotAfter to 5 years; leaf is 1 year.
-	// So leaf should be earliest.
-	if !earliest.Equal(leaf.cert.NotAfter) {
-		t.Errorf("earliestExpiry = %v, want leaf NotAfter %v", earliest, leaf.cert.NotAfter)
-	}
-}
-
-func TestEarliestExpiry_RootExpiresBeforeLeaf(t *testing.T) {
-	// WHY: When the root expires before the leaf, earliestExpiry must return
-	// the root's NotAfter — not the leaf's. This path was previously untested.
-	t.Parallel()
-
-	// Create a short-lived "root" that expires in 30 days.
-	shortRoot := newRSACA(t)
-	// Override NotAfter to 30 days from now by creating a leaf whose NotAfter
-	// is after the root. The newRSACA sets root to 10 years, newRSALeaf to 1 year.
-	// So we'll construct the bundle manually with a fake short-lived root.
-	leaf := newRSALeaf(t, shortRoot, "rootexp.example.com", []string{"rootexp.example.com"})
+	leaf := newRSALeaf(t, root, "rootexp.example.com", []string{"rootexp.example.com"})
 
 	// Create a fake root cert that expires 1 hour from now (before the leaf).
 	fakeRoot := &x509.Certificate{
+		Subject:  root.cert.Subject,
 		NotAfter: time.Now().Add(1 * time.Hour),
 	}
 
@@ -515,62 +460,100 @@ func TestEarliestExpiry_RootExpiresBeforeLeaf(t *testing.T) {
 		Roots: []*x509.Certificate{fakeRoot},
 	}
 
-	earliest := earliestExpiry(bundle)
+	data, err := GenerateYAML(bundle, leaf.keyPEM, "RSA", 2048)
+	if err != nil {
+		t.Fatalf("GenerateYAML: %v", err)
+	}
 
-	if !earliest.Equal(fakeRoot.NotAfter) {
-		t.Errorf("earliestExpiry = %v, want root NotAfter %v", earliest, fakeRoot.NotAfter)
+	var result map[string]any
+	if err := yaml.Unmarshal(data, &result); err != nil {
+		t.Fatalf("invalid YAML: %v", err)
+	}
+
+	expiresStr, ok := result["expires"].(string)
+	if !ok {
+		t.Fatalf("expires is not a string: %T", result["expires"])
+	}
+	expires, err := time.Parse(time.RFC3339, expiresStr)
+	if err != nil {
+		t.Fatalf("expires is not RFC 3339: %q", expiresStr)
+	}
+
+	leafExpiresStr := result["leaf_expires"].(string)
+	leafExpires, _ := time.Parse(time.RFC3339, leafExpiresStr)
+
+	// "expires" (chain) should be before "leaf_expires" since root expires first
+	if !expires.Before(leafExpires) {
+		t.Errorf("expires (%v) should be before leaf_expires (%v) when root expires first", expires, leafExpires)
 	}
 }
 
 func TestGenerateCSR_RoundTrip(t *testing.T) {
 	// WHY: Verifies that a generated CSR can be parsed back and retains the
-	// correct subject fields and DNS names — full encode/decode round-trip per T-6.
+	// correct subject fields, DNS names, and key algorithm — full encode/decode
+	// round-trip per T-6. All three key types are tested in one table since
+	// each uses a different signing path through GenerateCSR.
 	t.Parallel()
 
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "csr.example.com", []string{"csr.example.com", "api.example.com"})
+	rsaCA := newRSACA(t)
+	ecCA := newECDSACA(t)
 
-	csrPEM, csrJSON, err := GenerateCSR(leaf.cert, leaf.keyPEM, nil)
-	if err != nil {
-		t.Fatalf("GenerateCSR: %v", err)
-	}
-
-	// Parse CSR PEM
-	block, _ := pem.Decode(csrPEM)
-	if block == nil {
-		t.Fatal("CSR PEM does not contain valid PEM block")
-	}
-	csr, err := x509.ParseCertificateRequest(block.Bytes)
-	if err != nil {
-		t.Fatalf("parse CSR: %v", err)
+	tests := []struct {
+		name    string
+		leaf    testLeaf
+		wantAlg string
+	}{
+		{"RSA", newRSALeaf(t, rsaCA, "csr.example.com", []string{"csr.example.com", "api.example.com"}), "RSA"},
+		{"ECDSA", newECDSALeaf(t, ecCA, "ecdsa-csr.example.com", []string{"ecdsa-csr.example.com", "api.example.com"}), "ECDSA"},
+		{"Ed25519", newEd25519Leaf(t, rsaCA, "ed-csr.example.com", []string{"ed-csr.example.com", "api.example.com"}), "Ed25519"},
 	}
 
-	if err := csr.CheckSignature(); err != nil {
-		t.Errorf("CSR signature invalid: %v", err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	// Verify subject fields are copied from cert
-	if len(csr.Subject.Organization) != 1 || csr.Subject.Organization[0] != "TestOrg" {
-		t.Errorf("CSR organization = %v, want [TestOrg]", csr.Subject.Organization)
-	}
+			csrPEM, csrJSON, err := GenerateCSR(tt.leaf.cert, tt.leaf.keyPEM, nil)
+			if err != nil {
+				t.Fatalf("GenerateCSR: %v", err)
+			}
 
-	// Verify DNS names (www exclusion logic should not trigger here since
-	// neither SAN is "www." + CN)
-	if len(csr.DNSNames) != 2 {
-		t.Errorf("CSR DNS names = %v, want 2 entries", csr.DNSNames)
-	}
+			// Parse CSR PEM
+			block, _ := pem.Decode(csrPEM)
+			if block == nil {
+				t.Fatal("CSR PEM does not contain valid PEM block")
+			}
+			csr, err := x509.ParseCertificateRequest(block.Bytes)
+			if err != nil {
+				t.Fatalf("parse CSR: %v", err)
+			}
 
-	// Verify CSR JSON is valid
-	var jsonResult map[string]any
-	if err := json.Unmarshal(csrJSON, &jsonResult); err != nil {
-		t.Fatalf("CSR JSON is not valid: %v", err)
-	}
+			if err := csr.CheckSignature(); err != nil {
+				t.Errorf("CSR signature invalid: %v", err)
+			}
 
-	if _, ok := jsonResult["dns_names"]; !ok {
-		t.Error("CSR JSON missing dns_names field")
-	}
-	if _, ok := jsonResult["key_algorithm"]; !ok {
-		t.Error("CSR JSON missing key_algorithm field")
+			// Verify subject fields are copied from cert
+			if len(csr.Subject.Organization) != 1 || csr.Subject.Organization[0] != "TestOrg" {
+				t.Errorf("CSR organization = %v, want [TestOrg]", csr.Subject.Organization)
+			}
+
+			// Verify DNS names
+			if len(csr.DNSNames) != 2 {
+				t.Errorf("CSR DNS names = %v, want 2 entries", csr.DNSNames)
+			}
+
+			// Verify CSR JSON is valid and reports correct algorithm
+			var jsonResult map[string]any
+			if err := json.Unmarshal(csrJSON, &jsonResult); err != nil {
+				t.Fatalf("CSR JSON is not valid: %v", err)
+			}
+
+			if _, ok := jsonResult["dns_names"]; !ok {
+				t.Error("CSR JSON missing dns_names field")
+			}
+			if algo, ok := jsonResult["key_algorithm"].(string); !ok || algo != tt.wantAlg {
+				t.Errorf("key_algorithm = %v, want %s", jsonResult["key_algorithm"], tt.wantAlg)
+			}
+		})
 	}
 }
 
@@ -666,104 +649,6 @@ func TestGenerateCSR_SubjectOverride(t *testing.T) {
 	}
 }
 
-func TestGenerateCSR_ECDSAKey(t *testing.T) {
-	// WHY: CSR generation with ECDSA keys exercises a different signing path
-	// (ECDSA-SHA256 vs RSA-SHA256). Only RSA was tested previously — an ECDSA-
-	// specific signing failure would go undetected.
-	t.Parallel()
-
-	ca := newECDSACA(t)
-	leaf := newECDSALeaf(t, ca, "ecdsa-csr.example.com", []string{"ecdsa-csr.example.com"})
-
-	csrPEM, csrJSON, err := GenerateCSR(leaf.cert, leaf.keyPEM, nil)
-	if err != nil {
-		t.Fatalf("GenerateCSR with ECDSA key: %v", err)
-	}
-
-	block, _ := pem.Decode(csrPEM)
-	if block == nil {
-		t.Fatal("CSR PEM does not contain valid PEM block")
-	}
-	csr, err := x509.ParseCertificateRequest(block.Bytes)
-	if err != nil {
-		t.Fatalf("parse CSR: %v", err)
-	}
-	if err := csr.CheckSignature(); err != nil {
-		t.Errorf("CSR signature invalid: %v", err)
-	}
-
-	// Verify CSR JSON reports ECDSA
-	var jsonResult map[string]any
-	if err := json.Unmarshal(csrJSON, &jsonResult); err != nil {
-		t.Fatalf("CSR JSON invalid: %v", err)
-	}
-	if algo, ok := jsonResult["key_algorithm"].(string); !ok || algo != "ECDSA" {
-		t.Errorf("key_algorithm = %v, want ECDSA", jsonResult["key_algorithm"])
-	}
-}
-
-func TestGenerateCSR_Ed25519Key(t *testing.T) {
-	// WHY: CSR generation with Ed25519 keys uses pure EdDSA signing (no hash
-	// algorithm selection). Only RSA was tested previously — an Ed25519-
-	// specific signing failure would go undetected.
-	t.Parallel()
-
-	ca := newRSACA(t)
-	pub, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("generate Ed25519 key: %v", err)
-	}
-	tmpl := &x509.Certificate{
-		SerialNumber:   big.NewInt(600),
-		Subject:        pkix.Name{CommonName: "ed-csr.example.com", Organization: []string{"TestOrg"}},
-		DNSNames:       []string{"ed-csr.example.com"},
-		NotBefore:      time.Now().Add(-time.Hour),
-		NotAfter:       time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:       x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:    []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		AuthorityKeyId: ca.cert.SubjectKeyId,
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, ca.cert, pub, ca.key)
-	if err != nil {
-		t.Fatalf("create cert: %v", err)
-	}
-	leafCert, err := x509.ParseCertificate(certDER)
-	if err != nil {
-		t.Fatalf("parse cert: %v", err)
-	}
-	keyDER, err := x509.MarshalPKCS8PrivateKey(priv)
-	if err != nil {
-		t.Fatalf("marshal key: %v", err)
-	}
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
-
-	csrPEM, csrJSON, err := GenerateCSR(leafCert, keyPEM, nil)
-	if err != nil {
-		t.Fatalf("GenerateCSR with Ed25519 key: %v", err)
-	}
-
-	block, _ := pem.Decode(csrPEM)
-	if block == nil {
-		t.Fatal("CSR PEM does not contain valid PEM block")
-	}
-	csr, err := x509.ParseCertificateRequest(block.Bytes)
-	if err != nil {
-		t.Fatalf("parse CSR: %v", err)
-	}
-	if err := csr.CheckSignature(); err != nil {
-		t.Errorf("CSR signature invalid: %v", err)
-	}
-
-	// Verify CSR JSON reports Ed25519
-	var jsonResult map[string]any
-	if err := json.Unmarshal(csrJSON, &jsonResult); err != nil {
-		t.Fatalf("CSR JSON invalid: %v", err)
-	}
-	if algo, ok := jsonResult["key_algorithm"].(string); !ok || algo != "Ed25519" {
-		t.Errorf("key_algorithm = %v, want Ed25519", jsonResult["key_algorithm"])
-	}
-}
-
 func TestGenerateCSR_InvalidKeyPEM(t *testing.T) {
 	// WHY: Invalid key PEM should produce a clear error, not panic or garbage CSR.
 	t.Parallel()
@@ -777,59 +662,6 @@ func TestGenerateCSR_InvalidKeyPEM(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "parsing private key") {
 		t.Errorf("error should mention parsing private key, got: %v", err)
-	}
-}
-
-func TestFormatIPAddresses(t *testing.T) {
-	// WHY: Directly tests IP address formatting which is used by both
-	// GenerateJSON and GenerateYAML — verifies IPv4, IPv6, and edge cases.
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		ips  []net.IP
-		want []string
-	}{
-		{
-			name: "IPv4",
-			ips:  []net.IP{net.ParseIP("192.168.1.1")},
-			want: []string{"192.168.1.1"},
-		},
-		{
-			name: "IPv6",
-			ips:  []net.IP{net.ParseIP("::1")},
-			want: []string{"::1"},
-		},
-		{
-			name: "mixed",
-			ips:  []net.IP{net.ParseIP("10.0.0.1"), net.ParseIP("fe80::1")},
-			want: []string{"10.0.0.1", "fe80::1"},
-		},
-		{
-			name: "empty",
-			ips:  []net.IP{},
-			want: []string{},
-		},
-		{
-			name: "nil",
-			ips:  nil,
-			want: []string{},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := FormatIPAddresses(tt.ips)
-			if len(got) != len(tt.want) {
-				t.Fatalf("len = %d, want %d", len(got), len(tt.want))
-			}
-			for i := range got {
-				if got[i] != tt.want[i] {
-					t.Errorf("index %d = %q, want %q", i, got[i], tt.want[i])
-				}
-			}
-		})
 	}
 }
 

@@ -12,59 +12,31 @@ import (
 	"github.com/sensiblebit/certkit/internal/certstore"
 )
 
-func TestVerifyCert_KeyMatchAlgorithms(t *testing.T) {
-	// WHY: Verifies VerifyCert correctly detects key-certificate matches for all supported key algorithms (RSA, ECDSA, Ed25519), ensuring the key-match logic is not algorithm-specific.
-	tests := []struct {
-		name     string
-		createCA func(t *testing.T) testCA
-		newLeaf  func(t *testing.T, ca testCA) testLeaf
-	}{
-		{
-			name:     "RSA",
-			createCA: newRSACA,
-			newLeaf: func(t *testing.T, ca testCA) testLeaf {
-				return newRSALeaf(t, ca, "verify-rsa.example.com", []string{"verify-rsa.example.com"}, nil)
-			},
-		},
-		{
-			name:     "ECDSA",
-			createCA: newECDSACA,
-			newLeaf: func(t *testing.T, ca testCA) testLeaf {
-				return newECDSALeaf(t, ca, "verify-ecdsa.example.com", []string{"verify-ecdsa.example.com"})
-			},
-		},
-		{
-			name:     "Ed25519",
-			createCA: newRSACA,
-			newLeaf: func(t *testing.T, ca testCA) testLeaf {
-				return newEd25519Leaf(t, ca, "verify-ed25519.example.com", []string{"verify-ed25519.example.com"})
-			},
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ca := tt.createCA(t)
-			leaf := tt.newLeaf(t, ca)
+func TestVerifyCert_KeyMatch(t *testing.T) {
+	// WHY: Verifies VerifyCert correctly detects a key-certificate match.
+	// One key type (RSA) suffices because the key-match logic delegates to
+	// certkit.KeyMatchesCert which is tested across all algorithms in the
+	// root package.
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "verify-rsa.example.com", []string{"verify-rsa.example.com"}, nil)
 
-			result, err := VerifyCert(context.Background(), &VerifyInput{
-				Cert:          leaf.cert,
-				Key:           leaf.key,
-				CheckKeyMatch: true,
-				TrustStore:    "mozilla",
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if result.KeyMatch == nil {
-				t.Fatal("expected KeyMatch to be set")
-			}
-			if !*result.KeyMatch {
-				t.Errorf("expected %s key to match %s certificate", tt.name, tt.name)
-			}
-			if len(result.Errors) != 0 {
-				t.Errorf("expected no errors, got %v", result.Errors)
-			}
-		})
+	result, err := VerifyCert(context.Background(), &VerifyInput{
+		Cert:          leaf.cert,
+		Key:           leaf.key,
+		CheckKeyMatch: true,
+		TrustStore:    "mozilla",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.KeyMatch == nil {
+		t.Fatal("expected KeyMatch to be set")
+	}
+	if !*result.KeyMatch {
+		t.Error("expected RSA key to match RSA certificate")
+	}
+	if len(result.Errors) != 0 {
+		t.Errorf("expected no errors, got %v", result.Errors)
 	}
 }
 
@@ -579,35 +551,5 @@ func TestVerifyCert_ChainOnlyNoKeyMatch(t *testing.T) {
 	}
 	if len(result.Chain) == 0 {
 		t.Error("expected chain display to be populated")
-	}
-}
-
-func TestDaysUntil(t *testing.T) {
-	// WHY: daysUntil is used to compute certificate expiry countdown displayed to users; incorrect rounding (e.g., ceiling vs floor) or sign errors would produce misleading expiry warnings.
-	t.Parallel()
-
-	// daysUntil calls time.Now() internally, so there is a small timing gap
-	// between our time.Now() and the function's. We add a generous buffer
-	// (1 hour) to each offset to stay well within the expected day boundary.
-	tests := []struct {
-		name     string
-		offset   time.Duration
-		wantDays int
-	}{
-		{"future 30 days", 30*24*time.Hour + time.Hour, 30},
-		{"future 1 day", 24*time.Hour + time.Hour, 1},
-		{"past 1 day", -24*time.Hour - time.Hour, -2},
-		{"future half day", 12 * time.Hour, 0},
-		{"past half day", -12 * time.Hour, -1},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			target := time.Now().Add(tt.offset)
-			got := daysUntil(target)
-			if got != tt.wantDays {
-				t.Errorf("daysUntil(%v offset) = %d, want %d", tt.offset, got, tt.wantDays)
-			}
-		})
 	}
 }

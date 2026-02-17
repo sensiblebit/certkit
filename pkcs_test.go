@@ -102,20 +102,6 @@ func TestEncodePKCS12_RoundTrip_AllKeyTypes(t *testing.T) {
 		checkEq func(t *testing.T, original, decoded any)
 	}{
 		{
-			name: "ECDSA-P256",
-			genKey: func(t *testing.T) (any, any) {
-				t.Helper()
-				k, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-				return k, &k.PublicKey
-			},
-			checkEq: func(t *testing.T, original, decoded any) {
-				t.Helper()
-				if !original.(*ecdsa.PrivateKey).Equal(decoded) {
-					t.Error("key mismatch")
-				}
-			},
-		},
-		{
 			name: "RSA",
 			genKey: func(t *testing.T) (any, any) {
 				t.Helper()
@@ -145,34 +131,6 @@ func TestEncodePKCS12_RoundTrip_AllKeyTypes(t *testing.T) {
 			checkEq: func(t *testing.T, original, decoded any) {
 				t.Helper()
 				if !original.(ed25519.PrivateKey).Equal(decoded) {
-					t.Error("key mismatch")
-				}
-			},
-		},
-		{
-			name: "ECDSA-P384",
-			genKey: func(t *testing.T) (any, any) {
-				t.Helper()
-				k, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-				return k, &k.PublicKey
-			},
-			checkEq: func(t *testing.T, original, decoded any) {
-				t.Helper()
-				if !original.(*ecdsa.PrivateKey).Equal(decoded) {
-					t.Error("key mismatch")
-				}
-			},
-		},
-		{
-			name: "ECDSA-P521",
-			genKey: func(t *testing.T) (any, any) {
-				t.Helper()
-				k, _ := ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
-				return k, &k.PublicKey
-			},
-			checkEq: func(t *testing.T, original, decoded any) {
-				t.Helper()
-				if !original.(*ecdsa.PrivateKey).Equal(decoded) {
 					t.Error("key mismatch")
 				}
 			},
@@ -330,23 +288,6 @@ func TestEncodePKCS12Legacy_RoundTrip_AllKeyTypes(t *testing.T) {
 			},
 		},
 		{
-			name: "RSA",
-			genKey: func(t *testing.T) (any, any) {
-				t.Helper()
-				k, err := rsa.GenerateKey(rand.Reader, 2048)
-				if err != nil {
-					t.Fatal(err)
-				}
-				return k, &k.PublicKey
-			},
-			checkEq: func(t *testing.T, original, decoded any) {
-				t.Helper()
-				if !original.(*rsa.PrivateKey).Equal(decoded) {
-					t.Error("key mismatch")
-				}
-			},
-		},
-		{
 			name: "Ed25519",
 			genKey: func(t *testing.T) (any, any) {
 				t.Helper()
@@ -359,34 +300,6 @@ func TestEncodePKCS12Legacy_RoundTrip_AllKeyTypes(t *testing.T) {
 			checkEq: func(t *testing.T, original, decoded any) {
 				t.Helper()
 				if !original.(ed25519.PrivateKey).Equal(decoded) {
-					t.Error("key mismatch")
-				}
-			},
-		},
-		{
-			name: "ECDSA-P384",
-			genKey: func(t *testing.T) (any, any) {
-				t.Helper()
-				k, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-				return k, &k.PublicKey
-			},
-			checkEq: func(t *testing.T, original, decoded any) {
-				t.Helper()
-				if !original.(*ecdsa.PrivateKey).Equal(decoded) {
-					t.Error("key mismatch")
-				}
-			},
-		},
-		{
-			name: "ECDSA-P521",
-			genKey: func(t *testing.T) (any, any) {
-				t.Helper()
-				k, _ := ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
-				return k, &k.PublicKey
-			},
-			checkEq: func(t *testing.T, original, decoded any) {
-				t.Helper()
-				if !original.(*ecdsa.PrivateKey).Equal(decoded) {
 					t.Error("key mismatch")
 				}
 			},

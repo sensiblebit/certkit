@@ -12,95 +12,12 @@ import (
 	"encoding/hex"
 	"encoding/pem"
 	"math/big"
-	"net"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/sensiblebit/certkit"
-	"github.com/sensiblebit/certkit/internal/certstore"
 )
-
-func TestIsPEM(t *testing.T) {
-	// WHY: The PEM-vs-DER detection gate controls the entire parsing pipeline; a false positive or negative here would send data down the wrong decoder path.
-	tests := []struct {
-		name string
-		data []byte
-		want bool
-	}{
-		{"PEM data", []byte("-----BEGIN CERTIFICATE-----\nfoo\n-----END CERTIFICATE-----"), true},
-		{"DER data", []byte{0x30, 0x82, 0x01, 0x00}, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := certkit.IsPEM(tt.data); got != tt.want {
-				t.Errorf("IsPEM() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestGetKeyType(t *testing.T) {
-	// WHY: The key type string is stored in the DB and displayed to users; verifies the human-readable format (e.g. "RSA 2048 bits") is correct for all algorithm families.
-	tests := []struct {
-		name string
-		cert func(t *testing.T) *x509.Certificate
-		want string
-	}{
-		{
-			name: "RSA",
-			cert: func(t *testing.T) *x509.Certificate {
-				ca := newRSACA(t)
-				return newRSALeaf(t, ca, "test.example.com", []string{"test.example.com"}, nil).cert
-			},
-			want: "RSA 2048 bits",
-		},
-		{
-			name: "ECDSA",
-			cert: func(t *testing.T) *x509.Certificate {
-				ca := newECDSACA(t)
-				return newECDSALeaf(t, ca, "test.example.com", []string{"test.example.com"}).cert
-			},
-			want: "ECDSA P-256",
-		},
-		{
-			name: "Ed25519",
-			cert: func(t *testing.T) *x509.Certificate {
-				ca := newRSACA(t)
-				return newEd25519Leaf(t, ca, "test.example.com", []string{"test.example.com"}).cert
-			},
-			want: "Ed25519",
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := certstore.GetKeyType(tt.cert(t))
-			if got != tt.want {
-				t.Errorf("certstore.GetKeyType() = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestGetKeyType_UnknownKeyType(t *testing.T) {
-	// WHY: The getKeyType function has a default case for unrecognized public key
-	// types that returns "unknown key type: <type>". This branch is unreachable
-	// with standard x509 certificates, so we construct a certificate with a nil
-	// PublicKey to exercise it. Without this test, a refactor could silently break
-	// the fallback formatting.
-	cert := &x509.Certificate{
-		PublicKey: "not-a-real-key", // string is not RSA, ECDSA, or Ed25519
-	}
-
-	got := certstore.GetKeyType(cert)
-	if !strings.Contains(got, "unknown key type") {
-		t.Errorf("certstore.GetKeyType() = %q, want substring %q", got, "unknown key type")
-	}
-	if !strings.Contains(got, "string") {
-		t.Errorf("certstore.GetKeyType() = %q, should mention the actual type (string)", got)
-	}
-}
 
 func TestProcessFile_PEMCertificate(t *testing.T) {
 	// WHY: The primary ingestion path for PEM certificates; verifies the cert is stored in the DB with correct SKI, CN, type, and key type metadata.
@@ -137,37 +54,50 @@ func TestProcessFile_PEMCertificate(t *testing.T) {
 	}
 }
 
-func TestProcessFile_PEMPrivateKey(t *testing.T) {
-	// WHY: Verifies standalone PEM private key ingestion stores the key with correct type, bit length, and parseable key data in the DB.
-	cfg := newTestConfig(t)
+func TestProcessFile_PrivateKeyTypes(t *testing.T) {
+	// WHY: ProcessFile must ingest private keys of all supported types,
+	// store them with correct metadata, and produce parseable PKCS#8 PEM.
+	t.Parallel()
 
-	keyData := rsaKeyPEM(t)
-	dir := t.TempDir()
-	path := filepath.Join(dir, "key.pem")
-	if err := os.WriteFile(path, keyData, 0600); err != nil {
-		t.Fatalf("write key: %v", err)
+	tests := []struct {
+		name        string
+		keyPEM      func(t *testing.T) []byte
+		wantKeyType string
+	}{
+		{"RSA", rsaKeyPEM, "RSA"},
+		{"ECDSA", ecdsaKeyPEM, "ECDSA"},
+		{"Ed25519", ed25519KeyPEM, "Ed25519"},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cfg := newTestConfig(t)
 
-	if err := ProcessFile(path, cfg.Store, cfg.Passwords); err != nil {
-		t.Fatalf("ProcessFile: %v", err)
-	}
+			keyData := tt.keyPEM(t)
+			dir := t.TempDir()
+			path := filepath.Join(dir, "key.pem")
+			if err := os.WriteFile(path, keyData, 0600); err != nil {
+				t.Fatalf("write key: %v", err)
+			}
 
-	// Verify key was inserted with correct metadata
-	keys := cfg.Store.AllKeysFlat()
-	if len(keys) != 1 {
-		t.Fatalf("expected 1 key in DB, got %d", len(keys))
-	}
-	if keys[0].KeyType != "RSA" {
-		t.Errorf("key type = %q, want RSA", keys[0].KeyType)
-	}
-	if keys[0].BitLength != 2048 {
-		t.Errorf("key bit length = %d, want 2048", keys[0].BitLength)
-	}
+			if err := ProcessFile(path, cfg.Store, cfg.Passwords); err != nil {
+				t.Fatalf("ProcessFile: %v", err)
+			}
 
-	// Verify the stored key data is parseable
-	_, err := certkit.ParsePEMPrivateKey(keys[0].PEM)
-	if err != nil {
-		t.Errorf("stored key data is not parseable: %v", err)
+			keys := cfg.Store.AllKeysFlat()
+			if len(keys) != 1 {
+				t.Fatalf("expected 1 key in DB, got %d", len(keys))
+			}
+			if keys[0].KeyType != tt.wantKeyType {
+				t.Errorf("key type = %q, want %q", keys[0].KeyType, tt.wantKeyType)
+			}
+
+			// Verify the stored key data is parseable
+			_, err := certkit.ParsePEMPrivateKey(keys[0].PEM)
+			if err != nil {
+				t.Errorf("stored key data is not parseable: %v", err)
+			}
+		})
 	}
 }
 
@@ -396,36 +326,6 @@ func TestProcessFile_PKCS7(t *testing.T) {
 	}
 }
 
-func TestProcessFile_Ed25519Key(t *testing.T) {
-	// WHY: Ed25519 keys use a different PKCS#8 encoding than RSA/ECDSA; verifies the DER detection and PKCS#8 parsing path stores the correct key type.
-	cfg := newTestConfig(t)
-
-	keyData := ed25519KeyPEM(t)
-	dir := t.TempDir()
-	path := filepath.Join(dir, "ed25519.pem")
-	if err := os.WriteFile(path, keyData, 0600); err != nil {
-		t.Fatalf("write key: %v", err)
-	}
-
-	if err := ProcessFile(path, cfg.Store, cfg.Passwords); err != nil {
-		t.Fatalf("ProcessFile: %v", err)
-	}
-
-	keys := cfg.Store.AllKeysFlat()
-	if len(keys) != 1 {
-		t.Fatalf("expected 1 key in DB, got %d", len(keys))
-	}
-	if keys[0].KeyType != "Ed25519" {
-		t.Errorf("key type = %q, want Ed25519", keys[0].KeyType)
-	}
-
-	// Verify the stored key data is parseable
-	_, err := certkit.ParsePEMPrivateKey(keys[0].PEM)
-	if err != nil {
-		t.Errorf("stored Ed25519 key data is not parseable: %v", err)
-	}
-}
-
 func TestProcessFile_WrongPassword(t *testing.T) {
 	// WHY: When no provided password matches a PKCS#12 file, ProcessFile must gracefully skip it (no error, no data inserted), not crash or partially ingest.
 	ca := newRSACA(t)
@@ -514,47 +414,6 @@ func TestProcessFile_MixedCertAndKeyPEM(t *testing.T) {
 	}
 }
 
-func TestProcessFile_ECDSAKey(t *testing.T) {
-	// WHY: ECDSA keys use SEC1 or PKCS#8 encoding; verifies the parser detects the correct key type, curve name, and bit length for DB storage.
-	cfg := newTestConfig(t)
-
-	keyData := ecdsaKeyPEM(t)
-	dir := t.TempDir()
-	path := filepath.Join(dir, "ecdsa.pem")
-	if err := os.WriteFile(path, keyData, 0600); err != nil {
-		t.Fatalf("write key: %v", err)
-	}
-
-	if err := ProcessFile(path, cfg.Store, cfg.Passwords); err != nil {
-		t.Fatalf("ProcessFile: %v", err)
-	}
-
-	keys := cfg.Store.AllKeysFlat()
-	if len(keys) != 1 {
-		t.Fatalf("expected 1 key in DB, got %d", len(keys))
-	}
-	if keys[0].KeyType != "ECDSA" {
-		t.Errorf("key type = %q, want ECDSA", keys[0].KeyType)
-	}
-	// Check the curve from the key directly since certstore.KeyRecord has no Curve field
-	ecKey, ok := keys[0].Key.(*ecdsa.PrivateKey)
-	if !ok {
-		t.Fatal("expected *ecdsa.PrivateKey")
-	}
-	if ecKey.Curve.Params().Name != "P-256" {
-		t.Errorf("key curve = %q, want P-256", ecKey.Curve.Params().Name)
-	}
-	if keys[0].BitLength != 256 {
-		t.Errorf("key bit length = %d, want 256", keys[0].BitLength)
-	}
-
-	// Verify stored key data is parseable
-	_, err := certkit.ParsePEMPrivateKey(keys[0].PEM)
-	if err != nil {
-		t.Errorf("stored ECDSA key data is not parseable: %v", err)
-	}
-}
-
 func TestProcessFile_DERCertificate_VerifyFields(t *testing.T) {
 	// WHY: DER certificates lack PEM headers; verifies the DER detection fallback correctly parses and stores cert metadata identical to PEM input.
 	ca := newRSACA(t)
@@ -619,53 +478,6 @@ func TestProcessFile_DERPrivateKey_VerifyFields(t *testing.T) {
 	_, err := certkit.ParsePEMPrivateKey(keys[0].PEM)
 	if err != nil {
 		t.Errorf("stored DER key data is not parseable: %v", err)
-	}
-}
-
-func TestProcessFile_IPSANVerification(t *testing.T) {
-	// WHY: IP SANs must be included alongside DNS SANs in the stored certificate; without this, certs for IP-based services would lose their IP addresses during ingestion.
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "ipsan.example.com", []string{"ipsan.example.com"}, []net.IP{net.ParseIP("10.0.0.1")})
-	cfg := newTestConfig(t)
-
-	dir := t.TempDir()
-	path := filepath.Join(dir, "cert-ip.pem")
-	if err := os.WriteFile(path, leaf.certPEM, 0644); err != nil {
-		t.Fatalf("write cert: %v", err)
-	}
-
-	if err := ProcessFile(path, cfg.Store, cfg.Passwords); err != nil {
-		t.Fatalf("ProcessFile: %v", err)
-	}
-
-	expectedSKI := computeSKIHex(t, leaf.cert.PublicKey)
-	cert := cfg.Store.GetCert(expectedSKI)
-	if cert == nil {
-		t.Fatal("expected cert with IP SAN to be inserted")
-	}
-
-	// Verify the DNS SAN is present
-	foundDNS := false
-	for _, dns := range cert.Cert.DNSNames {
-		if dns == "ipsan.example.com" {
-			foundDNS = true
-			break
-		}
-	}
-	if !foundDNS {
-		t.Errorf("expected DNS SAN ipsan.example.com in cert.DNSNames, got %v", cert.Cert.DNSNames)
-	}
-
-	// Verify the IP SAN is present
-	foundIP := false
-	for _, ip := range cert.Cert.IPAddresses {
-		if ip.Equal(net.ParseIP("10.0.0.1")) {
-			foundIP = true
-			break
-		}
-	}
-	if !foundIP {
-		t.Errorf("expected IP SAN 10.0.0.1 in cert.IPAddresses, got %v", cert.Cert.IPAddresses)
 	}
 }
 

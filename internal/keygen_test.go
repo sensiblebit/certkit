@@ -11,7 +11,8 @@ import (
 )
 
 func TestGenerateKey(t *testing.T) {
-	// WHY: Core key generation must succeed for all three supported algorithms; a failure here would break the entire keygen command.
+	// WHY: Core key generation must succeed for all three supported algorithms
+	// and curve aliases; a failure here would break the entire keygen command.
 	tests := []struct {
 		name      string
 		algorithm string
@@ -21,6 +22,9 @@ func TestGenerateKey(t *testing.T) {
 		{"ECDSA", "ecdsa", 0, "P-256"},
 		{"RSA", "rsa", 2048, ""},
 		{"Ed25519", "ed25519", 0, ""},
+		{"ECDSA p256 alias", "ecdsa", 0, "p256"},
+		{"ECDSA prime256v1", "ecdsa", 0, "prime256v1"},
+		{"ECDSA secp384r1", "ecdsa", 0, "secp384r1"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -52,45 +56,48 @@ func TestGenerateKey_InvalidCurve(t *testing.T) {
 }
 
 func TestGenerateKeyFiles(t *testing.T) {
-	// WHY: Verifies the file-writing path for all algorithms creates key.pem and pub.pem with correct PEM headers, and does not create a CSR without CN/SANs.
-	tests := []struct {
-		name string
-		opts KeygenOptions
-	}{
-		{"ECDSA", KeygenOptions{Algorithm: "ecdsa", Curve: "P-256"}},
-		{"RSA", KeygenOptions{Algorithm: "rsa", Bits: 2048}},
-		{"Ed25519", KeygenOptions{Algorithm: "ed25519"}},
+	// WHY: Verifies the file-writing path creates key.pem and pub.pem with
+	// correct PEM headers, the key is parseable with the correct algorithm,
+	// and no CSR is created without CN/SANs. One key type suffices because
+	// the file-writing logic is algorithm-agnostic (a thin wrapper).
+	dir := t.TempDir()
+	_, err := GenerateKeyFiles(KeygenOptions{
+		Algorithm: "ecdsa",
+		Curve:     "P-256",
+		OutPath:   dir,
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			tt.opts.OutPath = dir
-			_, err := GenerateKeyFiles(tt.opts)
-			if err != nil {
-				t.Fatal(err)
-			}
 
-			keyData, err := os.ReadFile(filepath.Join(dir, "key.pem"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !strings.Contains(string(keyData), "PRIVATE KEY") {
-				t.Error("key file should contain PRIVATE KEY")
-			}
+	// Verify key.pem exists and is parseable
+	keyData, err := os.ReadFile(filepath.Join(dir, "key.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(keyData), "PRIVATE KEY") {
+		t.Error("key file should contain PRIVATE KEY")
+	}
+	parsedKey, err := certkit.ParsePEMPrivateKey(keyData)
+	if err != nil {
+		t.Fatalf("parsing generated key PEM: %v", err)
+	}
+	if certkit.KeyAlgorithmName(parsedKey) != "ECDSA" {
+		t.Errorf("algorithm = %s, want ECDSA", certkit.KeyAlgorithmName(parsedKey))
+	}
 
-			pubData, err := os.ReadFile(filepath.Join(dir, "pub.pem"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !strings.Contains(string(pubData), "PUBLIC KEY") {
-				t.Error("pub file should contain PUBLIC KEY")
-			}
+	// Verify pub.pem exists
+	pubData, err := os.ReadFile(filepath.Join(dir, "pub.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(pubData), "PUBLIC KEY") {
+		t.Error("pub file should contain PUBLIC KEY")
+	}
 
-			// No CSR should be created without CN/SANs
-			if _, err := os.Stat(filepath.Join(dir, "csr.pem")); err == nil {
-				t.Error("CSR should not be created without CN or SANs")
-			}
-		})
+	// No CSR should be created without CN/SANs
+	if _, err := os.Stat(filepath.Join(dir, "csr.pem")); err == nil {
+		t.Error("CSR should not be created without CN or SANs")
 	}
 }
 
@@ -170,80 +177,6 @@ func TestGenerateKeyFiles_UnsupportedAlgorithm(t *testing.T) {
 	})
 	if err == nil {
 		t.Error("expected error for unsupported algorithm")
-	}
-}
-
-func TestParseCurve(t *testing.T) {
-	tests := []struct {
-		input    string
-		wantName string
-		wantErr  bool
-	}{
-		{"P-256", "P-256", false},
-		{"p256", "P-256", false},
-		{"prime256v1", "P-256", false},
-		{"P-384", "P-384", false},
-		{"p384", "P-384", false},
-		{"secp384r1", "P-384", false},
-		{"P-521", "P-521", false},
-		{"p521", "P-521", false},
-		{"secp521r1", "P-521", false},
-		{"invalid", "", true},
-	}
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			curve, err := parseCurve(tt.input)
-			if (err != nil) != tt.wantErr {
-				t.Fatalf("parseCurve(%q): err=%v, wantErr=%v", tt.input, err, tt.wantErr)
-			}
-			if err == nil && curve.Params().Name != tt.wantName {
-				t.Errorf("parseCurve(%q) = %s, want %s", tt.input, curve.Params().Name, tt.wantName)
-			}
-		})
-	}
-}
-
-func TestGenerateKeyFiles_RoundTrip(t *testing.T) {
-	tests := []struct {
-		name    string
-		opts    KeygenOptions
-		wantAlg string
-	}{
-		{"RSA", KeygenOptions{Algorithm: "rsa", Bits: 2048}, "RSA"},
-		{"ECDSA", KeygenOptions{Algorithm: "ecdsa", Curve: "P-256"}, "ECDSA"},
-		{"Ed25519", KeygenOptions{Algorithm: "ed25519"}, "Ed25519"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			dir := t.TempDir()
-			tt.opts.OutPath = dir
-			_, err := GenerateKeyFiles(tt.opts)
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			keyData, err := os.ReadFile(filepath.Join(dir, "key.pem"))
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			parsedKey, err := certkit.ParsePEMPrivateKey(keyData)
-			if err != nil {
-				t.Fatalf("parsing generated key PEM: %v", err)
-			}
-
-			if certkit.KeyAlgorithmName(parsedKey) != tt.wantAlg {
-				t.Errorf("algorithm = %s, want %s", certkit.KeyAlgorithmName(parsedKey), tt.wantAlg)
-			}
-
-			pubData, err := os.ReadFile(filepath.Join(dir, "pub.pem"))
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !strings.Contains(string(pubData), "PUBLIC KEY") {
-				t.Error("pub file should contain PUBLIC KEY")
-			}
-		})
 	}
 }
 

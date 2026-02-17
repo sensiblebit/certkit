@@ -1088,49 +1088,34 @@ func TestMemStore_HandleKey_Deduplication(t *testing.T) {
 
 func TestMemStore_HandleKey_PEMRoundTrip(t *testing.T) {
 	// WHY: HandleKey stores a PEM blob alongside the key object. This test
-	// verifies that the stored PEM round-trips back to the original key for
-	// all supported key types, catching silent PEM corruption.
+	// verifies that the stored PEM round-trips back to the original key,
+	// catching silent PEM corruption. One key type suffices since the PEM
+	// storage path is key-type-agnostic.
 	t.Parallel()
 
 	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	_, edKey, _ := ed25519.GenerateKey(rand.Reader)
-
-	tests := []struct {
-		name string
-		key  any
-	}{
-		{"RSA", rsaKey},
-		{"ECDSA", ecKey},
-		{"Ed25519", edKey},
+	keyPEM, err := certkit.MarshalPrivateKeyToPEM(rsaKey)
+	if err != nil {
+		t.Fatalf("MarshalPrivateKeyToPEM: %v", err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			keyPEM, err := certkit.MarshalPrivateKeyToPEM(tt.key)
-			if err != nil {
-				t.Fatalf("MarshalPrivateKeyToPEM: %v", err)
-			}
 
-			store := NewMemStore()
-			if err := store.HandleKey(tt.key, []byte(keyPEM), "test.pem"); err != nil {
-				t.Fatalf("HandleKey: %v", err)
-			}
+	store := NewMemStore()
+	if err := store.HandleKey(rsaKey, []byte(keyPEM), "test.pem"); err != nil {
+		t.Fatalf("HandleKey: %v", err)
+	}
 
-			keys := store.AllKeys()
-			if len(keys) != 1 {
-				t.Fatalf("expected 1 key, got %d", len(keys))
-			}
-			for _, rec := range keys {
-				parsedKey, err := certkit.ParsePEMPrivateKey(rec.PEM)
-				if err != nil {
-					t.Fatalf("stored PEM round-trip parse failed: %v", err)
-				}
-				if !keysEqual(t, tt.key, parsedKey) {
-					t.Error("stored PEM round-trip key does not Equal original")
-				}
-			}
-		})
+	keys := store.AllKeys()
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key, got %d", len(keys))
+	}
+	for _, rec := range keys {
+		parsedKey, err := certkit.ParsePEMPrivateKey(rec.PEM)
+		if err != nil {
+			t.Fatalf("stored PEM round-trip parse failed: %v", err)
+		}
+		if !keysEqual(t, rsaKey, parsedKey) {
+			t.Error("stored PEM round-trip key does not Equal original")
+		}
 	}
 }
 

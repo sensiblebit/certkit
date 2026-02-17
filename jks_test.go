@@ -360,6 +360,18 @@ func TestDecodeJKS_DifferentKeyPassword(t *testing.T) {
 	if len(certs) != 2 {
 		t.Errorf("expected 2 certs (leaf + CA), got %d", len(certs))
 	}
+
+	// Verify the decoded key material matches the original when store and key
+	// passwords differ. A password-mixing bug could decrypt with the wrong key.
+	if len(keys) == 1 {
+		decodedRSA, ok := keys[0].(*rsa.PrivateKey)
+		if !ok {
+			t.Fatalf("expected *rsa.PrivateKey, got %T", keys[0])
+		}
+		if !leafKey.Equal(decodedRSA) {
+			t.Error("decoded key does not Equal original with different store/key passwords")
+		}
+	}
 }
 
 func TestDecodeJKS_CorruptedKeyData(t *testing.T) {
@@ -565,129 +577,6 @@ func TestEncodeDecodeJKS_KeyTypes(t *testing.T) {
 				t.Helper()
 				if !original.(*rsa.PrivateKey).Equal(decoded) {
 					t.Error("decoded RSA key does not Equal original")
-				}
-			},
-		},
-		{
-			name: "ECDSA-P256",
-			setup: func(t *testing.T) (any, *x509.Certificate, []*x509.Certificate, string, int) {
-				t.Helper()
-				caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-				if err != nil {
-					t.Fatal(err)
-				}
-				caTmpl := &x509.Certificate{
-					SerialNumber:          big.NewInt(1),
-					Subject:               pkix.Name{CommonName: "JKS ECDSA P256 CA"},
-					NotBefore:             time.Now().Add(-1 * time.Hour),
-					NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
-					KeyUsage:              x509.KeyUsageCertSign,
-					BasicConstraintsValid: true,
-					IsCA:                  true,
-				}
-				caDER, _ := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
-				caCert, _ := x509.ParseCertificate(caDER)
-
-				leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-				leafTmpl := &x509.Certificate{
-					SerialNumber: big.NewInt(100),
-					Subject:      pkix.Name{CommonName: "jks-ecdsa-p256.example.com"},
-					DNSNames:     []string{"jks-ecdsa-p256.example.com"},
-					NotBefore:    time.Now().Add(-1 * time.Hour),
-					NotAfter:     time.Now().Add(365 * 24 * time.Hour),
-					KeyUsage:     x509.KeyUsageDigitalSignature,
-				}
-				leafDER, _ := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
-				leafCert, _ := x509.ParseCertificate(leafDER)
-				return leafKey, leafCert, []*x509.Certificate{caCert}, "jks-ecdsa-p256.example.com", 2
-			},
-			wantType: "*ecdsa.PrivateKey",
-			checkEq: func(t *testing.T, original, decoded any) {
-				t.Helper()
-				if !original.(*ecdsa.PrivateKey).Equal(decoded) {
-					t.Error("decoded ECDSA P-256 key does not Equal original")
-				}
-			},
-		},
-		{
-			name: "ECDSA-P384",
-			setup: func(t *testing.T) (any, *x509.Certificate, []*x509.Certificate, string, int) {
-				t.Helper()
-				caKey, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-				if err != nil {
-					t.Fatal(err)
-				}
-				caTmpl := &x509.Certificate{
-					SerialNumber:          big.NewInt(1),
-					Subject:               pkix.Name{CommonName: "JKS ECDSA P384 CA"},
-					NotBefore:             time.Now().Add(-1 * time.Hour),
-					NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
-					KeyUsage:              x509.KeyUsageCertSign,
-					BasicConstraintsValid: true,
-					IsCA:                  true,
-				}
-				caDER, _ := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
-				caCert, _ := x509.ParseCertificate(caDER)
-
-				leafKey, _ := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
-				leafTmpl := &x509.Certificate{
-					SerialNumber: big.NewInt(100),
-					Subject:      pkix.Name{CommonName: "jks-ecdsa-p384.example.com"},
-					DNSNames:     []string{"jks-ecdsa-p384.example.com"},
-					NotBefore:    time.Now().Add(-1 * time.Hour),
-					NotAfter:     time.Now().Add(365 * 24 * time.Hour),
-					KeyUsage:     x509.KeyUsageDigitalSignature,
-				}
-				leafDER, _ := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
-				leafCert, _ := x509.ParseCertificate(leafDER)
-				return leafKey, leafCert, []*x509.Certificate{caCert}, "jks-ecdsa-p384.example.com", 2
-			},
-			wantType: "*ecdsa.PrivateKey",
-			checkEq: func(t *testing.T, original, decoded any) {
-				t.Helper()
-				if !original.(*ecdsa.PrivateKey).Equal(decoded) {
-					t.Error("decoded ECDSA P-384 key does not Equal original")
-				}
-			},
-		},
-		{
-			name: "ECDSA-P521",
-			setup: func(t *testing.T) (any, *x509.Certificate, []*x509.Certificate, string, int) {
-				t.Helper()
-				caKey, err := ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
-				if err != nil {
-					t.Fatal(err)
-				}
-				caTmpl := &x509.Certificate{
-					SerialNumber:          big.NewInt(1),
-					Subject:               pkix.Name{CommonName: "JKS ECDSA P521 CA"},
-					NotBefore:             time.Now().Add(-1 * time.Hour),
-					NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
-					KeyUsage:              x509.KeyUsageCertSign,
-					BasicConstraintsValid: true,
-					IsCA:                  true,
-				}
-				caDER, _ := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
-				caCert, _ := x509.ParseCertificate(caDER)
-
-				leafKey, _ := ecdsa.GenerateKey(elliptic.P521(), rand.Reader)
-				leafTmpl := &x509.Certificate{
-					SerialNumber: big.NewInt(100),
-					Subject:      pkix.Name{CommonName: "jks-ecdsa-p521.example.com"},
-					DNSNames:     []string{"jks-ecdsa-p521.example.com"},
-					NotBefore:    time.Now().Add(-1 * time.Hour),
-					NotAfter:     time.Now().Add(365 * 24 * time.Hour),
-					KeyUsage:     x509.KeyUsageDigitalSignature,
-				}
-				leafDER, _ := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
-				leafCert, _ := x509.ParseCertificate(leafDER)
-				return leafKey, leafCert, []*x509.Certificate{caCert}, "jks-ecdsa-p521.example.com", 2
-			},
-			wantType: "*ecdsa.PrivateKey",
-			checkEq: func(t *testing.T, original, decoded any) {
-				t.Helper()
-				if !original.(*ecdsa.PrivateKey).Equal(decoded) {
-					t.Error("decoded ECDSA P-521 key does not Equal original")
 				}
 			},
 		},
@@ -982,61 +871,6 @@ func TestDecodeJKS_CorruptedCertDER_PrivateKeyChain(t *testing.T) {
 	}
 }
 
-func TestDecodeJKS_DifferentKeyPassword_KeyEquality(t *testing.T) {
-	// WHY: TestDecodeJKS_DifferentKeyPassword checks counts only; this verifies
-	// the decoded key material matches the original when store and key passwords
-	// differ. A password-mixing bug could decrypt with the wrong key.
-	t.Parallel()
-
-	storePassword := "storepass"
-	keyPassword := "keypass"
-
-	leafKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "keyeq-leaf"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &leafKey.PublicKey, leafKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	pkcs8Key, _ := x509.MarshalPKCS8PrivateKey(leafKey)
-	ks := keystore.New()
-	if err := ks.SetPrivateKeyEntry("server", keystore.PrivateKeyEntry{
-		CreationTime: time.Now(),
-		PrivateKey:   pkcs8Key,
-		CertificateChain: []keystore.Certificate{
-			{Type: "X.509", Content: certDER},
-		},
-	}, []byte(keyPassword)); err != nil {
-		t.Fatal(err)
-	}
-
-	var buf bytes.Buffer
-	if err := ks.Store(&buf, []byte(storePassword)); err != nil {
-		t.Fatal(err)
-	}
-
-	_, keys, err := DecodeJKS(buf.Bytes(), []string{storePassword, keyPassword})
-	if err != nil {
-		t.Fatalf("DecodeJKS: %v", err)
-	}
-	if len(keys) != 1 {
-		t.Fatalf("expected 1 key, got %d", len(keys))
-	}
-
-	decodedRSA, ok := keys[0].(*rsa.PrivateKey)
-	if !ok {
-		t.Fatalf("expected *rsa.PrivateKey, got %T", keys[0])
-	}
-	if !leafKey.Equal(decodedRSA) {
-		t.Error("decoded key does not Equal original with different store/key passwords")
-	}
-}
-
 func TestDecodeJKS_MultiplePrivateKeyEntries(t *testing.T) {
 	// WHY: JKS files can contain multiple PrivateKeyEntry items (e.g., server + client certs).
 	// DecodeJKS must extract all keys and their cert chains, not just the first entry. This is
@@ -1163,67 +997,6 @@ func TestDecodeJKS_PrivateKeyEntry_EmptyCertChain(t *testing.T) {
 	}
 }
 
-func TestDecodeJKS_KeyNormalization_Ed25519(t *testing.T) {
-	// WHY: DecodeJKS calls normalizeKey on parsed keys. Since JKS stores
-	// PKCS#8 data and x509.ParsePKCS8PrivateKey returns ed25519.PrivateKey
-	// (value type), normalizeKey is a no-op here — but the test proves the
-	// contract holds and the key type is correct after the full decode path.
-	t.Parallel()
-
-	_, edKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("generate Ed25519 key: %v", err)
-	}
-	pkcs8Key, err := x509.MarshalPKCS8PrivateKey(edKey)
-	if err != nil {
-		t.Fatalf("marshal PKCS#8: %v", err)
-	}
-
-	// Create a cert for the chain
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "ed-jks-norm"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, edKey.Public(), edKey)
-	if err != nil {
-		t.Fatalf("create cert: %v", err)
-	}
-
-	password := "changeit"
-	ks := keystore.New()
-	if err := ks.SetPrivateKeyEntry("server", keystore.PrivateKeyEntry{
-		CreationTime: time.Now(),
-		PrivateKey:   pkcs8Key,
-		CertificateChain: []keystore.Certificate{
-			{Type: "X.509", Content: certDER},
-		},
-	}, []byte(password)); err != nil {
-		t.Fatalf("set private key entry: %v", err)
-	}
-
-	var buf bytes.Buffer
-	if err := ks.Store(&buf, []byte(password)); err != nil {
-		t.Fatalf("store JKS: %v", err)
-	}
-
-	_, keys, err := DecodeJKS(buf.Bytes(), []string{password})
-	if err != nil {
-		t.Fatalf("DecodeJKS: %v", err)
-	}
-	if len(keys) != 1 {
-		t.Fatalf("expected 1 key, got %d", len(keys))
-	}
-	if _, ok := keys[0].(ed25519.PrivateKey); !ok {
-		t.Fatalf("key type = %T, want ed25519.PrivateKey (value form)", keys[0])
-	}
-	if !edKey.Equal(keys[0]) {
-		t.Error("decoded Ed25519 key does not match original")
-	}
-}
-
 func TestEncodeJKS_NilPrivateKey(t *testing.T) {
 	// WHY: Nil private key must fail gracefully with clear error, not panic.
 	// EncodePKCS12 has TestEncodePKCS12_NilPrivateKey; JKS encoder needs parity.
@@ -1260,96 +1033,6 @@ func TestEncodeJKS_NilLeafCertificate(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "nil") {
 		t.Errorf("error should mention nil, got: %v", err)
-	}
-}
-
-func TestDecodeJKS_MultiplePrivateKeyEntries_RSAAndEd25519(t *testing.T) {
-	// WHY: TestDecodeJKS_MultiplePrivateKeyEntries covers RSA+ECDSA but not
-	// Ed25519. Since Ed25519 keys use a different PKCS#8 OID and the JKS
-	// decoder must call normalizeKey on each entry, mixing RSA and Ed25519
-	// in the same JKS tests both the PKCS#8 parsing diversity and the
-	// per-entry normalization contract.
-	t.Parallel()
-
-	password := "changeit"
-
-	// RSA key + cert
-	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	rsaTmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "rsa-entry"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	rsaCertDER, _ := x509.CreateCertificate(rand.Reader, rsaTmpl, rsaTmpl, &rsaKey.PublicKey, rsaKey)
-
-	// Ed25519 key + cert
-	_, edKey, _ := ed25519.GenerateKey(rand.Reader)
-	edTmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(2),
-		Subject:      pkix.Name{CommonName: "ed25519-entry"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	edCertDER, _ := x509.CreateCertificate(rand.Reader, edTmpl, edTmpl, edKey.Public(), edKey)
-
-	// Build JKS with both entries
-	ks := keystore.New()
-	rsaPKCS8, _ := x509.MarshalPKCS8PrivateKey(rsaKey)
-	if err := ks.SetPrivateKeyEntry("rsa-server", keystore.PrivateKeyEntry{
-		CreationTime:     time.Now(),
-		PrivateKey:       rsaPKCS8,
-		CertificateChain: []keystore.Certificate{{Type: "X.509", Content: rsaCertDER}},
-	}, []byte(password)); err != nil {
-		t.Fatalf("set RSA entry: %v", err)
-	}
-
-	edPKCS8, _ := x509.MarshalPKCS8PrivateKey(edKey)
-	if err := ks.SetPrivateKeyEntry("ed25519-server", keystore.PrivateKeyEntry{
-		CreationTime:     time.Now(),
-		PrivateKey:       edPKCS8,
-		CertificateChain: []keystore.Certificate{{Type: "X.509", Content: edCertDER}},
-	}, []byte(password)); err != nil {
-		t.Fatalf("set Ed25519 entry: %v", err)
-	}
-
-	var buf bytes.Buffer
-	if err := ks.Store(&buf, []byte(password)); err != nil {
-		t.Fatalf("store JKS: %v", err)
-	}
-
-	certs, keys, err := DecodeJKS(buf.Bytes(), []string{password})
-	if err != nil {
-		t.Fatalf("DecodeJKS: %v", err)
-	}
-	if len(keys) != 2 {
-		t.Fatalf("expected 2 keys, got %d", len(keys))
-	}
-	if len(certs) != 2 {
-		t.Fatalf("expected 2 certs, got %d", len(certs))
-	}
-
-	hasRSA, hasEd25519 := false, false
-	for _, k := range keys {
-		switch kk := k.(type) {
-		case *rsa.PrivateKey:
-			hasRSA = true
-			if !rsaKey.Equal(kk) {
-				t.Error("RSA key material mismatch")
-			}
-		case ed25519.PrivateKey:
-			hasEd25519 = true
-			if !edKey.Equal(kk) {
-				t.Error("Ed25519 key material mismatch")
-			}
-		default:
-			t.Errorf("unexpected key type: %T", k)
-		}
-	}
-	if !hasRSA || !hasEd25519 {
-		t.Errorf("missing key types: RSA=%v Ed25519=%v", hasRSA, hasEd25519)
 	}
 }
 

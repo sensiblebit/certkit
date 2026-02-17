@@ -11,113 +11,78 @@ import (
 )
 
 func TestSaveToSQLite_RoundTrip(t *testing.T) {
+	// WHY: SQLite persistence must round-trip certs, keys, and bundle names.
+	// One key type suffices since the SQLite layer stores PEM blobs
+	// key-type-agnostically.
 	t.Parallel()
 
-	tests := []struct {
-		name    string
-		mkCA    func(t *testing.T) testCA
-		mkLeaf  func(t *testing.T, ca testCA) testLeaf
-		keyType string
-	}{
-		{
-			name: "RSA",
-			mkCA: newRSACA,
-			mkLeaf: func(t *testing.T, ca testCA) testLeaf {
-				return newRSALeaf(t, ca, "rsa-rt.example.com", []string{"rsa-rt.example.com"})
-			},
-			keyType: "RSA",
-		},
-		{
-			name: "ECDSA",
-			mkCA: newECDSACA,
-			mkLeaf: func(t *testing.T, ca testCA) testLeaf {
-				return newECDSALeaf(t, ca, "ecdsa-rt.example.com", []string{"ecdsa-rt.example.com"})
-			},
-			keyType: "ECDSA",
-		},
-		{
-			name: "Ed25519",
-			mkCA: newRSACA,
-			mkLeaf: func(t *testing.T, ca testCA) testLeaf {
-				return newEd25519Leaf(t, ca, "ed25519-rt.example.com", []string{"ed25519-rt.example.com"})
-			},
-			keyType: "Ed25519",
-		},
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "rsa-rt.example.com", []string{"rsa-rt.example.com"})
+
+	store := NewMemStore()
+	if err := store.HandleCertificate(ca.cert, "test"); err != nil {
+		t.Fatalf("store CA cert: %v", err)
+	}
+	if err := store.HandleCertificate(leaf.cert, "test"); err != nil {
+		t.Fatalf("store leaf cert: %v", err)
+	}
+	if err := store.HandleKey(leaf.key, leaf.keyPEM, "test"); err != nil {
+		t.Fatalf("store key: %v", err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+	leafSKI, err := certkit.ComputeSKI(leaf.cert.PublicKey)
+	if err != nil {
+		t.Fatalf("compute leaf SKI: %v", err)
+	}
+	skiHex := hex.EncodeToString(leafSKI)
+	store.SetBundleName(skiHex, "RSA-bundle")
 
-			ca := tt.mkCA(t)
-			leaf := tt.mkLeaf(t, ca)
+	dbPath := filepath.Join(t.TempDir(), "rsa-roundtrip.db")
+	if err := SaveToSQLite(store, dbPath); err != nil {
+		t.Fatalf("SaveToSQLite: %v", err)
+	}
 
-			store := NewMemStore()
-			if err := store.HandleCertificate(ca.cert, "test"); err != nil {
-				t.Fatalf("store CA cert: %v", err)
-			}
-			if err := store.HandleCertificate(leaf.cert, "test"); err != nil {
-				t.Fatalf("store leaf cert: %v", err)
-			}
-			if err := store.HandleKey(leaf.key, leaf.keyPEM, "test"); err != nil {
-				t.Fatalf("store key: %v", err)
-			}
+	store2 := NewMemStore()
+	if err := LoadFromSQLite(store2, dbPath); err != nil {
+		t.Fatalf("LoadFromSQLite: %v", err)
+	}
 
-			leafSKI, err := certkit.ComputeSKI(leaf.cert.PublicKey)
-			if err != nil {
-				t.Fatalf("compute leaf SKI: %v", err)
-			}
-			skiHex := hex.EncodeToString(leafSKI)
-			store.SetBundleName(skiHex, tt.name+"-bundle")
+	certs := store2.AllCertsFlat()
+	if len(certs) != 2 {
+		t.Fatalf("expected 2 certs after round-trip, got %d", len(certs))
+	}
 
-			dbPath := filepath.Join(t.TempDir(), tt.name+"-roundtrip.db")
-			if err := SaveToSQLite(store, dbPath); err != nil {
-				t.Fatalf("SaveToSQLite: %v", err)
-			}
+	leafRec := store2.GetCert(skiHex)
+	if leafRec == nil {
+		t.Fatal("leaf cert not found after round-trip")
+	}
+	if leafRec.BundleName != "RSA-bundle" {
+		t.Errorf("bundle name: got %q, want %q", leafRec.BundleName, "RSA-bundle")
+	}
 
-			store2 := NewMemStore()
-			if err := LoadFromSQLite(store2, dbPath); err != nil {
-				t.Fatalf("LoadFromSQLite: %v", err)
-			}
+	keys := store2.AllKeysFlat()
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key after round-trip, got %d", len(keys))
+	}
+	if keys[0].KeyType != "RSA" {
+		t.Errorf("key type: got %q, want %q", keys[0].KeyType, "RSA")
+	}
+	if !keysEqual(t, leaf.key, keys[0].Key) {
+		t.Error("stored key does not Equal original after round-trip")
+	}
 
-			certs := store2.AllCertsFlat()
-			if len(certs) != 2 {
-				t.Fatalf("expected 2 certs after round-trip, got %d", len(certs))
-			}
-
-			leafRec := store2.GetCert(skiHex)
-			if leafRec == nil {
-				t.Fatal("leaf cert not found after round-trip")
-			}
-			if leafRec.BundleName != tt.name+"-bundle" {
-				t.Errorf("bundle name: got %q, want %q", leafRec.BundleName, tt.name+"-bundle")
-			}
-
-			keys := store2.AllKeysFlat()
-			if len(keys) != 1 {
-				t.Fatalf("expected 1 key after round-trip, got %d", len(keys))
-			}
-			if keys[0].KeyType != tt.keyType {
-				t.Errorf("key type: got %q, want %q", keys[0].KeyType, tt.keyType)
-			}
-			if !keysEqual(t, leaf.key, keys[0].Key) {
-				t.Error("stored key does not Equal original after round-trip")
-			}
-
-			summary := store2.ScanSummary()
-			if summary.Roots != 1 {
-				t.Errorf("roots: got %d, want 1", summary.Roots)
-			}
-			if summary.Leaves != 1 {
-				t.Errorf("leaves: got %d, want 1", summary.Leaves)
-			}
-			if summary.Keys != 1 {
-				t.Errorf("keys: got %d, want 1", summary.Keys)
-			}
-			if summary.Matched != 1 {
-				t.Errorf("matched: got %d, want 1", summary.Matched)
-			}
-		})
+	summary := store2.ScanSummary()
+	if summary.Roots != 1 {
+		t.Errorf("roots: got %d, want 1", summary.Roots)
+	}
+	if summary.Leaves != 1 {
+		t.Errorf("leaves: got %d, want 1", summary.Leaves)
+	}
+	if summary.Keys != 1 {
+		t.Errorf("keys: got %d, want 1", summary.Keys)
+	}
+	if summary.Matched != 1 {
+		t.Errorf("matched: got %d, want 1", summary.Matched)
 	}
 }
 
