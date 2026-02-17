@@ -47,7 +47,7 @@ Detailed file-by-file descriptions: `.claude/docs/architecture.md`
 
 ## 4 — Code Style
 
-- **CS-1 (MUST)** Enforce `gofmt`, `go vet`, `goimports` before committing.
+- **CS-1 (MUST)** Enforce `gofmt`, `go fix`, `go vet`, `goimports` before committing.
 - **CS-2 (MUST)** Avoid stutter in names: `package kv; type Store` (not `KVStore` in `kv`).
 - **CS-3 (SHOULD)** Small interfaces near consumers; prefer composition over inheritance.
 - **CS-4 (SHOULD)** Avoid reflection on hot paths; prefer generics when it clarifies and speeds.
@@ -123,6 +123,7 @@ Target the latest stable Go release. Use modern stdlib features freely: `slices`
 ```sh
 go test ./...          # Run all tests
 go build ./...         # Verify compilation
+go fix ./...           # Apply modernizer fixes
 go vet ./...           # Static analysis
 golangci-lint run      # Lint (errcheck, unused, staticcheck, etc.)
 ```
@@ -316,7 +317,7 @@ Every PR runs 10 parallel checks (`.github/workflows/ci.yml`):
 |---|---|
 | PR Title | Conventional Commits format |
 | PR Conventions | Branch name, commit messages, verified commits |
-| Go Checks | `go build`, `go vet`, goimports |
+| Go Checks | `go build`, `go fix`, `go vet`, goimports |
 | Go Test | `go test -race -count=1 ./...` |
 | Lint (golangci-lint) | errcheck, staticcheck, unused, etc. |
 | Vulnerability Check | `govulncheck ./...` |
@@ -340,16 +341,17 @@ pre-commit install --hook-type commit-msg
 pre-commit run --all-files  # Manual run against all files
 ```
 
-Configured hooks: `no-commit-to-branch`, `branch-name`, `commit-message` (commit-msg stage), `goimports`, `go vet`, `go build`, `go test`, `wasm`, `prettier`, `vitest`, `wrangler build`, `markdownlint`.
+Configured hooks: `no-commit-to-branch`, `branch-name`, `commit-message` (commit-msg stage), `goimports`, `go-fix`, `go vet`, `go build`, `go test`, `wasm`, `prettier`, `vitest`, `wrangler build`, `markdownlint`.
 
 ### Tooling gates
 
-- **G-1 (MUST)** `go vet ./...` passes.
-- **G-2 (MUST)** `go test -race ./...` passes.
-- **G-3 (MUST)** `golangci-lint run` passes with default linters (errcheck, staticcheck, unused, etc.). No `.golangci.yml` config — uses golangci-lint defaults.
-- **G-4 (MUST)** `GOOS=js GOARCH=wasm go vet ./cmd/wasm/` and `go build` pass.
-- **G-5 (MUST)** `cd web && npm test` passes (vitest).
-- **G-6 (MUST)** `cd web && wrangler pages functions build` compiles (local only, no credentials).
+- **G-1 (MUST)** `go fix ./...` leaves no pending changes.
+- **G-2 (MUST)** `go vet ./...` passes.
+- **G-3 (MUST)** `go test -race ./...` passes.
+- **G-4 (MUST)** `golangci-lint run` passes with default linters (errcheck, staticcheck, unused, etc.). No `.golangci.yml` config — uses golangci-lint defaults.
+- **G-5 (MUST)** `GOOS=js GOARCH=wasm go vet ./cmd/wasm/` and `go build` pass.
+- **G-6 (MUST)** `cd web && npm test` passes (vitest).
+- **G-7 (MUST)** `cd web && wrangler pages functions build` compiles (local only, no credentials).
 
 ---
 

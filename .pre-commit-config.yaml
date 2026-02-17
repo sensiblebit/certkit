@@ -8,11 +8,12 @@ repos:
         args: [--branch, main]
 
   - repo: https://github.com/sensiblebit/.github
-    rev: "27cc26b"
+    rev: "0b4c9df"
     hooks:
       - id: branch-name
       - id: commit-message
       - id: goimports
+      - id: go-fix
       - id: wasm
       - id: go-vet
       - id: go-build
