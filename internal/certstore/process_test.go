@@ -834,6 +834,77 @@ func TestProcessData_DER_KeyRoundTrip(t *testing.T) {
 	}
 }
 
+func TestProcessData_DER_PKCS1AndSEC1Keys(t *testing.T) {
+	// WHY: processDER has separate branches for PKCS#1 RSA (line 157) and SEC1 EC
+	// (line 171) after PKCS#8 fails. TestProcessData_DER_KeyRoundTrip only tests
+	// PKCS#8 DER, leaving these two code paths completely uncovered.
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		makeDER func(t *testing.T) ([]byte, any) // returns DER data and original key
+		wantAlg string
+	}{
+		{
+			name: "PKCS#1 RSA",
+			makeDER: func(t *testing.T) ([]byte, any) {
+				t.Helper()
+				key, err := rsa.GenerateKey(rand.Reader, 2048)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return x509.MarshalPKCS1PrivateKey(key), key
+			},
+			wantAlg: "RSA",
+		},
+		{
+			name: "SEC1 EC",
+			makeDER: func(t *testing.T) ([]byte, any) {
+				t.Helper()
+				key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				der, err := x509.MarshalECPrivateKey(key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return der, key
+			},
+			wantAlg: "ECDSA",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			der, original := tt.makeDER(t)
+
+			store := NewMemStore()
+			if err := ProcessData(ProcessInput{
+				Data:    der,
+				Path:    "test.der",
+				Handler: store,
+			}); err != nil {
+				t.Fatal(err)
+			}
+
+			keys := store.AllKeys()
+			if len(keys) != 1 {
+				t.Fatalf("expected 1 key, got %d", len(keys))
+			}
+			for _, rec := range keys {
+				if rec.KeyType != tt.wantAlg {
+					t.Errorf("KeyType = %q, want %q", rec.KeyType, tt.wantAlg)
+				}
+				if !keysEqual(t, original, rec.Key) {
+					t.Error("stored key does not Equal original")
+				}
+			}
+		})
+	}
+}
+
 func TestProcessData_OpenSSH_EncryptedPasswords(t *testing.T) {
 	// WHY: Encrypted OpenSSH keys must be decryptable with the correct password
 	// (producing normalized PKCS#8 storage) and silently skipped with the wrong

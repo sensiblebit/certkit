@@ -170,9 +170,17 @@ func TestGenerateCSRFiles_WithExistingKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// CSR should exist
-	if _, err := os.Stat(filepath.Join(outDir, "csr.pem")); err != nil {
-		t.Error("CSR file should exist")
+	// CSR should exist and be signed by the existing key
+	csrData, err := os.ReadFile(filepath.Join(outDir, "csr.pem"))
+	if err != nil {
+		t.Fatal("CSR file should exist")
+	}
+	csr, err := certkit.ParsePEMCertificateRequest(csrData)
+	if err != nil {
+		t.Fatalf("parse CSR: %v", err)
+	}
+	if !key.PublicKey.Equal(csr.PublicKey) {
+		t.Error("CSR public key does not match existing key — CSR was signed by a different key")
 	}
 
 	// Key file should NOT be generated when existing key is provided

@@ -170,7 +170,10 @@ func TestBundle_verifyFalsePassthrough(t *testing.T) {
 		t.Errorf("expected leaf CN=noverify-leaf, got %v", result.Leaf)
 	}
 	if len(result.Intermediates) != 1 {
-		t.Errorf("expected 1 intermediate passthrough, got %d", len(result.Intermediates))
+		t.Fatalf("expected 1 intermediate passthrough, got %d", len(result.Intermediates))
+	}
+	if !result.Intermediates[0].Equal(caCert) {
+		t.Errorf("intermediate should be caCert, got CN=%q", result.Intermediates[0].Subject.CommonName)
 	}
 	if result.Roots != nil {
 		t.Errorf("expected nil roots with verify=false, got %d", len(result.Roots))

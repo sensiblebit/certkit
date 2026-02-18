@@ -270,6 +270,7 @@ func TestFormatVerifyResult(t *testing.T) {
 	matchTrue := true
 	matchFalse := false
 	chainValid := true
+	chainInvalid := false
 	expiring := true
 
 	tests := []struct {
@@ -303,6 +304,19 @@ func TestFormatVerifyResult(t *testing.T) {
 				},
 			},
 			mustContain: []string{"Chain:", "[root]", "CN=leaf.example.com", "CN=Intermediate CA", "CN=Root CA", "0:", "2:"},
+		},
+		{
+			name: "chain invalid display",
+			result: &VerifyResult{
+				Subject:    "CN=bad-chain.example.com",
+				NotAfter:   "2030-01-01T00:00:00Z",
+				SKI:        "aabbccdd",
+				ChainValid: &chainInvalid,
+				ChainErr:   "x509: certificate signed by unknown authority",
+				Errors:     []string{"chain validation: x509: certificate signed by unknown authority"},
+			},
+			mustContain:    []string{"Chain: INVALID", "unknown authority", "Verification FAILED"},
+			mustNotContain: []string{"Chain: VALID"},
 		},
 		{
 			name: "SANs display",

@@ -866,6 +866,59 @@ func TestExportMatchedBundles_WildcardFolder(t *testing.T) {
 	}
 }
 
+func TestExportMatchedBundles_RetryNoVerify(t *testing.T) {
+	// WHY: RetryNoVerify retries bundling with Verify=false when verification fails
+	// (e.g., private CA). This 5-line code path (export.go:335-339) had zero test
+	// coverage. Without it, private-CA exports fail instead of falling back.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "retry.example.com", []string{"retry.example.com"})
+
+	store := NewMemStore()
+	if err := store.HandleCertificate(leaf.cert, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HandleCertificate(ca.cert, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HandleKey(leaf.key, leaf.keyPEM, "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	skis := store.MatchedPairs()
+	if len(skis) == 0 {
+		t.Fatal("expected at least one matched pair")
+	}
+	store.SetBundleName(skis[0], "retry-bundle")
+
+	var written []mockWriteCall
+	writer := &mockBundleWriter{calls: &written}
+
+	// Use mozilla trust store (will fail verification for our private CA)
+	// with RetryNoVerify=true to trigger the fallback path.
+	err := ExportMatchedBundles(t.Context(), ExportMatchedBundleInput{
+		Store: store,
+		SKIs:  skis,
+		BundleOpts: certkit.BundleOptions{
+			TrustStore: "mozilla",
+			Verify:     true,
+		},
+		Writer:        writer,
+		RetryNoVerify: true,
+	})
+	if err != nil {
+		t.Fatalf("ExportMatchedBundles: %v", err)
+	}
+
+	if len(written) != 1 {
+		t.Fatalf("expected 1 write call (retry succeeded), got %d", len(written))
+	}
+	if written[0].folder != "retry-bundle" {
+		t.Errorf("folder = %q, want %q", written[0].folder, "retry-bundle")
+	}
+}
+
 type mockWriteCall struct {
 	folder string
 	files  []BundleFile

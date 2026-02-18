@@ -48,6 +48,20 @@ func TestGenerateKey_CurveAliases(t *testing.T) {
 	}
 }
 
+func TestGenerateKey_Ed25519(t *testing.T) {
+	// WHY: The Ed25519 branch in GenerateKey (keygen.go:50-55) was the only
+	// algorithm path with zero test coverage. A bug swapping return values
+	// or wrapping the wrong type would go undetected.
+	t.Parallel()
+	signer, err := GenerateKey("ed25519", 0, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if certkit.KeyAlgorithmName(signer) != "Ed25519" {
+		t.Errorf("algorithm = %s, want Ed25519", certkit.KeyAlgorithmName(signer))
+	}
+}
+
 func TestGenerateKey_ErrorPaths(t *testing.T) {
 	// WHY: Invalid inputs (unsupported algorithm, invalid curve) must return
 	// clear errors; silent nil returns would cause nil-pointer panics downstream.

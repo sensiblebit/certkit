@@ -342,19 +342,8 @@ func TestParsePEMPrivateKeyWithPasswords_Encrypted(t *testing.T) {
 	}
 }
 
-func TestParsePEMPrivateKey_unsupportedBlockType(t *testing.T) {
-	// WHY: Unsupported PEM types (like DSA) must produce a clear error naming the block type, not a confusing parse failure.
-	t.Parallel()
-	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "DSA PRIVATE KEY", Bytes: []byte("whatever")})
-
-	_, err := ParsePEMPrivateKey(pemBytes)
-	if err == nil {
-		t.Error("expected error for unsupported block type")
-	}
-	if !strings.Contains(err.Error(), "unsupported PEM block type") {
-		t.Errorf("error should mention unsupported PEM block type, got: %v", err)
-	}
-}
+// TestParsePEMPrivateKey_unsupportedBlockType is consolidated into
+// TestParsePEMPrivateKey_ErrorPaths (T-14).
 
 func TestParsePEMCertificateRequest_errors(t *testing.T) {
 	// WHY: Each CSR parse failure mode (no PEM, wrong block type, corrupt DER) needs a distinct error message for user diagnostics.
@@ -868,6 +857,8 @@ func TestParsePEMPrivateKey_ErrorPaths(t *testing.T) {
 		Bytes: []byte("this is not a valid key in any format"),
 	})
 
+	dsaPEM := pem.EncodeToMemory(&pem.Block{Type: "DSA PRIVATE KEY", Bytes: []byte("whatever")})
+
 	tests := []struct {
 		name      string
 		input     []byte
@@ -876,6 +867,7 @@ func TestParsePEMPrivateKey_ErrorPaths(t *testing.T) {
 		{"empty input", nil, "no PEM block"},
 		{"corrupt OpenSSH body", corruptOpenSSH, "OpenSSH"},
 		{"garbage PRIVATE KEY block", garbagePKCS8, "parsing PRIVATE KEY"},
+		{"unsupported block type (DSA)", dsaPEM, "unsupported PEM block type"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1014,5 +1006,75 @@ func TestComputeSKILegacy(t *testing.T) {
 	}
 	if bytes.Equal(legacy, modern) {
 		t.Error("ComputeSKILegacy should differ from ComputeSKI (SHA-1 vs truncated SHA-256)")
+	}
+}
+
+func TestCertToPEM_RoundTrip(t *testing.T) {
+	// WHY: CertToPEM is the primary certificate serializer used by export and
+	// CLI output. A round-trip through ParsePEMCertificate proves the PEM
+	// wrapper is correct and the cert DER bytes survive encoding (T-6).
+	t.Parallel()
+	_, _, leafPEM := generateTestPKI(t)
+	original, err := ParsePEMCertificate([]byte(leafPEM))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	encoded := CertToPEM(original)
+	decoded, err := ParsePEMCertificate([]byte(encoded))
+	if err != nil {
+		t.Fatalf("ParsePEMCertificate after CertToPEM: %v", err)
+	}
+	if !original.Equal(decoded) {
+		t.Error("CertToPEM round-trip: decoded cert does not Equal original")
+	}
+}
+
+func TestMarshalPrivateKeyToPEM_RoundTrip(t *testing.T) {
+	// WHY: MarshalPrivateKeyToPEM is used by export and CSR generation to
+	// serialize keys. A round-trip through ParsePEMPrivateKey proves the
+	// PKCS#8 PEM wrapper is correct for all supported key types (T-6).
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		gen  func() crypto.PrivateKey
+	}{
+		{"RSA", func() crypto.PrivateKey {
+			k, _ := rsa.GenerateKey(rand.Reader, 2048)
+			return k
+		}},
+		{"ECDSA", func() crypto.PrivateKey {
+			k, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			return k
+		}},
+		{"Ed25519", func() crypto.PrivateKey {
+			_, k, _ := ed25519.GenerateKey(rand.Reader)
+			return k
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			original := tt.gen()
+			pemStr, err := MarshalPrivateKeyToPEM(original)
+			if err != nil {
+				t.Fatalf("MarshalPrivateKeyToPEM: %v", err)
+			}
+			parsed, err := ParsePEMPrivateKey([]byte(pemStr))
+			if err != nil {
+				t.Fatalf("ParsePEMPrivateKey after marshal: %v", err)
+			}
+			type equalKey interface {
+				Equal(x crypto.PrivateKey) bool
+			}
+			orig, ok := original.(equalKey)
+			if !ok {
+				t.Fatalf("original key %T does not implement Equal", original)
+			}
+			if !orig.Equal(parsed) {
+				t.Errorf("%s key round-trip mismatch", tt.name)
+			}
+		})
 	}
 }

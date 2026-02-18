@@ -27,6 +27,9 @@ func TestHasBinaryExtension(t *testing.T) {
 		{"DER extension", "cert.der", true},
 		{"JKS extension", "store.jks", true},
 
+		// .pem is in derExtensions because some .pem files are actually DER
+		{"PEM extension (surprise DER candidate)", "cert.pem", true},
+
 		// Unrecognized
 		{"unknown extension", "README.txt", false},
 		{"empty", "", false},
