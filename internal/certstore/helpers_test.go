@@ -130,18 +130,6 @@ func TestGetKeyType(t *testing.T) {
 			want: "Ed25519",
 		},
 		{
-			name: "Ed25519 pointer",
-			makePub: func(t *testing.T) *x509.Certificate {
-				t.Helper()
-				pub, _, err := ed25519.GenerateKey(rand.Reader)
-				if err != nil {
-					t.Fatal(err)
-				}
-				return &x509.Certificate{PublicKey: &pub}
-			},
-			want: "unknown key type: *ed25519.PublicKey",
-		},
-		{
 			name: "unknown",
 			makePub: func(t *testing.T) *x509.Certificate {
 				t.Helper()

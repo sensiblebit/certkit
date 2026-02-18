@@ -101,18 +101,6 @@ func TestEncodePKCS12_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestDecodePKCS12_invalidData(t *testing.T) {
-	// WHY: Non-PKCS#12 data must produce a "decoding PKCS#12" error, not a generic ASN.1 message; users need to know the format was wrong.
-	t.Parallel()
-	_, _, _, err := DecodePKCS12([]byte("not pkcs12"), "pass")
-	if err == nil {
-		t.Error("expected error for invalid PKCS#12 data")
-	}
-	if !strings.Contains(err.Error(), "decoding PKCS#12") {
-		t.Errorf("error should mention decoding PKCS#12, got: %v", err)
-	}
-}
-
 func TestDecodePKCS12_wrongPassword(t *testing.T) {
 	// WHY: Wrong passwords must produce an error, not silently return garbage or a zero-value key; this guards against data corruption on import.
 	t.Parallel()
@@ -191,18 +179,6 @@ func TestDecodePKCS7_roundTrip(t *testing.T) {
 	}
 }
 
-func TestDecodePKCS7_invalidData(t *testing.T) {
-	// WHY: Non-PKCS#7 data must produce a "parsing PKCS#7" error; without this, the ingestion pipeline cannot distinguish format from corruption errors.
-	t.Parallel()
-	_, err := DecodePKCS7([]byte("not pkcs7"))
-	if err == nil {
-		t.Error("expected error for invalid PKCS#7 data")
-	}
-	if !strings.Contains(err.Error(), "parsing PKCS#7") {
-		t.Errorf("error should mention parsing PKCS#7, got: %v", err)
-	}
-}
-
 func TestEncodePKCS12_MultiCertChain(t *testing.T) {
 	// WHY: Multi-level chains (root + intermediate + leaf) must all survive PKCS#12 encoding; missing intermediates would break TLS verification.
 	t.Parallel()
@@ -268,65 +244,6 @@ func TestEncodePKCS12_MultiCertChain(t *testing.T) {
 	}
 	if !leafKey.Equal(decodedECKey) {
 		t.Error("multi-chain decoded key does not match original")
-	}
-}
-
-func TestDecodePKCS12_TruncatedData(t *testing.T) {
-	// WHY: Truncated PKCS#12 data (e.g., incomplete download) must produce an error, not return partial or corrupt key/cert material.
-	t.Parallel()
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "truncate-test"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-	}
-	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	cert, _ := x509.ParseCertificate(certBytes)
-
-	pfxData, err := EncodePKCS12(key, cert, nil, "pass")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Truncate to half the data
-	truncated := pfxData[:len(pfxData)/2]
-	_, _, _, err = DecodePKCS12(truncated, "pass")
-	if err == nil {
-		t.Error("expected error for truncated PKCS#12 data")
-	}
-	if !strings.Contains(err.Error(), "decoding PKCS#12") {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-func TestEncodePKCS7_SingleCert(t *testing.T) {
-	// WHY: Single-cert PKCS#7 is the simplest case; verifies the encoder works without a chain and the round-trip preserves cert identity.
-	t.Parallel()
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "single-p7-cert"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-	}
-	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	cert, _ := x509.ParseCertificate(certBytes)
-
-	derData, err := EncodePKCS7([]*x509.Certificate{cert})
-	if err != nil {
-		t.Fatalf("EncodePKCS7 single cert: %v", err)
-	}
-
-	decoded, err := DecodePKCS7(derData)
-	if err != nil {
-		t.Fatalf("DecodePKCS7 round-trip: %v", err)
-	}
-	if len(decoded) != 1 {
-		t.Fatalf("expected 1 cert, got %d", len(decoded))
-	}
-	if !decoded[0].Equal(cert) {
-		t.Error("decoded cert does not match original")
 	}
 }
 

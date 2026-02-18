@@ -1028,60 +1028,46 @@ func TestProcessData_DER_KeyRoundTrip(t *testing.T) {
 }
 
 func TestProcessData_OpenSSH(t *testing.T) {
-	// WHY: OpenSSH key format uses a different parser (ssh.ParseRawPrivateKey)
-	// with distinct behavior per key type. RSA exercises the asymmetric path,
-	// Ed25519 exercises the curve-based path with pointer normalization.
+	// WHY: OpenSSH Ed25519 keys exercise the pointer normalization path
+	// (ssh.ParseRawPrivateKey returns *ed25519.PrivateKey). One key type
+	// suffices since the dispatch path (OPENSSH PRIVATE KEY block → ssh parse
+	// → normalizeKey → HandleKey) is identical for all key types (T-12).
 	t.Parallel()
 
-	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
 	_, edKey, _ := ed25519.GenerateKey(rand.Reader)
 
-	tests := []struct {
-		name    string
-		key     any
-		keyType string
-	}{
-		{"RSA", rsaKey, "RSA"},
-		{"Ed25519", edKey, "Ed25519"},
+	sshBlock, err := ssh.MarshalPrivateKey(edKey, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sshPEM := pem.EncodeToMemory(sshBlock)
+
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{
+		Data:    sshPEM,
+		Path:    "ed25519.openssh",
+		Handler: store,
+	}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			sshBlock, err := ssh.MarshalPrivateKey(tt.key, "")
-			if err != nil {
-				t.Fatal(err)
-			}
-			sshPEM := pem.EncodeToMemory(sshBlock)
-
-			store := NewMemStore()
-			if err := ProcessData(ProcessInput{
-				Data:    sshPEM,
-				Path:    tt.name + ".openssh",
-				Handler: store,
-			}); err != nil {
-				t.Fatalf("ProcessData: %v", err)
-			}
-
-			if len(store.AllKeys()) != 1 {
-				t.Fatalf("expected 1 key, got %d", len(store.AllKeys()))
-			}
-			for _, rec := range store.AllKeys() {
-				if rec.KeyType != tt.keyType {
-					t.Errorf("KeyType = %q, want %s", rec.KeyType, tt.keyType)
-				}
-				if !keysEqual(t, tt.key, rec.Key) {
-					t.Error("stored key does not Equal original OpenSSH key")
-				}
-				block, _ := pem.Decode(rec.PEM)
-				if block == nil {
-					t.Fatal("stored PEM is not parseable")
-				}
-				if block.Type != "PRIVATE KEY" {
-					t.Errorf("stored PEM type = %q, want PRIVATE KEY (PKCS#8)", block.Type)
-				}
-			}
-		})
+	if len(store.AllKeys()) != 1 {
+		t.Fatalf("expected 1 key, got %d", len(store.AllKeys()))
+	}
+	for _, rec := range store.AllKeys() {
+		if rec.KeyType != "Ed25519" {
+			t.Errorf("KeyType = %q, want Ed25519", rec.KeyType)
+		}
+		if !keysEqual(t, edKey, rec.Key) {
+			t.Error("stored key does not Equal original OpenSSH key")
+		}
+		block, _ := pem.Decode(rec.PEM)
+		if block == nil {
+			t.Fatal("stored PEM is not parseable")
+		}
+		if block.Type != "PRIVATE KEY" {
+			t.Errorf("stored PEM type = %q, want PRIVATE KEY (PKCS#8)", block.Type)
+		}
 	}
 }
 
@@ -1335,25 +1321,23 @@ func TestProcessData_PEMEncryptedPKCS8Block_SilentlySkipped(t *testing.T) {
 	}
 }
 
-func TestProcessData_PEMInterleaved_MultipleKeyTypes(t *testing.T) {
+func TestProcessData_PEMInterleaved_KeysExtractedAcrossCertBlocks(t *testing.T) {
 	// WHY: processPEMPrivateKeys loops through ALL PEM blocks and picks those
 	// containing "PRIVATE KEY". When key blocks are interleaved with cert blocks,
 	// all keys must be extracted regardless of position. This catches ordering
 	// assumptions where the parser might stop after the first non-key block.
+	// Two key types suffice to prove interleaving works (T-12).
 	t.Parallel()
 
 	ca := newRSACA(t)
 	rsaLeaf := newRSALeaf(t, ca, "rsa.example.com", []string{"rsa.example.com"})
 	ecLeaf := newECDSALeaf(t, ca, "ecdsa.example.com", []string{"ecdsa.example.com"})
-	edLeaf := newEd25519Leaf(t, ca, "ed25519.example.com", []string{"ed25519.example.com"})
 
-	// Interleave: RSA key, cert, ECDSA key, cert, Ed25519 key
+	// Interleave: RSA key, cert, ECDSA key
 	combined := slices.Concat(
 		rsaLeaf.keyPEM,
 		rsaLeaf.certPEM,
 		ecLeaf.keyPEM,
-		ecLeaf.certPEM,
-		edLeaf.keyPEM,
 	)
 
 	store := NewMemStore()
@@ -1366,11 +1350,11 @@ func TestProcessData_PEMInterleaved_MultipleKeyTypes(t *testing.T) {
 	}
 
 	keys := store.AllKeys()
-	if len(keys) != 3 {
-		t.Fatalf("expected 3 keys from interleaved PEM, got %d", len(keys))
+	if len(keys) != 2 {
+		t.Fatalf("expected 2 keys from interleaved PEM, got %d", len(keys))
 	}
 
-	hasRSA, hasECDSA, hasEd25519 := false, false, false
+	hasRSA, hasECDSA := false, false
 	for _, rec := range keys {
 		switch rec.KeyType {
 		case "RSA":
@@ -1383,15 +1367,10 @@ func TestProcessData_PEMInterleaved_MultipleKeyTypes(t *testing.T) {
 			if !keysEqual(t, ecLeaf.key, rec.Key) {
 				t.Error("ECDSA key material mismatch")
 			}
-		case "Ed25519":
-			hasEd25519 = true
-			if !keysEqual(t, edLeaf.key, rec.Key) {
-				t.Error("Ed25519 key material mismatch")
-			}
 		}
 	}
-	if !hasRSA || !hasECDSA || !hasEd25519 {
-		t.Errorf("missing key types: RSA=%v ECDSA=%v Ed25519=%v", hasRSA, hasECDSA, hasEd25519)
+	if !hasRSA || !hasECDSA {
+		t.Errorf("missing key types: RSA=%v ECDSA=%v", hasRSA, hasECDSA)
 	}
 }
 

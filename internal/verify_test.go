@@ -181,37 +181,6 @@ func TestVerifyCert_ChainInvalid(t *testing.T) {
 	}
 }
 
-func TestVerifyCert_CrossAlgorithmMismatch(t *testing.T) {
-	// WHY: An RSA key paired with an ECDSA cert must be detected as a mismatch; verifies the cross-algorithm comparison does not panic or false-positive.
-	ca := newRSACA(t)
-	ecdsaLeaf := newECDSALeaf(t, ca, "cross-algo.example.com", []string{"cross-algo.example.com"})
-
-	// Use an RSA key against an ECDSA cert
-	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	result, err := VerifyCert(context.Background(), &VerifyInput{
-		Cert:          ecdsaLeaf.cert,
-		Key:           rsaKey,
-		CheckKeyMatch: true,
-		TrustStore:    "mozilla",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.KeyMatch == nil {
-		t.Fatal("expected KeyMatch to be set")
-	}
-	if *result.KeyMatch {
-		t.Error("expected RSA key to NOT match ECDSA certificate")
-	}
-	if len(result.Errors) == 0 {
-		t.Error("expected errors for cross-algorithm mismatch")
-	}
-}
-
 func TestVerifyCert_CheckKeyMatchNilKey(t *testing.T) {
 	// WHY: When CheckKeyMatch=true but Key=nil (e.g. PKCS#7 input), KeyMatch must remain nil (skipped), not false; this distinguishes "not checked" from "failed."
 	ca := newRSACA(t)

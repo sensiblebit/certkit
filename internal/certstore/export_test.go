@@ -154,8 +154,9 @@ func TestGenerateBundleFiles_NoRoot(t *testing.T) {
 
 func TestGenerateBundleFiles_RSAKeyFileRoundTrip(t *testing.T) {
 	// WHY: The .key file is written directly from KeyRecord.PEM and must be
-	// parseable back to an equivalent RSA key. ECDSA and Ed25519 variants
-	// already have explicit key-file round-trip checks — RSA was missing.
+	// parseable back to an equivalent RSA key. One key type suffices per T-13
+	// since the key file is written verbatim from stored PEM regardless of
+	// key algorithm.
 	t.Parallel()
 
 	ca := newRSACA(t)

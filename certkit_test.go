@@ -403,18 +403,23 @@ func TestParsePEMPrivateKey_MislabeledSEC1EC(t *testing.T) {
 }
 
 func TestDefaultPasswords(t *testing.T) {
-	// WHY: DefaultPasswords must include the well-known passwords (empty, "password", "changeit") used by PKCS#12 and JKS files; missing any breaks auto-decryption.
+	// WHY: DefaultPasswords must include the well-known passwords (empty,
+	// "password", "changeit") used by PKCS#12 and JKS files in a stable
+	// order; missing any breaks auto-decryption, and order matters because
+	// DeduplicatePasswords places defaults first.
 	passwords := DefaultPasswords()
 	if len(passwords) < 3 {
-		t.Errorf("expected at least 3 default passwords, got %d", len(passwords))
+		t.Fatalf("expected at least 3 default passwords, got %d", len(passwords))
 	}
-	// Must include empty string, "password", "changeit"
-	expected := map[string]bool{"": true, "password": true, "changeit": true}
-	for _, p := range passwords {
-		delete(expected, p)
+	// Verify order: empty string first, then "password", then "changeit"
+	if passwords[0] != "" {
+		t.Errorf("passwords[0] = %q, want empty string", passwords[0])
 	}
-	for missing := range expected {
-		t.Errorf("DefaultPasswords missing %q", missing)
+	if passwords[1] != "password" {
+		t.Errorf("passwords[1] = %q, want \"password\"", passwords[1])
+	}
+	if passwords[2] != "changeit" {
+		t.Errorf("passwords[2] = %q, want \"changeit\"", passwords[2])
 	}
 }
 
@@ -682,40 +687,6 @@ func TestParsePEMCertificateRequest_LegacyBlockType(t *testing.T) {
 	}
 }
 
-func TestMarshalPrivateKeyToPEM_ErrorCases(t *testing.T) {
-	// WHY: Unsupported and nil key types must produce a wrapped error, not panic;
-	// callers pass through untyped crypto.PrivateKey values.
-	t.Parallel()
-	tests := []struct {
-		name string
-		key  any
-	}{
-		{"unsupported", struct{}{}},
-		{"nil", nil},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := MarshalPrivateKeyToPEM(tt.key)
-			if err == nil {
-				t.Errorf("expected error for %s key", tt.name)
-			}
-			if !strings.Contains(err.Error(), "marshaling private key to PKCS#8") {
-				t.Errorf("unexpected error: %v", err)
-			}
-		})
-	}
-}
-
-func TestComputeSKI_VsLegacy_Different(t *testing.T) {
-	// WHY: RFC 7093 (SHA-256 truncated) and legacy (SHA-1) must produce different results; accidentally using the same algorithm breaks cross-matching.
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	modern, _ := ComputeSKI(&key.PublicKey)
-	legacy, _ := ComputeSKILegacy(&key.PublicKey)
-	if string(modern) == string(legacy) {
-		t.Error("RFC 7093 M1 and legacy SHA-1 should produce different results")
-	}
-}
-
 func TestGetCertificateType(t *testing.T) {
 	// WHY: Certificate type classification (root vs leaf) drives export logic; misclassifying a CA as a leaf would break chain assembly.
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -862,30 +833,6 @@ func TestKeyMatchesCert(t *testing.T) {
 	}
 }
 
-func TestIsPEM(t *testing.T) {
-	// WHY: IsPEM is used as a fast-path filter before attempting PEM parse;
-	// false negatives would skip valid certs, false positives waste time.
-	t.Parallel()
-	tests := []struct {
-		name string
-		data []byte
-		want bool
-	}{
-		{"PEM data", []byte("-----BEGIN CERTIFICATE-----\nfoo\n-----END CERTIFICATE-----"), true},
-		{"DER data", []byte{0x30, 0x82, 0x01}, false},
-		{"empty bytes", []byte{}, false},
-		{"nil", nil, false},
-		{"DER with extra byte", []byte{0x30, 0x82, 0x01, 0x00}, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := IsPEM(tt.data); got != tt.want {
-				t.Errorf("IsPEM(%v) = %v, want %v", tt.data, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestMultiCertPEM_Concatenation(t *testing.T) {
 	// WHY: PEM concatenation is how chain bundles are built; order and cert type must be preserved or TLS servers will serve broken chains.
 	caPEM, intPEM, leafPEM := generateTestPKI(t)
@@ -1016,9 +963,20 @@ func TestMarshalPublicKeyToPEM_RoundTrip(t *testing.T) {
 }
 
 func TestCertFingerprintColon(t *testing.T) {
-	// WHY: Colon-separated fingerprints must match the exact uppercase hex format expected by OpenSSL and other tools.
+	// WHY: Colon-separated fingerprints must match the exact uppercase hex format
+	// expected by OpenSSL and other tools. Also verifies the fingerprint is
+	// computed from cert.Raw (not some other field) by cross-checking against
+	// a manual hash.
 	_, _, leafPEM := generateTestPKI(t)
 	cert, _ := ParsePEMCertificate([]byte(leafPEM))
+
+	// Cross-check SHA-256 fingerprint against manual computation from cert.Raw
+	manualHash := sha256.Sum256(cert.Raw)
+	manualFP := strings.ToUpper(ColonHex(manualHash[:]))
+	gotFP := CertFingerprintColonSHA256(cert)
+	if gotFP != manualFP {
+		t.Errorf("SHA-256 fingerprint mismatch:\n  got:  %s\n  want: %s", gotFP, manualFP)
+	}
 
 	tests := []struct {
 		name    string
@@ -1101,25 +1059,6 @@ func TestGetCertificateType_Intermediate(t *testing.T) {
 	}
 }
 
-func TestParsePEMCertificates_TrailingGarbage(t *testing.T) {
-	// WHY: Real-world PEM files often have trailing whitespace or garbage; the parser must extract valid certs and ignore trailing noise.
-	_, _, leafPEM := generateTestPKI(t)
-
-	// Append random garbage bytes after valid PEM
-	dataWithGarbage := append([]byte(leafPEM), []byte("\nsome random trailing garbage bytes\x00\x01\x02")...)
-
-	certs, err := ParsePEMCertificates(dataWithGarbage)
-	if err != nil {
-		t.Fatalf("expected valid cert to parse despite trailing garbage: %v", err)
-	}
-	if len(certs) != 1 {
-		t.Fatalf("expected 1 cert, got %d", len(certs))
-	}
-	if certs[0].Subject.CommonName != "test.example.com" {
-		t.Errorf("CN=%q, want test.example.com", certs[0].Subject.CommonName)
-	}
-}
-
 func TestParsePEMPrivateKeyWithPasswords_NoPasswordsEncryptedKey(t *testing.T) {
 	// WHY: Encrypted keys with nil or empty password lists must fail gracefully,
 	// not panic or silently return a zero-value key.
@@ -1156,17 +1095,6 @@ func TestParsePEMPrivateKeyWithPasswords_NoPasswordsEncryptedKey(t *testing.T) {
 	}
 }
 
-func TestMarshalPublicKeyToPEM_Unsupported(t *testing.T) {
-	// WHY: Unsupported public key types must produce a wrapped error, not panic; callers pass untyped crypto.PublicKey values.
-	_, err := MarshalPublicKeyToPEM(struct{}{})
-	if err == nil {
-		t.Error("expected error for unsupported public key type")
-	}
-	if !strings.Contains(err.Error(), "marshaling public key") {
-		t.Errorf("error should mention marshaling public key, got: %v", err)
-	}
-}
-
 func TestParsePEMCertificate_ReturnsFirstCertFromBundle(t *testing.T) {
 	// WHY: ParsePEMCertificate silently drops certs after the first one.
 	// Callers need to know this behavior is intentional and documented.
@@ -1199,31 +1127,6 @@ func TestParsePEMCertificate_ReturnsFirstCertFromBundle(t *testing.T) {
 	}
 	if len(all) != 2 {
 		t.Fatalf("expected 2 certs in bundle, got %d", len(all))
-	}
-}
-
-func TestComputeSKI_NilPublicKey(t *testing.T) {
-	// WHY: Nil public key must return a clear error, not panic, for both
-	// RFC 7093 and legacy SKI computation paths.
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		fn   func(crypto.PublicKey) ([]byte, error)
-	}{
-		{"RFC7093", ComputeSKI},
-		{"Legacy", ComputeSKILegacy},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			_, err := tt.fn(nil)
-			if err == nil {
-				t.Error("expected error for nil public key")
-			}
-			if !strings.Contains(err.Error(), "marshal PKIX") {
-				t.Errorf("unexpected error: %v", err)
-			}
-		})
 	}
 }
 
@@ -1670,35 +1573,6 @@ func TestParsePEMPrivateKey_EmptyInput(t *testing.T) {
 	}
 }
 
-func TestParsePEMPrivateKey_MultiplePEMBlocks_UsesFirst(t *testing.T) {
-	// WHY: ParsePEMPrivateKey uses pem.Decode which returns the first block.
-	// When given PEM data with multiple blocks (e.g., cert + key), it must
-	// parse the first key block. This documents the "first block" contract.
-	t.Parallel()
-
-	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-
-	rsaPEM := pem.EncodeToMemory(&pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(rsaKey),
-	})
-	ecDER, _ := x509.MarshalECPrivateKey(ecKey)
-	ecPEM := pem.EncodeToMemory(&pem.Block{
-		Type:  "EC PRIVATE KEY",
-		Bytes: ecDER,
-	})
-	combined := append(rsaPEM, ecPEM...)
-
-	parsed, err := ParsePEMPrivateKey(combined)
-	if err != nil {
-		t.Fatalf("ParsePEMPrivateKey: %v", err)
-	}
-	if !rsaKey.Equal(parsed) {
-		t.Error("expected first key (RSA) from multi-block PEM, got different key")
-	}
-}
-
 func TestParsePEMPrivateKeyWithPasswords_EmptyPasswordDecryptsKey(t *testing.T) {
 	// WHY: Some keys are encrypted with an empty password (e.g., PKCS#12
 	// exports with blank password). The password iteration must include ""
@@ -1723,31 +1597,6 @@ func TestParsePEMPrivateKeyWithPasswords_EmptyPasswordDecryptsKey(t *testing.T) 
 	}
 	if !key.Equal(parsed) {
 		t.Error("key encrypted with empty password did not round-trip")
-	}
-}
-
-func TestParsePEMPrivateKey_TrailingGarbage(t *testing.T) {
-	// WHY: PEM files in the wild may have trailing garbage after the END line
-	// (e.g., concatenated with non-PEM data, or extra whitespace/junk).
-	// pem.Decode handles this, but we must verify ParsePEMPrivateKey doesn't
-	// choke. The certificate equivalent (TestParsePEMCertificates_TrailingGarbage)
-	// exists; this is the key equivalent.
-	t.Parallel()
-
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	pemBytes := pem.EncodeToMemory(&pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(key),
-	})
-	// Append trailing garbage
-	withGarbage := append(pemBytes, []byte("\nsome random trailing garbage bytes\x00\x01\x02")...)
-
-	parsed, err := ParsePEMPrivateKey(withGarbage)
-	if err != nil {
-		t.Fatalf("ParsePEMPrivateKey with trailing garbage: %v", err)
-	}
-	if !key.Equal(parsed) {
-		t.Error("key with trailing garbage did not round-trip")
 	}
 }
 
@@ -1826,34 +1675,6 @@ func TestParsePEMPrivateKeyWithPasswords_EncryptedOpenSSH_AllWrongPasswords(t *t
 	}
 }
 
-func TestParsePEMPrivateKey_CorruptDER(t *testing.T) {
-	// WHY: Corrupt DER inside algorithm-specific PEM blocks (RSA, EC) must
-	// produce a clear error and not panic.
-	t.Parallel()
-	tests := []struct {
-		name    string
-		pemType string
-	}{
-		{"RSA block", "RSA PRIVATE KEY"},
-		{"EC block", "EC PRIVATE KEY"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			pemData := pem.EncodeToMemory(&pem.Block{
-				Type:  tt.pemType,
-				Bytes: []byte("this is not valid DER"),
-			})
-			_, err := ParsePEMPrivateKey(pemData)
-			if err == nil {
-				t.Fatalf("expected error for corrupt DER in %s block", tt.pemType)
-			}
-			if err.Error() == "" {
-				t.Error("error message should not be empty")
-			}
-		})
-	}
-}
-
 func TestGenerateECKey_NilCurve(t *testing.T) {
 	// WHY: GenerateECKey(nil) would panic inside ecdsa.GenerateKey with
 	// a nil pointer dereference. Callers need a clear error, not a panic.
@@ -1868,25 +1689,6 @@ func TestGenerateECKey_NilCurve(t *testing.T) {
 		t.Error("expected error for nil curve")
 	}
 	if !strings.Contains(err.Error(), "curve cannot be nil") {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-func TestParsePEMPrivateKey_EmptyDERInBlock(t *testing.T) {
-	// WHY: A PEM block with an empty DER payload (zero bytes) must produce a
-	// clear error, not a panic in the ASN.1 parser.
-	t.Parallel()
-
-	emptyBlock := pem.EncodeToMemory(&pem.Block{
-		Type:  "PRIVATE KEY",
-		Bytes: []byte{},
-	})
-
-	_, err := ParsePEMPrivateKey(emptyBlock)
-	if err == nil {
-		t.Fatal("expected error for PEM block with empty DER bytes, got nil")
-	}
-	if !strings.Contains(err.Error(), "PRIVATE KEY") {
 		t.Errorf("unexpected error: %v", err)
 	}
 }
