@@ -274,6 +274,23 @@ func TestExportBundles_EndToEnd(t *testing.T) {
 	if leafCert.Subject.CommonName != "e2e.example.com" {
 		t.Errorf("leaf CN = %q, want e2e.example.com", leafCert.Subject.CommonName)
 	}
+
+	// Verify key file is parseable and matches the leaf cert
+	keyPEM, err := os.ReadFile(filepath.Join(bundleDir, "e2e.example.com.key"))
+	if err != nil {
+		t.Fatalf("read key PEM: %v", err)
+	}
+	parsedKey, err := certkit.ParsePEMPrivateKey(keyPEM)
+	if err != nil {
+		t.Fatalf("parse key PEM: %v", err)
+	}
+	matches, err := certkit.KeyMatchesCert(parsedKey, leafCert)
+	if err != nil {
+		t.Fatalf("key match check: %v", err)
+	}
+	if !matches {
+		t.Error("exported key does not match exported leaf certificate")
+	}
 }
 
 func TestExportBundles_EmptyBundleNameSkipped(t *testing.T) {

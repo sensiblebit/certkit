@@ -35,9 +35,20 @@ func TestInspectFile_Certificate(t *testing.T) {
 	if !strings.Contains(results[0].Subject, "inspect.example.com") {
 		t.Errorf("subject should contain CN, got %s", results[0].Subject)
 	}
-	// SHA-256 colon-hex: 32 bytes = 64 hex chars + 31 colons = 95 chars
-	if len(results[0].SHA256) != 95 {
-		t.Fatalf("SHA-256 length = %d, want 95 (colon-hex for 32 bytes), got %q", len(results[0].SHA256), results[0].SHA256)
+	// SHA-256 colon-hex: 32 bytes = 64 hex chars + 31 colons = 95 chars.
+	// Verify format, not just length, to catch a function returning a fixed string.
+	sha := results[0].SHA256
+	if len(sha) != 95 {
+		t.Fatalf("SHA-256 length = %d, want 95 (colon-hex for 32 bytes), got %q", len(sha), sha)
+	}
+	parts := strings.Split(sha, ":")
+	if len(parts) != 32 {
+		t.Fatalf("SHA-256 colon-hex has %d octets, want 32", len(parts))
+	}
+	for i, p := range parts {
+		if len(p) != 2 {
+			t.Errorf("SHA-256 octet[%d] = %q, want 2 hex chars", i, p)
+		}
 	}
 }
 
@@ -75,9 +86,20 @@ func TestInspectFile_PrivateKey(t *testing.T) {
 	if keyResult.KeySize != "2048" {
 		t.Errorf("key size = %s, want 2048", keyResult.KeySize)
 	}
-	// SKI colon-hex: 20 bytes = 40 hex chars + 19 colons = 59 chars
-	if len(keyResult.SKI) != 59 {
-		t.Fatalf("SKI length = %d, want 59 (colon-hex for 20 bytes), got %q", len(keyResult.SKI), keyResult.SKI)
+	// SKI colon-hex: 20 bytes = 40 hex chars + 19 colons = 59 chars.
+	// Verify format, not just length, to catch a function returning a fixed string.
+	ski := keyResult.SKI
+	if len(ski) != 59 {
+		t.Fatalf("SKI length = %d, want 59 (colon-hex for 20 bytes), got %q", len(ski), ski)
+	}
+	skiParts := strings.Split(ski, ":")
+	if len(skiParts) != 20 {
+		t.Fatalf("SKI colon-hex has %d octets, want 20", len(skiParts))
+	}
+	for i, p := range skiParts {
+		if len(p) != 2 {
+			t.Errorf("SKI octet[%d] = %q, want 2 hex chars", i, p)
+		}
 	}
 }
 

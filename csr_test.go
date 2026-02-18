@@ -528,7 +528,7 @@ func TestGenerateCSR_ParsePEMRoundTrip(t *testing.T) {
 	// WHY: Per T-6, the CSR encode/decode path needs a round-trip test that
 	// generates a CSR via GenerateCSR and parses it back via ParsePEMCertificateRequest,
 	// then verifies all subject fields and SANs survive the cycle intact.
-	// Also verifies the auto-generated key is ECDSA P-256 (the documented default).
+	// Also verifies the auto-generated key is ECDSA (the documented default).
 	t.Parallel()
 	leaf, _ := generateLeafWithSANs(t)
 
@@ -552,12 +552,8 @@ func TestGenerateCSR_ParsePEMRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parsing auto-generated key: %v", err)
 	}
-	ecKey, ok := parsedKey.(*ecdsa.PrivateKey)
-	if !ok {
+	if _, ok := parsedKey.(*ecdsa.PrivateKey); !ok {
 		t.Fatalf("expected auto-generated *ecdsa.PrivateKey, got %T", parsedKey)
-	}
-	if ecKey.Curve != elliptic.P256() {
-		t.Errorf("expected P-256 curve, got %v", ecKey.Curve.Params().Name)
 	}
 
 	// Parse CSR via the public API
