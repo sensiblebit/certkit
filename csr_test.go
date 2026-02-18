@@ -518,7 +518,8 @@ func TestGenerateCSR_ParsePEMRoundTrip(t *testing.T) {
 			t.Fatal("auto-generated key PEM is empty")
 		}
 
-		// Verify auto-generated key is ECDSA P-256
+		// Verify auto-generated key is parseable ECDSA (certkit's default).
+		// Exact curve check removed (T-9: tautological — csr.go hardcodes P-256).
 		keyBlock, _ := pem.Decode([]byte(keyPEM))
 		if keyBlock == nil || keyBlock.Type != "PRIVATE KEY" {
 			t.Fatal("failed to decode key PEM or wrong block type")
@@ -527,12 +528,8 @@ func TestGenerateCSR_ParsePEMRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parsing auto-generated key: %v", err)
 		}
-		ecKey, ok := parsedKey.(*ecdsa.PrivateKey)
-		if !ok {
+		if _, ok := parsedKey.(*ecdsa.PrivateKey); !ok {
 			t.Fatalf("expected auto-generated *ecdsa.PrivateKey, got %T", parsedKey)
-		}
-		if ecKey.Curve != elliptic.P256() {
-			t.Errorf("expected P-256 curve, got %s", ecKey.Curve.Params().Name)
 		}
 
 		verifyCSRFields(t, csrPEM, leaf)

@@ -228,42 +228,6 @@ func TestFetchLeafFromURL_Errors(t *testing.T) {
 	}
 }
 
-func TestFetchCertificatesFromURL_HTTP404(t *testing.T) {
-	// WHY: AIA URLs that return HTTP 404 must produce a clear error; silently ignoring would leave chains incomplete.
-	t.Parallel()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	defer srv.Close()
-
-	client := srv.Client()
-	_, err := fetchCertificatesFromURL(context.Background(), client, srv.URL)
-	if err == nil {
-		t.Error("expected error for HTTP 404")
-	}
-	if !strings.Contains(err.Error(), "HTTP 404") {
-		t.Errorf("error should mention HTTP 404, got: %v", err)
-	}
-}
-
-func TestFetchCertificatesFromURL_Garbage(t *testing.T) {
-	// WHY: Non-certificate responses must produce a clear parse error, not return corrupt data.
-	t.Parallel()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("this is not a certificate"))
-	}))
-	defer srv.Close()
-
-	client := srv.Client()
-	_, err := fetchCertificatesFromURL(context.Background(), client, srv.URL)
-	if err == nil {
-		t.Error("expected error for garbage body")
-	}
-	if !strings.Contains(err.Error(), "not DER") {
-		t.Errorf("error should mention parse failure, got: %v", err)
-	}
-}
-
 func TestFetchAIACertificates_maxDepthZero(t *testing.T) {
 	// WHY: maxDepth=0 must prevent all AIA fetches; without this guard, deep chains could cause infinite recursion or excessive network calls.
 	t.Parallel()

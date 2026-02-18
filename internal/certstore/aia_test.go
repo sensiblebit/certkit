@@ -23,7 +23,10 @@ func TestResolveAIA_FetchesMissingIssuer(t *testing.T) {
 	t.Parallel()
 	store := NewMemStore()
 
-	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	caTmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "AIA Test CA"},
@@ -33,10 +36,19 @@ func TestResolveAIA_FetchesMissingIssuer(t *testing.T) {
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign,
 	}
-	caDER, _ := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
-	caCert, _ := x509.ParseCertificate(caDER)
+	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	leafTmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(2),
 		Subject:               pkix.Name{CommonName: "aia-leaf.example.com"},
@@ -44,8 +56,14 @@ func TestResolveAIA_FetchesMissingIssuer(t *testing.T) {
 		NotAfter:              time.Now().Add(24 * time.Hour),
 		IssuingCertificateURL: []string{"http://example.com/ca.cer"},
 	}
-	leafDER, _ := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
-	leafCert, _ := x509.ParseCertificate(leafDER)
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafCert, err := x509.ParseCertificate(leafDER)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Only add the leaf — issuer is missing
 	if err := store.HandleCertificate(leafCert, "leaf.pem"); err != nil {
@@ -125,7 +143,10 @@ func TestResolveAIA_SkipsResolvedAndRoots(t *testing.T) {
 		{"root_cert_with_aia", func(t *testing.T, store *MemStore) {
 			// Root has an AIA URL set — fetch must still not occur because
 			// root certs are skipped before AIA URL iteration.
-			caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
 			caTmpl := &x509.Certificate{
 				SerialNumber:          big.NewInt(1),
 				Subject:               pkix.Name{CommonName: "Root With AIA"},
@@ -136,8 +157,14 @@ func TestResolveAIA_SkipsResolvedAndRoots(t *testing.T) {
 				KeyUsage:              x509.KeyUsageCertSign,
 				IssuingCertificateURL: []string{"http://example.com/root.cer"},
 			}
-			caDER, _ := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
-			caCert, _ := x509.ParseCertificate(caDER)
+			caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			caCert, err := x509.ParseCertificate(caDER)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if err := store.HandleCertificate(caCert, "ca.pem"); err != nil {
 				t.Fatal(err)
 			}
@@ -194,7 +221,10 @@ func TestResolveAIA_FailureProducesWarning(t *testing.T) {
 			t.Parallel()
 			store := NewMemStore()
 
-			caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
 			caTmpl := &x509.Certificate{
 				SerialNumber:          big.NewInt(1),
 				Subject:               pkix.Name{CommonName: "Failure CA"},
@@ -204,10 +234,19 @@ func TestResolveAIA_FailureProducesWarning(t *testing.T) {
 				BasicConstraintsValid: true,
 				KeyUsage:              x509.KeyUsageCertSign,
 			}
-			caDER, _ := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
-			caCert, _ := x509.ParseCertificate(caDER)
+			caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			caCert, err := x509.ParseCertificate(caDER)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-			leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
 			leafTmpl := &x509.Certificate{
 				SerialNumber:          big.NewInt(2),
 				Subject:               pkix.Name{CommonName: "aia-fail.example.com"},
@@ -215,8 +254,14 @@ func TestResolveAIA_FailureProducesWarning(t *testing.T) {
 				NotAfter:              time.Now().Add(24 * time.Hour),
 				IssuingCertificateURL: []string{"http://example.com/ca.cer"},
 			}
-			leafDER, _ := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
-			leafCert, _ := x509.ParseCertificate(leafDER)
+			leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			leafCert, err := x509.ParseCertificate(leafDER)
+			if err != nil {
+				t.Fatal(err)
+			}
 
 			if err := store.HandleCertificate(leafCert, "leaf.pem"); err != nil {
 				t.Fatal(err)
@@ -243,7 +288,10 @@ func TestResolveAIA_DeduplicatesURLs(t *testing.T) {
 	t.Parallel()
 	store := NewMemStore()
 
-	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	caTmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "Shared AIA CA"},
@@ -253,12 +301,21 @@ func TestResolveAIA_DeduplicatesURLs(t *testing.T) {
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign,
 	}
-	caDER, _ := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
-	caCert, _ := x509.ParseCertificate(caDER)
+	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Two leaves with the same AIA URL
 	for _, serial := range []int64{2, 3} {
-		leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
 		leafTmpl := &x509.Certificate{
 			SerialNumber:          big.NewInt(serial),
 			Subject:               pkix.Name{CommonName: fmt.Sprintf("leaf%d.example.com", serial)},
@@ -266,8 +323,14 @@ func TestResolveAIA_DeduplicatesURLs(t *testing.T) {
 			NotAfter:              time.Now().Add(24 * time.Hour),
 			IssuingCertificateURL: []string{"http://example.com/shared-ca.cer"},
 		}
-		leafDER, _ := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
-		leafCert, _ := x509.ParseCertificate(leafDER)
+		leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		leafCert, err := x509.ParseCertificate(leafDER)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if err := store.HandleCertificate(leafCert, "leaf.pem"); err != nil {
 			t.Fatal(err)
 		}
@@ -298,7 +361,10 @@ func TestResolveAIA_MaxDepthDefault(t *testing.T) {
 	store := NewMemStore()
 
 	// Create a 3-cert chain: root → intermediate → leaf, each with AIA URLs.
-	rootKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	rootTmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "Depth Root CA"},
@@ -308,10 +374,19 @@ func TestResolveAIA_MaxDepthDefault(t *testing.T) {
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign,
 	}
-	rootDER, _ := x509.CreateCertificate(rand.Reader, rootTmpl, rootTmpl, &rootKey.PublicKey, rootKey)
-	rootCert, _ := x509.ParseCertificate(rootDER)
+	rootDER, err := x509.CreateCertificate(rand.Reader, rootTmpl, rootTmpl, &rootKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootCert, err := x509.ParseCertificate(rootDER)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	intKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	intKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	intTmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(2),
 		Subject:               pkix.Name{CommonName: "Depth Intermediate CA"},
@@ -322,10 +397,19 @@ func TestResolveAIA_MaxDepthDefault(t *testing.T) {
 		KeyUsage:              x509.KeyUsageCertSign,
 		IssuingCertificateURL: []string{"http://example.com/root.cer"},
 	}
-	intDER, _ := x509.CreateCertificate(rand.Reader, intTmpl, rootCert, &intKey.PublicKey, rootKey)
-	intCert, _ := x509.ParseCertificate(intDER)
+	intDER, err := x509.CreateCertificate(rand.Reader, intTmpl, rootCert, &intKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intCert, err := x509.ParseCertificate(intDER)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	leafTmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(3),
 		Subject:               pkix.Name{CommonName: "depth-test.example.com"},
@@ -333,8 +417,14 @@ func TestResolveAIA_MaxDepthDefault(t *testing.T) {
 		NotAfter:              time.Now().Add(24 * time.Hour),
 		IssuingCertificateURL: []string{"http://example.com/intermediate.cer"},
 	}
-	leafDER, _ := x509.CreateCertificate(rand.Reader, leafTmpl, intCert, &leafKey.PublicKey, intKey)
-	leafCert, _ := x509.ParseCertificate(leafDER)
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, intCert, &leafKey.PublicKey, intKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafCert, err := x509.ParseCertificate(leafDER)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if err := store.HandleCertificate(leafCert, "leaf.pem"); err != nil {
 		t.Fatal(err)
@@ -378,7 +468,10 @@ func TestResolveAIA_PKCS7Response(t *testing.T) {
 	t.Parallel()
 	store := NewMemStore()
 
-	rootKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	rootTmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "P7C Root CA"},
@@ -388,10 +481,19 @@ func TestResolveAIA_PKCS7Response(t *testing.T) {
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign,
 	}
-	rootDER, _ := x509.CreateCertificate(rand.Reader, rootTmpl, rootTmpl, &rootKey.PublicKey, rootKey)
-	rootCert, _ := x509.ParseCertificate(rootDER)
+	rootDER, err := x509.CreateCertificate(rand.Reader, rootTmpl, rootTmpl, &rootKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootCert, err := x509.ParseCertificate(rootDER)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	interKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	interKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	interTmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(2),
 		Subject:               pkix.Name{CommonName: "P7C Intermediate CA"},
@@ -401,10 +503,19 @@ func TestResolveAIA_PKCS7Response(t *testing.T) {
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign,
 	}
-	interDER, _ := x509.CreateCertificate(rand.Reader, interTmpl, rootCert, &interKey.PublicKey, rootKey)
-	interCert, _ := x509.ParseCertificate(interDER)
+	interDER, err := x509.CreateCertificate(rand.Reader, interTmpl, rootCert, &interKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	interCert, err := x509.ParseCertificate(interDER)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	leafTmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(3),
 		Subject:               pkix.Name{CommonName: "p7c-leaf.example.com"},
@@ -412,8 +523,14 @@ func TestResolveAIA_PKCS7Response(t *testing.T) {
 		NotAfter:              time.Now().Add(24 * time.Hour),
 		IssuingCertificateURL: []string{"http://crl.example.mil/issuedto/root_IT.p7c"},
 	}
-	leafDER, _ := x509.CreateCertificate(rand.Reader, leafTmpl, interCert, &leafKey.PublicKey, interKey)
-	leafCert, _ := x509.ParseCertificate(leafDER)
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, interCert, &leafKey.PublicKey, interKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafCert, err := x509.ParseCertificate(leafDER)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	if err := store.HandleCertificate(leafCert, "leaf.pem"); err != nil {
 		t.Fatal(err)
@@ -460,7 +577,10 @@ func TestResolveAIA_CancelledContext(t *testing.T) {
 	t.Parallel()
 
 	// Create a leaf with an AIA URL but no issuer in the store.
-	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	caTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "AIA Cancel CA"},
@@ -470,10 +590,19 @@ func TestResolveAIA_CancelledContext(t *testing.T) {
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign,
 	}
-	caBytes, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
-	caCert, _ := x509.ParseCertificate(caBytes)
+	caBytes, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caCert, err := x509.ParseCertificate(caBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	leafTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(2),
 		Subject:               pkix.Name{CommonName: "cancel.example.com"},
@@ -483,11 +612,19 @@ func TestResolveAIA_CancelledContext(t *testing.T) {
 		IssuingCertificateURL: []string{"http://ca.example.com/issuer.cer"},
 		AuthorityKeyId:        caCert.SubjectKeyId,
 	}
-	leafBytes, _ := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
-	leafCert, _ := x509.ParseCertificate(leafBytes)
+	leafBytes, err := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafCert, err := x509.ParseCertificate(leafBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	store := NewMemStore()
-	_ = store.HandleCertificate(leafCert, "test")
+	if err := store.HandleCertificate(leafCert, "test"); err != nil {
+		t.Fatal(err)
+	}
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately

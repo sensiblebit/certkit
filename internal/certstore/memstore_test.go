@@ -188,7 +188,10 @@ func TestMemStore_HasIssuer_MultipleIssuers(t *testing.T) {
 	t.Parallel()
 
 	// Create two CAs with the same subject DN but different keys.
-	ca1Key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	ca1Key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
 	sharedSubject := pkix.Name{CommonName: "Shared Subject CA", Organization: []string{"TestOrg"}}
 	ca1Template := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
@@ -200,10 +203,19 @@ func TestMemStore_HasIssuer_MultipleIssuers(t *testing.T) {
 		IsCA:                  true,
 		SubjectKeyId:          []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20},
 	}
-	ca1DER, _ := x509.CreateCertificate(rand.Reader, ca1Template, ca1Template, &ca1Key.PublicKey, ca1Key)
-	ca1Cert, _ := x509.ParseCertificate(ca1DER)
+	ca1DER, err := x509.CreateCertificate(rand.Reader, ca1Template, ca1Template, &ca1Key.PublicKey, ca1Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca1Cert, err := x509.ParseCertificate(ca1DER)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	ca2Key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	ca2Key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ca2Template := &x509.Certificate{
 		SerialNumber:          big.NewInt(2),
 		Subject:               sharedSubject,
@@ -214,11 +226,20 @@ func TestMemStore_HasIssuer_MultipleIssuers(t *testing.T) {
 		IsCA:                  true,
 		SubjectKeyId:          []byte{20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1},
 	}
-	ca2DER, _ := x509.CreateCertificate(rand.Reader, ca2Template, ca2Template, &ca2Key.PublicKey, ca2Key)
-	ca2Cert, _ := x509.ParseCertificate(ca2DER)
+	ca2DER, err := x509.CreateCertificate(rand.Reader, ca2Template, ca2Template, &ca2Key.PublicKey, ca2Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca2Cert, err := x509.ParseCertificate(ca2DER)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Create a leaf signed by ca1.
-	leafKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	leafKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
 	leafTemplate := &x509.Certificate{
 		SerialNumber:   big.NewInt(100),
 		Subject:        pkix.Name{CommonName: "multi-issuer.example.com"},
@@ -228,8 +249,14 @@ func TestMemStore_HasIssuer_MultipleIssuers(t *testing.T) {
 		KeyUsage:       x509.KeyUsageDigitalSignature,
 		AuthorityKeyId: ca1Cert.SubjectKeyId,
 	}
-	leafDER, _ := x509.CreateCertificate(rand.Reader, leafTemplate, ca1Cert, &leafKey.PublicKey, ca1Key)
-	leafCert, _ := x509.ParseCertificate(leafDER)
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, ca1Cert, &leafKey.PublicKey, ca1Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafCert, err := x509.ParseCertificate(leafDER)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Add only ca2 (NOT ca1) and the leaf. HasIssuer should still return true
 	// because ca2 has the same RawSubject as the leaf's RawIssuer.

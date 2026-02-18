@@ -423,10 +423,10 @@ func TestFormatInspectResults_UnsupportedFormat(t *testing.T) {
 
 func TestFormatInspectResults_JSON_ValidJSON(t *testing.T) {
 	// WHY: JSON format is the machine-readable contract for inspect output.
-	// Verifies valid JSON with trailing newline and correct element count.
-	// Per-field round-trip fidelity is encoding/json behavior (T-9); we only
-	// verify the certkit-owned aspects: valid output, correct count, and
-	// type discrimination between certificate and private_key entries.
+	// Verifies valid JSON with trailing newline, correct element count, type
+	// discrimination, and that certkit-owned struct tags produce the expected
+	// field names and values. A missing or misspelled json:"..." tag is a
+	// certkit bug that this test must catch.
 	t.Parallel()
 	results := []InspectResult{
 		{
@@ -465,11 +465,38 @@ func TestFormatInspectResults_JSON_ValidJSON(t *testing.T) {
 	if len(parsed) != 2 {
 		t.Fatalf("expected 2 results, got %d", len(parsed))
 	}
-	if parsed[0].Type != "certificate" {
-		t.Errorf("parsed[0].Type = %q, want %q", parsed[0].Type, "certificate")
+
+	// Verify certificate entry fields survive JSON round-trip (catches misspelled struct tags)
+	cert := parsed[0]
+	if cert.Type != "certificate" {
+		t.Errorf("parsed[0].Type = %q, want %q", cert.Type, "certificate")
 	}
-	if parsed[1].Type != "private_key" {
-		t.Errorf("parsed[1].Type = %q, want %q", parsed[1].Type, "private_key")
+	if cert.Subject != "CN=json-test.example.com,O=TestOrg" {
+		t.Errorf("parsed[0].Subject = %q, want %q", cert.Subject, "CN=json-test.example.com,O=TestOrg")
+	}
+	if cert.Issuer != "CN=Test CA" {
+		t.Errorf("parsed[0].Issuer = %q, want %q", cert.Issuer, "CN=Test CA")
+	}
+	if cert.SHA256 != "AA:BB:CC:DD" {
+		t.Errorf("parsed[0].SHA256 = %q, want %q", cert.SHA256, "AA:BB:CC:DD")
+	}
+	if cert.KeyAlgo != "RSA" {
+		t.Errorf("parsed[0].KeyAlgo = %q, want %q", cert.KeyAlgo, "RSA")
+	}
+	if len(cert.SANs) != 2 || cert.SANs[0] != "json-test.example.com" {
+		t.Errorf("parsed[0].SANs = %v, want [json-test.example.com www.json-test.example.com]", cert.SANs)
+	}
+
+	// Verify private key entry
+	key := parsed[1]
+	if key.Type != "private_key" {
+		t.Errorf("parsed[1].Type = %q, want %q", key.Type, "private_key")
+	}
+	if key.KeyType != "RSA" {
+		t.Errorf("parsed[1].KeyType = %q, want %q", key.KeyType, "RSA")
+	}
+	if key.SKI != "eeff0011" {
+		t.Errorf("parsed[1].SKI = %q, want %q", key.SKI, "eeff0011")
 	}
 }
 

@@ -115,7 +115,9 @@ func TestCertKeyIdEmbedded_NilExtensions(t *testing.T) {
 }
 
 func TestCertSKI_vs_Embedded(t *testing.T) {
-	// WHY: When a CA embeds a legacy SHA-1 SKI, computed (RFC 7093) and embedded values must differ; confusing them breaks chain resolution.
+	// WHY: When a CA embeds a legacy SHA-1 SKI, CertSKI (RFC 7093) and
+	// CertSKIEmbedded must differ. Also verifies CertSKI is wired correctly
+	// to ComputeSKI by comparing their outputs for the same key.
 	t.Parallel()
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
@@ -151,6 +153,15 @@ func TestCertSKI_vs_Embedded(t *testing.T) {
 	}
 	if computed == embedded {
 		t.Error("computed (truncated SHA-256) should differ from embedded (SHA-1)")
+	}
+
+	// CertSKI must match ComputeSKI for the same public key (wiring check)
+	skiBytes, err := ComputeSKI(cert.PublicKey)
+	if err != nil {
+		t.Fatalf("ComputeSKI: %v", err)
+	}
+	if computed != ColonHex(skiBytes) {
+		t.Errorf("CertSKI(%q) != ColonHex(ComputeSKI) (%q) — wiring mismatch", computed, ColonHex(skiBytes))
 	}
 }
 
@@ -928,9 +939,9 @@ func TestParsePEMPrivateKeyWithPasswords_CorruptNotEncrypted(t *testing.T) {
 
 func TestCertFingerprints(t *testing.T) {
 	// WHY: Fingerprints are used in display output, JSON, and cert matching.
-	// Verifies certkit-specific behavior: hex and colon variants are consistent
-	// with each other, colon form is uppercase, and SHA-256 differs from SHA-1.
-	// Does NOT re-derive digests (that would test crypto/sha256, not certkit).
+	// Verifies certkit-specific behavior: correct lengths (SHA-256=64 hex,
+	// SHA-1=40 hex), hex/colon consistency, colon form is uppercase, and the
+	// two algorithms produce different output.
 	t.Parallel()
 	_, _, leafPEM := generateTestPKI(t)
 	cert, _ := ParsePEMCertificate([]byte(leafPEM))
@@ -939,6 +950,19 @@ func TestCertFingerprints(t *testing.T) {
 	sha1Hex := CertFingerprintSHA1(cert)
 	sha256Colon := CertFingerprintColonSHA256(cert)
 	sha1Colon := CertFingerprintColonSHA1(cert)
+
+	// Length checks: SHA-256 = 32 bytes = 64 hex chars, SHA-1 = 20 bytes = 40 hex chars
+	if len(sha256Hex) != 64 {
+		t.Errorf("SHA-256 hex fingerprint should be 64 chars, got %d: %q", len(sha256Hex), sha256Hex)
+	}
+	if len(sha1Hex) != 40 {
+		t.Errorf("SHA-1 hex fingerprint should be 40 chars, got %d: %q", len(sha1Hex), sha1Hex)
+	}
+
+	// SHA-256 and SHA-1 must differ (different algorithms on same input)
+	if sha256Hex == sha1Hex {
+		t.Error("SHA-256 and SHA-1 fingerprints should differ")
+	}
 
 	// Cross-check: colon form lowered with colons removed must equal hex form
 	sha256ColonLower := strings.ToLower(strings.ReplaceAll(sha256Colon, ":", ""))
@@ -962,8 +986,8 @@ func TestCertFingerprints(t *testing.T) {
 func TestComputeSKILegacy(t *testing.T) {
 	// WHY: ComputeSKILegacy uses SHA-1 vs ComputeSKI's truncated SHA-256.
 	// Verifies the two algorithms produce different values — confusing them
-	// would break cross-matching with legacy certificates. Length and
-	// determinism checks removed (T-9: test crypto/sha1, not certkit).
+	// would break cross-matching with legacy certificates. Both must be
+	// 20 bytes (RFC 7093 truncation for modern, SHA-1 output for legacy).
 	t.Parallel()
 	_, _, leafPEM := generateTestPKI(t)
 	cert, _ := ParsePEMCertificate([]byte(leafPEM))
@@ -975,6 +999,14 @@ func TestComputeSKILegacy(t *testing.T) {
 	modern, err := ComputeSKI(cert.PublicKey)
 	if err != nil {
 		t.Fatalf("ComputeSKI: %v", err)
+	}
+
+	// Both SKI methods must produce 20 bytes
+	if len(legacy) != 20 {
+		t.Errorf("ComputeSKILegacy should be 20 bytes, got %d", len(legacy))
+	}
+	if len(modern) != 20 {
+		t.Errorf("ComputeSKI should be 20 bytes, got %d", len(modern))
 	}
 	if bytes.Equal(legacy, modern) {
 		t.Error("ComputeSKILegacy should differ from ComputeSKI (SHA-1 vs truncated SHA-256)")
