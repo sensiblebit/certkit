@@ -636,14 +636,24 @@ func TestGenerateCSR_ParsePEMRoundTrip(t *testing.T) {
 		t.Errorf("CN = %q, want %q", csr.Subject.CommonName, leaf.Subject.CommonName)
 	}
 
-	// Verify DNS names survived — leaf has exactly 2 DNS SANs.
+	// Verify DNS names survived with correct values.
 	if len(csr.DNSNames) != len(leaf.DNSNames) {
-		t.Errorf("CSR DNSNames count = %d, want %d", len(csr.DNSNames), len(leaf.DNSNames))
+		t.Fatalf("CSR DNSNames count = %d, want %d", len(csr.DNSNames), len(leaf.DNSNames))
+	}
+	for i, got := range csr.DNSNames {
+		if got != leaf.DNSNames[i] {
+			t.Errorf("DNSNames[%d] = %q, want %q", i, got, leaf.DNSNames[i])
+		}
 	}
 
-	// Verify IP addresses survived
-	if len(leaf.IPAddresses) > 0 && len(csr.IPAddresses) != len(leaf.IPAddresses) {
-		t.Errorf("IP addresses count = %d, want %d", len(csr.IPAddresses), len(leaf.IPAddresses))
+	// Verify IP addresses survived with correct values.
+	if len(csr.IPAddresses) != len(leaf.IPAddresses) {
+		t.Fatalf("IP addresses count = %d, want %d", len(csr.IPAddresses), len(leaf.IPAddresses))
+	}
+	for i, got := range csr.IPAddresses {
+		if !got.Equal(leaf.IPAddresses[i]) {
+			t.Errorf("IPAddresses[%d] = %v, want %v", i, got, leaf.IPAddresses[i])
+		}
 	}
 }
 
