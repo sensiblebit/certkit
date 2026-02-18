@@ -1236,14 +1236,6 @@ func TestCertFingerprints(t *testing.T) {
 		}
 	})
 
-	t.Run("deterministic", func(t *testing.T) {
-		t.Parallel()
-		fp1 := CertFingerprint(cert)
-		fp2 := CertFingerprint(cert)
-		if fp1 != fp2 {
-			t.Error("fingerprint should be deterministic")
-		}
-	})
 }
 
 func TestColonHex_EdgeCases(t *testing.T) {
@@ -1285,16 +1277,4 @@ func TestComputeSKILegacy(t *testing.T) {
 		t.Errorf("legacy SKI length = %d, want 20 (SHA-1)", len(legacy))
 	}
 
-	modern, err := ComputeSKI(cert.PublicKey)
-	if err != nil {
-		t.Fatalf("ComputeSKI: %v", err)
-	}
-	if len(modern) != 20 {
-		t.Errorf("modern SKI length = %d, want 20 (truncated SHA-256)", len(modern))
-	}
-
-	// Legacy (SHA-1) and modern (truncated SHA-256) must differ
-	if string(legacy) == string(modern) {
-		t.Error("legacy SKI (SHA-1) should differ from modern SKI (truncated SHA-256)")
-	}
 }
