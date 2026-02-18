@@ -4,6 +4,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"net"
 	"strings"
 	"testing"
@@ -235,6 +236,7 @@ func TestGenerateBundleFiles_PEMFilesAreParseable(t *testing.T) {
 		}
 
 		count := 0
+		var parsedCerts []*x509.Certificate
 		rest := f.Data
 		for {
 			var block *pem.Block
@@ -245,14 +247,23 @@ func TestGenerateBundleFiles_PEMFilesAreParseable(t *testing.T) {
 			if block.Type != "CERTIFICATE" {
 				t.Errorf("%s: unexpected PEM block type %q", f.Name, block.Type)
 			}
-			_, err := x509.ParseCertificate(block.Bytes)
+			cert, err := x509.ParseCertificate(block.Bytes)
 			if err != nil {
 				t.Errorf("%s: certificate %d not parseable: %v", f.Name, count+1, err)
+			} else {
+				parsedCerts = append(parsedCerts, cert)
 			}
 			count++
 		}
 		if count != expected {
 			t.Errorf("%s: expected %d certificates, got %d", f.Name, expected, count)
+		}
+
+		// Verify certificate identity: leaf must be first in chain files
+		if len(parsedCerts) > 0 && (f.Name == "valid.pem" || f.Name == "valid.chain.pem" || f.Name == "valid.fullchain.pem") {
+			if parsedCerts[0].Subject.CommonName != "valid.example.com" {
+				t.Errorf("%s: first cert CN=%q, want %q", f.Name, parsedCerts[0].Subject.CommonName, "valid.example.com")
+			}
 		}
 	}
 }
@@ -484,6 +495,11 @@ func TestGenerateCSR_RoundTrip(t *testing.T) {
 		t.Fatalf("parse CSR: %v", err)
 	}
 
+	// Verify CSR has a valid signature (T-6 round-trip completeness)
+	if err := csr.CheckSignature(); err != nil {
+		t.Fatalf("CSR signature invalid: %v", err)
+	}
+
 	// Verify subject fields are copied from cert
 	if len(csr.Subject.Organization) != 1 || csr.Subject.Organization[0] != "TestOrg" {
 		t.Errorf("CSR organization = %v, want [TestOrg]", csr.Subject.Organization)
@@ -536,6 +552,40 @@ func TestGenerateCSR_SANExclusion(t *testing.T) {
 			"*.example.com",
 		},
 	}
+
+	// Separate subtest: 3+ SANs — www is NOT excluded because the
+	// shouldExcludeWWW guard only activates when len(DNSNames) == 2.
+	t.Run("www kept when 3+ SANs present", func(t *testing.T) {
+		t.Parallel()
+		ca := newRSACA(t)
+		leaf := newRSALeaf(t, ca, "example.com",
+			[]string{"example.com", "www.example.com", "api.example.com"})
+
+		csrPEM, _, err := GenerateCSR(leaf.cert, leaf.keyPEM, nil)
+		if err != nil {
+			t.Fatalf("GenerateCSR: %v", err)
+		}
+
+		block, _ := pem.Decode(csrPEM)
+		csr, err := x509.ParseCertificateRequest(block.Bytes)
+		if err != nil {
+			t.Fatalf("parse CSR: %v", err)
+		}
+
+		wantDNS := map[string]bool{
+			"example.com":     true,
+			"www.example.com": true,
+			"api.example.com": true,
+		}
+		if len(csr.DNSNames) != len(wantDNS) {
+			t.Fatalf("expected %d DNS names, got %d: %v", len(wantDNS), len(csr.DNSNames), csr.DNSNames)
+		}
+		for _, name := range csr.DNSNames {
+			if !wantDNS[name] {
+				t.Errorf("unexpected DNS name %q", name)
+			}
+		}
+	})
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -917,16 +967,76 @@ func TestExportMatchedBundles_RetryNoVerify(t *testing.T) {
 	}
 }
 
+func TestExportMatchedBundles_WriterErrorContinues(t *testing.T) {
+	// WHY: When BundleWriter.WriteBundleFiles fails for one SKI, ExportMatchedBundles
+	// must continue processing remaining SKIs instead of aborting. This exercises
+	// the slog.Warn + continue path in exportBundleCerts.
+	t.Parallel()
+
+	// Use RSA + ECDSA CAs so each leaf gets a unique certID
+	// (newRSALeaf hardcodes SerialNumber=100; same CA SubjectKeyId causes
+	// identical AuthorityKeyId → certID collision → dedup).
+	rsaCA := newRSACA(t)
+	ecCA := newECDSACA(t)
+	leaf1 := newRSALeaf(t, rsaCA, "first.example.com", []string{"first.example.com"})
+	leaf2 := newRSALeaf(t, ecCA, "second.example.com", []string{"second.example.com"})
+
+	store := NewMemStore()
+	for _, c := range []*x509.Certificate{leaf1.cert, leaf2.cert, rsaCA.cert, ecCA.cert} {
+		if err := store.HandleCertificate(c, "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, l := range []testLeaf{leaf1, leaf2} {
+		if err := store.HandleKey(l.key, l.keyPEM, "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	skis := store.MatchedPairs()
+	if len(skis) < 2 {
+		t.Fatalf("expected at least 2 matched pairs, got %d", len(skis))
+	}
+
+	var written []mockWriteCall
+	writer := &mockBundleWriter{calls: &written, errOnFirst: true}
+
+	err := ExportMatchedBundles(t.Context(), ExportMatchedBundleInput{
+		Store:  store,
+		SKIs:   skis,
+		Writer: writer,
+		BundleOpts: certkit.BundleOptions{
+			CustomRoots: []*x509.Certificate{rsaCA.cert, ecCA.cert},
+			TrustStore:  "custom",
+			Verify:      true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ExportMatchedBundles: %v", err)
+	}
+
+	// One SKI's write failed, the other should still succeed
+	if len(written) != 1 {
+		t.Fatalf("expected 1 successful write, got %d", len(written))
+	}
+}
+
 type mockWriteCall struct {
 	folder string
 	files  []BundleFile
 }
 
 type mockBundleWriter struct {
-	calls *[]mockWriteCall
+	calls      *[]mockWriteCall
+	errOnFirst bool // if true, return an error on the first call
+	callCount  int
 }
 
 func (w *mockBundleWriter) WriteBundleFiles(folder string, files []BundleFile) error {
+	w.callCount++
+	if w.errOnFirst && w.callCount == 1 {
+		return fmt.Errorf("mock write error for %s", folder)
+	}
 	*w.calls = append(*w.calls, mockWriteCall{folder: folder, files: files})
 	return nil
 }

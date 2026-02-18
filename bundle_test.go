@@ -166,8 +166,11 @@ func TestBundle_verifyFalsePassthrough(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if result.Leaf == nil || result.Leaf.Subject.CommonName != "noverify-leaf" {
-		t.Errorf("expected leaf CN=noverify-leaf, got %v", result.Leaf)
+	if result.Leaf == nil {
+		t.Fatal("expected non-nil leaf")
+	}
+	if !result.Leaf.Equal(leafCert) {
+		t.Errorf("leaf cert does not match original (CN=%q)", result.Leaf.Subject.CommonName)
 	}
 	if len(result.Intermediates) != 1 {
 		t.Fatalf("expected 1 intermediate passthrough, got %d", len(result.Intermediates))
@@ -472,50 +475,86 @@ func TestDetectAndSwapLeaf_NoSwapCases(t *testing.T) {
 	}
 }
 
-func TestCheckSHA1Signatures(t *testing.T) {
-	// WHY: SHA-1 detection must warn on SHA-1 certs and not false-positive on SHA-256 certs.
+func TestBundle_SHA1Warning(t *testing.T) {
+	// WHY: Bundle must surface SHA-1 warnings in result.Warnings so callers
+	// can alert users. Tests through the public API instead of calling
+	// checkSHA1Signatures directly (T-11). Verify=false exercises the warning
+	// path without requiring a valid SHA-1 chain (modern Go rejects SHA-1
+	// during verification).
 	t.Parallel()
-	tests := []struct {
-		name      string
-		certs     []*x509.Certificate
-		wantCount int
-	}{
-		{
-			name: "SHA-1 certs produce warnings",
-			certs: []*x509.Certificate{
-				{Subject: pkix.Name{CommonName: "sha1-cert"}, SignatureAlgorithm: x509.SHA1WithRSA},
-				{Subject: pkix.Name{CommonName: "sha256-cert"}, SignatureAlgorithm: x509.SHA256WithRSA},
-				{Subject: pkix.Name{CommonName: "ecdsa-sha1"}, SignatureAlgorithm: x509.ECDSAWithSHA1},
-			},
-			wantCount: 2,
-		},
-		{
-			name: "SHA-256 certs produce no warnings",
-			certs: []*x509.Certificate{
-				{Subject: pkix.Name{CommonName: "modern"}, SignatureAlgorithm: x509.SHA256WithRSA},
-				{Subject: pkix.Name{CommonName: "ecdsa"}, SignatureAlgorithm: x509.ECDSAWithSHA256},
-			},
-			wantCount: 0,
-		},
+
+	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "SHA1-Test CA"},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			warnings := checkSHA1Signatures(tt.certs)
-			if len(warnings) != tt.wantCount {
-				t.Errorf("expected %d warnings, got %d: %v", tt.wantCount, len(warnings), warnings)
+	caBytes, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	caCert, _ := x509.ParseCertificate(caBytes)
+
+	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	leafTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "sha1-leaf.example.com"},
+		NotBefore:    time.Now().Add(-1 * time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+	}
+	leafBytes, _ := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
+	leafCert, _ := x509.ParseCertificate(leafBytes)
+
+	// Simulate a SHA-1 signature on the leaf (can't create real SHA-1 certs
+	// in modern Go, but SignatureAlgorithm is what checkSHA1Signatures reads)
+	leafCert.SignatureAlgorithm = x509.SHA1WithRSA
+
+	result, err := Bundle(context.Background(), leafCert, BundleOptions{
+		ExtraIntermediates: []*x509.Certificate{caCert},
+		FetchAIA:           false,
+		TrustStore:         "custom",
+		Verify:             false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var sha1Warnings int
+	for _, w := range result.Warnings {
+		if strings.Contains(w, "SHA-1") {
+			sha1Warnings++
+			if !strings.Contains(w, "sha1-leaf.example.com") {
+				t.Errorf("SHA-1 warning should identify the cert, got: %s", w)
 			}
-			for _, w := range warnings {
-				if !strings.Contains(w, "SHA-1") {
-					t.Errorf("warning should mention SHA-1: %s", w)
-				}
-			}
-		})
+		}
+	}
+	if sha1Warnings != 1 {
+		t.Errorf("expected 1 SHA-1 warning (leaf only), got %d; all warnings: %v", sha1Warnings, result.Warnings)
+	}
+
+	// Negative case: SHA-256 chain must produce zero SHA-1 warnings
+	leafCert.SignatureAlgorithm = x509.SHA256WithRSA
+	result2, err := Bundle(context.Background(), leafCert, BundleOptions{
+		ExtraIntermediates: []*x509.Certificate{caCert},
+		FetchAIA:           false,
+		TrustStore:         "custom",
+		Verify:             false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range result2.Warnings {
+		if strings.Contains(w, "SHA-1") {
+			t.Errorf("SHA-256 chain should produce no SHA-1 warnings, got: %s", w)
+		}
 	}
 }
 
-func TestCheckExpiryWarnings(t *testing.T) {
-	// WHY: Expiry warnings must fire for expired and soon-expiring certs but not for far-future certs; wrong thresholds cause missed or false alerts.
+func TestBundle_ExpiryWarnings(t *testing.T) {
+	// WHY: Bundle must surface expiry warnings in result.Warnings so callers
+	// can alert users about expired or soon-expiring certs. Tests through the
+	// public API instead of calling checkExpiryWarnings directly (T-11).
 	t.Parallel()
 	tests := []struct {
 		name         string
@@ -523,31 +562,53 @@ func TestCheckExpiryWarnings(t *testing.T) {
 		wantCount    int
 		wantContains string
 	}{
-		{"expired", -24 * time.Hour, 1, "has expired"},
+		{"expired cert", -24 * time.Hour, 1, "has expired"},
 		{"expiring soon", 10 * 24 * time.Hour, 1, "expires within 30 days"},
 		{"within 30 days boundary", 30*24*time.Hour - time.Minute, 1, "expires within 30 days"},
-		{"outside 30 days boundary", 30*24*time.Hour + time.Minute, 0, ""},
+		{"outside 30 days", 30*24*time.Hour + time.Minute, 0, ""},
+		{"far future", 365 * 24 * time.Hour, 0, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			certs := []*x509.Certificate{
-				{
-					Subject:  pkix.Name{CommonName: "test-cert"},
-					NotAfter: time.Now().Add(tt.notAfter),
-				},
+			key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			template := &x509.Certificate{
+				SerialNumber:          big.NewInt(1),
+				Subject:               pkix.Name{CommonName: "expiry-test"},
+				NotBefore:             time.Now().Add(-1 * time.Hour),
+				NotAfter:              time.Now().Add(tt.notAfter),
+				IsCA:                  true,
+				BasicConstraintsValid: true,
+				KeyUsage:              x509.KeyUsageCertSign,
 			}
-			warnings := checkExpiryWarnings(certs)
-			if len(warnings) != tt.wantCount {
-				t.Fatalf("got %d warnings, want %d", len(warnings), tt.wantCount)
+			certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+			cert, _ := x509.ParseCertificate(certBytes)
+
+			// Use Verify=false so expired certs don't fail chain verification
+			result, err := Bundle(context.Background(), cert, BundleOptions{
+				FetchAIA:   false,
+				TrustStore: "custom",
+				Verify:     false,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			var expiryWarnings []string
+			for _, w := range result.Warnings {
+				if strings.Contains(w, "expired") || strings.Contains(w, "expires") {
+					expiryWarnings = append(expiryWarnings, w)
+				}
+			}
+			if len(expiryWarnings) != tt.wantCount {
+				t.Fatalf("got %d expiry warnings, want %d: %v", len(expiryWarnings), tt.wantCount, result.Warnings)
 			}
 			if tt.wantContains != "" {
-				if !strings.Contains(warnings[0], tt.wantContains) {
-					t.Errorf("warning %q should contain %q", warnings[0], tt.wantContains)
+				if !strings.Contains(expiryWarnings[0], tt.wantContains) {
+					t.Errorf("warning %q should contain %q", expiryWarnings[0], tt.wantContains)
 				}
-				// Verify warning includes cert identity (CN)
-				if !strings.Contains(warnings[0], "test-cert") {
-					t.Errorf("warning %q should contain cert CN 'test-cert'", warnings[0])
+				if !strings.Contains(expiryWarnings[0], "expiry-test") {
+					t.Errorf("warning should include cert CN, got: %s", expiryWarnings[0])
 				}
 			}
 		})

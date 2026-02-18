@@ -282,21 +282,19 @@ func TestDecodeJKS_DifferentKeyPassword(t *testing.T) {
 		t.Fatalf("DecodeJKS with both passwords: %v", err)
 	}
 	if len(keys) != 1 {
-		t.Errorf("expected 1 key, got %d", len(keys))
+		t.Fatalf("expected 1 key, got %d", len(keys))
 	}
 	if len(certs) != 2 {
-		t.Errorf("expected 2 certs (leaf + CA), got %d", len(certs))
+		t.Fatalf("expected 2 certs (leaf + CA), got %d", len(certs))
 	}
 
 	// Verify key material matches original with different passwords.
-	if len(keys) == 1 {
-		decodedRSA, ok := keys[0].(*rsa.PrivateKey)
-		if !ok {
-			t.Fatalf("expected *rsa.PrivateKey, got %T", keys[0])
-		}
-		if !leafKey.Equal(decodedRSA) {
-			t.Error("decoded key does not Equal original with different store/key passwords")
-		}
+	decodedRSA, ok := keys[0].(*rsa.PrivateKey)
+	if !ok {
+		t.Fatalf("expected *rsa.PrivateKey, got %T", keys[0])
+	}
+	if !leafKey.Equal(decodedRSA) {
+		t.Error("decoded key does not Equal original with different store/key passwords")
 	}
 }
 

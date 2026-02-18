@@ -527,8 +527,12 @@ func TestGenerateCSR_ParsePEMRoundTrip(t *testing.T) {
 		if err != nil {
 			t.Fatalf("parsing auto-generated key: %v", err)
 		}
-		if _, ok := parsedKey.(*ecdsa.PrivateKey); !ok {
+		ecKey, ok := parsedKey.(*ecdsa.PrivateKey)
+		if !ok {
 			t.Fatalf("expected auto-generated *ecdsa.PrivateKey, got %T", parsedKey)
+		}
+		if ecKey.Curve != elliptic.P256() {
+			t.Errorf("expected P-256 curve, got %s", ecKey.Curve.Params().Name)
 		}
 
 		verifyCSRFields(t, csrPEM, leaf)
