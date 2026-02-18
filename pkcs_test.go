@@ -15,9 +15,9 @@ import (
 	smPkcs7 "github.com/smallstep/pkcs7"
 )
 
-func TestEncodeContainers_UnsupportedKeyType(t *testing.T) {
-	// WHY: Unsupported key types must produce a clear error, not panic. All
-	// three container encoders must reject bad keys consistently.
+func TestEncodeContainers_InvalidKey(t *testing.T) {
+	// WHY: Unsupported and nil private keys must produce a clear error, not
+	// panic. All three container encoders must reject bad keys consistently.
 	t.Parallel()
 
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -32,22 +32,26 @@ func TestEncodeContainers_UnsupportedKeyType(t *testing.T) {
 
 	tests := []struct {
 		name    string
+		key     any
 		wantSub string
-		encode  func() ([]byte, error)
+		encode  func(key any) ([]byte, error)
 	}{
-		{"PKCS12", "unsupported private key type", func() ([]byte, error) { return EncodePKCS12(struct{}{}, cert, nil, "pass") }},
-		{"PKCS12Legacy", "unsupported private key type", func() ([]byte, error) { return EncodePKCS12Legacy(struct{}{}, cert, nil, "pass") }},
-		{"JKS", "unknown key type", func() ([]byte, error) { return EncodeJKS(struct{}{}, cert, nil, "changeit") }},
+		{"PKCS12/unsupported", struct{}{}, "unsupported private key type", func(k any) ([]byte, error) { return EncodePKCS12(k, cert, nil, "pass") }},
+		{"PKCS12Legacy/unsupported", struct{}{}, "unsupported private key type", func(k any) ([]byte, error) { return EncodePKCS12Legacy(k, cert, nil, "pass") }},
+		{"JKS/unsupported", struct{}{}, "unknown key type", func(k any) ([]byte, error) { return EncodeJKS(k, cert, nil, "changeit") }},
+		{"PKCS12/nil", nil, "unsupported private key type", func(k any) ([]byte, error) { return EncodePKCS12(k, cert, nil, "pass") }},
+		{"PKCS12Legacy/nil", nil, "unsupported private key type", func(k any) ([]byte, error) { return EncodePKCS12Legacy(k, cert, nil, "pass") }},
+		{"JKS/nil", nil, "unknown key type", func(k any) ([]byte, error) { return EncodeJKS(k, cert, nil, "changeit") }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := tt.encode()
+			_, err := tt.encode(tt.key)
 			if err == nil {
-				t.Fatal("expected error for unsupported key type")
+				t.Fatal("expected error for invalid key")
 			}
 			if !strings.Contains(err.Error(), tt.wantSub) {
-				t.Fatalf("unexpected error message: got %q, want substring %q", err.Error(), tt.wantSub)
+				t.Fatalf("unexpected error: got %q, want substring %q", err.Error(), tt.wantSub)
 			}
 		})
 	}
@@ -406,46 +410,6 @@ func TestEncodePKCS12Legacy_WithCAChain(t *testing.T) {
 	}
 	if !leafKey.Equal(ecDecoded) {
 		t.Error("legacy PKCS#12 key round-trip mismatch")
-	}
-}
-
-func TestEncodeContainers_NilPrivateKey(t *testing.T) {
-	// WHY: Nil private key must fail gracefully with a clear error, not panic
-	// inside validatePKCS12KeyType or normalizeKey. All three container encoders
-	// must reject nil keys consistently.
-	t.Parallel()
-
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "nil-key-test"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	tempKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &tempKey.PublicKey, tempKey)
-	cert, _ := x509.ParseCertificate(certBytes)
-
-	tests := []struct {
-		name    string
-		wantSub string
-		encode  func() ([]byte, error)
-	}{
-		{"PKCS12", "unsupported private key type", func() ([]byte, error) { return EncodePKCS12(nil, cert, nil, "pass") }},
-		{"PKCS12Legacy", "unsupported private key type", func() ([]byte, error) { return EncodePKCS12Legacy(nil, cert, nil, "pass") }},
-		{"JKS", "unknown key type", func() ([]byte, error) { return EncodeJKS(nil, cert, nil, "changeit") }},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			_, err := tt.encode()
-			if err == nil {
-				t.Fatal("expected error with nil private key")
-			}
-			if !strings.Contains(err.Error(), tt.wantSub) {
-				t.Fatalf("unexpected error: got %q, want substring %q", err.Error(), tt.wantSub)
-			}
-		})
 	}
 }
 

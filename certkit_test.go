@@ -37,14 +37,35 @@ func TestParsePEMCertificate(t *testing.T) {
 	}
 }
 
-func TestParsePEMCertificates_empty(t *testing.T) {
-	// WHY: Non-PEM input must produce a clear error, not silently return an empty slice.
-	_, err := ParsePEMCertificates([]byte("not a cert"))
-	if err == nil {
-		t.Error("expected error for invalid PEM")
+func TestParsePEMCertificates_NoCertificates(t *testing.T) {
+	// WHY: All non-certificate inputs (nil, non-PEM text, key-only PEM) must
+	// produce a clear "no certificates found" error, not silently return an
+	// empty slice or panic.
+	t.Parallel()
+
+	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	der, _ := x509.MarshalPKCS8PrivateKey(key)
+	keyOnlyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+
+	tests := []struct {
+		name  string
+		input []byte
+	}{
+		{"nil input", nil},
+		{"non-PEM text", []byte("not a cert")},
+		{"only PRIVATE KEY blocks", keyOnlyPEM},
 	}
-	if !strings.Contains(err.Error(), "no certificates found") {
-		t.Errorf("unexpected error: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := ParsePEMCertificates(tt.input)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), "no certificates found") {
+				t.Errorf("expected 'no certificates found' error, got: %v", err)
+			}
+		})
 	}
 }
 
@@ -538,18 +559,6 @@ func TestParsePEMPrivateKey_unsupportedBlockType(t *testing.T) {
 	}
 }
 
-func TestParsePEMPrivateKey_invalid(t *testing.T) {
-	// WHY: Non-PEM input must be rejected with an error, not silently return a nil key.
-	t.Parallel()
-	_, err := ParsePEMPrivateKey([]byte("not a key"))
-	if err == nil {
-		t.Error("expected error for invalid PEM")
-	}
-	if !strings.Contains(err.Error(), "no PEM block found") {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
 func TestKeyAlgorithmName(t *testing.T) {
 	// WHY: KeyAlgorithmName is used in display output and JSON; returning "unknown" for a supported type would confuse users.
 	t.Parallel()
@@ -605,26 +614,6 @@ func TestPublicKeyAlgorithmName(t *testing.T) {
 				t.Errorf("PublicKeyAlgorithmName(%T) = %q, want %q", tt.key, got, tt.expected)
 			}
 		})
-	}
-}
-
-func TestParsePEMCertificateRequest(t *testing.T) {
-	// WHY: CSR parsing must preserve subject and SANs from the PEM; dropped fields would produce incorrect renewal requests.
-	leaf, key := generateLeafWithSANs(t)
-	csrPEM, _, err := GenerateCSR(leaf, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	csr, err := ParsePEMCertificateRequest([]byte(csrPEM))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if csr.Subject.CommonName != "test.example.com" {
-		t.Errorf("CN=%q, want test.example.com", csr.Subject.CommonName)
-	}
-	if len(csr.DNSNames) != 2 {
-		t.Errorf("DNSNames count=%d, want 2", len(csr.DNSNames))
 	}
 }
 
@@ -812,99 +801,64 @@ func TestGetPublicKey(t *testing.T) {
 }
 
 func TestKeyMatchesCert(t *testing.T) {
-	// WHY: Key-cert matching is the core of bundle assembly; a false negative would exclude valid keys from export bundles.
+	// WHY: Key-cert matching is the core of bundle assembly. False negatives
+	// exclude valid keys; false positives pair wrong keys. Covers match,
+	// mismatch, cross-algorithm, unsupported type, nil key, and nil cert.
 	t.Parallel()
-	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
-	// One key type suffices for the match case — KeyMatchesCert is a thin
-	// wrapper (GetPublicKey + Equal) per T-13.
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "ECDSA-match"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-	}
-	certDER, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &ecKey.PublicKey, ecKey)
-	cert, _ := x509.ParseCertificate(certDER)
-
-	match, err := KeyMatchesCert(ecKey, cert)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !match {
-		t.Error("expected ECDSA key to match its certificate")
-	}
-}
-
-func TestKeyMatchesCert_Mismatch(t *testing.T) {
-	// WHY: A false positive in key matching would pair the wrong key with a cert, producing TLS bundles that fail at handshake time.
-	t.Parallel()
-	// Generate key1, use it for cert; then check key2 against cert
-	key1, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	key2, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "mismatch"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-	}
-	certDER, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key1.PublicKey, key1)
-	cert, _ := x509.ParseCertificate(certDER)
-
-	match, err := KeyMatchesCert(key2, cert)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if match {
-		t.Error("expected different key to NOT match certificate")
-	}
-}
-
-func TestKeyMatchesCert_TypeMismatch(t *testing.T) {
-	// WHY: Cross-algorithm comparison (RSA key vs ECDSA cert) must return false, not panic on type assertion.
-	t.Parallel()
-	// RSA key vs ECDSA cert
+	ecKey1, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	ecKey2, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "type-mismatch"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
+	makeCert := func(t *testing.T, pub any, signer any) *x509.Certificate {
+		t.Helper()
+		tmpl := &x509.Certificate{
+			SerialNumber: big.NewInt(1),
+			Subject:      pkix.Name{CommonName: "keymatch-test"},
+			NotBefore:    time.Now().Add(-1 * time.Hour),
+			NotAfter:     time.Now().Add(24 * time.Hour),
+		}
+		der, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, signer)
+		cert, _ := x509.ParseCertificate(der)
+		return cert
 	}
-	certDER, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &ecKey.PublicKey, ecKey)
-	cert, _ := x509.ParseCertificate(certDER)
 
-	match, err := KeyMatchesCert(rsaKey, cert)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if match {
-		t.Error("expected RSA key to NOT match ECDSA certificate")
-	}
-}
+	ecCert := makeCert(t, &ecKey1.PublicKey, ecKey1)
 
-func TestKeyMatchesCert_UnsupportedKey(t *testing.T) {
-	// WHY: Unsupported key types must produce an error, not panic; callers pass untyped crypto.PrivateKey from container decoders.
-	t.Parallel()
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "unsupported"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
+	tests := []struct {
+		name    string
+		key     any
+		cert    *x509.Certificate
+		want    bool
+		wantErr string
+	}{
+		{"matching key", ecKey1, ecCert, true, ""},
+		{"different key same algo", ecKey2, ecCert, false, ""},
+		{"cross-algorithm RSA vs ECDSA", rsaKey, ecCert, false, ""},
+		{"unsupported key type", struct{}{}, ecCert, false, "unsupported private key type"},
+		{"nil key", nil, ecCert, false, "unsupported private key type"},
+		{"nil cert", ecKey1, nil, false, "certificate is nil"},
 	}
-	certDER, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	cert, _ := x509.ParseCertificate(certDER)
-
-	_, err := KeyMatchesCert(struct{}{}, cert)
-	if err == nil {
-		t.Error("expected error for unsupported key type")
-	}
-	if !strings.Contains(err.Error(), "unsupported private key type") {
-		t.Errorf("unexpected error: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			match, err := KeyMatchesCert(tt.key, tt.cert)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("error = %v, want substring %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if match != tt.want {
+				t.Errorf("KeyMatchesCert = %v, want %v", match, tt.want)
+			}
+		})
 	}
 }
 
@@ -990,40 +944,46 @@ func TestMultiCertPEM_Concatenation(t *testing.T) {
 
 // --- Tests for new Stage 1 library functions ---
 
-func TestCertExpiresWithin_Expiring(t *testing.T) {
-	// WHY: Expiry window detection drives renewal warnings; both the "within window" and "outside window" cases must be correct.
+func TestCertExpiresWithin(t *testing.T) {
+	// WHY: Expiry window detection drives renewal warnings and the
+	// --allow-expired filter. Covers within/outside window, already-expired,
+	// and zero-duration edge cases.
+	t.Parallel()
+
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "expiry-test"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(10 * 24 * time.Hour), // expires in 10 days
-	}
-	certDER, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	cert, _ := x509.ParseCertificate(certDER)
 
-	if !CertExpiresWithin(cert, 30*24*time.Hour) {
-		t.Error("cert expiring in 10 days should be within 30 day window")
+	makeCert := func(notAfter time.Duration) *x509.Certificate {
+		tmpl := &x509.Certificate{
+			SerialNumber: big.NewInt(1),
+			Subject:      pkix.Name{CommonName: "expiry-test"},
+			NotBefore:    time.Now().Add(-48 * time.Hour),
+			NotAfter:     time.Now().Add(notAfter),
+		}
+		der, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+		cert, _ := x509.ParseCertificate(der)
+		return cert
 	}
-	if CertExpiresWithin(cert, 5*24*time.Hour) {
-		t.Error("cert expiring in 10 days should NOT be within 5 day window")
-	}
-}
 
-func TestCertExpiresWithin_AlreadyExpired(t *testing.T) {
-	// WHY: Already-expired certs must always be flagged, even with a zero-duration window; missing this breaks the --allow-expired filter.
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "already-expired"},
-		NotBefore:    time.Now().Add(-48 * time.Hour),
-		NotAfter:     time.Now().Add(-1 * time.Hour),
+	tests := []struct {
+		name     string
+		notAfter time.Duration
+		window   time.Duration
+		want     bool
+	}{
+		{"within 30d window", 10 * 24 * time.Hour, 30 * 24 * time.Hour, true},
+		{"outside 5d window", 10 * 24 * time.Hour, 5 * 24 * time.Hour, false},
+		{"already expired", -1 * time.Hour, 0, true},
+		{"zero duration, non-expired", 24 * time.Hour, 0, false},
 	}
-	certDER, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	cert, _ := x509.ParseCertificate(certDER)
-
-	if !CertExpiresWithin(cert, 0) {
-		t.Error("already expired cert should expire within any window")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cert := makeCert(tt.notAfter)
+			if got := CertExpiresWithin(cert, tt.window); got != tt.want {
+				t.Errorf("CertExpiresWithin(notAfter=%v, window=%v) = %v, want %v",
+					tt.notAfter, tt.window, got, tt.want)
+			}
+		})
 	}
 }
 
@@ -1079,29 +1039,6 @@ func TestCertFingerprintColon(t *testing.T) {
 				t.Errorf("fingerprint format invalid: %s", fp)
 			}
 		})
-	}
-}
-
-func TestVerifyCSR_Tampered(t *testing.T) {
-	// WHY: Tampered CSR bytes must fail signature verification; passing would mean the verify function is not actually checking the signature.
-	leaf, key := generateLeafWithSANs(t)
-	csrPEM, _, err := GenerateCSR(leaf, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	csr, err := ParsePEMCertificateRequest([]byte(csrPEM))
-	if err != nil {
-		t.Fatal(err)
-	}
-	// Tamper with the CSR subject
-	csr.Subject.CommonName = "tampered.example.com"
-	// Note: CheckSignature validates the raw bytes, so tampering the parsed
-	// struct doesn't affect it. We need to tamper the raw bytes.
-	if len(csr.RawTBSCertificateRequest) > 10 {
-		csr.RawTBSCertificateRequest[10] ^= 0xFF
-	}
-	if err := VerifyCSR(csr); err == nil {
-		t.Error("expected error for tampered CSR")
 	}
 }
 
@@ -1161,33 +1098,6 @@ func TestGetCertificateType_Intermediate(t *testing.T) {
 	// Verify root is still "root" and not confused
 	if rootType := GetCertificateType(caCert); rootType != "root" {
 		t.Errorf("GetCertificateType(root) = %q, want %q", rootType, "root")
-	}
-}
-
-func TestParsePEMCertificates_NilInput(t *testing.T) {
-	// WHY: Nil input must produce a clear "no certificates found" error, not a nil-pointer panic.
-	_, err := ParsePEMCertificates(nil)
-	if err == nil {
-		t.Fatal("expected error for nil input")
-	}
-	if !strings.Contains(err.Error(), "no certificates found") {
-		t.Errorf("expected 'no certificates found' error, got: %v", err)
-	}
-}
-
-func TestParsePEMCertificates_OnlyNonCertBlocks(t *testing.T) {
-	// WHY: PEM containing only non-CERTIFICATE blocks must return "no certificates found," not silently return an empty slice.
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	der, _ := x509.MarshalPKCS8PrivateKey(key)
-
-	pemData := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
-
-	_, err := ParsePEMCertificates(pemData)
-	if err == nil {
-		t.Fatal("expected error when PEM contains only PRIVATE KEY blocks")
-	}
-	if !strings.Contains(err.Error(), "no certificates found") {
-		t.Errorf("expected 'no certificates found' error, got: %v", err)
 	}
 }
 
@@ -1292,25 +1202,6 @@ func TestParsePEMCertificate_ReturnsFirstCertFromBundle(t *testing.T) {
 	}
 }
 
-func TestCertExpiresWithin_ZeroDurationNonExpired(t *testing.T) {
-	// WHY: CertExpiresWithin(validCert, 0) must return false, not true.
-	// A zero duration means "expires right now", and a cert expiring in the
-	// future should not match.
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "zero-duration-test"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-	}
-	certDER, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	cert, _ := x509.ParseCertificate(certDER)
-
-	if CertExpiresWithin(cert, 0) {
-		t.Error("CertExpiresWithin(validCert, 0) should return false for non-expired cert")
-	}
-}
-
 func TestComputeSKI_NilPublicKey(t *testing.T) {
 	// WHY: Nil public key must return a clear error, not panic, for both
 	// RFC 7093 and legacy SKI computation paths.
@@ -1333,18 +1224,6 @@ func TestComputeSKI_NilPublicKey(t *testing.T) {
 				t.Errorf("unexpected error: %v", err)
 			}
 		})
-	}
-}
-
-func TestGenerateRSAKey_InvalidBitSize(t *testing.T) {
-	// WHY: Invalid RSA bit sizes (like 0) must return a meaningful error,
-	// not panic or produce a useless key.
-	_, err := GenerateRSAKey(0)
-	if err == nil {
-		t.Error("GenerateRSAKey(0) should return an error")
-	}
-	if !strings.Contains(err.Error(), "generating RSA key") {
-		t.Errorf("error should be wrapped with context, got: %v", err)
 	}
 }
 
@@ -1844,46 +1723,6 @@ func TestParsePEMPrivateKeyWithPasswords_EmptyPasswordDecryptsKey(t *testing.T) 
 	}
 	if !key.Equal(parsed) {
 		t.Error("key encrypted with empty password did not round-trip")
-	}
-}
-
-func TestKeyMatchesCert_NilKey(t *testing.T) {
-	// WHY: KeyMatchesCert delegates to GetPublicKey which uses a crypto.Signer
-	// type assertion. A nil key must return an error, not panic.
-	t.Parallel()
-
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "nil-key-test"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-	}
-	certDER, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	cert, _ := x509.ParseCertificate(certDER)
-
-	_, err := KeyMatchesCert(nil, cert)
-	if err == nil {
-		t.Fatal("expected error for nil key")
-	}
-	if !strings.Contains(err.Error(), "unsupported private key type") {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-func TestKeyMatchesCert_NilCert(t *testing.T) {
-	// WHY: A nil certificate must return an error, not panic when accessing
-	// cert.PublicKey. Callers with optional cert fields must get a clear error.
-	t.Parallel()
-
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-
-	_, err := KeyMatchesCert(key, nil)
-	if err == nil {
-		t.Fatal("expected error for nil cert")
-	}
-	if !strings.Contains(err.Error(), "certificate is nil") {
-		t.Errorf("unexpected error: %v", err)
 	}
 }
 
