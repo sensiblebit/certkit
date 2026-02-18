@@ -213,27 +213,29 @@ func TestFetchLeafFromURL(t *testing.T) {
 	}
 }
 
-func TestFetchLeafFromURL_badHost(t *testing.T) {
-	// WHY: Non-existent hosts must return an error, not hang or panic; callers depend on error return to report unreachable servers.
+func TestFetchLeafFromURL_Errors(t *testing.T) {
+	// WHY: Invalid inputs (non-existent hosts, malformed URLs) must produce clear
+	// errors, not hang or panic. Consolidated per T-12.
 	t.Parallel()
-	_, err := FetchLeafFromURL(context.Background(), "https://this-does-not-exist.invalid", 2*time.Second)
-	if err == nil {
-		t.Error("expected error for non-existent host")
+	tests := []struct {
+		name    string
+		url     string
+		wantErr string
+	}{
+		{"non-existent host", "https://this-does-not-exist.invalid", "tls dial to"},
+		{"malformed URL", "://bad", "parsing URL"},
 	}
-	if !strings.Contains(err.Error(), "tls dial to") {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-func TestFetchLeafFromURL_invalidURL(t *testing.T) {
-	// WHY: Malformed URLs must produce a "parsing URL" error, not a confusing network error downstream.
-	t.Parallel()
-	_, err := FetchLeafFromURL(context.Background(), "://bad", 2*time.Second)
-	if err == nil {
-		t.Error("expected error for invalid URL")
-	}
-	if !strings.Contains(err.Error(), "parsing URL") {
-		t.Errorf("error should mention parsing URL, got: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := FetchLeafFromURL(context.Background(), tt.url, 2*time.Second)
+			if err == nil {
+				t.Errorf("expected error for %s", tt.name)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error should contain %q, got: %v", tt.wantErr, err)
+			}
+		})
 	}
 }
 
@@ -699,31 +701,24 @@ func TestBundle_CustomTrustStoreNilRoots(t *testing.T) {
 	}
 }
 
-func TestIsIssuedByMozillaRoot_KnownRoot(t *testing.T) {
-	// WHY: A cert whose issuer is a real Mozilla root must return true;
-	// false negatives would trigger unnecessary AIA fetches.
+func TestIsIssuedByMozillaRoot(t *testing.T) {
+	// WHY: Verifies both positive and negative cases of Mozilla root issuer
+	// detection — false negatives trigger unnecessary AIA fetches, false
+	// positives skip resolution and leave chains incomplete. Consolidated per T-12.
 	t.Parallel()
-	// Parse one root from the bundle and create a cert "issued by" it
+
+	// Build a known Mozilla root cert
 	pemData := MozillaRootPEM()
 	block, _ := pem.Decode(pemData)
 	if block == nil {
 		t.Fatal("failed to decode first PEM block from Mozilla bundle")
 	}
-	root, err := x509.ParseCertificate(block.Bytes)
+	mozRoot, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// A self-signed Mozilla root's issuer IS itself — a mozilla root subject.
-	if !IsIssuedByMozillaRoot(root) {
-		t.Error("self-signed Mozilla root should report IsIssuedByMozillaRoot=true")
-	}
-}
-
-func TestIsIssuedByMozillaRoot_UnknownIssuer(t *testing.T) {
-	// WHY: A cert issued by a private CA must return false; false positives
-	// would skip AIA resolution and leave chains incomplete.
-	t.Parallel()
+	// Build a private CA cert (unknown issuer)
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
@@ -732,9 +727,22 @@ func TestIsIssuedByMozillaRoot_UnknownIssuer(t *testing.T) {
 		NotAfter:     time.Now().Add(24 * time.Hour),
 	}
 	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	cert, _ := x509.ParseCertificate(certBytes)
+	privateCert, _ := x509.ParseCertificate(certBytes)
 
-	if IsIssuedByMozillaRoot(cert) {
-		t.Error("self-signed private cert should not report IsIssuedByMozillaRoot=true")
+	tests := []struct {
+		name string
+		cert *x509.Certificate
+		want bool
+	}{
+		{"known Mozilla root", mozRoot, true},
+		{"private CA cert", privateCert, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := IsIssuedByMozillaRoot(tt.cert); got != tt.want {
+				t.Errorf("IsIssuedByMozillaRoot() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
