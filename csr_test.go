@@ -267,13 +267,13 @@ func TestGenerateCSRFromTemplate(t *testing.T) {
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	tests := []struct {
-		name       string
-		tmpl       *CSRTemplate
-		wantCN     string
-		wantDNS    int
-		wantIPs    int
-		wantURIs   int
-		wantEmails int
+		name        string
+		tmpl        *CSRTemplate
+		wantCN      string
+		wantDNS     []string
+		wantIPStrs  []string
+		wantURIStrs []string
+		wantEmails  []string
 	}{
 		{
 			name: "subject with DNS and IP hosts",
@@ -285,8 +285,9 @@ func TestGenerateCSRFromTemplate(t *testing.T) {
 				},
 				Hosts: []string{"test.example.com", "www.test.example.com", "10.0.0.1"},
 			},
-			wantCN:  "test.example.com",
-			wantDNS: 2, wantIPs: 1,
+			wantCN:     "test.example.com",
+			wantDNS:    []string{"test.example.com", "www.test.example.com"},
+			wantIPStrs: []string{"10.0.0.1"},
 		},
 		{
 			name: "auto-CN from first DNS host",
@@ -295,7 +296,7 @@ func TestGenerateCSRFromTemplate(t *testing.T) {
 				Hosts:   []string{"auto.example.com", "www.auto.example.com"},
 			},
 			wantCN:  "auto.example.com",
-			wantDNS: 2,
+			wantDNS: []string{"auto.example.com", "www.auto.example.com"},
 		},
 		{
 			name: "empty CN with IP-only hosts",
@@ -303,8 +304,8 @@ func TestGenerateCSRFromTemplate(t *testing.T) {
 				Subject: CSRSubject{},
 				Hosts:   []string{"10.0.0.1", "192.168.1.1"},
 			},
-			wantCN:  "",
-			wantIPs: 2,
+			wantCN:     "",
+			wantIPStrs: []string{"10.0.0.1", "192.168.1.1"},
 		},
 		{
 			name: "mixed DNS, URI, and email hosts",
@@ -312,10 +313,10 @@ func TestGenerateCSRFromTemplate(t *testing.T) {
 				Subject: CSRSubject{CommonName: "test.example.com"},
 				Hosts:   []string{"test.example.com", "spiffe://example.com/workload", "admin@example.com"},
 			},
-			wantCN:     "test.example.com",
-			wantDNS:    1,
-			wantURIs:   1,
-			wantEmails: 1,
+			wantCN:      "test.example.com",
+			wantDNS:     []string{"test.example.com"},
+			wantURIStrs: []string{"spiffe://example.com/workload"},
+			wantEmails:  []string{"admin@example.com"},
 		},
 		{
 			name: "empty host list",
@@ -341,17 +342,37 @@ func TestGenerateCSRFromTemplate(t *testing.T) {
 			if csr.Subject.CommonName != tt.wantCN {
 				t.Errorf("CN=%q, want %q", csr.Subject.CommonName, tt.wantCN)
 			}
-			if len(csr.DNSNames) != tt.wantDNS {
-				t.Errorf("DNSNames count=%d, want %d", len(csr.DNSNames), tt.wantDNS)
+			if len(csr.DNSNames) != len(tt.wantDNS) {
+				t.Errorf("DNSNames count=%d, want %d", len(csr.DNSNames), len(tt.wantDNS))
 			}
-			if len(csr.IPAddresses) != tt.wantIPs {
-				t.Errorf("IPAddresses count=%d, want %d", len(csr.IPAddresses), tt.wantIPs)
+			for i, got := range csr.DNSNames {
+				if i < len(tt.wantDNS) && got != tt.wantDNS[i] {
+					t.Errorf("DNSNames[%d]=%q, want %q", i, got, tt.wantDNS[i])
+				}
 			}
-			if len(csr.URIs) != tt.wantURIs {
-				t.Errorf("URIs count=%d, want %d", len(csr.URIs), tt.wantURIs)
+			if len(csr.IPAddresses) != len(tt.wantIPStrs) {
+				t.Errorf("IPAddresses count=%d, want %d", len(csr.IPAddresses), len(tt.wantIPStrs))
 			}
-			if len(csr.EmailAddresses) != tt.wantEmails {
-				t.Errorf("EmailAddresses count=%d, want %d", len(csr.EmailAddresses), tt.wantEmails)
+			for i, got := range csr.IPAddresses {
+				if i < len(tt.wantIPStrs) && got.String() != tt.wantIPStrs[i] {
+					t.Errorf("IPAddresses[%d]=%q, want %q", i, got.String(), tt.wantIPStrs[i])
+				}
+			}
+			if len(csr.URIs) != len(tt.wantURIStrs) {
+				t.Errorf("URIs count=%d, want %d", len(csr.URIs), len(tt.wantURIStrs))
+			}
+			for i, got := range csr.URIs {
+				if i < len(tt.wantURIStrs) && got.String() != tt.wantURIStrs[i] {
+					t.Errorf("URIs[%d]=%q, want %q", i, got.String(), tt.wantURIStrs[i])
+				}
+			}
+			if len(csr.EmailAddresses) != len(tt.wantEmails) {
+				t.Errorf("EmailAddresses count=%d, want %d", len(csr.EmailAddresses), len(tt.wantEmails))
+			}
+			for i, got := range csr.EmailAddresses {
+				if i < len(tt.wantEmails) && got != tt.wantEmails[i] {
+					t.Errorf("EmailAddresses[%d]=%q, want %q", i, got, tt.wantEmails[i])
+				}
 			}
 		})
 	}

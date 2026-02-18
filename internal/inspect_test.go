@@ -3,6 +3,7 @@ package internal
 import (
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
@@ -116,14 +117,15 @@ func TestInspectFile_PrivateKey(t *testing.T) {
 }
 
 func TestInspectFile_NotFound(t *testing.T) {
-	// WHY: A nonexistent file path must return an error, not panic or return empty results.
+	// WHY: A nonexistent file path must return an error wrapping os.ErrNotExist,
+	// not panic or return empty results.
 	t.Parallel()
 	_, err := InspectFile("/nonexistent/path", []string{})
 	if err == nil {
 		t.Error("expected error for nonexistent file")
 	}
-	if !strings.Contains(err.Error(), "reading") {
-		t.Errorf("unexpected error: %v", err)
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("expected os.ErrNotExist, got: %v", err)
 	}
 }
 

@@ -191,7 +191,8 @@ func TestParseContainerData_UnparseableInputs(t *testing.T) {
 		data      []byte
 		passwords []string
 	}{
-		{"garbage data", []byte("this is not a certificate or key in any format"), nil},
+		// "garbage data" removed — exercises the same "nothing matched" fallthrough
+		// as "DER private key" (T-14). DER key is a more realistic input.
 		{"DER private key", pkcs8DER, nil},
 		{"empty JKS", emptyJKSData, []string{"changeit"}},
 	}

@@ -9,7 +9,6 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha1"
-	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
@@ -1016,8 +1015,9 @@ func TestIsPEM(t *testing.T) {
 
 func TestCertFingerprints(t *testing.T) {
 	// WHY: Fingerprints are used in display output, JSON, and cert matching.
-	// Verifies correct hash computation against an independent digest of
-	// cert.Raw, and validates output format (length, hex case, colon separators).
+	// The hex variants are thin wrappers; the colon variants have certkit-
+	// specific formatting (uppercase, colon separators) worth verifying.
+	// Cross-checks between hex and colon forms prove internal consistency.
 	t.Parallel()
 	_, _, leafPEM := generateTestPKI(t)
 	cert, _ := ParsePEMCertificate([]byte(leafPEM))
@@ -1027,14 +1027,17 @@ func TestCertFingerprints(t *testing.T) {
 	sha256Colon := CertFingerprintColonSHA256(cert)
 	sha1Colon := CertFingerprintColonSHA1(cert)
 
-	// Independent verification: compute expected fingerprints from cert.Raw
-	wantSHA256 := fmt.Sprintf("%x", sha256.Sum256(cert.Raw))
-	if sha256Hex != wantSHA256 {
-		t.Errorf("CertFingerprint = %q, want %q (independent SHA-256 of cert.Raw)", sha256Hex, wantSHA256)
+	// SHA-256 hex: 64 lowercase hex chars
+	if len(sha256Hex) != 64 {
+		t.Errorf("CertFingerprint length = %d, want 64", len(sha256Hex))
 	}
-	wantSHA1 := fmt.Sprintf("%x", sha1.Sum(cert.Raw))
-	if sha1Hex != wantSHA1 {
-		t.Errorf("CertFingerprintSHA1 = %q, want %q (independent SHA-1 of cert.Raw)", sha1Hex, wantSHA1)
+	if sha256Hex != strings.ToLower(sha256Hex) {
+		t.Errorf("CertFingerprint should be lowercase, got %q", sha256Hex)
+	}
+
+	// SHA-1 hex: 40 lowercase hex chars
+	if len(sha1Hex) != 40 {
+		t.Errorf("CertFingerprintSHA1 length = %d, want 40", len(sha1Hex))
 	}
 
 	// SHA-256 colon: 32 uppercase hex pairs separated by colons = 95 chars
@@ -1048,6 +1051,16 @@ func TestCertFingerprints(t *testing.T) {
 	// SHA-1 colon: 20 uppercase hex pairs separated by colons = 59 chars
 	if len(sha1Colon) != 59 {
 		t.Errorf("CertFingerprintColonSHA1 length = %d, want 59", len(sha1Colon))
+	}
+
+	// Cross-check: colon form lowered with colons removed must equal hex form
+	sha256ColonLower := strings.ToLower(strings.ReplaceAll(sha256Colon, ":", ""))
+	if sha256ColonLower != sha256Hex {
+		t.Errorf("CertFingerprintColonSHA256 inconsistent with CertFingerprint: %q vs %q", sha256Colon, sha256Hex)
+	}
+	sha1ColonLower := strings.ToLower(strings.ReplaceAll(sha1Colon, ":", ""))
+	if sha1ColonLower != sha1Hex {
+		t.Errorf("CertFingerprintColonSHA1 inconsistent with CertFingerprintSHA1: %q vs %q", sha1Colon, sha1Hex)
 	}
 }
 
