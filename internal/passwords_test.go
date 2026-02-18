@@ -1,10 +1,10 @@
 package internal
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
-	"strings"
 	"testing"
 
 	"github.com/sensiblebit/certkit"
@@ -40,8 +40,8 @@ func TestProcessPasswords_BadFileReturnsError(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for nonexistent password file, got nil")
 	}
-	if !strings.Contains(err.Error(), "loading passwords from file") {
-		t.Errorf("unexpected error: %v", err)
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("expected os.ErrNotExist in chain, got: %v", err)
 	}
 }
 

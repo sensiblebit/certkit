@@ -233,7 +233,13 @@ func TestParseCSRTemplate_Valid(t *testing.T) {
 		t.Errorf("Org=%v", tmpl.Subject.Organization)
 	}
 	if len(tmpl.Hosts) != 2 {
-		t.Errorf("Hosts count=%d, want 2", len(tmpl.Hosts))
+		t.Fatalf("Hosts count=%d, want 2", len(tmpl.Hosts))
+	}
+	if tmpl.Hosts[0] != "example.com" {
+		t.Errorf("Hosts[0]=%q, want example.com", tmpl.Hosts[0])
+	}
+	if tmpl.Hosts[1] != "10.0.0.1" {
+		t.Errorf("Hosts[1]=%q, want 10.0.0.1", tmpl.Hosts[1])
 	}
 }
 

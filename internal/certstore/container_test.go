@@ -163,26 +163,11 @@ func TestParseContainerData_JKS_TrustedCertOnly(t *testing.T) {
 	}
 }
 
-func TestParseContainerData_GarbageData(t *testing.T) {
-	// WHY: Completely unrecognizable data must return an error indicating
-	// that parsing failed, so the user knows no format matched.
-	t.Parallel()
-
-	garbage := []byte("this is not a certificate or key in any format")
-	_, err := ParseContainerData(garbage, nil)
-	if err == nil {
-		t.Fatal("expected error for garbage data")
-	}
-	if !strings.Contains(err.Error(), "could not parse") {
-		t.Errorf("error should mention parsing failure, got: %v", err)
-	}
-}
-
-func TestParseContainerData_DERPrivateKey_ReturnsError(t *testing.T) {
-	// WHY: ParseContainerData supports DER certificates but NOT DER private
-	// keys. A DER-encoded PKCS#8 private key must produce a clear error, not
-	// silently succeed with wrong content or panic. This documents the design
-	// boundary: DER key parsing is ProcessData's job, not ParseContainerData's.
+func TestParseContainerData_UnparseableInputs(t *testing.T) {
+	// WHY: Data that doesn't match any container format (garbage bytes, DER
+	// private keys, empty JKS) must produce a clear "could not parse" error.
+	// DER keys are ProcessData's job, not ParseContainerData's. Empty JKS
+	// falls through all parsers after DecodeJKS returns no leaf.
 	t.Parallel()
 
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -194,25 +179,6 @@ func TestParseContainerData_DERPrivateKey_ReturnsError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = ParseContainerData(pkcs8DER, nil)
-	if err == nil {
-		t.Fatal("expected error for DER private key passed to ParseContainerData")
-	}
-	if !strings.Contains(err.Error(), "could not parse") {
-		t.Errorf("error should mention 'could not parse', got: %v", err)
-	}
-}
-
-func TestParseContainerData_EmptyJKS_FallsThrough(t *testing.T) {
-	// WHY: A valid JKS file with zero entries (no certs, no keys) parses
-	// successfully via DecodeJKS but returns empty slices. ParseContainerData
-	// checks "if leaf != nil" before returning — an empty JKS falls through
-	// to PKCS#7, PEM, and DER parsers, all of which fail. The resulting error
-	// must be clear, not a panic from attempting to decode JKS magic bytes
-	// as another format.
-	t.Parallel()
-
-	// Create an empty JKS keystore
 	ks := keystore.New()
 	var buf bytes.Buffer
 	if err := ks.Store(&buf, []byte("changeit")); err != nil {
@@ -220,11 +186,25 @@ func TestParseContainerData_EmptyJKS_FallsThrough(t *testing.T) {
 	}
 	emptyJKSData := buf.Bytes()
 
-	_, err := ParseContainerData(emptyJKSData, []string{"changeit"})
-	if err == nil {
-		t.Fatal("expected error for empty JKS (no certs, no keys)")
+	tests := []struct {
+		name      string
+		data      []byte
+		passwords []string
+	}{
+		{"garbage data", []byte("this is not a certificate or key in any format"), nil},
+		{"DER private key", pkcs8DER, nil},
+		{"empty JKS", emptyJKSData, []string{"changeit"}},
 	}
-	if !strings.Contains(err.Error(), "could not parse") {
-		t.Errorf("unexpected error: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := ParseContainerData(tt.data, tt.passwords)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), "could not parse") {
+				t.Errorf("error should mention 'could not parse', got: %v", err)
+			}
+		})
 	}
 }

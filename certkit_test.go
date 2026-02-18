@@ -400,7 +400,6 @@ func TestAlgorithmName(t *testing.T) {
 		{"Ed25519", edPriv, edPub, "Ed25519", "Ed25519"},
 		{"Ed25519_pointer", &edPriv, &edPub, "Ed25519", "Ed25519"},
 		{"nil", nil, nil, "unknown", "unknown"},
-		{"unsupported", struct{}{}, struct{}{}, "unknown", "unknown"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -553,7 +552,6 @@ func TestGetPublicKey(t *testing.T) {
 		name string
 		priv any
 	}{
-		{"unsupported", struct{}{}},
 		{"nil", nil},
 	}
 	for _, tt := range tests {
@@ -605,7 +603,6 @@ func TestKeyMatchesCert(t *testing.T) {
 		{"matching key", ecKey1, ecCert, true, ""},
 		{"different key same algo", ecKey2, ecCert, false, ""},
 		{"cross-algorithm RSA vs ECDSA", rsaKey, ecCert, false, ""},
-		{"unsupported key type", struct{}{}, ecCert, false, "unsupported private key type"},
 		{"nil key", nil, ecCert, false, "unsupported private key type"},
 		{"nil cert", ecKey1, nil, false, "certificate is nil"},
 	}

@@ -343,8 +343,11 @@ func TestGenerateJSON_NoIntermediates(t *testing.T) {
 		t.Fatalf("invalid JSON: %v", err)
 	}
 
-	pemStr := result["pem"].(string)
-	certCount := strings.Count(pemStr, "-----BEGIN CERTIFICATE-----")
+	pemVal, ok := result["pem"].(string)
+	if !ok {
+		t.Fatalf("pem is not a string: %T", result["pem"])
+	}
+	certCount := strings.Count(pemVal, "-----BEGIN CERTIFICATE-----")
 	if certCount != 1 {
 		t.Errorf("PEM should contain 1 cert (leaf only), got %d", certCount)
 	}
@@ -440,8 +443,14 @@ func TestGenerateYAML_RootExpiresBeforeLeaf(t *testing.T) {
 		t.Fatalf("expires is not RFC 3339: %q", expiresStr)
 	}
 
-	leafExpiresStr := result["leaf_expires"].(string)
-	leafExpires, _ := time.Parse(time.RFC3339, leafExpiresStr)
+	leafExpiresStr, ok := result["leaf_expires"].(string)
+	if !ok {
+		t.Fatalf("leaf_expires is not a string: %T", result["leaf_expires"])
+	}
+	leafExpires, err := time.Parse(time.RFC3339, leafExpiresStr)
+	if err != nil {
+		t.Fatalf("leaf_expires is not RFC 3339: %q", leafExpiresStr)
+	}
 
 	// "expires" (chain) should be before "leaf_expires" since root expires first
 	if !expires.Before(leafExpires) {

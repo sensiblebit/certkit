@@ -127,8 +127,26 @@ func TestGenerateKeyFiles(t *testing.T) {
 	if pubBlock == nil {
 		t.Fatal("pub.pem contains no PEM block")
 	}
-	if _, err := x509.ParsePKIXPublicKey(pubBlock.Bytes); err != nil {
+	parsedPub, err := x509.ParsePKIXPublicKey(pubBlock.Bytes)
+	if err != nil {
 		t.Fatalf("parsing generated pub PEM: %v", err)
+	}
+
+	// Verify pub.pem matches key.pem — the critical invariant of key generation
+	privPub, err := certkit.GetPublicKey(parsedKey)
+	if err != nil {
+		t.Fatalf("GetPublicKey: %v", err)
+	}
+	privECPub, ok := privPub.(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatalf("expected *ecdsa.PublicKey from private key, got %T", privPub)
+	}
+	parsedECPub, ok := parsedPub.(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatalf("expected *ecdsa.PublicKey from pub.pem, got %T", parsedPub)
+	}
+	if !privECPub.Equal(parsedECPub) {
+		t.Error("pub.pem public key does not match key.pem private key")
 	}
 	pubInfo, err := os.Stat(pubPath)
 	if err != nil {
@@ -161,8 +179,12 @@ func TestGenerateKeyFiles_Stdout(t *testing.T) {
 	if _, err := certkit.ParsePEMPrivateKey([]byte(result.KeyPEM)); err != nil {
 		t.Errorf("KeyPEM is not parseable: %v", err)
 	}
-	if !strings.Contains(result.PubPEM, "PUBLIC KEY") {
-		t.Error("PubPEM should contain PUBLIC KEY")
+	pubBlock, _ := pem.Decode([]byte(result.PubPEM))
+	if pubBlock == nil {
+		t.Fatal("PubPEM contains no PEM block")
+	}
+	if _, err := x509.ParsePKIXPublicKey(pubBlock.Bytes); err != nil {
+		t.Errorf("PubPEM is not parseable: %v", err)
 	}
 	if _, err := certkit.ParsePEMCertificateRequest([]byte(result.CSRPEM)); err != nil {
 		t.Errorf("CSRPEM is not parseable: %v", err)
