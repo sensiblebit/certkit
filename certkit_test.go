@@ -105,9 +105,12 @@ func TestParsePEMCertificates_invalidDER(t *testing.T) {
 	t.Parallel()
 	pemData := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("garbage DER")})
 
-	_, err := ParsePEMCertificates(pemData)
+	certs, err := ParsePEMCertificates(pemData)
 	if err == nil {
 		t.Error("expected error for invalid certificate DER")
+	}
+	if len(certs) != 0 {
+		t.Errorf("expected 0 certs on error, got %d", len(certs))
 	}
 	if !strings.Contains(err.Error(), "parsing certificate") {
 		t.Errorf("error should mention parsing certificate, got: %v", err)
@@ -240,21 +243,25 @@ func TestCertSKI_vs_Embedded(t *testing.T) {
 	}
 }
 
-func TestCertSKIEmbedded_empty(t *testing.T) {
-	// WHY: Certs without a SubjectKeyId extension must return empty string, not panic on nil slice access.
+func TestCertKeyIdEmbedded_empty(t *testing.T) {
+	// WHY: Certs without SubjectKeyId or AuthorityKeyId extensions must
+	// return empty string, not panic on nil slice access.
 	t.Parallel()
-	cert := &x509.Certificate{SubjectKeyId: nil}
-	if got := CertSKIEmbedded(cert); got != "" {
-		t.Errorf("expected empty string for nil SubjectKeyId, got %q", got)
+	tests := []struct {
+		name string
+		fn   func(*x509.Certificate) string
+		cert *x509.Certificate
+	}{
+		{"nil SubjectKeyId", CertSKIEmbedded, &x509.Certificate{SubjectKeyId: nil}},
+		{"nil AuthorityKeyId", CertAKIEmbedded, &x509.Certificate{AuthorityKeyId: nil}},
 	}
-}
-
-func TestCertAKIEmbedded_empty(t *testing.T) {
-	// WHY: Root certs and self-signed certs often lack an AuthorityKeyId; must return empty string without error.
-	t.Parallel()
-	cert := &x509.Certificate{AuthorityKeyId: nil}
-	if got := CertAKIEmbedded(cert); got != "" {
-		t.Errorf("expected empty string for nil AuthorityKeyId, got %q", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tt.fn(tt.cert); got != "" {
+				t.Errorf("expected empty string, got %q", got)
+			}
+		})
 	}
 }
 
@@ -1029,23 +1036,30 @@ func TestCertFingerprintColon(t *testing.T) {
 		t.Errorf("SHA-256 fingerprint mismatch:\n  got:  %s\n  want: %s", gotFP, manualFP)
 	}
 
+	// Cross-check SHA-1 fingerprint against manual computation from cert.Raw
+	sha1Hash := sha1.Sum(cert.Raw)
+	sha1FP := strings.ToUpper(ColonHex(sha1Hash[:]))
+	gotSHA1 := CertFingerprintColonSHA1(cert)
+	if gotSHA1 != sha1FP {
+		t.Errorf("SHA-1 fingerprint mismatch:\n  got:  %s\n  want: %s", gotSHA1, sha1FP)
+	}
+
 	tests := []struct {
 		name    string
-		fn      func(*x509.Certificate) string
+		fp      string
 		wantLen int
 		pattern string
 	}{
-		{"SHA256", CertFingerprintColonSHA256, 95, `^[0-9A-F]{2}(:[0-9A-F]{2}){31}$`},
-		{"SHA1", CertFingerprintColonSHA1, 59, `^[0-9A-F]{2}(:[0-9A-F]{2}){19}$`},
+		{"SHA256", gotFP, 95, `^[0-9A-F]{2}(:[0-9A-F]{2}){31}$`},
+		{"SHA1", gotSHA1, 59, `^[0-9A-F]{2}(:[0-9A-F]{2}){19}$`},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			fp := tt.fn(cert)
-			if len(fp) != tt.wantLen {
-				t.Errorf("fingerprint length %d, want %d", len(fp), tt.wantLen)
+			if len(tt.fp) != tt.wantLen {
+				t.Errorf("fingerprint length %d, want %d", len(tt.fp), tt.wantLen)
 			}
-			if !regexp.MustCompile(tt.pattern).MatchString(fp) {
-				t.Errorf("fingerprint format invalid: %s", fp)
+			if !regexp.MustCompile(tt.pattern).MatchString(tt.fp) {
+				t.Errorf("fingerprint format invalid: %s", tt.fp)
 			}
 		})
 	}
@@ -1077,6 +1091,7 @@ func TestParsePEMPrivateKeyWithPasswords_NoPasswordsEncryptedKey(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			_, err := ParsePEMPrivateKeyWithPasswords(encPEM, tt.passwords)
 			if err == nil {
 				t.Error("expected error when password list is nil/empty for encrypted key")
@@ -1106,12 +1121,6 @@ func TestParsePEMCertificate_ReturnsFirstCertFromBundle(t *testing.T) {
 	}
 	if got.Subject.CommonName != ca.Subject.CommonName {
 		t.Errorf("expected first cert CN=%q, got CN=%q", ca.Subject.CommonName, got.Subject.CommonName)
-	}
-
-	// Verify the second cert (leaf) was silently dropped.
-	leaf, _ := ParsePEMCertificate([]byte(leafPEM))
-	if got.Subject.CommonName == leaf.Subject.CommonName {
-		t.Error("ParsePEMCertificate returned the second cert instead of the first")
 	}
 
 	// Sanity: the bundle actually contains both certs.
@@ -1531,6 +1540,7 @@ func TestParsePEMPrivateKey_EmptyInput(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			_, err := ParsePEMPrivateKey(tt.input)
 			if err == nil {
 				t.Fatal("expected error for empty/nil input")

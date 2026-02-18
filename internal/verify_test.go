@@ -501,8 +501,8 @@ func TestFormatVerifyResult_OverallStatus(t *testing.T) {
 
 func TestVerifyCert_ChainOnlyNoKeyMatch(t *testing.T) {
 	// WHY: CheckChain=true with CheckKeyMatch=false and Key=nil is a real
-	// user scenario (verify chain only, no key available). KeyMatch must
-	// remain nil while ChainValid is populated.
+	// user scenario (verify chain only, no key available). ChainValid must
+	// be populated and the chain display must be non-empty.
 	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "chain-only.example.com", []string{"chain-only.example.com"}, nil)

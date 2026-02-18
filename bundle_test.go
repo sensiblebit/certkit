@@ -664,7 +664,7 @@ func TestDetectAndSwapLeaf_AllCAsInExtras(t *testing.T) {
 
 func TestMozillaRootPEM(t *testing.T) {
 	// WHY: MozillaRootPEM is an exported function returning embedded root
-	// certs; must return non-empty, parseable PEM data.
+	// certs; must return non-empty, parseable PEM with valid X.509 data.
 	t.Parallel()
 	data := MozillaRootPEM()
 	if len(data) == 0 {
@@ -677,11 +677,18 @@ func TestMozillaRootPEM(t *testing.T) {
 	if block.Type != "CERTIFICATE" {
 		t.Errorf("first PEM block type = %q, want CERTIFICATE", block.Type)
 	}
+	cert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatalf("first PEM block is not a valid X.509 certificate: %v", err)
+	}
+	if !cert.IsCA {
+		t.Error("first certificate should be a CA")
+	}
 }
 
 func TestMozillaRootPool(t *testing.T) {
 	// WHY: MozillaRootPool is used for chain verification; must return a
-	// non-nil pool with no error. Uses sync.Once internally.
+	// non-nil pool that can actually verify a real root certificate.
 	t.Parallel()
 	pool, err := MozillaRootPool()
 	if err != nil {
@@ -689,6 +696,18 @@ func TestMozillaRootPool(t *testing.T) {
 	}
 	if pool == nil {
 		t.Fatal("MozillaRootPool returned nil pool")
+	}
+	// Verify the pool contains real certificates by checking that a known
+	// Mozilla root (the first one in the PEM bundle) validates against it.
+	data := MozillaRootPEM()
+	block, _ := pem.Decode(data)
+	root, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatalf("parse first root: %v", err)
+	}
+	_, err = root.Verify(x509.VerifyOptions{Roots: pool})
+	if err != nil {
+		t.Errorf("first Mozilla root should verify against the pool: %v", err)
 	}
 }
 
@@ -1022,23 +1041,10 @@ func TestIsIssuedByMozillaRoot_KnownRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Create a cert whose RawIssuer matches the root's RawSubject
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "issued-by-mozilla-root"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-	}
-	certBytes, _ := x509.CreateCertificate(rand.Reader, template, root, &key.PublicKey, key)
-	// Use the root's key for signing — doesn't matter for this test since
-	// we only check RawIssuer matching, not signature validity.
-	// Actually we need a valid signature, so self-sign but set issuer manually.
-	// Simpler: just check the root itself — it's self-signed so its issuer IS a mozilla root subject.
+	// A self-signed Mozilla root's issuer IS itself — a mozilla root subject.
 	if !IsIssuedByMozillaRoot(root) {
 		t.Error("self-signed Mozilla root should report IsIssuedByMozillaRoot=true")
 	}
-	_ = certBytes // suppress unused
 }
 
 func TestIsIssuedByMozillaRoot_UnknownIssuer(t *testing.T) {

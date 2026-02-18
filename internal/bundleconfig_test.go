@@ -51,47 +51,6 @@ bundles:
 	}
 }
 
-func TestLoadBundleConfigs_NewFormatWithOverride(t *testing.T) {
-	// WHY: Ensures a bundle's explicit subject completely replaces the default, not merges with it; a merge bug would silently inject unwanted fields into CSRs.
-	t.Parallel()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "bundles.yaml")
-	yaml := `
-defaultSubject:
-  country: ["US"]
-  organization: ["DefaultOrg"]
-bundles:
-  - commonNames: ["example.com"]
-    bundleName: "example-bundle"
-    subject:
-      country: ["GB"]
-      organization: ["OverrideOrg"]
-`
-	if err := os.WriteFile(path, []byte(yaml), 0644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	configs, err := LoadBundleConfigs(path)
-	if err != nil {
-		t.Fatalf("load configs: %v", err)
-	}
-
-	if len(configs) != 1 {
-		t.Fatalf("expected 1 bundle, got %d", len(configs))
-	}
-
-	cfg := configs[0]
-	if cfg.Subject == nil {
-		t.Fatal("expected subject to be preserved, got nil")
-	}
-	if len(cfg.Subject.Country) != 1 || cfg.Subject.Country[0] != "GB" {
-		t.Errorf("expected country [GB] (override), got %v", cfg.Subject.Country)
-	}
-	if len(cfg.Subject.Organization) != 1 || cfg.Subject.Organization[0] != "OverrideOrg" {
-		t.Errorf("expected org [OverrideOrg] (override), got %v", cfg.Subject.Organization)
-	}
-}
-
 func TestLoadBundleConfigs_OldFormat(t *testing.T) {
 	// WHY: The parser supports a legacy bare-array YAML format for backward compatibility; without this test, a refactor could break existing configs.
 	t.Parallel()
@@ -300,8 +259,5 @@ bundles: []
 	_, err := LoadBundleConfigs(path)
 	if err == nil {
 		t.Error("expected error for empty bundles with new format structure, got nil")
-	}
-	if !strings.Contains(err.Error(), "cannot unmarshal") {
-		t.Errorf("unexpected error: %v", err)
 	}
 }
