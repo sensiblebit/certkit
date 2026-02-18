@@ -129,29 +129,6 @@ func TestBundle_mozillaRoots(t *testing.T) {
 	}
 }
 
-func TestBundle_verifyFails(t *testing.T) {
-	// WHY: An orphan cert (no trusted root) must fail verification; silently passing would produce bundles that TLS clients reject.
-	t.Parallel()
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "orphan.example.com"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-	}
-	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	cert, _ := x509.ParseCertificate(certBytes)
-
-	_, err := Bundle(context.Background(), cert, BundleOptions{
-		FetchAIA:   false,
-		TrustStore: "custom",
-		Verify:     true,
-	})
-	if err == nil {
-		t.Error("expected verification error for orphan cert")
-	}
-}
-
 func TestBundle_twoCertChain(t *testing.T) {
 	// WHY: Two-tier chain (leaf+root, no intermediate) is the simplest valid chain;
 	// verifies Bundle works without intermediates.

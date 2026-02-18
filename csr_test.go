@@ -343,11 +343,20 @@ func TestGenerateCSRFromTemplate_Basic(t *testing.T) {
 	if csr.Subject.CommonName != "test.example.com" {
 		t.Errorf("CN=%q, want test.example.com", csr.Subject.CommonName)
 	}
-	if len(csr.DNSNames) != 2 {
-		t.Errorf("DNSNames count=%d, want 2", len(csr.DNSNames))
+	wantDNS := []string{"test.example.com", "www.test.example.com"}
+	if len(csr.DNSNames) != len(wantDNS) {
+		t.Fatalf("DNSNames count=%d, want %d", len(csr.DNSNames), len(wantDNS))
+	}
+	for i, got := range csr.DNSNames {
+		if got != wantDNS[i] {
+			t.Errorf("DNSNames[%d]=%q, want %q", i, got, wantDNS[i])
+		}
 	}
 	if len(csr.IPAddresses) != 1 {
-		t.Errorf("IPAddresses count=%d, want 1", len(csr.IPAddresses))
+		t.Fatalf("IPAddresses count=%d, want 1", len(csr.IPAddresses))
+	}
+	if got := csr.IPAddresses[0].String(); got != "10.0.0.1" {
+		t.Errorf("IPAddresses[0]=%q, want 10.0.0.1", got)
 	}
 }
 
@@ -627,9 +636,9 @@ func TestGenerateCSR_ParsePEMRoundTrip(t *testing.T) {
 		t.Errorf("CN = %q, want %q", csr.Subject.CommonName, leaf.Subject.CommonName)
 	}
 
-	// Verify DNS names survived (may not be exact due to deduplication logic)
-	if len(csr.DNSNames) == 0 {
-		t.Error("CSR should have at least one DNS name")
+	// Verify DNS names survived — leaf has exactly 2 DNS SANs.
+	if len(csr.DNSNames) != len(leaf.DNSNames) {
+		t.Errorf("CSR DNSNames count = %d, want %d", len(csr.DNSNames), len(leaf.DNSNames))
 	}
 
 	// Verify IP addresses survived

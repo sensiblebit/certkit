@@ -620,9 +620,13 @@ func TestGenerateYAML_NoRoot(t *testing.T) {
 
 	rootVal, ok := result["root"]
 	if !ok {
-		t.Error("root key should be present in YAML even when empty")
+		t.Fatal("root key should be present in YAML even when empty")
 	}
-	if rootStr, isStr := rootVal.(string); isStr && rootStr != "" {
+	rootStr, isStr := rootVal.(string)
+	if !isStr {
+		t.Fatalf("root should be a string, got %T", rootVal)
+	}
+	if rootStr != "" {
 		t.Errorf("root should be empty string, got %d chars", len(rootStr))
 	}
 }

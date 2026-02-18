@@ -399,20 +399,21 @@ func TestMemStore_MultipleCertsAndKeys(t *testing.T) {
 		t.Errorf("expected 2 matched pairs, got %d", len(store.MatchedPairs()))
 	}
 
-	// Verify key material is preserved, not just counts.
+	// Verify key material is preserved by checking each original is found.
+	foundKey1, foundKey2 := false, false
 	for _, rec := range store.AllKeys() {
-		switch rec.KeyType {
-		case "RSA":
-			if !keysEqual(t, leaf1.key, rec.Key) {
-				t.Error("stored RSA key does not match original")
-			}
-		case "ECDSA":
-			if !keysEqual(t, leaf2.key, rec.Key) {
-				t.Error("stored ECDSA key does not match original")
-			}
-		default:
-			t.Errorf("unexpected key type: %s", rec.KeyType)
+		if keysEqual(t, leaf1.key, rec.Key) {
+			foundKey1 = true
 		}
+		if keysEqual(t, leaf2.key, rec.Key) {
+			foundKey2 = true
+		}
+	}
+	if !foundKey1 {
+		t.Error("leaf1 RSA key not found in store")
+	}
+	if !foundKey2 {
+		t.Error("leaf2 ECDSA key not found in store")
 	}
 }
 

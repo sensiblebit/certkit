@@ -716,18 +716,21 @@ func TestDecodeJKS_MultiplePrivateKeyEntries(t *testing.T) {
 		t.Errorf("expected 2 certs, got %d", len(certs))
 	}
 
-	// Verify both key types are present
-	hasRSA, hasECDSA := false, false
+	// Verify both original keys are present (material equality, not just types).
+	foundKey1, foundKey2 := false, false
 	for _, k := range keys {
-		switch k.(type) {
-		case *rsa.PrivateKey:
-			hasRSA = true
-		case *ecdsa.PrivateKey:
-			hasECDSA = true
+		if key1.Equal(k) {
+			foundKey1 = true
+		}
+		if key2.Equal(k) {
+			foundKey2 = true
 		}
 	}
-	if !hasRSA || !hasECDSA {
-		t.Error("expected both RSA and ECDSA keys from multi-entry JKS")
+	if !foundKey1 {
+		t.Error("RSA key material not preserved through JKS round-trip")
+	}
+	if !foundKey2 {
+		t.Error("ECDSA key material not preserved through JKS round-trip")
 	}
 }
 
