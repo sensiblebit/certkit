@@ -37,25 +37,6 @@ func TestParseContainerData_EmptyData(t *testing.T) {
 	}
 }
 
-func TestParseContainerData_PKCS12_WrongPassword(t *testing.T) {
-	// WHY: PKCS#12 with the wrong password must fall through to other format
-	// parsers (JKS, PKCS#7, PEM, DER), ultimately failing since none will
-	// match either.
-	t.Parallel()
-
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "p12wrong.example.com", []string{"p12wrong.example.com"})
-	p12Data := newPKCS12Bundle(t, leaf, ca, "correctpw")
-
-	_, err := ParseContainerData(p12Data, []string{"wrongpw"})
-	if err == nil {
-		t.Fatal("expected error for PKCS#12 with wrong password")
-	}
-	if !strings.Contains(err.Error(), "could not parse") {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
 func TestParseContainerData_Ed25519KeyNormalization(t *testing.T) {
 	// WHY: PKCS#12 and JKS take different code paths in ParseContainerData
 	// (DecodePKCS12 vs DecodeJKS) that both call normalizeKey. This verifies

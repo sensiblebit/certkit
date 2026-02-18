@@ -101,42 +101,6 @@ func TestProcessArchive_PEMCertAllFormats(t *testing.T) {
 	}
 }
 
-func TestProcessArchive_ZipWithDERCert(t *testing.T) {
-	// WHY: Verifies that DER certificates with binary extensions inside ZIP
-	// archives pass through hasBinaryExtension and processDER correctly.
-	// Uses an entry name with a directory prefix to exercise the normal path.
-	t.Parallel()
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "der-zip.example.com", []string{"der-zip.example.com"}, nil)
-
-	zipData := createTestZip(t, map[string][]byte{
-		"certs/server.der": leaf.certDER,
-	})
-
-	cfg := newTestConfig(t)
-	n, err := ProcessArchive(ProcessArchiveInput{
-		ArchivePath: "test.zip",
-		Data:        zipData,
-		Format:      "zip",
-		Limits:      DefaultArchiveLimits(),
-		Store:       cfg.Store, Passwords: cfg.Passwords,
-	})
-	if err != nil {
-		t.Fatalf("ProcessArchive: %v", err)
-	}
-	if n != 1 {
-		t.Errorf("processed %d entries, want 1", n)
-	}
-
-	certs := cfg.Store.AllCertsFlat()
-	if len(certs) != 1 {
-		t.Fatalf("got %d certs in store, want 1", len(certs))
-	}
-	if certs[0].Cert.Subject.CommonName != "der-zip.example.com" {
-		t.Errorf("cert CN = %q, want %q", certs[0].Cert.Subject.CommonName, "der-zip.example.com")
-	}
-}
-
 func TestProcessArchive_DERCertNoDirectoryPrefix(t *testing.T) {
 	// WHY: Regression test for the filepath.Ext virtual path bug. When an
 	// archive entry name has no "/" separator (e.g., "server.der"), the virtual

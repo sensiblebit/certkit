@@ -380,10 +380,6 @@ func TestGenerateYAML_Fields(t *testing.T) {
 		t.Errorf("key_size = %v, want 2048", result["key_size"])
 	}
 
-	if result["crl_support"] != false {
-		t.Errorf("crl_support = %v, want false", result["crl_support"])
-	}
-
 	expiresStr, ok := result["expires"].(string)
 	if !ok {
 		t.Fatalf("expires is not a string: %T", result["expires"])

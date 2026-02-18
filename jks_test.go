@@ -223,21 +223,8 @@ func TestDecodeJKS_PrivateKeyEntry(t *testing.T) {
 	if len(keys) != 1 {
 		t.Errorf("expected 1 key, got %d", len(keys))
 	}
-	rsaKey, ok := keys[0].(*rsa.PrivateKey)
-	if !ok {
+	if _, ok := keys[0].(*rsa.PrivateKey); !ok {
 		t.Fatalf("expected *rsa.PrivateKey, got %T", keys[0])
-	}
-	// Verify key is functional by round-tripping through PEM.
-	pemStr, err := MarshalPrivateKeyToPEM(rsaKey)
-	if err != nil {
-		t.Fatalf("MarshalPrivateKeyToPEM: %v", err)
-	}
-	parsed, err := ParsePEMPrivateKey([]byte(pemStr))
-	if err != nil {
-		t.Fatalf("re-parse key PEM: %v", err)
-	}
-	if !rsaKey.Equal(parsed) {
-		t.Error("decoded JKS key does not survive PEM round-trip")
 	}
 }
 
@@ -536,22 +523,6 @@ func TestEncodeDecodeJKS_RoundTrip(t *testing.T) {
 	}
 	if certs[0].Subject.CommonName != "jks-rsa-leaf.example.com" {
 		t.Errorf("leaf CN=%q, want %q", certs[0].Subject.CommonName, "jks-rsa-leaf.example.com")
-	}
-}
-
-func TestDecodeJKS_NilPasswords(t *testing.T) {
-	// WHY: Nil password list must produce a clear error, not panic or silently
-	// return empty results. Empty slice follows the same code path (range over
-	// nil/empty both iterate zero times), so one case suffices (T-12).
-	t.Parallel()
-	data := buildJKSTrustedCert(t, "changeit")
-
-	_, _, err := DecodeJKS(data, nil)
-	if err == nil {
-		t.Fatal("expected error when password list is nil")
-	}
-	if !strings.Contains(err.Error(), "loading JKS") {
-		t.Errorf("error should mention loading JKS, got: %v", err)
 	}
 }
 

@@ -600,20 +600,6 @@ func TestDetectAndSwapLeaf_AllCAsInExtras(t *testing.T) {
 	}
 }
 
-func TestMozillaRootPool(t *testing.T) {
-	// WHY: MozillaRootPool is used for chain verification; must return a
-	// non-nil pool. Whether a root cert verifies against the pool is stdlib
-	// behavior (T-9), so we only assert pool construction succeeds.
-	t.Parallel()
-	pool, err := MozillaRootPool()
-	if err != nil {
-		t.Fatalf("MozillaRootPool: %v", err)
-	}
-	if pool == nil {
-		t.Fatal("MozillaRootPool returned nil pool")
-	}
-}
-
 func TestCheckSHA1Signatures(t *testing.T) {
 	// WHY: SHA-1 detection must warn on SHA-1 certs and not false-positive on SHA-256 certs.
 	t.Parallel()

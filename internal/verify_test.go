@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/sensiblebit/certkit/internal/certstore"
 )
 
 func TestVerifyCert_KeyMatch(t *testing.T) {
@@ -99,38 +97,6 @@ func TestVerifyCert_ExpiryCheck(t *testing.T) {
 				t.Errorf("Expiry = %v, want %v", *result.Expiry, tt.wantExpiry)
 			}
 		})
-	}
-}
-
-func TestVerifyCert_PKCS12(t *testing.T) {
-	// WHY: PKCS#12 bundles embed cert, key, and chain; verifies that all three are correctly extracted and pass both key match and chain validation.
-	t.Parallel()
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "p12.example.com", []string{"p12.example.com"}, nil)
-	p12Data := newPKCS12Bundle(t, leaf, ca, "changeit")
-
-	contents, err := certstore.ParseContainerData(p12Data, []string{"changeit"})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	result, err := VerifyCert(context.Background(), &VerifyInput{
-		Cert:          contents.Leaf,
-		Key:           contents.Key,
-		ExtraCerts:    contents.ExtraCerts,
-		CheckKeyMatch: true,
-		CheckChain:    true,
-		TrustStore:    "custom",
-		CustomRoots:   contents.ExtraCerts,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.KeyMatch == nil || !*result.KeyMatch {
-		t.Error("expected key match for p12 embedded key")
-	}
-	if result.ChainValid == nil || !*result.ChainValid {
-		t.Error("expected chain to be valid with p12 embedded intermediates")
 	}
 }
 

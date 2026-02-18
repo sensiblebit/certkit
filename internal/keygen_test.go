@@ -145,14 +145,15 @@ func TestGenerateKeyFiles_Stdout(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !strings.Contains(result.KeyPEM, "PRIVATE KEY") {
-		t.Error("KeyPEM should contain PRIVATE KEY")
+	// Verify key PEM is parseable, not just present
+	if _, err := certkit.ParsePEMPrivateKey([]byte(result.KeyPEM)); err != nil {
+		t.Errorf("KeyPEM is not parseable: %v", err)
 	}
 	if !strings.Contains(result.PubPEM, "PUBLIC KEY") {
 		t.Error("PubPEM should contain PUBLIC KEY")
 	}
-	if !strings.Contains(result.CSRPEM, "CERTIFICATE REQUEST") {
-		t.Error("CSRPEM should contain CERTIFICATE REQUEST")
+	if _, err := certkit.ParsePEMCertificateRequest([]byte(result.CSRPEM)); err != nil {
+		t.Errorf("CSRPEM is not parseable: %v", err)
 	}
 
 	// No files should be written

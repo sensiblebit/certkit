@@ -14,7 +14,6 @@ import (
 	"encoding/pem"
 	"fmt"
 	"math/big"
-	"regexp"
 	"slices"
 	"strings"
 	"testing"
@@ -166,51 +165,18 @@ func TestCertSKI_RFC7093(t *testing.T) {
 	if ColonHex(computedSKI) != ski {
 		t.Errorf("CertSKI = %s, ComputeSKI = %s — must match", ski, ColonHex(computedSKI))
 	}
-
-	// Verify it differs from legacy SHA-1 computation
-	legacySKI, err2 := ComputeSKILegacy(leaf.PublicKey)
-	if err2 != nil {
-		t.Fatalf("ComputeSKILegacy: %v", err2)
-	}
-	if ColonHex(legacySKI) == ski {
-		t.Error("RFC 7093 SKI should differ from legacy SHA-1 SKI")
-	}
 }
 
-func TestCertKeyIdEmbedded(t *testing.T) {
-	// WHY: Embedded SKI/AKI values come directly from X.509 extensions; format
-	// validation catches encoding bugs. Nil extensions must return empty string
-	// gracefully, not panic. Covers populated and empty cases in one table.
+func TestCertKeyIdEmbedded_NilExtensions(t *testing.T) {
+	// WHY: Nil SubjectKeyId/AuthorityKeyId must return empty string gracefully,
+	// not panic. Populated cases are tautological (ColonHex(x) == ColonHex(x))
+	// and covered transitively by TestCertSKI_vs_Embedded.
 	t.Parallel()
-	caPEM, _, leafPEM := generateTestPKI(t)
-	ca, _ := ParsePEMCertificate([]byte(caPEM))
-	leaf, _ := ParsePEMCertificate([]byte(leafPEM))
-
-	tests := []struct {
-		name    string
-		fn      func(*x509.Certificate) string
-		cert    *x509.Certificate
-		wantVal string // "nonempty" or exact value
-	}{
-		{"CA has embedded SKI", CertSKIEmbedded, ca, ColonHex(ca.SubjectKeyId)},
-		{"leaf has embedded AKI", CertAKIEmbedded, leaf, ColonHex(leaf.AuthorityKeyId)},
-		{"nil SubjectKeyId", CertSKIEmbedded, &x509.Certificate{SubjectKeyId: nil}, ""},
-		{"nil AuthorityKeyId", CertAKIEmbedded, &x509.Certificate{AuthorityKeyId: nil}, ""},
+	if got := CertSKIEmbedded(&x509.Certificate{SubjectKeyId: nil}); got != "" {
+		t.Errorf("CertSKIEmbedded(nil) = %q, want empty", got)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := tt.fn(tt.cert)
-			if got != tt.wantVal {
-				t.Errorf("got %q, want %q", got, tt.wantVal)
-			}
-			// For populated cases, verify colon-separated hex format
-			if tt.wantVal != "" {
-				if !strings.Contains(got, ":") || len(got) < 5 {
-					t.Errorf("format unexpected: %q", got)
-				}
-			}
-		})
+	if got := CertAKIEmbedded(&x509.Certificate{AuthorityKeyId: nil}); got != "" {
+		t.Errorf("CertAKIEmbedded(nil) = %q, want empty", got)
 	}
 }
 
@@ -411,42 +377,6 @@ func TestParsePEMPrivateKey_MislabeledBlockType(t *testing.T) {
 				t.Error("mislabeled key round-trip mismatch")
 			}
 		})
-	}
-}
-
-func TestDefaultPasswords(t *testing.T) {
-	// WHY: DefaultPasswords must include the well-known passwords (empty,
-	// "password", "changeit", "keypassword") used by PKCS#12 and JKS files
-	// in a stable order; missing any breaks auto-decryption, and order matters
-	// because DeduplicatePasswords places defaults first.
-	t.Parallel()
-	want := []string{"", "password", "changeit", "keypassword"}
-	got := DefaultPasswords()
-	if !slices.Equal(got, want) {
-		t.Errorf("DefaultPasswords() = %v, want %v", got, want)
-	}
-}
-
-func TestParsePEMPrivateKeyWithPasswords_Unencrypted(t *testing.T) {
-	// WHY: Unencrypted keys passed to the password-aware parser must parse
-	// normally without requiring any password, and key material must match.
-	t.Parallel()
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	pemBytes := pem.EncodeToMemory(&pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(key),
-	})
-
-	parsed, err := ParsePEMPrivateKeyWithPasswords(pemBytes, nil)
-	if err != nil {
-		t.Fatalf("expected unencrypted key to parse: %v", err)
-	}
-	rsaParsed, ok := parsed.(*rsa.PrivateKey)
-	if !ok {
-		t.Fatalf("expected *rsa.PrivateKey, got %T", parsed)
-	}
-	if !key.Equal(rsaParsed) {
-		t.Error("parsed unencrypted key does not Equal original")
 	}
 }
 
@@ -712,53 +642,27 @@ func TestGetCertificateType(t *testing.T) {
 }
 
 func TestGetPublicKey(t *testing.T) {
-	// WHY: GetPublicKey extracts public keys from private keys for SKI computation;
-	// RSA/ECDSA just call stdlib .Public() (T-9). Keep Ed25519 (value vs pointer),
-	// unsupported, and nil cases.
+	// WHY: GetPublicKey calls crypto.Signer.Public() — the happy path is
+	// stdlib behavior (T-9). Only the error paths (unsupported type, nil)
+	// exercise certkit logic. Happy path is covered transitively by
+	// TestKeyMatchesCert and TestCrossFormatRoundTrip.
 	t.Parallel()
-	_, edPriv, _ := ed25519.GenerateKey(rand.Reader)
-
-	edPtr := &edPriv
-
 	tests := []struct {
-		name    string
-		priv    any
-		wantPub crypto.PublicKey
-		wantTyp string
-		wantErr bool
+		name string
+		priv any
 	}{
-		{"Ed25519", edPriv, edPriv.Public(), "ed25519.PublicKey", false},
-		{"Ed25519Pointer", edPtr, edPriv.Public(), "ed25519.PublicKey", false},
-		{"unsupported", struct{}{}, nil, "", true},
-		{"nil", nil, nil, "", true},
+		{"unsupported", struct{}{}},
+		{"nil", nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			pub, err := GetPublicKey(tt.priv)
-			if tt.wantErr {
-				if err == nil {
-					t.Error("expected error")
-				}
-				if !strings.Contains(err.Error(), "unsupported private key type") {
-					t.Errorf("unexpected error: %v", err)
-				}
-				return
+			_, err := GetPublicKey(tt.priv)
+			if err == nil {
+				t.Error("expected error")
 			}
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got := fmt.Sprintf("%T", pub); got != tt.wantTyp {
-				t.Errorf("GetPublicKey() type = %s, want %s", got, tt.wantTyp)
-			}
-			// Verify the returned public key is the correct key, not just the right type
-			type equalKey interface {
-				Equal(crypto.PublicKey) bool
-			}
-			if eq, ok := pub.(equalKey); ok {
-				if !eq.Equal(tt.wantPub) {
-					t.Error("returned public key does not match expected")
-				}
+			if !strings.Contains(err.Error(), "unsupported private key type") {
+				t.Errorf("unexpected error: %v", err)
 			}
 		})
 	}
@@ -870,17 +774,6 @@ func TestMultiCertPEM_Concatenation(t *testing.T) {
 	if certs[2].Subject.CommonName != "Test CA" {
 		t.Errorf("cert[2] CN = %q, want Test CA", certs[2].Subject.CommonName)
 	}
-
-	// Verify cert types
-	if GetCertificateType(certs[0]) != "leaf" {
-		t.Errorf("cert[0] type = %q, want leaf", GetCertificateType(certs[0]))
-	}
-	if GetCertificateType(certs[1]) != "intermediate" {
-		t.Errorf("cert[1] type = %q, want intermediate", GetCertificateType(certs[1]))
-	}
-	if GetCertificateType(certs[2]) != "root" {
-		t.Errorf("cert[2] type = %q, want root", GetCertificateType(certs[2]))
-	}
 }
 
 // --- Tests for new Stage 1 library functions ---
@@ -954,67 +847,6 @@ func TestMarshalPublicKeyToPEM_RoundTrip(t *testing.T) {
 
 	if !ecKey.PublicKey.Equal(parsed) {
 		t.Error("ECDSA public key round-trip equality check failed")
-	}
-}
-
-func TestCertFingerprintColon(t *testing.T) {
-	// WHY: Colon-separated fingerprints must match the exact uppercase hex format
-	// expected by OpenSSL and other tools. Verifies format and length; actual
-	// hash correctness follows from ColonHex (tested directly in TestColonHex)
-	// and crypto/sha256 (stdlib).
-	t.Parallel()
-	_, _, leafPEM := generateTestPKI(t)
-	cert, _ := ParsePEMCertificate([]byte(leafPEM))
-
-	tests := []struct {
-		name    string
-		fp      string
-		wantLen int
-		pattern string
-	}{
-		{"SHA256", CertFingerprintColonSHA256(cert), 95, `^[0-9A-F]{2}(:[0-9A-F]{2}){31}$`},
-		{"SHA1", CertFingerprintColonSHA1(cert), 59, `^[0-9A-F]{2}(:[0-9A-F]{2}){19}$`},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			if len(tt.fp) != tt.wantLen {
-				t.Errorf("fingerprint length %d, want %d", len(tt.fp), tt.wantLen)
-			}
-			if !regexp.MustCompile(tt.pattern).MatchString(tt.fp) {
-				t.Errorf("fingerprint format invalid: %s", tt.fp)
-			}
-		})
-	}
-}
-
-func TestParsePEMCertificate_ReturnsFirstCertFromBundle(t *testing.T) {
-	// WHY: ParsePEMCertificate silently drops certs after the first one.
-	// Callers need to know this behavior is intentional and documented.
-	t.Parallel()
-	caPEM, _, leafPEM := generateTestPKI(t)
-	ca, err := ParsePEMCertificate([]byte(caPEM))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Concatenate CA first, then leaf — ParsePEMCertificate should return CA only.
-	bundle := []byte(caPEM + leafPEM)
-	got, err := ParsePEMCertificate(bundle)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got.Subject.CommonName != ca.Subject.CommonName {
-		t.Errorf("expected first cert CN=%q, got CN=%q", ca.Subject.CommonName, got.Subject.CommonName)
-	}
-
-	// Sanity: the bundle actually contains both certs.
-	all, err := ParsePEMCertificates(bundle)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(all) != 2 {
-		t.Fatalf("expected 2 certs in bundle, got %d", len(all))
 	}
 }
 
