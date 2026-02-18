@@ -19,10 +19,10 @@ import (
 
 func TestBundle_ChainDepths(t *testing.T) {
 	// WHY: Custom trust stores are the primary offline testing path. This
-	// verifies chains of varying depth (2-tier through 4-tier) all resolve
-	// correctly without network access. Two-tier (leaf+root, no intermediate)
-	// is the simplest valid chain. Real-world PKI often has multiple
-	// intermediates (root -> int1 -> int2 -> leaf).
+	// verifies chains of varying depth all resolve correctly without network
+	// access. Two-tier (leaf+root, no intermediate) is the simplest valid
+	// chain. Three-tier (root -> intermediate -> leaf) exercises the
+	// intermediate loop. Four-tier would add no unique branch coverage (T-14).
 	t.Parallel()
 	tests := []struct {
 		name              string
@@ -32,7 +32,6 @@ func TestBundle_ChainDepths(t *testing.T) {
 	}{
 		{name: "two-tier", depth: 2, wantIntermediates: 0, wantRootCN: "Chain Root CA"},
 		{name: "three-tier", depth: 3, wantIntermediates: 1, wantRootCN: "Chain Root CA"},
-		{name: "four-tier", depth: 4, wantIntermediates: 2, wantRootCN: "Chain Root CA"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
