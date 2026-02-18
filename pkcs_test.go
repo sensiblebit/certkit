@@ -203,7 +203,10 @@ func TestEncodePKCS12Legacy_WithCAChain(t *testing.T) {
 	// CA certs path was covered. This ensures the legacy RC2 encoder correctly
 	// includes CA certs in the bundle and they survive a round-trip decode.
 	t.Parallel()
-	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	caTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "Legacy Chain CA"},
@@ -213,10 +216,19 @@ func TestEncodePKCS12Legacy_WithCAChain(t *testing.T) {
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign,
 	}
-	caBytes, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
-	caCert, _ := x509.ParseCertificate(caBytes)
+	caBytes, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caCert, err := x509.ParseCertificate(caBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	leafTemplate := &x509.Certificate{
 		SerialNumber: big.NewInt(2),
 		Subject:      pkix.Name{CommonName: "legacy-chain-leaf.example.com"},
@@ -224,18 +236,20 @@ func TestEncodePKCS12Legacy_WithCAChain(t *testing.T) {
 		NotAfter:     time.Now().Add(24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 	}
-	leafBytes, _ := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
-	leafCert, _ := x509.ParseCertificate(leafBytes)
+	leafBytes, err := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafCert, err := x509.ParseCertificate(leafBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	password := "legacy-chain-pass"
 	pfxData, err := EncodePKCS12Legacy(leafKey, leafCert, []*x509.Certificate{caCert}, password)
 	if err != nil {
 		t.Fatalf("EncodePKCS12Legacy with CA chain: %v", err)
 	}
-	if len(pfxData) == 0 {
-		t.Fatal("empty PKCS#12 legacy data")
-	}
-
 	// Decode and verify both the leaf and the CA cert survived the round-trip.
 	decodedKey, decodedCert, decodedCAs, err := DecodePKCS12(pfxData, password)
 	if err != nil {

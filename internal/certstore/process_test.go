@@ -654,8 +654,14 @@ func TestProcessData_EndToEnd_IngestExportRoundTrip(t *testing.T) {
 	// unique pipeline coverage after normalization.
 	t.Parallel()
 
-	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	_, edKey, _ := ed25519.GenerateKey(rand.Reader)
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, edKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []struct {
 		name    string
@@ -790,8 +796,14 @@ func TestProcessData_DER_KeyRoundTrip(t *testing.T) {
 	// is identical for all key types (T-13).
 	t.Parallel()
 
-	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	rsaPKCS8, _ := x509.MarshalPKCS8PrivateKey(rsaKey)
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rsaPKCS8, err := x509.MarshalPKCS8PrivateKey(rsaKey)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	store := NewMemStore()
 	if err := ProcessData(ProcessInput{
@@ -978,8 +990,14 @@ func TestProcessData_PEMMixedValidAndMalformedKeys(t *testing.T) {
 	// tests the resilience of processPEMPrivateKeys to partial failures.
 	t.Parallel()
 
-	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	validRSAPEM := pem.EncodeToMemory(&pem.Block{
 		Type:  "RSA PRIVATE KEY",
@@ -989,7 +1007,10 @@ func TestProcessData_PEMMixedValidAndMalformedKeys(t *testing.T) {
 		Type:  "PRIVATE KEY",
 		Bytes: []byte("garbage-not-pkcs8"),
 	})
-	ecDER, _ := x509.MarshalECPrivateKey(ecKey)
+	ecDER, err := x509.MarshalECPrivateKey(ecKey)
+	if err != nil {
+		t.Fatal(err)
+	}
 	validECPEM := pem.EncodeToMemory(&pem.Block{
 		Type:  "EC PRIVATE KEY",
 		Bytes: ecDER,
@@ -1035,26 +1056,47 @@ func TestProcessData_PEMMixedEncrypted_PartialPasswordMatch(t *testing.T) {
 	// error. Tests password list iteration resilience.
 	t.Parallel()
 
-	rsaKey1, _ := rsa.GenerateKey(rand.Reader, 2048)
-	rsaKey2, _ := rsa.GenerateKey(rand.Reader, 2048)
-	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	rsaKey1, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rsaKey2, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Key 1: encrypted with "pass1" (RSA PKCS#1)
 	rsaDER1 := x509.MarshalPKCS1PrivateKey(rsaKey1)
 	//nolint:staticcheck // x509.EncryptPEMBlock is deprecated but intentionally used
-	encBlock1, _ := x509.EncryptPEMBlock(rand.Reader, "RSA PRIVATE KEY", rsaDER1, []byte("pass1"), x509.PEMCipherAES256)
+	encBlock1, err := x509.EncryptPEMBlock(rand.Reader, "RSA PRIVATE KEY", rsaDER1, []byte("pass1"), x509.PEMCipherAES256)
+	if err != nil {
+		t.Fatal(err)
+	}
 	key1PEM := pem.EncodeToMemory(encBlock1)
 
 	// Key 2: encrypted with "pass2" (RSA PKCS#1)
 	rsaDER2 := x509.MarshalPKCS1PrivateKey(rsaKey2)
 	//nolint:staticcheck
-	encBlock2, _ := x509.EncryptPEMBlock(rand.Reader, "RSA PRIVATE KEY", rsaDER2, []byte("pass2"), x509.PEMCipherAES256)
+	encBlock2, err := x509.EncryptPEMBlock(rand.Reader, "RSA PRIVATE KEY", rsaDER2, []byte("pass2"), x509.PEMCipherAES256)
+	if err != nil {
+		t.Fatal(err)
+	}
 	key2PEM := pem.EncodeToMemory(encBlock2)
 
 	// Key 3: encrypted with "pass3" (EC SEC1)
-	ecDER, _ := x509.MarshalECPrivateKey(ecKey)
+	ecDER, err := x509.MarshalECPrivateKey(ecKey)
+	if err != nil {
+		t.Fatal(err)
+	}
 	//nolint:staticcheck
-	encBlock3, _ := x509.EncryptPEMBlock(rand.Reader, "EC PRIVATE KEY", ecDER, []byte("pass3"), x509.PEMCipherAES256)
+	encBlock3, err := x509.EncryptPEMBlock(rand.Reader, "EC PRIVATE KEY", ecDER, []byte("pass3"), x509.PEMCipherAES256)
+	if err != nil {
+		t.Fatal(err)
+	}
 	key3PEM := pem.EncodeToMemory(encBlock3)
 
 	// Combined file: key1 + key2 + key3

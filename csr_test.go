@@ -412,15 +412,31 @@ func TestGenerateCSRFromCSR_CopiesFieldsAndRotatesKey(t *testing.T) {
 		t.Errorf("CN=%q, want %q", newCSR.Subject.CommonName, srcCSR.Subject.CommonName)
 	}
 	if len(newCSR.DNSNames) != len(srcCSR.DNSNames) {
-		t.Errorf("DNSNames count=%d, want %d", len(newCSR.DNSNames), len(srcCSR.DNSNames))
+		t.Fatalf("DNSNames count=%d, want %d", len(newCSR.DNSNames), len(srcCSR.DNSNames))
+	}
+	for i, dns := range newCSR.DNSNames {
+		if dns != srcCSR.DNSNames[i] {
+			t.Errorf("DNSNames[%d]=%q, want %q", i, dns, srcCSR.DNSNames[i])
+		}
 	}
 	if len(newCSR.IPAddresses) != len(srcCSR.IPAddresses) {
-		t.Errorf("IPAddresses count=%d, want %d", len(newCSR.IPAddresses), len(srcCSR.IPAddresses))
+		t.Fatalf("IPAddresses count=%d, want %d", len(newCSR.IPAddresses), len(srcCSR.IPAddresses))
+	}
+	for i, ip := range newCSR.IPAddresses {
+		if !ip.Equal(srcCSR.IPAddresses[i]) {
+			t.Errorf("IPAddresses[%d]=%v, want %v", i, ip, srcCSR.IPAddresses[i])
+		}
 	}
 
 	// Public keys must differ — new CSR uses the rotated key
-	srcPub := srcCSR.PublicKey.(*ecdsa.PublicKey)
-	newPub := newCSR.PublicKey.(*ecdsa.PublicKey)
+	srcPub, ok := srcCSR.PublicKey.(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatalf("expected source *ecdsa.PublicKey, got %T", srcCSR.PublicKey)
+	}
+	newPub, ok := newCSR.PublicKey.(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatalf("expected new *ecdsa.PublicKey, got %T", newCSR.PublicKey)
+	}
 	if srcPub.Equal(newPub) {
 		t.Error("new CSR should have a different public key than source")
 	}

@@ -144,12 +144,12 @@ func TestCertSKI_vs_Embedded(t *testing.T) {
 	computed := CertSKI(cert)
 	embedded := CertSKIEmbedded(cert)
 
-	// Verify both are non-empty colon-hex strings (20 bytes = "xx:xx:...:xx")
-	if !strings.Contains(computed, ":") || len(computed) == 0 {
-		t.Errorf("computed SKI should be non-empty colon-hex, got %q", computed)
+	// 20 bytes = 20 hex pairs + 19 colons = 59 chars (e.g., "aa:bb:cc:...:tt")
+	if len(computed) != 59 {
+		t.Errorf("computed SKI should be 59 chars (20 colon-hex bytes), got %d: %q", len(computed), computed)
 	}
-	if !strings.Contains(embedded, ":") || len(embedded) == 0 {
-		t.Errorf("embedded SKI should be non-empty colon-hex, got %q", embedded)
+	if len(embedded) != 59 {
+		t.Errorf("embedded SKI should be 59 chars (20 colon-hex bytes), got %d: %q", len(embedded), embedded)
 	}
 	if computed == embedded {
 		t.Error("computed (truncated SHA-256) should differ from embedded (SHA-1)")

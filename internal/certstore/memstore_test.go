@@ -964,10 +964,13 @@ func TestMemStore_HandleKey_NilPEM(t *testing.T) {
 	// must not panic on nil PEM.
 	t.Parallel()
 
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
 	store := NewMemStore()
 
-	err := store.HandleKey(key, nil, "nil-pem.key")
+	err = store.HandleKey(key, nil, "nil-pem.key")
 	if err != nil {
 		t.Fatalf("HandleKey with nil PEM: %v", err)
 	}
@@ -1000,8 +1003,14 @@ func TestMemStore_MatchedPairs_OrphanedKey(t *testing.T) {
 	store := NewMemStore()
 
 	// Store a key with no matching certificate
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	keyPEM, _ := certkit.MarshalPrivateKeyToPEM(key)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPEM, err := certkit.MarshalPrivateKeyToPEM(key)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := store.HandleKey(key, []byte(keyPEM), "orphan.key"); err != nil {
 		t.Fatalf("HandleKey: %v", err)
 	}
