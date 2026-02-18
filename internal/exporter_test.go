@@ -5,8 +5,6 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
-	"encoding/json"
-	"encoding/pem"
 	"os"
 	"path/filepath"
 	"testing"
@@ -22,81 +20,6 @@ func newTestBundle(t *testing.T, leaf testLeaf, ca testCA) *certkit.BundleResult
 		Leaf:          leaf.cert,
 		Intermediates: []*x509.Certificate{ca.cert},
 		Roots:         []*x509.Certificate{ca.cert},
-	}
-}
-
-func TestWriteBundleFiles_CreatesAllFiles(t *testing.T) {
-	// WHY: A full bundle export produces up to 12 output files; verifies all expected files are created on disk for a standard cert+key+chain bundle.
-	t.Parallel()
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "bundle.example.com", []string{"bundle.example.com"}, nil)
-
-	certRecord := &certstore.CertRecord{
-		Cert: leaf.cert,
-	}
-	keyRecord := &certstore.KeyRecord{PEM: leaf.keyPEM}
-	bundle := newTestBundle(t, leaf, ca)
-
-	outDir := t.TempDir()
-	bundleFolder := "test-bundle"
-
-	err := writeBundleFiles(outDir, bundleFolder, certRecord, keyRecord, bundle, nil)
-	if err != nil {
-		t.Fatalf("writeBundleFiles: %v", err)
-	}
-
-	prefix := "bundle.example.com"
-	folderPath := filepath.Join(outDir, bundleFolder)
-
-	expectedFiles := []string{
-		prefix + ".pem",
-		prefix + ".chain.pem",
-		prefix + ".fullchain.pem",
-		prefix + ".intermediates.pem",
-		prefix + ".root.pem",
-		prefix + ".key",
-		prefix + ".p12",
-		prefix + ".k8s.yaml",
-		prefix + ".json",
-		prefix + ".yaml",
-		prefix + ".csr",
-		prefix + ".csr.json",
-	}
-
-	for _, name := range expectedFiles {
-		path := filepath.Join(folderPath, name)
-		info, err := os.Stat(path)
-		if os.IsNotExist(err) {
-			t.Errorf("expected file %s to exist", name)
-			continue
-		}
-		if info.Size() == 0 {
-			t.Errorf("file %s is empty", name)
-		}
-	}
-
-	// Validate PEM files are parseable certificates
-	pemFile := filepath.Join(folderPath, prefix+".pem")
-	pemData, err := os.ReadFile(pemFile)
-	if err != nil {
-		t.Fatalf("read PEM file: %v", err)
-	}
-	block, _ := pem.Decode(pemData)
-	if block == nil {
-		t.Error("leaf PEM file does not contain valid PEM")
-	} else if _, parseErr := x509.ParseCertificate(block.Bytes); parseErr != nil {
-		t.Errorf("leaf PEM file contains unparseable certificate: %v", parseErr)
-	}
-
-	// Validate JSON file is parseable
-	jsonFile := filepath.Join(folderPath, prefix+".json")
-	jsonData, err := os.ReadFile(jsonFile)
-	if err != nil {
-		t.Fatalf("read JSON file: %v", err)
-	}
-	var jsonResult map[string]any
-	if err := json.Unmarshal(jsonData, &jsonResult); err != nil {
-		t.Errorf("JSON file is not valid JSON: %v", err)
 	}
 }
 

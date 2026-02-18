@@ -452,62 +452,12 @@ func TestDetectAndSwapLeaf_ReversedChain(t *testing.T) {
 	}
 }
 
-func TestDetectAndSwapLeaf_MultipleNonCACerts(t *testing.T) {
-	// WHY: detectAndSwapLeaf should NOT swap when multiple non-CA certs exist
-	// in extras — the heuristic only fires for exactly one candidate.
+func TestDetectAndSwapLeaf_NoSwapCases(t *testing.T) {
+	// WHY: detectAndSwapLeaf must NOT swap in several cases: when multiple
+	// non-CA candidates exist (ambiguous), when the leaf is already correct,
+	// or when all extras are CAs. A false swap would put the wrong cert as leaf.
 	t.Parallel()
-	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	caTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "Multi-NonCA CA"},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-	}
-	caBytes, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
-	caCert, _ := x509.ParseCertificate(caBytes)
 
-	// Create two non-CA leaf certs
-	leafKey1, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	leafTemplate1 := &x509.Certificate{
-		SerialNumber: big.NewInt(2),
-		Subject:      pkix.Name{CommonName: "leaf1.example.com"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-	}
-	leafBytes1, _ := x509.CreateCertificate(rand.Reader, leafTemplate1, caCert, &leafKey1.PublicKey, caKey)
-	leafCert1, _ := x509.ParseCertificate(leafBytes1)
-
-	leafKey2, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	leafTemplate2 := &x509.Certificate{
-		SerialNumber: big.NewInt(3),
-		Subject:      pkix.Name{CommonName: "leaf2.example.com"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-	}
-	leafBytes2, _ := x509.CreateCertificate(rand.Reader, leafTemplate2, caCert, &leafKey2.PublicKey, caKey)
-	leafCert2, _ := x509.ParseCertificate(leafBytes2)
-
-	// Pass CA as "leaf" with two non-CA certs as extras
-	newLeaf, newExtras, warnings := detectAndSwapLeaf(caCert, []*x509.Certificate{leafCert1, leafCert2})
-
-	// Should NOT swap — ambiguous which leaf to pick
-	if newLeaf.Subject.CommonName != "Multi-NonCA CA" {
-		t.Errorf("should not swap when multiple non-CA certs exist, leaf CN=%q", newLeaf.Subject.CommonName)
-	}
-	if len(warnings) != 0 {
-		t.Errorf("should not produce warnings, got %v", warnings)
-	}
-	if len(newExtras) != 2 {
-		t.Errorf("extras should be unchanged, got %d", len(newExtras))
-	}
-}
-
-func TestDetectAndSwapLeaf_NoSwapWhenLeafIsCorrect(t *testing.T) {
-	// WHY: When the leaf is already correctly positioned, no swap should occur; a false swap would put the CA cert as the leaf.
-	t.Parallel()
 	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	caTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
@@ -521,82 +471,72 @@ func TestDetectAndSwapLeaf_NoSwapWhenLeafIsCorrect(t *testing.T) {
 	caBytes, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
 	caCert, _ := x509.ParseCertificate(caBytes)
 
-	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	leafTemplate := &x509.Certificate{
-		SerialNumber: big.NewInt(2),
-		Subject:      pkix.Name{CommonName: "noswap-leaf.example.com"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-	leafBytes, _ := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
-	leafCert, _ := x509.ParseCertificate(leafBytes)
-
-	// Correct order — leaf first
-	result, err := Bundle(context.Background(), leafCert, BundleOptions{
-		ExtraIntermediates: []*x509.Certificate{caCert},
-		FetchAIA:           false,
-		TrustStore:         "custom",
-		CustomRoots:        []*x509.Certificate{caCert},
-		Verify:             false,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Positive assertion: the leaf is still the leaf we passed in.
-	if result.Leaf.Subject.CommonName != "noswap-leaf.example.com" {
-		t.Errorf("leaf CN=%q, want noswap-leaf.example.com", result.Leaf.Subject.CommonName)
-	}
-	for _, w := range result.Warnings {
-		if strings.Contains(w, "reversed chain detected") {
-			t.Error("should not have swap warning when leaf is correct")
+	makeCert := func(serial int64, cn string, isCA bool) *x509.Certificate {
+		t.Helper()
+		key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		tmpl := &x509.Certificate{
+			SerialNumber:          big.NewInt(serial),
+			Subject:               pkix.Name{CommonName: cn},
+			NotBefore:             time.Now().Add(-1 * time.Hour),
+			NotAfter:              time.Now().Add(24 * time.Hour),
+			IsCA:                  isCA,
+			BasicConstraintsValid: isCA,
 		}
+		if isCA {
+			tmpl.KeyUsage = x509.KeyUsageCertSign
+		}
+		der, _ := x509.CreateCertificate(rand.Reader, tmpl, caCert, &key.PublicKey, caKey)
+		cert, _ := x509.ParseCertificate(der)
+		return cert
 	}
-}
 
-func TestDetectAndSwapLeaf_AllCAsInExtras(t *testing.T) {
-	// WHY: When the leaf is a CA and all extras are also CAs, the swap
-	// heuristic must not fire — there is no non-CA candidate to swap to.
-	t.Parallel()
+	intCert := makeCert(2, "NoSwap Intermediate", true)
+	leafCert1 := makeCert(3, "leaf1.example.com", false)
+	leafCert2 := makeCert(4, "leaf2.example.com", false)
 
-	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	caTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "AllCA Root"},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
+	tests := []struct {
+		name          string
+		leaf          *x509.Certificate
+		extras        []*x509.Certificate
+		wantLeafCN    string
+		wantExtrasCnt int
+	}{
+		{
+			name:          "multiple non-CA candidates (ambiguous)",
+			leaf:          caCert,
+			extras:        []*x509.Certificate{leafCert1, leafCert2},
+			wantLeafCN:    "NoSwap CA",
+			wantExtrasCnt: 2,
+		},
+		{
+			name:          "leaf already correct (non-CA)",
+			leaf:          leafCert1,
+			extras:        []*x509.Certificate{caCert},
+			wantLeafCN:    "leaf1.example.com",
+			wantExtrasCnt: 1,
+		},
+		{
+			name:          "all extras are CAs",
+			leaf:          caCert,
+			extras:        []*x509.Certificate{intCert},
+			wantLeafCN:    "NoSwap CA",
+			wantExtrasCnt: 1,
+		},
 	}
-	caBytes, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
-	caCert, _ := x509.ParseCertificate(caBytes)
-
-	intKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	intTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(2),
-		Subject:               pkix.Name{CommonName: "AllCA Intermediate"},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-	}
-	intBytes, _ := x509.CreateCertificate(rand.Reader, intTemplate, caCert, &intKey.PublicKey, caKey)
-	intCert, _ := x509.ParseCertificate(intBytes)
-
-	newLeaf, newExtras, warnings := detectAndSwapLeaf(caCert, []*x509.Certificate{intCert})
-
-	if newLeaf.Subject.CommonName != "AllCA Root" {
-		t.Errorf("should not swap when all extras are CAs, leaf CN=%q", newLeaf.Subject.CommonName)
-	}
-	if len(warnings) != 0 {
-		t.Errorf("should not produce warnings, got %v", warnings)
-	}
-	if len(newExtras) != 1 {
-		t.Errorf("extras should be unchanged, got %d", len(newExtras))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			newLeaf, newExtras, warnings := detectAndSwapLeaf(tt.leaf, tt.extras)
+			if newLeaf.Subject.CommonName != tt.wantLeafCN {
+				t.Errorf("leaf CN=%q, want %q", newLeaf.Subject.CommonName, tt.wantLeafCN)
+			}
+			if len(warnings) != 0 {
+				t.Errorf("should not produce warnings, got %v", warnings)
+			}
+			if len(newExtras) != tt.wantExtrasCnt {
+				t.Errorf("extras count=%d, want %d", len(newExtras), tt.wantExtrasCnt)
+			}
+		})
 	}
 }
 
