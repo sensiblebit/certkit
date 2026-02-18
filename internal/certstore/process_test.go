@@ -1325,8 +1325,8 @@ func TestProcessData_CrossFormatSKIEquality(t *testing.T) {
 	// coverage since HandleKey uses the same ComputeSKI path for all types).
 	t.Parallel()
 
-	edCA := newRSACA(t)
-	edLeaf := newEd25519Leaf(t, edCA, "ed-cross.example.com", []string{"ed-cross.example.com"})
+	ca := newRSACA(t)
+	edLeaf := newEd25519Leaf(t, ca, "ed-cross.example.com", []string{"ed-cross.example.com"})
 	edKey := edLeaf.key.(ed25519.PrivateKey)
 
 	edPKCS8DER, _ := x509.MarshalPKCS8PrivateKey(edKey)
@@ -1346,8 +1346,8 @@ func TestProcessData_CrossFormatSKIEquality(t *testing.T) {
 		{"PKCS#8 DER", edPKCS8DER, "key.der"},
 		{"Raw 64-byte", raw64, "key.der"},
 		{"OpenSSH", sshPEM, "key.pem"},
-		{"PKCS#12", newPKCS12Bundle(t, edLeaf, edCA, "test"), "bundle.p12"},
-		{"JKS", newJKSBundle(t, edLeaf, edCA, "changeit"), "bundle.jks"},
+		{"PKCS#12", newPKCS12Bundle(t, edLeaf, ca, "test"), "bundle.p12"},
+		{"JKS", newJKSBundle(t, edLeaf, ca, "changeit"), "bundle.jks"},
 	}
 
 	var skis []string

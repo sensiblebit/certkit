@@ -100,9 +100,23 @@ func TestResolveAIA_SkipsResolvedAndRoots(t *testing.T) {
 				t.Fatal(err)
 			}
 		}},
-		{"root_cert", func(t *testing.T, store *MemStore) {
-			ca := newRSACA(t)
-			if err := store.HandleCertificate(ca.cert, "ca.pem"); err != nil {
+		{"root_cert_with_aia", func(t *testing.T, store *MemStore) {
+			// Root has an AIA URL set — fetch must still not occur because
+			// root certs are skipped before AIA URL iteration.
+			caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			caTmpl := &x509.Certificate{
+				SerialNumber:          big.NewInt(1),
+				Subject:               pkix.Name{CommonName: "Root With AIA"},
+				NotBefore:             time.Now().Add(-time.Hour),
+				NotAfter:              time.Now().Add(24 * time.Hour),
+				IsCA:                  true,
+				BasicConstraintsValid: true,
+				KeyUsage:              x509.KeyUsageCertSign,
+				IssuingCertificateURL: []string{"http://example.com/root.cer"},
+			}
+			caDER, _ := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+			caCert, _ := x509.ParseCertificate(caDER)
+			if err := store.HandleCertificate(caCert, "ca.pem"); err != nil {
 				t.Fatal(err)
 			}
 		}},
