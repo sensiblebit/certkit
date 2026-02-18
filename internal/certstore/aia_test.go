@@ -80,167 +80,124 @@ func TestResolveAIA_FetchesMissingIssuer(t *testing.T) {
 	}
 }
 
-func TestResolveAIA_SkipsCertsWithIssuerInStore(t *testing.T) {
-	// WHY: When the issuer is already in the store, no fetch should occur.
-	// Unnecessary fetches waste time and could fail spuriously.
+func TestResolveAIA_SkipsResolvedAndRoots(t *testing.T) {
+	// WHY: No fetch should occur when the issuer is already in the store or
+	// the cert is a self-signed root. Unnecessary fetches waste time and
+	// could fail spuriously. Consolidated per T-12.
 	t.Parallel()
-	store := NewMemStore()
 
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "has-issuer.example.com", []string{"has-issuer.example.com"})
-
-	if err := store.HandleCertificate(ca.cert, "ca.pem"); err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, store *MemStore)
+	}{
+		{"issuer_in_store", func(t *testing.T, store *MemStore) {
+			ca := newRSACA(t)
+			leaf := newRSALeaf(t, ca, "has-issuer.example.com", []string{"has-issuer.example.com"})
+			if err := store.HandleCertificate(ca.cert, "ca.pem"); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.HandleCertificate(leaf.cert, "leaf.pem"); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"root_cert", func(t *testing.T, store *MemStore) {
+			ca := newRSACA(t)
+			if err := store.HandleCertificate(ca.cert, "ca.pem"); err != nil {
+				t.Fatal(err)
+			}
+		}},
 	}
-	if err := store.HandleCertificate(leaf.cert, "leaf.pem"); err != nil {
-		t.Fatal(err)
-	}
 
-	fetchCount := 0
-	fetcher := func(_ context.Context, _ string) ([]byte, error) {
-		fetchCount++
-		return nil, fmt.Errorf("should not be called")
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			store := NewMemStore()
+			tt.setup(t, store)
 
-	warnings := ResolveAIA(context.Background(), ResolveAIAInput{
-		Store: store,
-		Fetch: fetcher,
-	})
+			fetchCount := 0
+			fetcher := func(_ context.Context, _ string) ([]byte, error) {
+				fetchCount++
+				return nil, fmt.Errorf("should not be called")
+			}
 
-	if len(warnings) != 0 {
-		t.Errorf("expected 0 warnings, got %v", warnings)
-	}
-	if fetchCount != 0 {
-		t.Errorf("expected 0 fetches (issuer already in store), got %d", fetchCount)
+			warnings := ResolveAIA(context.Background(), ResolveAIAInput{
+				Store: store,
+				Fetch: fetcher,
+			})
+
+			if len(warnings) != 0 {
+				t.Errorf("expected 0 warnings, got %v", warnings)
+			}
+			if fetchCount != 0 {
+				t.Errorf("expected 0 fetches, got %d", fetchCount)
+			}
+		})
 	}
 }
 
-func TestResolveAIA_SkipsRoots(t *testing.T) {
-	// WHY: Root certificates are self-signed trust anchors; attempting to
-	// fetch their issuer would fail or return the same root.
+func TestResolveAIA_FailureProducesWarning(t *testing.T) {
+	// WHY: Both network failures and garbage responses from AIA URLs must
+	// produce user-visible warnings, not silently leave the chain incomplete.
+	// Consolidated per T-12: same setup, same assertion, different fetcher.
 	t.Parallel()
-	store := NewMemStore()
-	ca := newRSACA(t)
 
-	if err := store.HandleCertificate(ca.cert, "ca.pem"); err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name    string
+		fetcher func(context.Context, string) ([]byte, error)
+	}{
+		{"fetch_failure", func(_ context.Context, _ string) ([]byte, error) {
+			return nil, fmt.Errorf("connection refused")
+		}},
+		{"parse_failure", func(_ context.Context, _ string) ([]byte, error) {
+			return []byte("not a certificate"), nil
+		}},
 	}
 
-	fetchCount := 0
-	fetcher := func(_ context.Context, _ string) ([]byte, error) {
-		fetchCount++
-		return nil, fmt.Errorf("should not be called")
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			store := NewMemStore()
 
-	warnings := ResolveAIA(context.Background(), ResolveAIAInput{
-		Store: store,
-		Fetch: fetcher,
-	})
+			caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			caTmpl := &x509.Certificate{
+				SerialNumber:          big.NewInt(1),
+				Subject:               pkix.Name{CommonName: "Failure CA"},
+				NotBefore:             time.Now().Add(-time.Hour),
+				NotAfter:              time.Now().Add(24 * time.Hour),
+				IsCA:                  true,
+				BasicConstraintsValid: true,
+				KeyUsage:              x509.KeyUsageCertSign,
+			}
+			caDER, _ := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+			caCert, _ := x509.ParseCertificate(caDER)
 
-	if len(warnings) != 0 {
-		t.Errorf("expected 0 warnings, got %v", warnings)
-	}
-	if fetchCount != 0 {
-		t.Errorf("expected 0 fetches for root cert, got %d", fetchCount)
-	}
-}
+			leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			leafTmpl := &x509.Certificate{
+				SerialNumber:          big.NewInt(2),
+				Subject:               pkix.Name{CommonName: "aia-fail.example.com"},
+				NotBefore:             time.Now().Add(-time.Hour),
+				NotAfter:              time.Now().Add(24 * time.Hour),
+				IssuingCertificateURL: []string{"http://example.com/ca.cer"},
+			}
+			leafDER, _ := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
+			leafCert, _ := x509.ParseCertificate(leafDER)
 
-func TestResolveAIA_FetchFailureProducesWarning(t *testing.T) {
-	// WHY: Network failures during AIA fetch must produce a user-visible
-	// warning, not silently leave the chain incomplete.
-	t.Parallel()
-	store := NewMemStore()
+			if err := store.HandleCertificate(leafCert, "leaf.pem"); err != nil {
+				t.Fatal(err)
+			}
 
-	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	caTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "Unreachable CA"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-	}
-	caDER, _ := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
-	caCert, _ := x509.ParseCertificate(caDER)
+			warnings := ResolveAIA(context.Background(), ResolveAIAInput{
+				Store: store,
+				Fetch: tt.fetcher,
+			})
 
-	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	leafTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(2),
-		Subject:               pkix.Name{CommonName: "orphan.example.com"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IssuingCertificateURL: []string{"http://unreachable.example.com/ca.cer"},
-	}
-	leafDER, _ := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
-	leafCert, _ := x509.ParseCertificate(leafDER)
-
-	if err := store.HandleCertificate(leafCert, "leaf.pem"); err != nil {
-		t.Fatal(err)
-	}
-
-	fetcher := func(_ context.Context, _ string) ([]byte, error) {
-		return nil, fmt.Errorf("connection refused")
-	}
-
-	warnings := ResolveAIA(context.Background(), ResolveAIAInput{
-		Store: store,
-		Fetch: fetcher,
-	})
-
-	if len(warnings) != 1 {
-		t.Fatalf("expected 1 warning, got %d: %v", len(warnings), warnings)
-	}
-	if len(store.AllCertsFlat()) != 1 {
-		t.Errorf("store should still have only the leaf, got %d certs", len(store.AllCertsFlat()))
-	}
-}
-
-func TestResolveAIA_ParseFailureProducesWarning(t *testing.T) {
-	// WHY: An AIA URL that returns garbage must produce a clear warning,
-	// not panic or silently corrupt the store.
-	t.Parallel()
-	store := NewMemStore()
-
-	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	caTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "Garbage CA"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-	}
-	caDER, _ := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
-	caCert, _ := x509.ParseCertificate(caDER)
-
-	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	leafTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(2),
-		Subject:               pkix.Name{CommonName: "garbage-aia.example.com"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IssuingCertificateURL: []string{"http://example.com/garbage.cer"},
-	}
-	leafDER, _ := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
-	leafCert, _ := x509.ParseCertificate(leafDER)
-
-	if err := store.HandleCertificate(leafCert, "leaf.pem"); err != nil {
-		t.Fatal(err)
-	}
-
-	fetcher := func(_ context.Context, _ string) ([]byte, error) {
-		return []byte("not a certificate"), nil
-	}
-
-	warnings := ResolveAIA(context.Background(), ResolveAIAInput{
-		Store: store,
-		Fetch: fetcher,
-	})
-
-	if len(warnings) != 1 {
-		t.Fatalf("expected 1 warning for garbage response, got %d: %v", len(warnings), warnings)
+			if len(warnings) != 1 {
+				t.Fatalf("expected 1 warning, got %d: %v", len(warnings), warnings)
+			}
+			if len(store.AllCertsFlat()) != 1 {
+				t.Errorf("store should still have only the leaf, got %d certs", len(store.AllCertsFlat()))
+			}
+		})
 	}
 }
 

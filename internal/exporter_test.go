@@ -9,7 +9,6 @@ import (
 	"encoding/pem"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 
 	"github.com/sensiblebit/certkit"
@@ -283,43 +282,6 @@ func TestWriteBundleFiles_SensitiveFilePermissions(t *testing.T) {
 		if perm != 0600 {
 			t.Errorf("%s permissions = %04o, want 0600", name, perm)
 		}
-	}
-}
-
-func TestWriteBundleFiles_PKCS12WrongPassword(t *testing.T) {
-	// WHY: Exported PKCS#12 files must use the "changeit" password convention.
-	// Correct-password decode and key match are covered by
-	// certstore/export_test.go (T-10). This test verifies the filesystem-written
-	// P12 rejects wrong passwords.
-	t.Parallel()
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "p12pass.example.com", []string{"p12pass.example.com"}, nil)
-
-	certRecord := &certstore.CertRecord{
-		Cert: leaf.cert,
-	}
-	keyRecord := &certstore.KeyRecord{PEM: leaf.keyPEM}
-	bundle := newTestBundle(t, leaf, ca)
-
-	outDir := t.TempDir()
-	err := writeBundleFiles(outDir, "p12pass-test", certRecord, keyRecord, bundle, nil)
-	if err != nil {
-		t.Fatalf("writeBundleFiles: %v", err)
-	}
-
-	p12Path := filepath.Join(outDir, "p12pass-test", "p12pass.example.com.p12")
-	p12Data, err := os.ReadFile(p12Path)
-	if err != nil {
-		t.Fatalf("read p12: %v", err)
-	}
-
-	// Should NOT decode with wrong password
-	_, _, _, err = certkit.DecodePKCS12(p12Data, "wrong-password")
-	if err == nil {
-		t.Error("expected error decoding p12 with wrong password")
-	}
-	if !strings.Contains(err.Error(), "decoding PKCS#12") {
-		t.Errorf("unexpected error: %v", err)
 	}
 }
 

@@ -56,38 +56,64 @@ func TestParseContainerData_PKCS12_WrongPassword(t *testing.T) {
 	}
 }
 
-func TestParseContainerData_PKCS12_Ed25519(t *testing.T) {
-	// WHY: ParseContainerData returns the key from DecodePKCS12 which calls
-	// normalizeKey internally. This verifies the Ed25519 key emerges as
-	// ed25519.PrivateKey (value type) from a PKCS#12 container through
-	// ParseContainerData — the RSA-only test would not catch a normalization
-	// gap specific to Ed25519.
+func TestParseContainerData_Ed25519KeyNormalization(t *testing.T) {
+	// WHY: PKCS#12 and JKS take different code paths in ParseContainerData
+	// (DecodePKCS12 vs DecodeJKS) that both call normalizeKey. This verifies
+	// Ed25519 keys emerge as value type (ed25519.PrivateKey, not pointer)
+	// from both container formats — consolidated per T-12.
 	t.Parallel()
 
 	ca := newEd25519CA(t)
-	leaf := newEd25519Leaf(t, ca, "ed-p12.example.com", []string{"ed-p12.example.com"})
-	p12Data := newPKCS12Bundle(t, leaf, ca, "changeit")
 
-	contents, err := ParseContainerData(p12Data, []string{"changeit"})
-	if err != nil {
-		t.Fatalf("ParseContainerData: %v", err)
+	tests := []struct {
+		name     string
+		cn       string
+		makeData func(t *testing.T, leaf testLeaf, ca testCA) []byte
+	}{
+		{
+			name: "PKCS#12",
+			cn:   "ed-p12.example.com",
+			makeData: func(t *testing.T, leaf testLeaf, ca testCA) []byte {
+				return newPKCS12Bundle(t, leaf, ca, "changeit")
+			},
+		},
+		{
+			name: "JKS",
+			cn:   "ed-jks.example.com",
+			makeData: func(t *testing.T, leaf testLeaf, ca testCA) []byte {
+				return newJKSBundle(t, leaf, ca, "changeit")
+			},
+		},
 	}
-	if contents.Leaf == nil {
-		t.Fatal("expected Leaf to be non-nil")
-	}
-	if contents.Leaf.Subject.CommonName != "ed-p12.example.com" {
-		t.Errorf("Leaf CN = %q, want ed-p12.example.com", contents.Leaf.Subject.CommonName)
-	}
-	if contents.Key == nil {
-		t.Fatal("expected Key to be non-nil for PKCS#12")
-	}
-	edKey, ok := contents.Key.(ed25519.PrivateKey)
-	if !ok {
-		t.Fatalf("Key type = %T, want ed25519.PrivateKey (value, not pointer)", contents.Key)
-	}
-	origKey := leaf.key.(ed25519.PrivateKey)
-	if !origKey.Equal(edKey) {
-		t.Error("extracted Ed25519 key does not Equal original")
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			leaf := newEd25519Leaf(t, ca, tt.cn, []string{tt.cn})
+			data := tt.makeData(t, leaf, ca)
+
+			contents, err := ParseContainerData(data, []string{"changeit"})
+			if err != nil {
+				t.Fatalf("ParseContainerData: %v", err)
+			}
+			if contents.Leaf == nil {
+				t.Fatal("expected Leaf to be non-nil")
+			}
+			if contents.Leaf.Subject.CommonName != tt.cn {
+				t.Errorf("Leaf CN = %q, want %s", contents.Leaf.Subject.CommonName, tt.cn)
+			}
+			if contents.Key == nil {
+				t.Fatal("expected Key to be non-nil")
+			}
+			edKey, ok := contents.Key.(ed25519.PrivateKey)
+			if !ok {
+				t.Fatalf("Key type = %T, want ed25519.PrivateKey (value, not pointer)", contents.Key)
+			}
+			origKey := leaf.key.(ed25519.PrivateKey)
+			if !origKey.Equal(edKey) {
+				t.Error("extracted Ed25519 key does not Equal original")
+			}
+		})
 	}
 }
 
@@ -209,41 +235,6 @@ func TestParseContainerData_PEMCertWithEncryptedPKCS8Key(t *testing.T) {
 	// Key should be nil since ENCRYPTED PRIVATE KEY cannot be decrypted
 	if contents.Key != nil {
 		t.Errorf("expected Key to be nil for undecryptable ENCRYPTED PRIVATE KEY, got %T", contents.Key)
-	}
-}
-
-func TestParseContainerData_JKS_Ed25519Key(t *testing.T) {
-	// WHY: ParseContainerData tests PKCS#12 Ed25519 but not JKS Ed25519.
-	// JKS key extraction uses DecodeJKS which parses PKCS#8 internally and
-	// normalizes Ed25519 pointer form — a different code path than PKCS#12.
-	// A missing normalization in the JKS branch of ParseContainerData would
-	// return *ed25519.PrivateKey, breaking downstream type switches.
-	t.Parallel()
-
-	ca := newEd25519CA(t)
-	leaf := newEd25519Leaf(t, ca, "ed-jks.example.com", []string{"ed-jks.example.com"})
-	jksData := newJKSBundle(t, leaf, ca, "changeit")
-
-	contents, err := ParseContainerData(jksData, []string{"changeit"})
-	if err != nil {
-		t.Fatalf("ParseContainerData: %v", err)
-	}
-	if contents.Leaf == nil {
-		t.Fatal("expected Leaf to be non-nil")
-	}
-	if contents.Leaf.Subject.CommonName != "ed-jks.example.com" {
-		t.Errorf("Leaf CN = %q, want ed-jks.example.com", contents.Leaf.Subject.CommonName)
-	}
-	if contents.Key == nil {
-		t.Fatal("expected Key to be non-nil for JKS with Ed25519 key")
-	}
-	edKey, ok := contents.Key.(ed25519.PrivateKey)
-	if !ok {
-		t.Fatalf("Key type = %T, want ed25519.PrivateKey (value, not pointer)", contents.Key)
-	}
-	origKey := leaf.key.(ed25519.PrivateKey)
-	if !origKey.Equal(edKey) {
-		t.Error("extracted Ed25519 key from JKS does not Equal original")
 	}
 }
 

@@ -268,28 +268,61 @@ func TestProcessData_PKCS12_CorrectPassword(t *testing.T) {
 	}
 }
 
-func TestProcessData_PKCS12_WrongPassword(t *testing.T) {
-	// WHY: PKCS#12 with wrong password must be silently skipped.
+func TestProcessData_EncryptedContainer_WrongPassword(t *testing.T) {
+	// WHY: PKCS#12 and JKS with the wrong password must be silently skipped,
+	// leaving the store empty. Consolidated per T-12: same assertion pattern,
+	// different container formats.
 	t.Parallel()
+
 	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "p12wrong.example.com", []string{"p12wrong.example.com"})
-	p12Data := newPKCS12Bundle(t, leaf, ca, "secretpw")
-	store := NewMemStore()
 
-	if err := ProcessData(ProcessInput{
-		Data:      p12Data,
-		Path:      "bundle.p12",
-		Passwords: []string{"wrongpw"},
-		Handler:   store,
-	}); err != nil {
-		t.Fatalf("ProcessData should not error: %v", err)
+	tests := []struct {
+		name     string
+		cn       string
+		path     string
+		makeData func(t *testing.T, leaf testLeaf, ca testCA) []byte
+	}{
+		{
+			name: "PKCS#12",
+			cn:   "p12wrong.example.com",
+			path: "bundle.p12",
+			makeData: func(t *testing.T, leaf testLeaf, ca testCA) []byte {
+				return newPKCS12Bundle(t, leaf, ca, "secretpw")
+			},
+		},
+		{
+			name: "JKS",
+			cn:   "jkswrong.example.com",
+			path: "store.jks",
+			makeData: func(t *testing.T, leaf testLeaf, ca testCA) []byte {
+				return newJKSBundle(t, leaf, ca, "correctpw")
+			},
+		},
 	}
 
-	if len(store.AllCerts()) != 0 {
-		t.Errorf("expected 0 certs with wrong password, got %d", len(store.AllCerts()))
-	}
-	if len(store.AllKeys()) != 0 {
-		t.Errorf("expected 0 keys with wrong password, got %d", len(store.AllKeys()))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			leaf := newRSALeaf(t, ca, tt.cn, []string{tt.cn})
+			data := tt.makeData(t, leaf, ca)
+			store := NewMemStore()
+
+			if err := ProcessData(ProcessInput{
+				Data:      data,
+				Path:      tt.path,
+				Passwords: []string{"wrongpw"},
+				Handler:   store,
+			}); err != nil {
+				t.Fatalf("ProcessData should not error: %v", err)
+			}
+
+			if len(store.AllCerts()) != 0 {
+				t.Errorf("expected 0 certs with wrong password, got %d", len(store.AllCerts()))
+			}
+			if len(store.AllKeys()) != 0 {
+				t.Errorf("expected 0 keys with wrong password, got %d", len(store.AllKeys()))
+			}
+		})
 	}
 }
 
@@ -665,33 +698,6 @@ func TestProcessData_MalformedPEMCert(t *testing.T) {
 	}
 }
 
-func TestProcessData_JKS_WrongPassword(t *testing.T) {
-	// WHY: JKS with the wrong password must be silently skipped, leaving the
-	// store empty — no partial extraction or errors should leak through.
-	t.Parallel()
-
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "jkswrong.example.com", []string{"jkswrong.example.com"})
-	jksData := newJKSBundle(t, leaf, ca, "correctpw")
-	store := NewMemStore()
-
-	if err := ProcessData(ProcessInput{
-		Data:      jksData,
-		Path:      "store.jks",
-		Passwords: []string{"wrongpw"},
-		Handler:   store,
-	}); err != nil {
-		t.Fatalf("ProcessData should not error: %v", err)
-	}
-
-	if len(store.AllCerts()) != 0 {
-		t.Errorf("expected 0 certs with wrong JKS password, got %d", len(store.AllCerts()))
-	}
-	if len(store.AllKeys()) != 0 {
-		t.Errorf("expected 0 keys with wrong JKS password, got %d", len(store.AllKeys()))
-	}
-}
-
 // TestProcessData_EndToEnd_IngestExportRoundTrip verifies the full pipeline:
 // ingest PEM cert+key via ProcessData → store in MemStore → retrieve key →
 // build export input → verify the .key file round-trips back to Equal().
@@ -898,76 +904,58 @@ func TestProcessData_JKS_DifferentKeyPassword(t *testing.T) {
 func TestProcessData_DER_KeyRoundTrip(t *testing.T) {
 	// WHY: Existing DER key tests check type only, not key equality. A subtle
 	// DER-to-PEM encoding bug that changes key material would pass all prior tests.
-	// This test verifies .Equal() for all DER key formats.
+	// One key type (RSA PKCS#8) suffices since the DER-to-PEM normalization path
+	// is identical for all key types (T-13).
 	t.Parallel()
 
 	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-
 	rsaPKCS8, _ := x509.MarshalPKCS8PrivateKey(rsaKey)
-	ecSEC1, _ := x509.MarshalECPrivateKey(ecKey)
 
-	tests := []struct {
-		name    string
-		data    []byte
-		origKey crypto.PrivateKey
-		keyType string
-	}{
-		{"PKCS8 RSA DER", rsaPKCS8, rsaKey, "RSA"},
-		{"SEC1 ECDSA DER", ecSEC1, ecKey, "ECDSA"},
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{
+		Data:    rsaPKCS8,
+		Path:    "test.der",
+		Handler: store,
+	}); err != nil {
+		t.Fatal(err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			store := NewMemStore()
-			if err := ProcessData(ProcessInput{
-				Data:    tt.data,
-				Path:    "test.der",
-				Handler: store,
-			}); err != nil {
-				t.Fatal(err)
-			}
+	if len(store.AllKeys()) != 1 {
+		t.Fatalf("expected 1 key, got %d", len(store.AllKeys()))
+	}
 
-			if len(store.AllKeys()) != 1 {
-				t.Fatalf("expected 1 key, got %d", len(store.AllKeys()))
-			}
+	for _, rec := range store.AllKeys() {
+		if rec.KeyType != "RSA" {
+			t.Errorf("KeyType = %q, want RSA", rec.KeyType)
+		}
+		if !keysEqual(t, rsaKey, rec.Key) {
+			t.Error("stored key does not Equal original RSA key")
+		}
 
-			for _, rec := range store.AllKeys() {
-				if rec.KeyType != tt.keyType {
-					t.Errorf("KeyType = %q, want %q", rec.KeyType, tt.keyType)
-				}
-				if !keysEqual(t, tt.origKey, rec.Key) {
-					t.Errorf("stored key does not Equal original %s key", tt.keyType)
-				}
+		// Verify stored PEM is valid PKCS#8
+		block, _ := pem.Decode(rec.PEM)
+		if block == nil {
+			t.Fatal("stored PEM is not parseable")
+		}
+		if block.Type != "PRIVATE KEY" {
+			t.Errorf("stored PEM type = %q, want PRIVATE KEY (PKCS#8)", block.Type)
+		}
 
-				// Verify stored PEM is valid PKCS#8
-				block, _ := pem.Decode(rec.PEM)
-				if block == nil {
-					t.Fatal("stored PEM is not parseable")
-				}
-				if block.Type != "PRIVATE KEY" {
-					t.Errorf("stored PEM type = %q, want PRIVATE KEY (PKCS#8)", block.Type)
-				}
-
-				// Parse stored PEM and verify it equals original
-				reparsed, err := certkit.ParsePEMPrivateKey(rec.PEM)
-				if err != nil {
-					t.Fatalf("re-parse stored PEM: %v", err)
-				}
-				if !keysEqual(t, tt.origKey, reparsed) {
-					t.Error("stored PEM round-trip lost key material")
-				}
-			}
-		})
+		// Parse stored PEM and verify it equals original
+		reparsed, err := certkit.ParsePEMPrivateKey(rec.PEM)
+		if err != nil {
+			t.Fatalf("re-parse stored PEM: %v", err)
+		}
+		if !keysEqual(t, rsaKey, reparsed) {
+			t.Error("stored PEM round-trip lost key material")
+		}
 	}
 }
 
-func TestProcessData_OpenSSH_Encrypted(t *testing.T) {
-	// WHY: Encrypted OpenSSH keys through ProcessData must be decryptable with
-	// the correct password and produce normalized PKCS#8 storage. This exercises
-	// processPEMPrivateKeys → ParsePEMPrivateKeyWithPasswords → OpenSSH decrypt
-	// → normalizeKey → MarshalPrivateKeyToPEM → HandleKey.
+func TestProcessData_OpenSSH_EncryptedPasswords(t *testing.T) {
+	// WHY: Encrypted OpenSSH keys must be decryptable with the correct password
+	// (producing normalized PKCS#8 storage) and silently skipped with the wrong
+	// password. Consolidated per T-12: same key setup, different password scenarios.
 	t.Parallel()
 
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -980,69 +968,54 @@ func TestProcessData_OpenSSH_Encrypted(t *testing.T) {
 	}
 	sshPEM := pem.EncodeToMemory(sshBlock)
 
-	store := NewMemStore()
-	if err := ProcessData(ProcessInput{
-		Data:      sshPEM,
-		Path:      "encrypted.openssh",
-		Passwords: []string{"testpass"},
-		Handler:   store,
-	}); err != nil {
-		t.Fatalf("ProcessData: %v", err)
+	tests := []struct {
+		name     string
+		password string
+		wantKeys int
+	}{
+		{"correct_password", "testpass", 1},
+		{"wrong_password", "wrongpass", 0},
 	}
 
-	if len(store.AllKeys()) != 1 {
-		t.Fatalf("expected 1 key from encrypted OpenSSH, got %d", len(store.AllKeys()))
-	}
-	for _, rec := range store.AllKeys() {
-		if rec.KeyType != "Ed25519" {
-			t.Errorf("KeyType = %q, want Ed25519", rec.KeyType)
-		}
-		edKey, ok := rec.Key.(ed25519.PrivateKey)
-		if !ok {
-			t.Fatalf("stored key type = %T, want ed25519.PrivateKey (value)", rec.Key)
-		}
-		if !priv.Equal(edKey) {
-			t.Error("stored key does not Equal original encrypted OpenSSH Ed25519 key")
-		}
-		// Verify stored PEM is PKCS#8 (normalized from encrypted OpenSSH)
-		block, _ := pem.Decode(rec.PEM)
-		if block == nil {
-			t.Fatal("stored PEM is not parseable")
-		}
-		if block.Type != "PRIVATE KEY" {
-			t.Errorf("stored PEM type = %q, want PRIVATE KEY (PKCS#8)", block.Type)
-		}
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			store := NewMemStore()
+			if err := ProcessData(ProcessInput{
+				Data:      sshPEM,
+				Path:      "encrypted.openssh",
+				Passwords: []string{tt.password},
+				Handler:   store,
+			}); err != nil {
+				t.Fatalf("ProcessData: %v", err)
+			}
 
-func TestProcessData_OpenSSH_WrongPassword(t *testing.T) {
-	// WHY: Encrypted OpenSSH keys with wrong password through ProcessData must
-	// be silently skipped, not error. This mirrors the existing encrypted PEM
-	// wrong-password behavior.
-	t.Parallel()
+			if len(store.AllKeys()) != tt.wantKeys {
+				t.Fatalf("expected %d keys, got %d", tt.wantKeys, len(store.AllKeys()))
+			}
 
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sshBlock, err := ssh.MarshalPrivateKeyWithPassphrase(priv, "", []byte("secret"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	sshPEM := pem.EncodeToMemory(sshBlock)
-
-	store := NewMemStore()
-	if err := ProcessData(ProcessInput{
-		Data:      sshPEM,
-		Path:      "encrypted.openssh",
-		Passwords: []string{"wrongpass"},
-		Handler:   store,
-	}); err != nil {
-		t.Fatalf("ProcessData should not error: %v", err)
-	}
-
-	if len(store.AllKeys()) != 0 {
-		t.Errorf("expected 0 keys with wrong OpenSSH password, got %d", len(store.AllKeys()))
+			if tt.wantKeys == 1 {
+				for _, rec := range store.AllKeys() {
+					if rec.KeyType != "Ed25519" {
+						t.Errorf("KeyType = %q, want Ed25519", rec.KeyType)
+					}
+					edKey, ok := rec.Key.(ed25519.PrivateKey)
+					if !ok {
+						t.Fatalf("stored key type = %T, want ed25519.PrivateKey (value)", rec.Key)
+					}
+					if !priv.Equal(edKey) {
+						t.Error("stored key does not Equal original encrypted OpenSSH Ed25519 key")
+					}
+					block, _ := pem.Decode(rec.PEM)
+					if block == nil {
+						t.Fatal("stored PEM is not parseable")
+					}
+					if block.Type != "PRIVATE KEY" {
+						t.Errorf("stored PEM type = %q, want PRIVATE KEY (PKCS#8)", block.Type)
+					}
+				}
+			}
+		})
 	}
 }
 
@@ -1347,19 +1320,15 @@ func TestProcessData_DERKeyWithPEMExtension(t *testing.T) {
 func TestProcessData_CrossFormatSKIEquality(t *testing.T) {
 	// WHY: The same key ingested from all supported container formats must
 	// produce the same SKI. A format-dependent SKI difference would prevent
-	// deduplication and break bundle matching. One subtest per key type.
+	// deduplication and break bundle matching. Ed25519 is the critical case
+	// due to pointer normalization across formats (T-13: RSA adds no unique
+	// coverage since HandleKey uses the same ComputeSKI path for all types).
 	t.Parallel()
-
-	rsaCA := newRSACA(t)
-	rsaLeaf := newRSALeaf(t, rsaCA, "rsa-cross.example.com", []string{"rsa-cross.example.com"})
-	rsaKey := rsaLeaf.key.(*rsa.PrivateKey)
 
 	edCA := newRSACA(t)
 	edLeaf := newEd25519Leaf(t, edCA, "ed-cross.example.com", []string{"ed-cross.example.com"})
 	edKey := edLeaf.key.(ed25519.PrivateKey)
 
-	// Helper to build format lists per key type
-	rsaPKCS8DER, _ := x509.MarshalPKCS8PrivateKey(rsaKey)
 	edPKCS8DER, _ := x509.MarshalPKCS8PrivateKey(edKey)
 	raw64 := make([]byte, ed25519.PrivateKeySize)
 	copy(raw64, edKey)
@@ -1372,73 +1341,46 @@ func TestProcessData_CrossFormatSKIEquality(t *testing.T) {
 		path string
 	}
 
-	tests := []struct {
-		name    string
-		keyType string
-		formats []formatEntry
-	}{
-		{
-			name:    "RSA",
-			keyType: "RSA",
-			formats: []formatEntry{
-				{"PKCS#1 PEM", pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(rsaKey)}), "key.pem"},
-				{"PKCS#8 PEM", pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: rsaPKCS8DER}), "key.pem"},
-				{"PKCS#8 DER", rsaPKCS8DER, "key.der"},
-				{"PKCS#1 DER", x509.MarshalPKCS1PrivateKey(rsaKey), "key.der"},
-				{"PKCS#12", newPKCS12Bundle(t, rsaLeaf, rsaCA, "test"), "bundle.p12"},
-				{"JKS", newJKSBundle(t, rsaLeaf, rsaCA, "changeit"), "bundle.jks"},
-			},
-		},
-		{
-			name:    "Ed25519",
-			keyType: "Ed25519",
-			formats: []formatEntry{
-				{"PKCS#8 PEM", pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: edPKCS8DER}), "key.pem"},
-				{"PKCS#8 DER", edPKCS8DER, "key.der"},
-				{"Raw 64-byte", raw64, "key.der"},
-				{"OpenSSH", sshPEM, "key.pem"},
-				{"PKCS#12", newPKCS12Bundle(t, edLeaf, edCA, "test"), "bundle.p12"},
-				{"JKS", newJKSBundle(t, edLeaf, edCA, "changeit"), "bundle.jks"},
-			},
-		},
+	formats := []formatEntry{
+		{"PKCS#8 PEM", pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: edPKCS8DER}), "key.pem"},
+		{"PKCS#8 DER", edPKCS8DER, "key.der"},
+		{"Raw 64-byte", raw64, "key.der"},
+		{"OpenSSH", sshPEM, "key.pem"},
+		{"PKCS#12", newPKCS12Bundle(t, edLeaf, edCA, "test"), "bundle.p12"},
+		{"JKS", newJKSBundle(t, edLeaf, edCA, "changeit"), "bundle.jks"},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			var skis []string
-			for _, f := range tt.formats {
-				store := NewMemStore()
-				if err := ProcessData(ProcessInput{
-					Data:      f.data,
-					Path:      f.path,
-					Handler:   store,
-					Passwords: []string{"", "test", "changeit"},
-				}); err != nil {
-					t.Fatalf("%s: ProcessData: %v", f.name, err)
-				}
+	var skis []string
+	for _, f := range formats {
+		store := NewMemStore()
+		if err := ProcessData(ProcessInput{
+			Data:      f.data,
+			Path:      f.path,
+			Handler:   store,
+			Passwords: []string{"", "test", "changeit"},
+		}); err != nil {
+			t.Fatalf("%s: ProcessData: %v", f.name, err)
+		}
 
-				keys := store.AllKeysFlat()
-				found := false
-				for _, rec := range keys {
-					if rec.KeyType == tt.keyType {
-						skis = append(skis, rec.SKI)
-						found = true
-						break
-					}
-				}
-				if !found {
-					t.Fatalf("%s: no %s key found in store", f.name, tt.keyType)
-				}
+		keys := store.AllKeysFlat()
+		found := false
+		for _, rec := range keys {
+			if rec.KeyType == "Ed25519" {
+				skis = append(skis, rec.SKI)
+				found = true
+				break
 			}
+		}
+		if !found {
+			t.Fatalf("%s: no Ed25519 key found in store", f.name)
+		}
+	}
 
-			for i := 1; i < len(skis); i++ {
-				if skis[i] != skis[0] {
-					t.Errorf("SKI mismatch: %s=%s vs %s=%s",
-						tt.formats[0].name, skis[0], tt.formats[i].name, skis[i])
-				}
-			}
-		})
+	for i := 1; i < len(skis); i++ {
+		if skis[i] != skis[0] {
+			t.Errorf("SKI mismatch: %s=%s vs %s=%s",
+				formats[0].name, skis[0], formats[i].name, skis[i])
+		}
 	}
 }
 

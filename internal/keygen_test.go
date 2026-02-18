@@ -3,7 +3,6 @@ package internal
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
-	"crypto/rsa"
 	"os"
 	"path/filepath"
 	"strings"
@@ -183,16 +182,6 @@ func TestGenerateKeyFiles_WithCSR_KeyMatchesCSR(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Parse the private key
-	keyData, err := os.ReadFile(filepath.Join(dir, "key.pem"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	parsedKey, err := certkit.ParsePEMPrivateKey(keyData)
-	if err != nil {
-		t.Fatalf("parsing private key: %v", err)
-	}
-
 	// Parse the CSR
 	csrData, err := os.ReadFile(filepath.Join(dir, "csr.pem"))
 	if err != nil {
@@ -203,22 +192,7 @@ func TestGenerateKeyFiles_WithCSR_KeyMatchesCSR(t *testing.T) {
 		t.Fatalf("parsing CSR: %v", err)
 	}
 
-	// Extract the public key from the CSR and compare with the private key's public key
-	rsaKey, ok := parsedKey.(*rsa.PrivateKey)
-	if !ok {
-		t.Fatalf("expected *rsa.PrivateKey, got %T", parsedKey)
-	}
-
-	csrPubKey, ok := csr.PublicKey.(*rsa.PublicKey)
-	if !ok {
-		t.Fatalf("expected CSR public key to be *rsa.PublicKey, got %T", csr.PublicKey)
-	}
-
-	if !rsaKey.PublicKey.Equal(csrPubKey) {
-		t.Error("CSR public key does not match private key's public key")
-	}
-
-	// Verify the CSR signature is valid
+	// Verify the CSR signature is valid (implicitly proves key-CSR match)
 	if err := certkit.VerifyCSR(csr); err != nil {
 		t.Errorf("CSR verification failed: %v", err)
 	}

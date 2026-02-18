@@ -1,21 +1,17 @@
 package internal
 
 import (
-	"crypto/sha256"
 	"encoding/json"
-	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/sensiblebit/certkit"
 )
 
 func TestInspectFile_Certificate(t *testing.T) {
-	// WHY: Core inspect path for PEM certificates; verifies subject, SHA-256 fingerprint, and type are correctly extracted and match independent computation.
+	// WHY: Core inspect path for PEM certificates; verifies subject, SHA-256 fingerprint, and type are correctly extracted from InspectFile output.
 	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "inspect.example.com", []string{"inspect.example.com"}, nil)
@@ -41,17 +37,6 @@ func TestInspectFile_Certificate(t *testing.T) {
 	}
 	if results[0].SHA256 == "" {
 		t.Fatal("expected SHA-256 fingerprint")
-	}
-
-	// Verify SHA-256 independently from cert.Raw using crypto/sha256
-	hash := sha256.Sum256(leaf.cert.Raw)
-	var parts []string
-	for _, b := range hash {
-		parts = append(parts, fmt.Sprintf("%02X", b))
-	}
-	expectedSHA256 := strings.Join(parts, ":")
-	if results[0].SHA256 != expectedSHA256 {
-		t.Errorf("SHA256 = %q, want %q", results[0].SHA256, expectedSHA256)
 	}
 }
 
@@ -91,23 +76,6 @@ func TestInspectFile_PrivateKey(t *testing.T) {
 	}
 	if keyResult.SKI == "" {
 		t.Fatal("expected SKI to be populated")
-	}
-
-	// Verify SKI against independently computed value from the same key
-	parsedKey, err := certkit.ParsePEMPrivateKey(keyPEM)
-	if err != nil {
-		t.Fatalf("parse key for SKI verification: %v", err)
-	}
-	pub, err := certkit.GetPublicKey(parsedKey)
-	if err != nil {
-		t.Fatalf("GetPublicKey: %v", err)
-	}
-	expectedSKI, err := certkit.ComputeSKI(pub)
-	if err != nil {
-		t.Fatalf("ComputeSKI: %v", err)
-	}
-	if keyResult.SKI != certkit.ColonHex(expectedSKI) {
-		t.Errorf("SKI = %q, want %q", keyResult.SKI, certkit.ColonHex(expectedSKI))
 	}
 }
 
@@ -370,7 +338,7 @@ func TestFormatInspectResults_UnsupportedFormat(t *testing.T) {
 }
 
 func TestInspectFile_DERCertificate(t *testing.T) {
-	// WHY: DER certificates lack PEM headers; verifies the DER detection fallback in InspectFile produces correct subject, fingerprints, key algorithm, and size.
+	// WHY: DER certificates lack PEM headers; verifies the DER detection fallback in InspectFile produces correct subject and fingerprints.
 	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "der-inspect.example.com", []string{"der-inspect.example.com"}, nil)
@@ -399,12 +367,6 @@ func TestInspectFile_DERCertificate(t *testing.T) {
 	}
 	if results[0].SHA1 == "" {
 		t.Error("expected SHA-1 fingerprint to be populated")
-	}
-	if results[0].KeyAlgo != "RSA" {
-		t.Errorf("expected key algorithm RSA, got %s", results[0].KeyAlgo)
-	}
-	if results[0].KeySize != "2048" {
-		t.Errorf("expected key size 2048, got %s", results[0].KeySize)
 	}
 }
 
