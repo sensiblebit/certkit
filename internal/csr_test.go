@@ -104,7 +104,10 @@ func TestGenerateCSRFiles_FromCert(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	csrData, _ := os.ReadFile(filepath.Join(outDir, "csr.pem"))
+	csrData, err := os.ReadFile(filepath.Join(outDir, "csr.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	csr, err := certkit.ParsePEMCertificateRequest(csrData)
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +118,7 @@ func TestGenerateCSRFiles_FromCert(t *testing.T) {
 }
 
 func TestGenerateCSRFiles_FromCSR(t *testing.T) {
-	// WHY: CSR-to-CSR generation allows re-keying with a different algorithm; verifies CN transfer and that Ed25519 key generation works.
+	// WHY: CSR-to-CSR generation allows re-keying with a different algorithm; verifies CN transfer from the source CSR to the new CSR.
 	t.Parallel()
 	dir := t.TempDir()
 
@@ -143,7 +146,10 @@ func TestGenerateCSRFiles_FromCSR(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	csrData, _ := os.ReadFile(filepath.Join(outDir, "csr.pem"))
+	csrData, err := os.ReadFile(filepath.Join(outDir, "csr.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	csr, err := certkit.ParsePEMCertificateRequest(csrData)
 	if err != nil {
 		t.Fatal(err)

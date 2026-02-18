@@ -63,54 +63,42 @@ func TestVerifyCert_KeyMatch(t *testing.T) {
 }
 
 func TestVerifyCert_ExpiryCheck(t *testing.T) {
-	// WHY: The expiry window check must trigger when the cert expires within the window and not trigger otherwise; verifies both the positive and negative cases.
+	// WHY: The expiry window check must trigger when the cert expires within
+	// the window, not trigger when outside the window, and always trigger for
+	// already-expired certs. Each case covers a distinct code path.
 	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "expiry.example.com", []string{"expiry.example.com"}, nil)
+	expired := newExpiredLeaf(t, ca)
 
-	// Cert expires in ~365 days, so 400d should trigger
-	result, err := VerifyCert(context.Background(), &VerifyInput{
-		Cert:           leaf.cert,
-		ExpiryDuration: 400 * 24 * time.Hour,
-		TrustStore:     "mozilla",
-	})
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name       string
+		cert       *x509.Certificate
+		window     time.Duration
+		wantExpiry bool
+	}{
+		{"within window triggers", leaf.cert, 400 * 24 * time.Hour, true},
+		{"outside window does not trigger", leaf.cert, 30 * 24 * time.Hour, false},
+		{"already expired always triggers", expired.cert, 1 * time.Hour, true},
 	}
-	if result.Expiry == nil || !*result.Expiry {
-		t.Error("expected expiry warning for 400d window")
-	}
-
-	// 30d window should not trigger
-	result, err = VerifyCert(context.Background(), &VerifyInput{
-		Cert:           leaf.cert,
-		ExpiryDuration: 30 * 24 * time.Hour,
-		TrustStore:     "mozilla",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Expiry == nil || *result.Expiry {
-		t.Error("expected no expiry warning for 30d window")
-	}
-}
-
-func TestVerifyCert_ExpiredCert(t *testing.T) {
-	// WHY: An already-expired cert must always trigger the expiry warning regardless of the window duration; verifies the already-past-NotAfter path.
-	t.Parallel()
-	ca := newRSACA(t)
-	leaf := newExpiredLeaf(t, ca)
-
-	result, err := VerifyCert(context.Background(), &VerifyInput{
-		Cert:           leaf.cert,
-		ExpiryDuration: 1 * time.Hour,
-		TrustStore:     "mozilla",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.Expiry == nil || !*result.Expiry {
-		t.Error("expected expired cert to trigger expiry warning")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result, err := VerifyCert(context.Background(), &VerifyInput{
+				Cert:           tt.cert,
+				ExpiryDuration: tt.window,
+				TrustStore:     "mozilla",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.Expiry == nil {
+				t.Fatal("expected Expiry to be set")
+			}
+			if *result.Expiry != tt.wantExpiry {
+				t.Errorf("Expiry = %v, want %v", *result.Expiry, tt.wantExpiry)
+			}
+		})
 	}
 }
 

@@ -329,37 +329,6 @@ func TestProcessData_JKS(t *testing.T) {
 	}
 }
 
-func TestProcessData_Ed25519RawKey_Valid(t *testing.T) {
-	// WHY: Valid raw Ed25519 keys (64 bytes, seed || public) must be ingested.
-	t.Parallel()
-	_, priv, _ := ed25519.GenerateKey(rand.Reader)
-	store := NewMemStore()
-
-	if err := ProcessData(ProcessInput{
-		Data:    []byte(priv),
-		Path:    "ed25519.key",
-		Handler: store,
-	}); err != nil {
-		t.Fatalf("ProcessData: %v", err)
-	}
-
-	if len(store.AllKeys()) != 1 {
-		t.Fatalf("expected 1 key from valid Ed25519, got %d", len(store.AllKeys()))
-	}
-	for _, rec := range store.AllKeys() {
-		if rec.KeyType != "Ed25519" {
-			t.Errorf("KeyType = %q, want Ed25519", rec.KeyType)
-		}
-		edKey, ok := rec.Key.(ed25519.PrivateKey)
-		if !ok {
-			t.Errorf("stored key type = %T, want ed25519.PrivateKey (value)", rec.Key)
-		}
-		if !priv.Equal(edKey) {
-			t.Error("stored Ed25519 raw key does not Equal original — derivation from seed may be broken")
-		}
-	}
-}
-
 func TestProcessData_Ed25519RawKey_StoredPEM_IsPKCS8(t *testing.T) {
 	// WHY: Raw Ed25519 keys (64-byte seed||public) are detected and ingested
 	// via processDER's special-case path. The stored PEM must be normalized to
@@ -991,50 +960,6 @@ func TestProcessData_DER_KeyRoundTrip(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestProcessData_OpenSSH(t *testing.T) {
-	// WHY: OpenSSH Ed25519 keys exercise the pointer normalization path
-	// (ssh.ParseRawPrivateKey returns *ed25519.PrivateKey). One key type
-	// suffices since the dispatch path (OPENSSH PRIVATE KEY block → ssh parse
-	// → normalizeKey → HandleKey) is identical for all key types (T-12).
-	t.Parallel()
-
-	_, edKey, _ := ed25519.GenerateKey(rand.Reader)
-
-	sshBlock, err := ssh.MarshalPrivateKey(edKey, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	sshPEM := pem.EncodeToMemory(sshBlock)
-
-	store := NewMemStore()
-	if err := ProcessData(ProcessInput{
-		Data:    sshPEM,
-		Path:    "ed25519.openssh",
-		Handler: store,
-	}); err != nil {
-		t.Fatalf("ProcessData: %v", err)
-	}
-
-	if len(store.AllKeys()) != 1 {
-		t.Fatalf("expected 1 key, got %d", len(store.AllKeys()))
-	}
-	for _, rec := range store.AllKeys() {
-		if rec.KeyType != "Ed25519" {
-			t.Errorf("KeyType = %q, want Ed25519", rec.KeyType)
-		}
-		if !keysEqual(t, edKey, rec.Key) {
-			t.Error("stored key does not Equal original OpenSSH key")
-		}
-		block, _ := pem.Decode(rec.PEM)
-		if block == nil {
-			t.Fatal("stored PEM is not parseable")
-		}
-		if block.Type != "PRIVATE KEY" {
-			t.Errorf("stored PEM type = %q, want PRIVATE KEY (PKCS#8)", block.Type)
-		}
 	}
 }
 

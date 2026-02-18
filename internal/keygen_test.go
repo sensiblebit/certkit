@@ -44,27 +44,30 @@ func TestGenerateKey_CurveAliases(t *testing.T) {
 	}
 }
 
-func TestGenerateKey_UnsupportedAlgorithm(t *testing.T) {
-	// WHY: Unsupported algorithms must return a clear error; silently returning nil would cause nil-pointer panics downstream.
+func TestGenerateKey_ErrorPaths(t *testing.T) {
+	// WHY: Invalid inputs (unsupported algorithm, invalid curve) must return
+	// clear errors; silent nil returns would cause nil-pointer panics downstream.
 	t.Parallel()
-	_, err := GenerateKey("dsa", 0, "")
-	if err == nil {
-		t.Error("expected error for unsupported algorithm")
+	tests := []struct {
+		name    string
+		algo    string
+		curve   string
+		wantErr string
+	}{
+		{"unsupported algorithm", "dsa", "", "unsupported algorithm"},
+		{"invalid ECDSA curve", "ecdsa", "invalid-curve", "unsupported curve"},
 	}
-	if !strings.Contains(err.Error(), "unsupported algorithm") {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-func TestGenerateKey_InvalidCurve(t *testing.T) {
-	// WHY: An invalid ECDSA curve name must return an error; silently defaulting to a curve would surprise users with unexpected key parameters.
-	t.Parallel()
-	_, err := GenerateKey("ecdsa", 0, "invalid-curve")
-	if err == nil {
-		t.Error("expected error for invalid curve")
-	}
-	if !strings.Contains(err.Error(), "unsupported curve") {
-		t.Errorf("unexpected error: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := GenerateKey(tt.algo, 0, tt.curve)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error = %v, want substring %q", err, tt.wantErr)
+			}
+		})
 	}
 }
 

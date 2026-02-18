@@ -678,65 +678,14 @@ func TestGenerateJSON_IPAddresses(t *testing.T) {
 }
 
 func TestGenerateBundleFiles_PKCS12RoundTrip(t *testing.T) {
-	// WHY: The P12 file in GenerateBundleFiles output is created by re-parsing
-	// KeyRecord.PEM (stored PKCS#8) and encoding with EncodePKCS12Legacy.
-	// One key type (RSA) suffices per T-13 since the P12 encoding is
-	// key-type-agnostic after PKCS#8 normalization.
-	t.Parallel()
-
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "p12rt-rsa.example.com", []string{"p12rt-rsa.example.com"})
-
-	bundle := &certkit.BundleResult{
-		Leaf:  leaf.cert,
-		Roots: []*x509.Certificate{ca.cert},
-	}
-
-	files, err := GenerateBundleFiles(BundleExportInput{
-		Bundle:     bundle,
-		KeyPEM:     leaf.keyPEM,
-		KeyType:    "RSA",
-		BitLength:  2048,
-		Prefix:     "p12rt-rsa",
-		SecretName: "p12rt-rsa-tls",
-	})
-	if err != nil {
-		t.Fatalf("GenerateBundleFiles: %v", err)
-	}
-
-	for _, f := range files {
-		if strings.HasSuffix(f.Name, ".p12") {
-			privKey, leafCert, _, err := certkit.DecodePKCS12(f.Data, "changeit")
-			if err != nil {
-				t.Fatalf("DecodePKCS12: %v", err)
-			}
-			if leafCert == nil {
-				t.Fatal("P12 contained no leaf cert")
-			}
-			if !leafCert.Equal(leaf.cert) {
-				t.Error("P12 leaf cert does not match original")
-			}
-			if privKey == nil {
-				t.Fatal("P12 contained no private key")
-			}
-			if !keysEqual(t, leaf.key, privKey) {
-				t.Error("P12 key does not match original")
-			}
-			return
-		}
-	}
-	t.Fatal("no .p12 file in output")
-}
-
-func TestGenerateBundleFiles_PKCS12ChainIntegrity(t *testing.T) {
-	// WHY: The PKCS#12 from GenerateBundleFiles must include the full chain
-	// (intermediates). If EncodePKCS12Legacy drops intermediates, the P12 is
-	// unusable for server installation that requires the chain.
+	// WHY: The P12 file from GenerateBundleFiles must contain the correct leaf
+	// cert, matching private key, and full intermediate chain. A missing key
+	// or dropped intermediates makes the P12 unusable for server installation.
 	t.Parallel()
 
 	root := newRSACA(t)
 	intermediate := newIntermediateCA(t, root)
-	leaf := newRSALeaf(t, intermediate, "chain.example.com", []string{"chain.example.com"})
+	leaf := newRSALeaf(t, intermediate, "p12rt.example.com", []string{"p12rt.example.com"})
 
 	bundle := &certkit.BundleResult{
 		Leaf:          leaf.cert,
@@ -749,8 +698,8 @@ func TestGenerateBundleFiles_PKCS12ChainIntegrity(t *testing.T) {
 		KeyPEM:     leaf.keyPEM,
 		KeyType:    "RSA",
 		BitLength:  2048,
-		Prefix:     "chain",
-		SecretName: "chain-tls",
+		Prefix:     "p12rt",
+		SecretName: "p12rt-tls",
 	})
 	if err != nil {
 		t.Fatalf("GenerateBundleFiles: %v", err)
@@ -760,17 +709,23 @@ func TestGenerateBundleFiles_PKCS12ChainIntegrity(t *testing.T) {
 		if !strings.HasSuffix(f.Name, ".p12") {
 			continue
 		}
-		_, leafCert, caCerts, err := certkit.DecodePKCS12(f.Data, "changeit")
+		privKey, leafCert, caCerts, err := certkit.DecodePKCS12(f.Data, "changeit")
 		if err != nil {
 			t.Fatalf("DecodePKCS12: %v", err)
 		}
 		if leafCert == nil {
-			t.Fatal("P12 has no leaf cert")
+			t.Fatal("P12 contained no leaf cert")
 		}
 		if !leafCert.Equal(leaf.cert) {
-			t.Error("P12 leaf does not match original")
+			t.Error("P12 leaf cert does not match original")
 		}
-		// Intermediates should be present in the CA certs
+		if privKey == nil {
+			t.Fatal("P12 contained no private key")
+		}
+		if !keysEqual(t, leaf.key, privKey) {
+			t.Error("P12 key does not match original")
+		}
+		// Intermediates must be present in the CA certs
 		if len(caCerts) == 0 {
 			t.Fatal("P12 has no CA certs (intermediates missing)")
 		}

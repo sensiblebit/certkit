@@ -137,6 +137,7 @@ func TestEncodePKCS7_EmptyInput(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			_, err := EncodePKCS7(tt.certs)
 			if err == nil {
 				t.Fatal("expected error for empty cert list")

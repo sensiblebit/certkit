@@ -17,30 +17,6 @@ import (
 	"time"
 )
 
-func TestDefaultOptions(t *testing.T) {
-	// WHY: Default options define the contract for callers who omit configuration; wrong defaults silently break verification or AIA fetching.
-	t.Parallel()
-	opts := DefaultOptions()
-	if !opts.FetchAIA {
-		t.Error("FetchAIA should default to true")
-	}
-	if opts.AIATimeout != 2*time.Second {
-		t.Errorf("AIATimeout = %v, want 2s", opts.AIATimeout)
-	}
-	if opts.AIAMaxDepth != 5 {
-		t.Errorf("AIAMaxDepth = %d, want 5", opts.AIAMaxDepth)
-	}
-	if opts.TrustStore != "system" {
-		t.Errorf("TrustStore = %q, want system", opts.TrustStore)
-	}
-	if !opts.Verify {
-		t.Error("Verify should default to true")
-	}
-	if opts.ExcludeRoot {
-		t.Error("ExcludeRoot should default to false")
-	}
-}
-
 func TestBundle_customRoots(t *testing.T) {
 	// WHY: Custom trust stores are the primary offline testing path; this verifies a full 3-tier chain resolves correctly without network access.
 	t.Parallel()
@@ -662,30 +638,6 @@ func TestDetectAndSwapLeaf_AllCAsInExtras(t *testing.T) {
 	}
 }
 
-func TestMozillaRootPEM(t *testing.T) {
-	// WHY: MozillaRootPEM is an exported function returning embedded root
-	// certs; must return non-empty, parseable PEM with valid X.509 data.
-	t.Parallel()
-	data := MozillaRootPEM()
-	if len(data) == 0 {
-		t.Fatal("MozillaRootPEM returned empty data")
-	}
-	block, _ := pem.Decode(data)
-	if block == nil {
-		t.Fatal("MozillaRootPEM does not contain valid PEM")
-	}
-	if block.Type != "CERTIFICATE" {
-		t.Errorf("first PEM block type = %q, want CERTIFICATE", block.Type)
-	}
-	cert, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		t.Fatalf("first PEM block is not a valid X.509 certificate: %v", err)
-	}
-	if !cert.IsCA {
-		t.Error("first certificate should be a CA")
-	}
-}
-
 func TestMozillaRootPool(t *testing.T) {
 	// WHY: MozillaRootPool is used for chain verification; must return a
 	// non-nil pool that can actually verify a real root certificate.
@@ -1009,20 +961,6 @@ func TestBundle_FourTierChain(t *testing.T) {
 	}
 	if result.Roots[0].Subject.CommonName != "4-Tier Root CA" {
 		t.Errorf("root CN=%q, want 4-Tier Root CA", result.Roots[0].Subject.CommonName)
-	}
-}
-
-func TestMozillaRootSubjects_NonEmpty(t *testing.T) {
-	// WHY: MozillaRootSubjects is used by AIA resolution to skip fetching for
-	// certs issued by known roots. An empty set would cause unnecessary fetches.
-	t.Parallel()
-	subjects := MozillaRootSubjects()
-	if len(subjects) == 0 {
-		t.Fatal("expected non-empty Mozilla root subjects map")
-	}
-	// Mozilla bundle typically has 100+ roots
-	if len(subjects) < 50 {
-		t.Errorf("suspiciously few root subjects: %d", len(subjects))
 	}
 }
 

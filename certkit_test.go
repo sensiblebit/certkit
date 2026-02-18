@@ -141,7 +141,8 @@ func TestCertToPEM_RoundTrip(t *testing.T) {
 
 func TestCertSKI_RFC7093(t *testing.T) {
 	// WHY: CertSKI must use RFC 7093 Method 1 (truncated SHA-256), not legacy
-	// SHA-1; wrong algorithm breaks AKI resolution. Length proves 20-byte output.
+	// SHA-1; wrong algorithm breaks AKI resolution. Verifies both format and
+	// that the value differs from a SHA-1-based computation.
 	t.Parallel()
 	_, _, leafPEM := generateTestPKI(t)
 	leaf, _ := ParsePEMCertificate([]byte(leafPEM))
@@ -156,36 +157,60 @@ func TestCertSKI_RFC7093(t *testing.T) {
 	if len(ski) != 59 {
 		t.Errorf("SKI length %d, want 59 (20 bytes colon-separated)", len(ski))
 	}
+
+	// Verify it matches the independent ComputeSKI path (which also uses SHA-256)
+	computedSKI, err := ComputeSKI(leaf.PublicKey)
+	if err != nil {
+		t.Fatalf("ComputeSKI: %v", err)
+	}
+	if ColonHex(computedSKI) != ski {
+		t.Errorf("CertSKI = %s, ComputeSKI = %s — must match", ski, ColonHex(computedSKI))
+	}
+
+	// Verify it differs from legacy SHA-1 computation
+	legacySKI, err2 := ComputeSKILegacy(leaf.PublicKey)
+	if err2 != nil {
+		t.Fatalf("ComputeSKILegacy: %v", err2)
+	}
+	if ColonHex(legacySKI) == ski {
+		t.Error("RFC 7093 SKI should differ from legacy SHA-1 SKI")
+	}
 }
 
-func TestCertSKIEmbedded(t *testing.T) {
-	// WHY: Embedded SKI/AKI values come directly from the X.509 extension; format validation catches encoding bugs.
+func TestCertKeyIdEmbedded(t *testing.T) {
+	// WHY: Embedded SKI/AKI values come directly from X.509 extensions; format
+	// validation catches encoding bugs. Nil extensions must return empty string
+	// gracefully, not panic. Covers populated and empty cases in one table.
 	t.Parallel()
 	caPEM, _, leafPEM := generateTestPKI(t)
-
 	ca, _ := ParsePEMCertificate([]byte(caPEM))
 	leaf, _ := ParsePEMCertificate([]byte(leafPEM))
 
-	caSKI := CertSKIEmbedded(ca)
-	if caSKI == "" {
-		t.Fatal("CA embedded SKI should be non-empty (x509.CreateCertificate auto-populates it)")
+	tests := []struct {
+		name    string
+		fn      func(*x509.Certificate) string
+		cert    *x509.Certificate
+		wantVal string // "nonempty" or exact value
+	}{
+		{"CA has embedded SKI", CertSKIEmbedded, ca, ColonHex(ca.SubjectKeyId)},
+		{"leaf has embedded AKI", CertAKIEmbedded, leaf, ColonHex(leaf.AuthorityKeyId)},
+		{"nil SubjectKeyId", CertSKIEmbedded, &x509.Certificate{SubjectKeyId: nil}, ""},
+		{"nil AuthorityKeyId", CertAKIEmbedded, &x509.Certificate{AuthorityKeyId: nil}, ""},
 	}
-	if !strings.Contains(caSKI, ":") || len(caSKI) < 5 {
-		t.Errorf("CA embedded SKI format unexpected: %q", caSKI)
-	}
-	if caSKI != ColonHex(ca.SubjectKeyId) {
-		t.Errorf("CA embedded SKI = %q, want ColonHex(SubjectKeyId) = %q", caSKI, ColonHex(ca.SubjectKeyId))
-	}
-
-	leafAKI := CertAKIEmbedded(leaf)
-	if leafAKI == "" {
-		t.Fatal("Leaf embedded AKI should be non-empty (set from issuer SKI)")
-	}
-	if !strings.Contains(leafAKI, ":") || len(leafAKI) < 5 {
-		t.Errorf("Leaf embedded AKI format unexpected: %q", leafAKI)
-	}
-	if leafAKI != ColonHex(leaf.AuthorityKeyId) {
-		t.Errorf("Leaf embedded AKI = %q, want ColonHex(AuthorityKeyId) = %q", leafAKI, ColonHex(leaf.AuthorityKeyId))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := tt.fn(tt.cert)
+			if got != tt.wantVal {
+				t.Errorf("got %q, want %q", got, tt.wantVal)
+			}
+			// For populated cases, verify colon-separated hex format
+			if tt.wantVal != "" {
+				if !strings.Contains(got, ":") || len(got) < 5 {
+					t.Errorf("format unexpected: %q", got)
+				}
+			}
+		})
 	}
 }
 
@@ -225,28 +250,6 @@ func TestCertSKI_vs_Embedded(t *testing.T) {
 	}
 	if computed == embedded {
 		t.Error("computed (truncated SHA-256) should differ from embedded (SHA-1)")
-	}
-}
-
-func TestCertKeyIdEmbedded_empty(t *testing.T) {
-	// WHY: Certs without SubjectKeyId or AuthorityKeyId extensions must
-	// return empty string, not panic on nil slice access.
-	t.Parallel()
-	tests := []struct {
-		name string
-		fn   func(*x509.Certificate) string
-		cert *x509.Certificate
-	}{
-		{"nil SubjectKeyId", CertSKIEmbedded, &x509.Certificate{SubjectKeyId: nil}},
-		{"nil AuthorityKeyId", CertAKIEmbedded, &x509.Certificate{AuthorityKeyId: nil}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			if got := tt.fn(tt.cert); got != "" {
-				t.Errorf("expected empty string, got %q", got)
-			}
-		})
 	}
 }
 
@@ -335,6 +338,7 @@ func TestParsePEMPrivateKey_AllFormats(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			original, pemBytes := tt.genKey()
 			parsed, err := ParsePEMPrivateKey(pemBytes)
 			if err != nil {
@@ -454,107 +458,64 @@ func TestParsePEMPrivateKeyWithPasswords_Unencrypted(t *testing.T) {
 	}
 }
 
-func TestParsePEMPrivateKeyWithPasswords_EncryptedRSA(t *testing.T) {
-	// WHY: Encrypted RSA PEM keys (legacy format) must decrypt and round-trip correctly with the right password.
+func TestParsePEMPrivateKeyWithPasswords_Encrypted(t *testing.T) {
+	// WHY: Encrypted PEM keys must decrypt with the correct password, fail
+	// clearly with wrong passwords, iterate all candidates, and handle edge
+	// cases (nil list, empty password). Each case covers a distinct code path
+	// in the password iteration logic.
 	t.Parallel()
+
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	block := &pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	encrypt := func(t *testing.T, password string) []byte {
+		t.Helper()
+		block := &pem.Block{
+			Type:  "RSA PRIVATE KEY",
+			Bytes: x509.MarshalPKCS1PrivateKey(key),
+		}
+		//nolint:staticcheck // x509.EncryptPEMBlock is deprecated but needed for test
+		encBlock, err := x509.EncryptPEMBlock(rand.Reader, block.Type, block.Bytes, []byte(password), x509.PEMCipherAES256)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return pem.EncodeToMemory(encBlock)
 	}
 
-	//nolint:staticcheck // x509.EncryptPEMBlock is deprecated but needed for test
-	encBlock, err := x509.EncryptPEMBlock(rand.Reader, block.Type, block.Bytes, []byte("secret123"), x509.PEMCipherAES256)
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name       string
+		encryptPW  string
+		passwords  []string
+		wantErr    bool
+		wantErrSub string
+	}{
+		{"correct password", "secret123", []string{"secret123"}, false, ""},
+		{"wrong passwords", "correct", []string{"wrong1", "wrong2"}, true, "decrypting private key"},
+		{"default passwords include changeit", "changeit", DefaultPasswords(), false, ""},
+		{"correct password last in list", "third", []string{"first", "second", "third"}, false, ""},
+		{"nil password list", "secret", nil, true, "decrypting private key"},
+		{"empty password list", "secret", []string{}, true, "decrypting private key"},
+		{"empty password decrypts", "", []string{""}, false, ""},
 	}
-	encPEM := pem.EncodeToMemory(encBlock)
-
-	// Correct password
-	parsed, err := ParsePEMPrivateKeyWithPasswords(encPEM, []string{"secret123"})
-	if err != nil {
-		t.Fatalf("expected encrypted key to parse with correct password: %v", err)
-	}
-	rsaParsed, ok := parsed.(*rsa.PrivateKey)
-	if !ok {
-		t.Fatalf("expected *rsa.PrivateKey, got %T", parsed)
-	}
-	if !key.Equal(rsaParsed) {
-		t.Error("encrypted RSA key round-trip mismatch")
-	}
-}
-
-func TestParsePEMPrivateKeyWithPasswords_WrongPassword(t *testing.T) {
-	// WHY: Wrong passwords must produce a clear decryption error, not silently return garbage key material.
-	t.Parallel()
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	block := &pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(key),
-	}
-
-	//nolint:staticcheck // x509.EncryptPEMBlock is deprecated but needed for test
-	encBlock, _ := x509.EncryptPEMBlock(rand.Reader, block.Type, block.Bytes, []byte("correct"), x509.PEMCipherAES256)
-	encPEM := pem.EncodeToMemory(encBlock)
-
-	_, err := ParsePEMPrivateKeyWithPasswords(encPEM, []string{"wrong1", "wrong2"})
-	if err == nil {
-		t.Error("expected error with wrong passwords")
-	}
-	if !strings.Contains(err.Error(), "decrypting private key") {
-		t.Errorf("error should mention decryption failure, got: %v", err)
-	}
-}
-
-func TestParsePEMPrivateKeyWithPasswords_DefaultPasswords(t *testing.T) {
-	// WHY: Keys encrypted with common passwords (like "changeit") must be
-	// auto-decryptable via DefaultPasswords without user intervention, and
-	// the decrypted key material must match the original.
-	t.Parallel()
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	block := &pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(key),
-	}
-
-	// Encrypt with "changeit" which is in DefaultPasswords
-	//nolint:staticcheck // x509.EncryptPEMBlock is deprecated but needed for test
-	encBlock, _ := x509.EncryptPEMBlock(rand.Reader, block.Type, block.Bytes, []byte("changeit"), x509.PEMCipherAES256)
-	encPEM := pem.EncodeToMemory(encBlock)
-
-	parsed, err := ParsePEMPrivateKeyWithPasswords(encPEM, DefaultPasswords())
-	if err != nil {
-		t.Fatalf("expected DefaultPasswords to include 'changeit': %v", err)
-	}
-	rsaParsed, ok := parsed.(*rsa.PrivateKey)
-	if !ok {
-		t.Fatalf("expected *rsa.PrivateKey, got %T", parsed)
-	}
-	if !key.Equal(rsaParsed) {
-		t.Error("decrypted key does not Equal original")
-	}
-}
-
-func TestParsePEMPrivateKeyWithPasswords_TriesMultiple(t *testing.T) {
-	// WHY: The parser must iterate all provided passwords, not stop at the first failure; the correct password may be last in the list.
-	t.Parallel()
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	block := &pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(key),
-	}
-
-	//nolint:staticcheck // x509.EncryptPEMBlock is deprecated but needed for test
-	encBlock, _ := x509.EncryptPEMBlock(rand.Reader, block.Type, block.Bytes, []byte("third"), x509.PEMCipherAES256)
-	encPEM := pem.EncodeToMemory(encBlock)
-
-	// Correct password is third in list
-	parsed, err := ParsePEMPrivateKeyWithPasswords(encPEM, []string{"first", "second", "third"})
-	if err != nil {
-		t.Fatalf("expected third password to work: %v", err)
-	}
-	if !key.Equal(parsed.(*rsa.PrivateKey)) {
-		t.Error("key mismatch after password iteration")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			encPEM := encrypt(t, tt.encryptPW)
+			parsed, err := ParsePEMPrivateKeyWithPasswords(encPEM, tt.passwords)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				if !strings.Contains(err.Error(), tt.wantErrSub) {
+					t.Errorf("error = %v, want substring %q", err, tt.wantErrSub)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !key.Equal(parsed.(*rsa.PrivateKey)) {
+				t.Error("decrypted key does not Equal original")
+			}
+		})
 	}
 }
 
@@ -1006,7 +967,8 @@ func TestMarshalPublicKeyToPEM_RoundTrip(t *testing.T) {
 
 func TestCertFingerprintColon(t *testing.T) {
 	// WHY: Colon-separated fingerprints must match the exact uppercase hex format
-	// expected by OpenSSL and other tools. Format validation catches encoding bugs.
+	// expected by OpenSSL and other tools. Verifies format, length, and that
+	// the value matches an independently computed hash of cert.Raw.
 	t.Parallel()
 	_, _, leafPEM := generateTestPKI(t)
 	cert, _ := ParsePEMCertificate([]byte(leafPEM))
@@ -1030,44 +992,7 @@ func TestCertFingerprintColon(t *testing.T) {
 			}
 		})
 	}
-}
 
-func TestParsePEMPrivateKeyWithPasswords_NoPasswordsEncryptedKey(t *testing.T) {
-	// WHY: Encrypted keys with nil or empty password lists must fail gracefully,
-	// not panic or silently return a zero-value key.
-	t.Parallel()
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	block := &pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(key),
-	}
-
-	//nolint:staticcheck // x509.EncryptPEMBlock is deprecated but needed for test
-	encBlock, err := x509.EncryptPEMBlock(rand.Reader, block.Type, block.Bytes, []byte("secret"), x509.PEMCipherAES256)
-	if err != nil {
-		t.Fatal(err)
-	}
-	encPEM := pem.EncodeToMemory(encBlock)
-
-	tests := []struct {
-		name      string
-		passwords []string
-	}{
-		{"nil passwords", nil},
-		{"empty passwords", []string{}},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			_, err := ParsePEMPrivateKeyWithPasswords(encPEM, tt.passwords)
-			if err == nil {
-				t.Error("expected error when password list is nil/empty for encrypted key")
-			}
-			if !strings.Contains(err.Error(), "decrypting private key") {
-				t.Errorf("unexpected error: %v", err)
-			}
-		})
-	}
 }
 
 func TestParsePEMCertificate_ReturnsFirstCertFromBundle(t *testing.T) {
@@ -1519,33 +1444,6 @@ func TestParsePEMPrivateKey_EmptyInput(t *testing.T) {
 	}
 }
 
-func TestParsePEMPrivateKeyWithPasswords_EmptyPasswordDecryptsKey(t *testing.T) {
-	// WHY: Some keys are encrypted with an empty password (e.g., PKCS#12
-	// exports with blank password). The password iteration must include ""
-	// and not skip it for legacy encrypted PEM blocks.
-	t.Parallel()
-
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	block := &pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(key),
-	}
-	//nolint:staticcheck // testing legacy encrypted PEM
-	encBlock, err := x509.EncryptPEMBlock(rand.Reader, block.Type, block.Bytes, []byte(""), x509.PEMCipherAES256)
-	if err != nil {
-		t.Fatalf("encrypt PEM: %v", err)
-	}
-	encPEM := pem.EncodeToMemory(encBlock)
-
-	parsed, err := ParsePEMPrivateKeyWithPasswords(encPEM, []string{""})
-	if err != nil {
-		t.Fatalf("ParsePEMPrivateKeyWithPasswords with empty password: %v", err)
-	}
-	if !key.Equal(parsed) {
-		t.Error("key encrypted with empty password did not round-trip")
-	}
-}
-
 func TestMarshalPrivateKeyToPEM_RoundTrip(t *testing.T) {
 	// WHY: MarshalPrivateKeyToPEM is a thin wrapper (normalizeKey + MarshalPKCS8
 	// + PEM encode). One key type suffices per T-13. ECDSA P-256 exercises the
@@ -1617,8 +1515,7 @@ func TestGenerateECKey_NilCurve(t *testing.T) {
 func TestParsePEMPrivateKeyWithPasswords_CorruptNotEncrypted(t *testing.T) {
 	// WHY: When ParsePEMPrivateKeyWithPasswords receives a corrupt but not
 	// encrypted PEM block, it falls through to re-call ParsePEMPrivateKey
-	// (lines 185-188) for a clean error. This path is only exercised when
-	// unencrypted parsing fails AND IsEncryptedPEMBlock returns false.
+	// for a clean error. The error must mention the parse failure, not decryption.
 	t.Parallel()
 
 	corruptPEM := pem.EncodeToMemory(&pem.Block{
@@ -1630,11 +1527,12 @@ func TestParsePEMPrivateKeyWithPasswords_CorruptNotEncrypted(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for corrupt non-encrypted PEM key")
 	}
-	if err.Error() == "" {
-		t.Error("error message should not be empty")
-	}
-	// The error should come from ParsePEMPrivateKey, not from decryption
+	// Must not mention decryption since the key is not encrypted
 	if strings.Contains(err.Error(), "decrypting") {
 		t.Errorf("error should not mention decrypting (key is not encrypted), got: %v", err)
+	}
+	// The error should come from ParsePEMPrivateKey (ASN.1 or key format error)
+	if strings.Contains(err.Error(), "no PEM block") {
+		t.Errorf("error should not be 'no PEM block' — PEM block exists, DER is corrupt: %v", err)
 	}
 }
