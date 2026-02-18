@@ -374,19 +374,6 @@ func newRSALeafWithIPSANs(t *testing.T, ca testCA, cn string, dnsNames []string,
 	return testLeaf{cert: cert, certPEM: certPEM, certDER: certDER, key: key, keyPEM: keyPEM}
 }
 
-// rsaKeyPEM returns PEM-encoded RSA private key bytes.
-func rsaKeyPEM(t *testing.T) []byte {
-	t.Helper()
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("generate RSA key: %v", err)
-	}
-	return pem.EncodeToMemory(&pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(key),
-	})
-}
-
 // keysEqual compares two private keys by extracting their public keys and using
 // the Equal method. Works across all supported key types (RSA, ECDSA, Ed25519).
 func keysEqual(t *testing.T, a, b any) bool {

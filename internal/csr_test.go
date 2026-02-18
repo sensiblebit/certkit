@@ -59,6 +59,12 @@ func TestGenerateCSRFiles_FromTemplate(t *testing.T) {
 	if csr.Subject.CommonName != "template.example.com" {
 		t.Errorf("CSR CN=%q, want template.example.com", csr.Subject.CommonName)
 	}
+	if len(csr.DNSNames) != 1 || csr.DNSNames[0] != "template.example.com" {
+		t.Errorf("CSR DNSNames=%v, want [template.example.com]", csr.DNSNames)
+	}
+	if len(csr.IPAddresses) != 1 || csr.IPAddresses[0].String() != "10.0.0.1" {
+		t.Errorf("CSR IPAddresses=%v, want [10.0.0.1]", csr.IPAddresses)
+	}
 
 	// Check key file was generated
 	keyData, err := os.ReadFile(filepath.Join(outDir, "key.pem"))
@@ -115,6 +121,9 @@ func TestGenerateCSRFiles_FromCert(t *testing.T) {
 	if csr.Subject.CommonName != "cert-template.example.com" {
 		t.Errorf("CSR CN=%q, want cert-template.example.com", csr.Subject.CommonName)
 	}
+	if len(csr.DNSNames) != 1 || csr.DNSNames[0] != "cert-template.example.com" {
+		t.Errorf("CSR DNSNames=%v, want [cert-template.example.com]", csr.DNSNames)
+	}
 }
 
 func TestGenerateCSRFiles_FromCSR(t *testing.T) {
@@ -156,6 +165,9 @@ func TestGenerateCSRFiles_FromCSR(t *testing.T) {
 	}
 	if csr.Subject.CommonName != "csr-source.example.com" {
 		t.Errorf("CSR CN=%q, want csr-source.example.com", csr.Subject.CommonName)
+	}
+	if len(csr.DNSNames) != 1 || csr.DNSNames[0] != "csr-source.example.com" {
+		t.Errorf("CSR DNSNames=%v, want [csr-source.example.com]", csr.DNSNames)
 	}
 }
 

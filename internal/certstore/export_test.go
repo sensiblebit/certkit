@@ -475,9 +475,15 @@ func TestGenerateCSR_RoundTrip(t *testing.T) {
 		t.Errorf("CSR organization = %v, want [TestOrg]", csr.Subject.Organization)
 	}
 
-	// Verify DNS names
-	if len(csr.DNSNames) != 2 {
-		t.Errorf("CSR DNS names = %v, want 2 entries", csr.DNSNames)
+	// Verify DNS name values, not just count
+	wantDNS := []string{"csr.example.com", "api.example.com"}
+	if len(csr.DNSNames) != len(wantDNS) {
+		t.Fatalf("CSR DNS names count = %d, want %d", len(csr.DNSNames), len(wantDNS))
+	}
+	for i, got := range csr.DNSNames {
+		if got != wantDNS[i] {
+			t.Errorf("DNSNames[%d] = %q, want %q", i, got, wantDNS[i])
+		}
 	}
 
 	// Verify CSR JSON is valid and reports correct algorithm

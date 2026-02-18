@@ -51,12 +51,23 @@ func TestProcessData_PEMCertificate(t *testing.T) {
 }
 
 func TestProcessData_PEMPrivateKey(t *testing.T) {
-	// WHY: Standalone PEM private key files must be ingested with correct type.
+	// WHY: Standalone PEM private key files must be ingested with correct type
+	// and key material equality — a bug that corrupts key material during
+	// PEM-to-store normalization must be caught.
 	t.Parallel()
-	store := NewMemStore()
 
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	})
+
+	store := NewMemStore()
 	if err := ProcessData(ProcessInput{
-		Data:    rsaKeyPEM(t),
+		Data:    keyPEM,
 		Path:    "key.pem",
 		Handler: store,
 	}); err != nil {
@@ -70,8 +81,8 @@ func TestProcessData_PEMPrivateKey(t *testing.T) {
 		if rec.KeyType != "RSA" {
 			t.Errorf("KeyType = %q, want RSA", rec.KeyType)
 		}
-		if _, ok := rec.Key.(*rsa.PrivateKey); !ok {
-			t.Errorf("stored key type = %T, want *rsa.PrivateKey", rec.Key)
+		if !keysEqual(t, key, rec.Key) {
+			t.Error("stored key does not Equal original RSA key material")
 		}
 	}
 }
@@ -232,39 +243,73 @@ func TestProcessData_PKCS7(t *testing.T) {
 	}
 }
 
-func TestProcessData_PKCS12_CorrectPassword(t *testing.T) {
-	// WHY: PKCS#12 ingestion must extract leaf, CA cert, and key with correct
-	// metadata. One key type suffices since multi-key-type dispatch is in the
-	// PKCS#12 library, not certkit.
+func TestProcessData_EncryptedContainer_CorrectPassword(t *testing.T) {
+	// WHY: PKCS#12 and JKS ingestion must extract leaf, CA cert, and key with
+	// correct metadata and key material equality. Consolidated per T-12: same
+	// assertion pattern, different container formats. One key type suffices
+	// since multi-key-type dispatch is in the container libraries, not certkit.
 	t.Parallel()
 
 	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "p12-rsa.example.com", []string{"p12-rsa.example.com"})
-	p12Data := newPKCS12Bundle(t, leaf, ca, "changeit")
-	store := NewMemStore()
 
-	if err := ProcessData(ProcessInput{
-		Data:      p12Data,
-		Path:      "bundle.p12",
-		Passwords: []string{"changeit"},
-		Handler:   store,
-	}); err != nil {
-		t.Fatalf("ProcessData: %v", err)
+	tests := []struct {
+		name     string
+		cn       string
+		path     string
+		password string
+		makeData func(t *testing.T, leaf testLeaf, ca testCA, password string) []byte
+	}{
+		{
+			name:     "PKCS#12",
+			cn:       "p12-rsa.example.com",
+			path:     "bundle.p12",
+			password: "changeit",
+			makeData: func(t *testing.T, leaf testLeaf, ca testCA, password string) []byte {
+				return newPKCS12Bundle(t, leaf, ca, password)
+			},
+		},
+		{
+			name:     "JKS",
+			cn:       "jks-rsa.example.com",
+			path:     "store.jks",
+			password: "changeit",
+			makeData: func(t *testing.T, leaf testLeaf, ca testCA, password string) []byte {
+				return newJKSBundle(t, leaf, ca, password)
+			},
+		},
 	}
 
-	if len(store.AllCerts()) != 2 {
-		t.Errorf("expected 2 certs from PKCS#12 (leaf + CA), got %d", len(store.AllCerts()))
-	}
-	if len(store.AllKeys()) != 1 {
-		t.Errorf("expected 1 key from PKCS#12, got %d", len(store.AllKeys()))
-	}
-	for _, rec := range store.AllKeys() {
-		if rec.KeyType != "RSA" {
-			t.Errorf("KeyType = %q, want RSA", rec.KeyType)
-		}
-		if !keysEqual(t, leaf.key, rec.Key) {
-			t.Error("stored PKCS#12 key does not Equal original key material")
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			leaf := newRSALeaf(t, ca, tt.cn, []string{tt.cn})
+			data := tt.makeData(t, leaf, ca, tt.password)
+			store := NewMemStore()
+
+			if err := ProcessData(ProcessInput{
+				Data:      data,
+				Path:      tt.path,
+				Passwords: []string{tt.password},
+				Handler:   store,
+			}); err != nil {
+				t.Fatalf("ProcessData: %v", err)
+			}
+
+			if len(store.AllCerts()) != 2 {
+				t.Errorf("expected 2 certs (leaf + CA), got %d", len(store.AllCerts()))
+			}
+			if len(store.AllKeys()) != 1 {
+				t.Errorf("expected 1 key, got %d", len(store.AllKeys()))
+			}
+			for _, rec := range store.AllKeys() {
+				if rec.KeyType != "RSA" {
+					t.Errorf("KeyType = %q, want RSA", rec.KeyType)
+				}
+				if !keysEqual(t, leaf.key, rec.Key) {
+					t.Errorf("stored %s key does not Equal original key material", tt.name)
+				}
+			}
+		})
 	}
 }
 
@@ -323,42 +368,6 @@ func TestProcessData_EncryptedContainer_WrongPassword(t *testing.T) {
 				t.Errorf("expected 0 keys with wrong password, got %d", len(store.AllKeys()))
 			}
 		})
-	}
-}
-
-func TestProcessData_JKS(t *testing.T) {
-	// WHY: JKS ingestion must extract leaf, CA cert, and key with correct
-	// metadata. One key type suffices since multi-key-type dispatch is in the
-	// JKS library, not certkit.
-	t.Parallel()
-
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "jks-rsa.example.com", []string{"jks-rsa.example.com"})
-	jksData := newJKSBundle(t, leaf, ca, "changeit")
-	store := NewMemStore()
-
-	if err := ProcessData(ProcessInput{
-		Data:      jksData,
-		Path:      "store.jks",
-		Passwords: []string{"changeit"},
-		Handler:   store,
-	}); err != nil {
-		t.Fatalf("ProcessData: %v", err)
-	}
-
-	if len(store.AllCerts()) != 2 {
-		t.Errorf("expected 2 certs from JKS (leaf + CA), got %d", len(store.AllCerts()))
-	}
-	if len(store.AllKeys()) != 1 {
-		t.Errorf("expected 1 key from JKS, got %d", len(store.AllKeys()))
-	}
-	for _, rec := range store.AllKeys() {
-		if rec.KeyType != "RSA" {
-			t.Errorf("KeyType = %q, want RSA", rec.KeyType)
-		}
-		if !keysEqual(t, leaf.key, rec.Key) {
-			t.Error("stored JKS key does not Equal original key material")
-		}
 	}
 }
 

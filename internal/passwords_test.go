@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/sensiblebit/certkit"
 )
 
 func TestProcessPasswords_FromFile(t *testing.T) {
@@ -22,10 +24,22 @@ func TestProcessPasswords_FromFile(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	// Verify file passwords are present
 	for _, want := range []string{"filepass1", "filepass2"} {
 		if !slices.Contains(result, want) {
 			t.Errorf("expected password %q from file to be present", want)
 		}
+	}
+	// Verify defaults are also present (DeduplicatePasswords prepends them)
+	for _, want := range certkit.DefaultPasswords() {
+		if !slices.Contains(result, want) {
+			t.Errorf("expected default password %q to be present", want)
+		}
+	}
+	// Verify total count: 4 defaults + 2 file passwords = 6
+	wantLen := len(certkit.DefaultPasswords()) + 2
+	if len(result) != wantLen {
+		t.Errorf("result length = %d, want %d (defaults + file passwords)", len(result), wantLen)
 	}
 }
 

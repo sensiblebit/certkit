@@ -539,6 +539,8 @@ func TestProcessArchive_TotalSizeLimit(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "totalsize.example.com", []string{"totalsize.example.com"}, nil)
 
+	// Both entries use identical data so the assertion is order-independent
+	// despite Go's non-deterministic map iteration.
 	files := map[string][]byte{
 		"a.pem": leaf.certPEM,
 		"b.pem": leaf.certPEM,
