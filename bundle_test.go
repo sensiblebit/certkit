@@ -17,69 +17,53 @@ import (
 	"time"
 )
 
-func TestBundle_customRoots(t *testing.T) {
-	// WHY: Custom trust stores are the primary offline testing path; this verifies a full 3-tier chain resolves correctly without network access.
+func TestBundle_ChainDepths(t *testing.T) {
+	// WHY: Custom trust stores are the primary offline testing path. This
+	// verifies chains of varying depth (2-tier through 4-tier) all resolve
+	// correctly without network access. Two-tier (leaf+root, no intermediate)
+	// is the simplest valid chain. Real-world PKI often has multiple
+	// intermediates (root -> int1 -> int2 -> leaf).
 	t.Parallel()
-	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	caTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "Test Root CA"},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
+	tests := []struct {
+		name              string
+		depth             int
+		wantIntermediates int
+		wantRootCN        string
+	}{
+		{name: "two-tier", depth: 2, wantIntermediates: 0, wantRootCN: "Chain Root CA"},
+		{name: "three-tier", depth: 3, wantIntermediates: 1, wantRootCN: "Chain Root CA"},
+		{name: "four-tier", depth: 4, wantIntermediates: 2, wantRootCN: "Chain Root CA"},
 	}
-	caBytes, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
-	caCert, _ := x509.ParseCertificate(caBytes)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			root, intermediates, leaf := buildChain(t, tt.depth)
 
-	intKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	intTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(2),
-		Subject:               pkix.Name{CommonName: "Test Intermediate CA"},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-	}
-	intBytes, _ := x509.CreateCertificate(rand.Reader, intTemplate, caCert, &intKey.PublicKey, caKey)
-	intCert, _ := x509.ParseCertificate(intBytes)
+			opts := BundleOptions{
+				FetchAIA:    false,
+				TrustStore:  "custom",
+				CustomRoots: []*x509.Certificate{root},
+				Verify:      true,
+			}
+			if len(intermediates) > 0 {
+				opts.ExtraIntermediates = intermediates
+			}
 
-	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	leafTemplate := &x509.Certificate{
-		SerialNumber: big.NewInt(3),
-		Subject:      pkix.Name{CommonName: "leaf.example.com"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-	leafBytes, _ := x509.CreateCertificate(rand.Reader, leafTemplate, intCert, &leafKey.PublicKey, intKey)
-	leafCert, _ := x509.ParseCertificate(leafBytes)
+			result, err := Bundle(context.Background(), leaf, opts)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	result, err := Bundle(context.Background(), leafCert, BundleOptions{
-		ExtraIntermediates: []*x509.Certificate{intCert},
-		FetchAIA:           false,
-		TrustStore:         "custom",
-		CustomRoots:        []*x509.Certificate{caCert},
-		Verify:             true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(result.Intermediates) != 1 {
-		t.Errorf("expected 1 intermediate, got %d", len(result.Intermediates))
-	}
-	if result.Intermediates[0].Subject.CommonName != "Test Intermediate CA" {
-		t.Errorf("intermediate CN=%q", result.Intermediates[0].Subject.CommonName)
-	}
-	if len(result.Roots) != 1 {
-		t.Errorf("expected 1 root, got %d", len(result.Roots))
-	}
-	if result.Roots[0].Subject.CommonName != "Test Root CA" {
-		t.Errorf("root CN=%q", result.Roots[0].Subject.CommonName)
+			if len(result.Intermediates) != tt.wantIntermediates {
+				t.Errorf("intermediates: got %d, want %d", len(result.Intermediates), tt.wantIntermediates)
+			}
+			if len(result.Roots) != 1 {
+				t.Errorf("roots: got %d, want 1", len(result.Roots))
+			}
+			if result.Roots[0].Subject.CommonName != tt.wantRootCN {
+				t.Errorf("root CN=%q, want %q", result.Roots[0].Subject.CommonName, tt.wantRootCN)
+			}
+		})
 	}
 }
 
@@ -126,56 +110,6 @@ func TestBundle_mozillaRoots(t *testing.T) {
 		if !inter.IsCA {
 			t.Error("intermediate should be a CA")
 		}
-	}
-}
-
-func TestBundle_twoCertChain(t *testing.T) {
-	// WHY: Two-tier chain (leaf+root, no intermediate) is the simplest valid chain;
-	// verifies Bundle works without intermediates.
-	t.Parallel()
-	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	caTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "Two-Tier CA"},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-	}
-	caBytes, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
-	caCert, _ := x509.ParseCertificate(caBytes)
-
-	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	leafTemplate := &x509.Certificate{
-		SerialNumber: big.NewInt(2),
-		Subject:      pkix.Name{CommonName: "two-tier-leaf.example.com"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-	leafBytes, _ := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
-	leafCert, _ := x509.ParseCertificate(leafBytes)
-
-	result, err := Bundle(context.Background(), leafCert, BundleOptions{
-		FetchAIA:    false,
-		TrustStore:  "custom",
-		CustomRoots: []*x509.Certificate{caCert},
-		Verify:      true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if len(result.Intermediates) != 0 {
-		t.Errorf("expected 0 intermediates, got %d", len(result.Intermediates))
-	}
-	if len(result.Roots) != 1 {
-		t.Errorf("expected 1 root, got %d", len(result.Roots))
-	}
-	if result.Roots[0].Subject.CommonName != "Two-Tier CA" {
-		t.Errorf("root CN=%q", result.Roots[0].Subject.CommonName)
 	}
 }
 
@@ -762,82 +696,6 @@ func TestBundle_CustomTrustStoreNilRoots(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "chain verification failed") {
 		t.Errorf("error should mention chain verification failed, got: %v", err)
-	}
-}
-
-func TestBundle_FourTierChain(t *testing.T) {
-	// WHY: Real-world PKI often has multiple intermediates (root -> int1 -> int2 -> leaf).
-	// Only a 3-tier chain was tested; this verifies multi-intermediate chains resolve correctly.
-	t.Parallel()
-	rootKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	rootTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "4-Tier Root CA"},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-	}
-	rootDER, _ := x509.CreateCertificate(rand.Reader, rootTmpl, rootTmpl, &rootKey.PublicKey, rootKey)
-	rootCert, _ := x509.ParseCertificate(rootDER)
-
-	int1Key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	int1Tmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(2),
-		Subject:               pkix.Name{CommonName: "Intermediate CA 1"},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-	}
-	int1DER, _ := x509.CreateCertificate(rand.Reader, int1Tmpl, rootCert, &int1Key.PublicKey, rootKey)
-	int1Cert, _ := x509.ParseCertificate(int1DER)
-
-	int2Key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	int2Tmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(3),
-		Subject:               pkix.Name{CommonName: "Intermediate CA 2"},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-	}
-	int2DER, _ := x509.CreateCertificate(rand.Reader, int2Tmpl, int1Cert, &int2Key.PublicKey, int1Key)
-	int2Cert, _ := x509.ParseCertificate(int2DER)
-
-	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	leafTmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(4),
-		Subject:      pkix.Name{CommonName: "four-tier-leaf.example.com"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-	leafDER, _ := x509.CreateCertificate(rand.Reader, leafTmpl, int2Cert, &leafKey.PublicKey, int2Key)
-	leafCert, _ := x509.ParseCertificate(leafDER)
-
-	result, err := Bundle(context.Background(), leafCert, BundleOptions{
-		ExtraIntermediates: []*x509.Certificate{int1Cert, int2Cert},
-		FetchAIA:           false,
-		TrustStore:         "custom",
-		CustomRoots:        []*x509.Certificate{rootCert},
-		Verify:             true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(result.Intermediates) != 2 {
-		t.Errorf("expected 2 intermediates, got %d", len(result.Intermediates))
-	}
-	if len(result.Roots) != 1 {
-		t.Errorf("expected 1 root, got %d", len(result.Roots))
-	}
-	if result.Roots[0].Subject.CommonName != "4-Tier Root CA" {
-		t.Errorf("root CN=%q, want 4-Tier Root CA", result.Roots[0].Subject.CommonName)
 	}
 }
 

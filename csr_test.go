@@ -153,6 +153,14 @@ func TestClassifyHosts(t *testing.T) {
 			nil,
 			nil, nil, nil, nil,
 		},
+		{
+			// WHY: url.Parse("example.com/path") produces an empty Scheme and Host, so
+			// ClassifyHosts must fall through to DNS classification instead of URI.
+			// A bug here would put bare hostnames with paths into the URI SAN extension.
+			"URL without scheme",
+			[]string{"example.com/path"},
+			[]string{"example.com/path"}, nil, nil, nil,
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -199,30 +207,6 @@ func TestClassifyHosts(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestClassifyHosts_URLWithoutScheme(t *testing.T) {
-	// WHY: url.Parse("example.com/path") produces an empty Scheme and Host, so
-	// ClassifyHosts must fall through to DNS classification instead of URI.
-	// A bug here would put bare hostnames with paths into the URI SAN extension.
-	t.Parallel()
-	dns, ips, uris, emails := ClassifyHosts([]string{"example.com/path"})
-
-	if len(uris) != 0 {
-		t.Errorf("expected 0 URIs for schemeless URL, got %d: %v", len(uris), uris)
-	}
-	if len(ips) != 0 {
-		t.Errorf("expected 0 IPs, got %d", len(ips))
-	}
-	if len(emails) != 0 {
-		t.Errorf("expected 0 emails, got %d", len(emails))
-	}
-	if len(dns) != 1 {
-		t.Fatalf("expected 1 DNS name, got %d", len(dns))
-	}
-	if dns[0] != "example.com/path" {
-		t.Errorf("DNS[0]=%q, want %q", dns[0], "example.com/path")
 	}
 }
 

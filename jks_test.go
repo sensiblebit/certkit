@@ -187,62 +187,73 @@ func buildJKSMixed(t *testing.T, password string) []byte {
 	return buf.Bytes()
 }
 
-func TestDecodeJKS_TrustedCertEntry(t *testing.T) {
-	// WHY: JKS TrustedCertificateEntry is a cert-only entry (no key); must decode to exactly one cert and zero keys.
+func TestDecodeJKS_EntryTypes(t *testing.T) {
+	// WHY: JKS files contain different entry types — TrustedCertificateEntry (cert-only,
+	// no key), PrivateKeyEntry (key + cert chain), or a mix of both. The decoder must
+	// handle each type correctly: extract the right number of certs and keys, preserve
+	// certificate identity (CN), and return the correct key type.
 	t.Parallel()
-	data := buildJKSTrustedCert(t, "changeit")
 
-	certs, keys, err := DecodeJKS(data, []string{"changeit"})
-	if err != nil {
-		t.Fatalf("DecodeJKS: %v", err)
+	tests := []struct {
+		name        string
+		build       func(*testing.T, string) []byte
+		password    string
+		wantCerts   int
+		wantKeys    int
+		wantLeafCN  string // optional: verify CN of first cert
+		wantKeyType string // optional: verify key type (e.g. "*rsa.PrivateKey")
+	}{
+		{
+			name:       "TrustedCertEntry",
+			build:      buildJKSTrustedCert,
+			password:   "changeit",
+			wantCerts:  1,
+			wantKeys:   0,
+			wantLeafCN: "jks-trusted.example.com",
+		},
+		{
+			name:        "PrivateKeyEntry",
+			build:       buildJKSPrivateKey,
+			password:    "changeit",
+			wantCerts:   2, // leaf + CA
+			wantKeys:    1,
+			wantKeyType: "*rsa.PrivateKey",
+		},
+		{
+			name:      "MixedEntries",
+			build:     buildJKSMixed,
+			password:  "changeit",
+			wantCerts: 2, // 1 trusted cert + 1 leaf from private key chain
+			wantKeys:  1,
+		},
 	}
-	if len(certs) != 1 {
-		t.Errorf("expected 1 cert, got %d", len(certs))
-	}
-	if len(keys) != 0 {
-		t.Errorf("expected 0 keys, got %d", len(keys))
-	}
-	if certs[0].Subject.CommonName != "jks-trusted.example.com" {
-		t.Errorf("CN=%q, want jks-trusted.example.com", certs[0].Subject.CommonName)
-	}
-}
 
-func TestDecodeJKS_PrivateKeyEntry(t *testing.T) {
-	// WHY: JKS PrivateKeyEntry bundles a key with its cert chain; must extract both the key and all chain certs.
-	t.Parallel()
-	data := buildJKSPrivateKey(t, "changeit")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			data := tt.build(t, tt.password)
 
-	certs, keys, err := DecodeJKS(data, []string{"changeit"})
-	if err != nil {
-		t.Fatalf("DecodeJKS: %v", err)
-	}
-	// 2 certs in chain: leaf + CA
-	if len(certs) != 2 {
-		t.Errorf("expected 2 certs, got %d", len(certs))
-	}
-	if len(keys) != 1 {
-		t.Errorf("expected 1 key, got %d", len(keys))
-	}
-	if _, ok := keys[0].(*rsa.PrivateKey); !ok {
-		t.Fatalf("expected *rsa.PrivateKey, got %T", keys[0])
-	}
-}
-
-func TestDecodeJKS_MixedEntries(t *testing.T) {
-	// WHY: Real JKS files often mix trusted certs and private key entries; the decoder must aggregate certs from both entry types.
-	t.Parallel()
-	data := buildJKSMixed(t, "changeit")
-
-	certs, keys, err := DecodeJKS(data, []string{"changeit"})
-	if err != nil {
-		t.Fatalf("DecodeJKS: %v", err)
-	}
-	// 1 trusted cert + 1 leaf from private key chain = 2 certs
-	if len(certs) != 2 {
-		t.Errorf("expected 2 certs, got %d", len(certs))
-	}
-	if len(keys) != 1 {
-		t.Errorf("expected 1 key, got %d", len(keys))
+			certs, keys, err := DecodeJKS(data, []string{tt.password})
+			if err != nil {
+				t.Fatalf("DecodeJKS: %v", err)
+			}
+			if len(certs) != tt.wantCerts {
+				t.Errorf("certs: got %d, want %d", len(certs), tt.wantCerts)
+			}
+			if len(keys) != tt.wantKeys {
+				t.Errorf("keys: got %d, want %d", len(keys), tt.wantKeys)
+			}
+			if tt.wantLeafCN != "" && len(certs) > 0 {
+				if certs[0].Subject.CommonName != tt.wantLeafCN {
+					t.Errorf("CN=%q, want %q", certs[0].Subject.CommonName, tt.wantLeafCN)
+				}
+			}
+			if tt.wantKeyType != "" && len(keys) > 0 {
+				if _, ok := keys[0].(*rsa.PrivateKey); !ok {
+					t.Errorf("key type: got %T, want %s", keys[0], tt.wantKeyType)
+				}
+			}
+		})
 	}
 }
 

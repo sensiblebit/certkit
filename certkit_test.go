@@ -433,59 +433,36 @@ func TestParsePEMPrivateKey_unsupportedBlockType(t *testing.T) {
 	}
 }
 
-func TestKeyAlgorithmName(t *testing.T) {
-	// WHY: KeyAlgorithmName is used in display output and JSON; returning "unknown" for a supported type would confuse users.
+func TestAlgorithmName(t *testing.T) {
+	// WHY: KeyAlgorithmName and PublicKeyAlgorithmName are used in display output and JSON;
+	// returning "unknown" for a supported type would confuse users. Both must handle all
+	// supported key types including nil and unsupported inputs.
 	t.Parallel()
 	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	_, edKey, _ := ed25519.GenerateKey(rand.Reader)
+	edPub, edPriv, _ := ed25519.GenerateKey(rand.Reader)
 
 	tests := []struct {
 		name     string
-		key      any
-		expected string
+		privKey  any
+		pubKey   any
+		wantPriv string
+		wantPub  string
 	}{
-		{"ECDSA", ecKey, "ECDSA"},
-		{"RSA", rsaKey, "RSA"},
-		{"Ed25519", edKey, "Ed25519"},
-		{"Ed25519_pointer", &edKey, "Ed25519"},
-		{"nil", nil, "unknown"},
-		{"unsupported", struct{}{}, "unknown"},
+		{"ECDSA", ecKey, &ecKey.PublicKey, "ECDSA", "ECDSA"},
+		{"RSA", rsaKey, &rsaKey.PublicKey, "RSA", "RSA"},
+		{"Ed25519", edPriv, edPub, "Ed25519", "Ed25519"},
+		{"Ed25519_pointer", &edPriv, &edPub, "Ed25519", "Ed25519"},
+		{"nil", nil, nil, "unknown", "unknown"},
+		{"unsupported", struct{}{}, struct{}{}, "unknown", "unknown"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := KeyAlgorithmName(tt.key)
-			if got != tt.expected {
-				t.Errorf("KeyAlgorithmName(%T) = %q, want %q", tt.key, got, tt.expected)
+			if got := KeyAlgorithmName(tt.privKey); got != tt.wantPriv {
+				t.Errorf("KeyAlgorithmName(%T) = %q, want %q", tt.privKey, got, tt.wantPriv)
 			}
-		})
-	}
-}
-
-func TestPublicKeyAlgorithmName(t *testing.T) {
-	// WHY: PublicKeyAlgorithmName mirrors KeyAlgorithmName for public keys; must handle all supported types including nil and unsupported.
-	t.Parallel()
-	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	edPub, _, _ := ed25519.GenerateKey(rand.Reader)
-
-	tests := []struct {
-		name     string
-		key      any
-		expected string
-	}{
-		{"ECDSA", &ecKey.PublicKey, "ECDSA"},
-		{"RSA", &rsaKey.PublicKey, "RSA"},
-		{"Ed25519", edPub, "Ed25519"},
-		{"Ed25519_pointer", &edPub, "Ed25519"},
-		{"nil", nil, "unknown"},
-		{"unsupported", struct{}{}, "unknown"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := PublicKeyAlgorithmName(tt.key)
-			if got != tt.expected {
-				t.Errorf("PublicKeyAlgorithmName(%T) = %q, want %q", tt.key, got, tt.expected)
+			if got := PublicKeyAlgorithmName(tt.pubKey); got != tt.wantPub {
+				t.Errorf("PublicKeyAlgorithmName(%T) = %q, want %q", tt.pubKey, got, tt.wantPub)
 			}
 		})
 	}
@@ -867,109 +844,121 @@ func TestParsePEMPrivateKeyWithPasswords_OpenSSH_Encrypted(t *testing.T) {
 	}
 }
 
-// --- ParseCertificatesAny tests ---
-
-func TestParseCertificatesAny_DER(t *testing.T) {
-	// WHY: DER is the most common AIA response format (.cer files).
-	// Must return exactly one certificate with correct identity.
+func TestParseCertificatesAny(t *testing.T) {
+	// WHY: ParseCertificatesAny must handle every format seen in the wild:
+	// DER (.cer files from AIA responses), PEM bundles (chain files with
+	// multiple certs), single-cert PKCS#7 SignedData (.p7c from DISA/FPKI
+	// AIA endpoints — the bug that motivated this function), multi-cert
+	// PKCS#7 (DISA issuedto/*.p7c, FPKI caCertsIssuedTo*.p7c with
+	// cross-certificates). Invalid data must produce a clear error
+	// mentioning all three formats tried, not a panic or misleading
+	// single-format error.
 	t.Parallel()
-	_, _, leafPEM := generateTestPKI(t)
-	block, _ := pem.Decode([]byte(leafPEM))
 
-	certs, err := ParseCertificatesAny(block.Bytes)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(certs) != 1 {
-		t.Fatalf("expected 1 cert, got %d", len(certs))
-	}
-	if certs[0].Subject.CommonName != "test.example.com" {
-		t.Errorf("expected CN 'test.example.com', got %q", certs[0].Subject.CommonName)
-	}
-}
-
-func TestParseCertificatesAny_PEM(t *testing.T) {
-	// WHY: PEM bundles can contain multiple certificates (chain files).
-	// Must parse all certs, not just the first.
-	t.Parallel()
-	caPEM, interPEM, leafPEM := generateTestPKI(t)
-	bundle := leafPEM + interPEM + caPEM
-
-	certs, err := ParseCertificatesAny([]byte(bundle))
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(certs) != 3 {
-		t.Fatalf("expected 3 certs from PEM bundle, got %d", len(certs))
-	}
-	if certs[0].Subject.CommonName != "test.example.com" {
-		t.Errorf("first cert should be leaf, got CN %q", certs[0].Subject.CommonName)
-	}
-}
-
-func TestParseCertificatesAny_PKCS7Single(t *testing.T) {
-	// WHY: AIA endpoints (e.g., DISA, FPKI) commonly serve .p7c files
-	// containing a single certificate in PKCS#7 SignedData. This was
-	// previously unparseable — the bug that motivated ParseCertificatesAny.
-	t.Parallel()
-	_, _, leafPEM := generateTestPKI(t)
-	block, _ := pem.Decode([]byte(leafPEM))
-	cert, _ := x509.ParseCertificate(block.Bytes)
-
-	p7Data, err := EncodePKCS7([]*x509.Certificate{cert})
-	if err != nil {
-		t.Fatalf("encode PKCS#7: %v", err)
-	}
-
-	certs, err := ParseCertificatesAny(p7Data)
-	if err != nil {
-		t.Fatalf("unexpected error parsing PKCS#7: %v", err)
-	}
-	if len(certs) != 1 {
-		t.Fatalf("expected 1 cert from PKCS#7, got %d", len(certs))
-	}
-	if certs[0].Subject.CommonName != "test.example.com" {
-		t.Errorf("expected CN 'test.example.com', got %q", certs[0].Subject.CommonName)
-	}
-}
-
-func TestParseCertificatesAny_PKCS7Multi(t *testing.T) {
-	// WHY: DISA issuedto/*.p7c and FPKI caCertsIssuedTo*.p7c files
-	// contain multiple cross-certificates. All must be returned.
-	t.Parallel()
-	caPEM, interPEM, leafPEM := generateTestPKI(t)
-	var certs []*x509.Certificate
-	for _, pemStr := range []string{leafPEM, interPEM, caPEM} {
-		block, _ := pem.Decode([]byte(pemStr))
-		cert, _ := x509.ParseCertificate(block.Bytes)
-		certs = append(certs, cert)
-	}
-
-	p7Data, err := EncodePKCS7(certs)
-	if err != nil {
-		t.Fatalf("encode PKCS#7: %v", err)
+	tests := []struct {
+		name       string
+		setup      func(t *testing.T) []byte
+		wantCount  int
+		wantCN     string
+		wantErrSub string
+	}{
+		{
+			name: "DER single certificate",
+			setup: func(t *testing.T) []byte {
+				t.Helper()
+				_, _, leafPEM := generateTestPKI(t)
+				block, _ := pem.Decode([]byte(leafPEM))
+				return block.Bytes
+			},
+			wantCount: 1,
+			wantCN:    "test.example.com",
+		},
+		{
+			name: "PEM bundle with three certificates",
+			setup: func(t *testing.T) []byte {
+				t.Helper()
+				caPEM, interPEM, leafPEM := generateTestPKI(t)
+				return []byte(leafPEM + interPEM + caPEM)
+			},
+			wantCount: 3,
+			wantCN:    "test.example.com",
+		},
+		{
+			name: "PKCS#7 single certificate",
+			setup: func(t *testing.T) []byte {
+				t.Helper()
+				_, _, leafPEM := generateTestPKI(t)
+				block, _ := pem.Decode([]byte(leafPEM))
+				cert, _ := x509.ParseCertificate(block.Bytes)
+				p7Data, err := EncodePKCS7([]*x509.Certificate{cert})
+				if err != nil {
+					t.Fatalf("encode PKCS#7: %v", err)
+				}
+				return p7Data
+			},
+			wantCount: 1,
+			wantCN:    "test.example.com",
+		},
+		{
+			name: "PKCS#7 multiple certificates",
+			setup: func(t *testing.T) []byte {
+				t.Helper()
+				caPEM, interPEM, leafPEM := generateTestPKI(t)
+				var certs []*x509.Certificate
+				for _, pemStr := range []string{leafPEM, interPEM, caPEM} {
+					block, _ := pem.Decode([]byte(pemStr))
+					cert, _ := x509.ParseCertificate(block.Bytes)
+					certs = append(certs, cert)
+				}
+				p7Data, err := EncodePKCS7(certs)
+				if err != nil {
+					t.Fatalf("encode PKCS#7: %v", err)
+				}
+				return p7Data
+			},
+			wantCount: 3,
+			wantCN:    "test.example.com",
+		},
+		{
+			name: "garbage input returns error mentioning all formats",
+			setup: func(t *testing.T) []byte {
+				t.Helper()
+				return []byte("not a certificate")
+			},
+			wantErrSub: "DER",
+		},
 	}
 
-	parsed, err := ParseCertificatesAny(p7Data)
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	if len(parsed) != 3 {
-		t.Fatalf("expected 3 certs from multi-cert PKCS#7, got %d", len(parsed))
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			data := tt.setup(t)
 
-func TestParseCertificatesAny_Garbage(t *testing.T) {
-	// WHY: Invalid data must produce a clear error mentioning all three
-	// formats tried, not a panic or misleading single-format error.
-	t.Parallel()
-	_, err := ParseCertificatesAny([]byte("not a certificate"))
-	if err == nil {
-		t.Fatal("expected error for garbage input")
-	}
-	errStr := err.Error()
-	if !strings.Contains(errStr, "DER") || !strings.Contains(errStr, "PEM") || !strings.Contains(errStr, "PKCS#7") {
-		t.Errorf("error should mention all three formats, got: %v", err)
+			certs, err := ParseCertificatesAny(data)
+
+			if tt.wantErrSub != "" {
+				if err == nil {
+					t.Fatal("expected error for invalid input")
+				}
+				errStr := err.Error()
+				for _, keyword := range []string{"DER", "PEM", "PKCS#7"} {
+					if !strings.Contains(errStr, keyword) {
+						t.Errorf("error should mention %s, got: %v", keyword, err)
+					}
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(certs) != tt.wantCount {
+				t.Fatalf("expected %d cert(s), got %d", tt.wantCount, len(certs))
+			}
+			if tt.wantCN != "" && certs[0].Subject.CommonName != tt.wantCN {
+				t.Errorf("expected first cert CN %q, got %q", tt.wantCN, certs[0].Subject.CommonName)
+			}
+		})
 	}
 }
 
