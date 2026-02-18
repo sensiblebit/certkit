@@ -344,6 +344,10 @@ func TestProcessArchive_ZeroByteEntry(t *testing.T) {
 	if len(certs) != 0 {
 		t.Errorf("got %d certs in store, want 0 (empty entries)", len(certs))
 	}
+	keys := cfg.Store.AllKeysFlat()
+	if len(keys) != 0 {
+		t.Errorf("got %d keys in store, want 0 (empty entries)", len(keys))
+	}
 }
 
 func TestProcessArchive_EntryExceedsMaxSize_ZIP(t *testing.T) {

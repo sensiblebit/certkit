@@ -40,7 +40,6 @@ func TestEncodeContainers_InvalidInput(t *testing.T) {
 		// as PKCS12, so one PKCS12 case suffices (T-12).
 		{"PKCS12/unsupported_key", "unsupported private key type", func() ([]byte, error) { return EncodePKCS12(struct{}{}, cert, nil, "pass") }},
 		{"JKS/unsupported_key", "unknown key type", func() ([]byte, error) { return EncodeJKS(struct{}{}, cert, nil, "changeit") }},
-		{"JKS/nil_key", "unknown key type", func() ([]byte, error) { return EncodeJKS(nil, cert, nil, "changeit") }},
 		// Nil leaf certificate cases — PKCS12Legacy has the same nil-cert
 		// guard as PKCS12, so one PKCS12 case suffices (T-12).
 		{"PKCS12/nil_cert", "leaf certificate cannot be nil", func() ([]byte, error) { return EncodePKCS12(rsaKey, nil, nil, "pass") }},

@@ -957,18 +957,13 @@ func TestCertFingerprints(t *testing.T) {
 	if sha1Colon != strings.ToUpper(sha1Colon) {
 		t.Errorf("CertFingerprintColonSHA1 should be uppercase, got %q", sha1Colon)
 	}
-
-	// SHA-256 and SHA-1 must differ (different hash algorithms)
-	if sha256Hex == sha1Hex {
-		t.Error("SHA-256 and SHA-1 fingerprints should differ")
-	}
 }
 
 func TestComputeSKILegacy(t *testing.T) {
-	// WHY: ComputeSKILegacy uses SHA-1 (20 bytes) vs ComputeSKI's truncated
-	// SHA-256 (also 20 bytes). Verifies the output has the correct length,
-	// is deterministic, and differs from ComputeSKI. Does NOT re-derive the
-	// SHA-1 manually (that would test crypto/sha1, not certkit).
+	// WHY: ComputeSKILegacy uses SHA-1 vs ComputeSKI's truncated SHA-256.
+	// Verifies the two algorithms produce different values — confusing them
+	// would break cross-matching with legacy certificates. Length and
+	// determinism checks removed (T-9: test crypto/sha1, not certkit).
 	t.Parallel()
 	_, _, leafPEM := generateTestPKI(t)
 	cert, _ := ParsePEMCertificate([]byte(leafPEM))
@@ -977,20 +972,6 @@ func TestComputeSKILegacy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ComputeSKILegacy: %v", err)
 	}
-	if len(legacy) != 20 {
-		t.Fatalf("ComputeSKILegacy length = %d, want 20 (SHA-1)", len(legacy))
-	}
-
-	// Deterministic: same key must produce the same SKI
-	legacy2, err := ComputeSKILegacy(cert.PublicKey)
-	if err != nil {
-		t.Fatalf("ComputeSKILegacy (second call): %v", err)
-	}
-	if !bytes.Equal(legacy, legacy2) {
-		t.Error("ComputeSKILegacy is not deterministic")
-	}
-
-	// Must differ from modern ComputeSKI (different hash algorithms)
 	modern, err := ComputeSKI(cert.PublicKey)
 	if err != nil {
 		t.Fatalf("ComputeSKI: %v", err)

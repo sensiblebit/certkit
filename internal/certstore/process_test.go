@@ -566,8 +566,14 @@ func TestProcessData_ExpiredCertNotFiltered(t *testing.T) {
 		t.Fatalf("ProcessData: %v", err)
 	}
 
-	if len(store.AllCerts()) != 1 {
-		t.Fatalf("expected 1 cert (expired certs should not be filtered), got %d", len(store.AllCerts()))
+	allCerts := store.AllCerts()
+	if len(allCerts) != 1 {
+		t.Fatalf("expected 1 cert (expired certs should not be filtered), got %d", len(allCerts))
+	}
+	for _, rec := range allCerts {
+		if rec.Cert.Subject.CommonName != "expired.example.com" {
+			t.Errorf("stored cert CN=%q, want expired.example.com", rec.Cert.Subject.CommonName)
+		}
 	}
 }
 

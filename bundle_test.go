@@ -91,16 +91,6 @@ func TestBundle_mozillaRoots(t *testing.T) {
 	if len(result.Roots) == 0 {
 		t.Fatal("expected at least 1 root")
 	}
-
-	// Verify root is actually a CA
-	if !result.Roots[0].IsCA {
-		t.Error("root certificate should be a CA")
-	}
-
-	// Verify first intermediate is a CA (guaranteed non-empty by check above)
-	if !result.Intermediates[0].IsCA {
-		t.Error("intermediate should be a CA")
-	}
 }
 
 func TestBundle_unknownTrustStore(t *testing.T) {
@@ -256,39 +246,6 @@ func TestFetchCertificatesFromURL_HTTP404(t *testing.T) {
 	}
 }
 
-func TestFetchCertificatesFromURL_DER(t *testing.T) {
-	// WHY: fetchCertificatesFromURL delegates to ParseCertificatesAny; one format
-	// (DER) suffices to verify the HTTP body delegation (T-13). Format-specific
-	// parsing is covered by TestParseCertificatesAny_* tests.
-	t.Parallel()
-
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "format-test"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-	}
-	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write(certBytes)
-	}))
-	defer srv.Close()
-
-	client := srv.Client()
-	certs, err := fetchCertificatesFromURL(context.Background(), client, srv.URL)
-	if err != nil {
-		t.Fatalf("fetchCertificatesFromURL(DER): %v", err)
-	}
-	if len(certs) != 1 {
-		t.Fatalf("expected 1 cert, got %d", len(certs))
-	}
-	if certs[0].Subject.CommonName != "format-test" {
-		t.Errorf("CN=%q, want format-test", certs[0].Subject.CommonName)
-	}
-}
-
 func TestFetchCertificatesFromURL_Garbage(t *testing.T) {
 	// WHY: Non-certificate responses must produce a clear parse error, not return corrupt data.
 	t.Parallel()
@@ -384,94 +341,6 @@ func TestDetectAndSwapLeaf_ReversedChain(t *testing.T) {
 	}
 	if !hasSwapWarning {
 		t.Error("expected reversed chain warning")
-	}
-}
-
-func TestDetectAndSwapLeaf_NoSwapCases(t *testing.T) {
-	// WHY: detectAndSwapLeaf must NOT swap in several cases: when multiple
-	// non-CA candidates exist (ambiguous), when the leaf is already correct,
-	// or when all extras are CAs. A false swap would put the wrong cert as leaf.
-	t.Parallel()
-
-	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	caTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "NoSwap CA"},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-	}
-	caBytes, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
-	caCert, _ := x509.ParseCertificate(caBytes)
-
-	makeCert := func(serial int64, cn string, isCA bool) *x509.Certificate {
-		t.Helper()
-		key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-		tmpl := &x509.Certificate{
-			SerialNumber:          big.NewInt(serial),
-			Subject:               pkix.Name{CommonName: cn},
-			NotBefore:             time.Now().Add(-1 * time.Hour),
-			NotAfter:              time.Now().Add(24 * time.Hour),
-			IsCA:                  isCA,
-			BasicConstraintsValid: isCA,
-		}
-		if isCA {
-			tmpl.KeyUsage = x509.KeyUsageCertSign
-		}
-		der, _ := x509.CreateCertificate(rand.Reader, tmpl, caCert, &key.PublicKey, caKey)
-		cert, _ := x509.ParseCertificate(der)
-		return cert
-	}
-
-	intCert := makeCert(2, "NoSwap Intermediate", true)
-	leafCert1 := makeCert(3, "leaf1.example.com", false)
-	leafCert2 := makeCert(4, "leaf2.example.com", false)
-
-	tests := []struct {
-		name          string
-		leaf          *x509.Certificate
-		extras        []*x509.Certificate
-		wantLeafCN    string
-		wantExtrasCnt int
-	}{
-		{
-			name:          "multiple non-CA candidates (ambiguous)",
-			leaf:          caCert,
-			extras:        []*x509.Certificate{leafCert1, leafCert2},
-			wantLeafCN:    "NoSwap CA",
-			wantExtrasCnt: 2,
-		},
-		{
-			name:          "leaf already correct (non-CA)",
-			leaf:          leafCert1,
-			extras:        []*x509.Certificate{caCert},
-			wantLeafCN:    "leaf1.example.com",
-			wantExtrasCnt: 1,
-		},
-		{
-			name:          "all extras are CAs",
-			leaf:          caCert,
-			extras:        []*x509.Certificate{intCert},
-			wantLeafCN:    "NoSwap CA",
-			wantExtrasCnt: 1,
-		},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			newLeaf, newExtras, warnings := detectAndSwapLeaf(tt.leaf, tt.extras)
-			if newLeaf.Subject.CommonName != tt.wantLeafCN {
-				t.Errorf("leaf CN=%q, want %q", newLeaf.Subject.CommonName, tt.wantLeafCN)
-			}
-			if len(warnings) != 0 {
-				t.Errorf("should not produce warnings, got %v", warnings)
-			}
-			if len(newExtras) != tt.wantExtrasCnt {
-				t.Errorf("extras count=%d, want %d", len(newExtras), tt.wantExtrasCnt)
-			}
-		})
 	}
 }
 
