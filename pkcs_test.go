@@ -11,8 +11,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	smPkcs7 "github.com/smallstep/pkcs7"
 )
 
 func TestEncodeContainers_InvalidInput(t *testing.T) {
@@ -173,17 +171,18 @@ func TestDecodePKCS7_roundTrip(t *testing.T) {
 }
 
 func TestDecodePKCS7_EmptyPKCS7(t *testing.T) {
-	// WHY: A PKCS#7 container with no certificates must produce a "no certificates" error, not return an empty slice that callers would silently accept.
+	// WHY: A PKCS#7 container with no certificates must produce a "no certificates"
+	// error, not return an empty slice that callers would silently accept.
 	t.Parallel()
-	// EncodePKCS7 rejects empty input, so we try to create a degenerate PKCS#7
-	// with no certificates using the underlying library directly.
-	derData, err := smPkcs7.DegenerateCertificate([]byte{})
+
+	// Build a valid PKCS#7 SignedData with an empty certificate set using
+	// encoding/asn1 to ensure correct DER encoding.
+	emptyPKCS7, err := buildEmptyPKCS7DER()
 	if err != nil {
-		// If the library itself errors on empty input, that's acceptable
-		t.Skipf("underlying library rejects empty DER: %v", err)
+		t.Fatalf("building empty PKCS#7: %v", err)
 	}
 
-	_, err = DecodePKCS7(derData)
+	_, err = DecodePKCS7(emptyPKCS7)
 	if err == nil {
 		t.Error("expected error for PKCS#7 with no certificates")
 	}

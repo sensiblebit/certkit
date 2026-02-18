@@ -281,12 +281,10 @@ func TestMemStore_SetBundleName_NonexistentSKI(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// This SKI does not exist in the store
 	store.SetBundleName("deadbeef", "should-not-appear")
 
-	// Verify no bundle name was applied to the existing cert
-	for _, names := range store.BundleNames() {
-		if names == "should-not-appear" {
+	for _, name := range store.BundleNames() {
+		if name == "should-not-appear" {
 			t.Error("SetBundleName should not create a phantom bundle name")
 		}
 	}

@@ -699,3 +699,83 @@ func TestDecodeJKS_PrivateKeyEntry_EmptyCertChain(t *testing.T) {
 		t.Errorf("expected 0 certs from empty chain, got %d", len(certs))
 	}
 }
+
+func TestEncodeJKS_RoundTripWithCAChain(t *testing.T) {
+	// WHY: EncodeJKS appends CA certs to the PrivateKeyEntry chain (jks.go:103-108).
+	// This path was untested — a bug there would silently drop intermediates from
+	// JKS exports. Per T-6, every encode/decode path needs a round-trip test.
+	t.Parallel()
+
+	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "JKS RT CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caCert, _ := x509.ParseCertificate(caDER)
+
+	leafKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafTmpl := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "jks-rt-leaf.example.com"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafCert, _ := x509.ParseCertificate(leafDER)
+
+	password := "changeit"
+	jksData, err := EncodeJKS(leafKey, leafCert, []*x509.Certificate{caCert}, password)
+	if err != nil {
+		t.Fatalf("EncodeJKS: %v", err)
+	}
+
+	certs, keys, err := DecodeJKS(jksData, []string{password})
+	if err != nil {
+		t.Fatalf("DecodeJKS: %v", err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key, got %d", len(keys))
+	}
+	if !leafKey.Equal(keys[0]) {
+		t.Error("decoded key does not match original")
+	}
+	if len(certs) != 2 {
+		t.Fatalf("expected 2 certs (leaf + CA), got %d", len(certs))
+	}
+
+	// Verify both leaf and CA survived the round-trip.
+	foundLeaf, foundCA := false, false
+	for _, c := range certs {
+		if c.Subject.CommonName == "jks-rt-leaf.example.com" {
+			foundLeaf = true
+		}
+		if c.Subject.CommonName == "JKS RT CA" {
+			foundCA = true
+		}
+	}
+	if !foundLeaf {
+		t.Error("leaf cert not found after JKS round-trip")
+	}
+	if !foundCA {
+		t.Error("CA cert not found after JKS round-trip")
+	}
+}

@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -104,8 +105,8 @@ func TestLoadBundleConfigs_MissingFile(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for missing file, got nil")
 	}
-	if !strings.Contains(err.Error(), "no such file") {
-		t.Errorf("unexpected error: %v", err)
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("expected os.ErrNotExist, got: %v", err)
 	}
 }
 

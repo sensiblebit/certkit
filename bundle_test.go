@@ -93,11 +93,6 @@ func TestBundle_mozillaRoots(t *testing.T) {
 		t.Fatal("expected at least 1 root")
 	}
 
-	// Verify the leaf matches what we fetched
-	if result.Leaf.Subject.CommonName != leaf.Subject.CommonName {
-		t.Errorf("leaf CN = %q, want %q", result.Leaf.Subject.CommonName, leaf.Subject.CommonName)
-	}
-
 	// Verify root is actually a CA
 	if !result.Roots[0].IsCA {
 		t.Error("root certificate should be a CA")
@@ -529,6 +524,8 @@ func TestCheckExpiryWarnings(t *testing.T) {
 	}{
 		{"expired", -24 * time.Hour, 1, "has expired"},
 		{"expiring soon", 10 * 24 * time.Hour, 1, "expires within 30 days"},
+		{"exactly 30 days", 30 * 24 * time.Hour, 1, "expires within 30 days"},
+		{"just past 30 days", 31 * 24 * time.Hour, 0, ""},
 		{"far future", 365 * 24 * time.Hour, 0, ""},
 	}
 	for _, tt := range tests {

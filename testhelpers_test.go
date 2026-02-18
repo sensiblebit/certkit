@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -178,6 +179,44 @@ func buildChain(t *testing.T, depth int) (root *x509.Certificate, intermediates 
 	}
 
 	return root, intermediates, leaf
+}
+
+// buildEmptyPKCS7DER constructs a valid PKCS#7 SignedData envelope with zero certificates
+// using encoding/asn1 for correct DER encoding. Used to test the "no certificates" error path.
+func buildEmptyPKCS7DER() ([]byte, error) {
+	oidSignedData := asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 2}
+	oidData := asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 1}
+
+	type contentInfo struct {
+		ContentType asn1.ObjectIdentifier
+	}
+	type signedData struct {
+		Version          int
+		DigestAlgorithms asn1.RawValue
+		ContentInfo      contentInfo
+		SignerInfos      asn1.RawValue
+	}
+
+	sd := signedData{
+		Version:          1,
+		DigestAlgorithms: asn1.RawValue{Tag: 17, Class: asn1.ClassUniversal, IsCompound: true, Bytes: []byte{}}, // empty SET
+		ContentInfo:      contentInfo{ContentType: oidData},
+		SignerInfos:      asn1.RawValue{Tag: 17, Class: asn1.ClassUniversal, IsCompound: true, Bytes: []byte{}}, // empty SET
+	}
+	sdBytes, err := asn1.Marshal(sd)
+	if err != nil {
+		return nil, err
+	}
+
+	type outerContentInfo struct {
+		ContentType asn1.ObjectIdentifier
+		Content     asn1.RawValue `asn1:"explicit,tag:0"`
+	}
+	outer := outerContentInfo{
+		ContentType: oidSignedData,
+		Content:     asn1.RawValue{FullBytes: sdBytes},
+	}
+	return asn1.Marshal(outer)
 }
 
 // generateLeafWithSANs creates a self-signed leaf certificate with Subject, DNS SANs,

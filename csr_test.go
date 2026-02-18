@@ -84,8 +84,13 @@ func TestGenerateCSR_withKey(t *testing.T) {
 	if len(csr.DNSNames) != 2 {
 		t.Errorf("DNSNames count=%d, want 2", len(csr.DNSNames))
 	}
-	if len(csr.IPAddresses) != 2 {
-		t.Errorf("IPAddresses count=%d, want 2", len(csr.IPAddresses))
+	if len(csr.IPAddresses) != len(leaf.IPAddresses) {
+		t.Fatalf("IPAddresses count=%d, want %d", len(csr.IPAddresses), len(leaf.IPAddresses))
+	}
+	for i, got := range csr.IPAddresses {
+		if !got.Equal(leaf.IPAddresses[i]) {
+			t.Errorf("IPAddresses[%d]=%v, want %v", i, got, leaf.IPAddresses[i])
+		}
 	}
 	if len(csr.URIs) != 1 || csr.URIs[0].String() != "spiffe://example.com/workload" {
 		t.Errorf("URIs=%v, want [spiffe://example.com/workload]", csr.URIs)
