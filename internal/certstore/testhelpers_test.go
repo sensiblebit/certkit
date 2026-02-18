@@ -387,20 +387,6 @@ func rsaKeyPEM(t *testing.T) []byte {
 	})
 }
 
-// ecdsaKeyPEM returns PEM-encoded ECDSA private key bytes.
-func ecdsaKeyPEM(t *testing.T) []byte {
-	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("generate ECDSA key: %v", err)
-	}
-	ecBytes, err := x509.MarshalECPrivateKey(key)
-	if err != nil {
-		t.Fatalf("marshal ECDSA key: %v", err)
-	}
-	return pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: ecBytes})
-}
-
 // keysEqual compares two private keys by extracting their public keys and using
 // the Equal method. Works across all supported key types (RSA, ECDSA, Ed25519).
 func keysEqual(t *testing.T, a, b any) bool {

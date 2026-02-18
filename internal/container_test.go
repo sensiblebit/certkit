@@ -7,6 +7,7 @@ import (
 
 func TestLoadContainerFile_NotFound(t *testing.T) {
 	// WHY: A nonexistent file must return an error, not panic or return empty contents.
+	t.Parallel()
 	_, err := LoadContainerFile("/nonexistent/file.pem", nil)
 	if err == nil {
 		t.Error("expected error for nonexistent file")

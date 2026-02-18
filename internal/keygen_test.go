@@ -13,6 +13,7 @@ import (
 func TestGenerateKey(t *testing.T) {
 	// WHY: Core key generation must succeed for all three supported algorithms
 	// and curve aliases; a failure here would break the entire keygen command.
+	t.Parallel()
 	tests := []struct {
 		name      string
 		algorithm string
@@ -38,6 +39,7 @@ func TestGenerateKey(t *testing.T) {
 
 func TestGenerateKey_UnsupportedAlgorithm(t *testing.T) {
 	// WHY: Unsupported algorithms must return a clear error; silently returning nil would cause nil-pointer panics downstream.
+	t.Parallel()
 	_, err := GenerateKey("dsa", 0, "")
 	if err == nil {
 		t.Error("expected error for unsupported algorithm")
@@ -49,6 +51,7 @@ func TestGenerateKey_UnsupportedAlgorithm(t *testing.T) {
 
 func TestGenerateKey_InvalidCurve(t *testing.T) {
 	// WHY: An invalid ECDSA curve name must return an error; silently defaulting to a curve would surprise users with unexpected key parameters.
+	t.Parallel()
 	_, err := GenerateKey("ecdsa", 0, "invalid-curve")
 	if err == nil {
 		t.Error("expected error for invalid curve")
@@ -63,6 +66,7 @@ func TestGenerateKeyFiles(t *testing.T) {
 	// correct PEM headers, the key is parseable with the correct algorithm,
 	// and no CSR is created without CN/SANs. One key type suffices because
 	// the file-writing logic is algorithm-agnostic (a thin wrapper).
+	t.Parallel()
 	dir := t.TempDir()
 	_, err := GenerateKeyFiles(KeygenOptions{
 		Algorithm: "ecdsa",
@@ -106,6 +110,7 @@ func TestGenerateKeyFiles(t *testing.T) {
 
 func TestGenerateKeyFiles_KeyPermissions(t *testing.T) {
 	// WHY: Private keys must be written with 0600 permissions and public keys with 0644; incorrect permissions would be a security vulnerability.
+	t.Parallel()
 	dir := t.TempDir()
 	_, err := GenerateKeyFiles(KeygenOptions{
 		Algorithm: "ecdsa",
@@ -139,6 +144,7 @@ func TestGenerateKeyFiles_KeyPermissions(t *testing.T) {
 
 func TestGenerateKeyFiles_Stdout(t *testing.T) {
 	// WHY: When no OutPath is set, key material must be returned in-memory (for stdout) with no files written; verifies the stdout mode path.
+	t.Parallel()
 	result, err := GenerateKeyFiles(KeygenOptions{
 		Algorithm: "ecdsa",
 		Curve:     "P-256",
@@ -173,6 +179,7 @@ func TestGenerateKeyFiles_Stdout(t *testing.T) {
 
 func TestGenerateKeyFiles_UnsupportedAlgorithm(t *testing.T) {
 	// WHY: GenerateKeyFiles must propagate the GenerateKey error for unsupported algorithms; verifies the error path does not leave partial files on disk.
+	t.Parallel()
 	dir := t.TempDir()
 	_, err := GenerateKeyFiles(KeygenOptions{
 		Algorithm: "dsa",
@@ -188,6 +195,7 @@ func TestGenerateKeyFiles_UnsupportedAlgorithm(t *testing.T) {
 
 func TestGenerateKeyFiles_WithCSR_KeyMatchesCSR(t *testing.T) {
 	// WHY: The generated CSR must be signed by the corresponding private key; a key-CSR mismatch would produce a CSR that CAs reject as invalid.
+	t.Parallel()
 	dir := t.TempDir()
 	_, err := GenerateKeyFiles(KeygenOptions{
 		Algorithm: "rsa",

@@ -26,6 +26,7 @@ import (
 
 func TestParsePEMCertificate(t *testing.T) {
 	// WHY: Verifies single-cert PEM parsing produces correct cert, not just "no error".
+	t.Parallel()
 	_, _, leafPEM := generateTestPKI(t)
 
 	cert, err := ParsePEMCertificate([]byte(leafPEM))
@@ -71,6 +72,7 @@ func TestParsePEMCertificates_NoCertificates(t *testing.T) {
 
 func TestParsePEMCertificates_mixedBlockTypes(t *testing.T) {
 	// WHY: PEM bundles often contain keys alongside certs; the parser must skip non-CERTIFICATE blocks without error.
+	t.Parallel()
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	keyDER, _ := x509.MarshalPKCS8PrivateKey(key)
 
@@ -100,6 +102,7 @@ func TestParsePEMCertificates_mixedBlockTypes(t *testing.T) {
 
 func TestParsePEMCertificates_invalidDER(t *testing.T) {
 	// WHY: Corrupt DER inside a valid PEM wrapper must produce a descriptive parse error, not a silent skip or panic.
+	t.Parallel()
 	pemData := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("garbage DER")})
 
 	_, err := ParsePEMCertificates(pemData)
@@ -113,6 +116,7 @@ func TestParsePEMCertificates_invalidDER(t *testing.T) {
 
 func TestCertToPEM_RoundTrip(t *testing.T) {
 	// WHY: Round-trip (cert->PEM->cert) proves PEM encoding preserves certificate identity and byte equality.
+	t.Parallel()
 	_, _, leafPEM := generateTestPKI(t)
 	cert, _ := ParsePEMCertificate([]byte(leafPEM))
 
@@ -135,6 +139,7 @@ func TestCertToPEM_RoundTrip(t *testing.T) {
 
 func TestCertSKI_RFC7093(t *testing.T) {
 	// WHY: CertSKI must use RFC 7093 Method 1 (truncated SHA-256), not legacy SHA-1; wrong algorithm breaks AKI resolution.
+	t.Parallel()
 	_, _, leafPEM := generateTestPKI(t)
 	leaf, _ := ParsePEMCertificate([]byte(leafPEM))
 
@@ -167,6 +172,7 @@ func TestCertSKI_RFC7093(t *testing.T) {
 
 func TestCertSKIEmbedded(t *testing.T) {
 	// WHY: Embedded SKI/AKI values come directly from the X.509 extension; format validation catches encoding bugs.
+	t.Parallel()
 	caPEM, _, leafPEM := generateTestPKI(t)
 
 	ca, _ := ParsePEMCertificate([]byte(caPEM))
@@ -179,6 +185,9 @@ func TestCertSKIEmbedded(t *testing.T) {
 	if !strings.Contains(caSKI, ":") || len(caSKI) < 5 {
 		t.Errorf("CA embedded SKI format unexpected: %q", caSKI)
 	}
+	if caSKI != ColonHex(ca.SubjectKeyId) {
+		t.Errorf("CA embedded SKI = %q, want ColonHex(SubjectKeyId) = %q", caSKI, ColonHex(ca.SubjectKeyId))
+	}
 
 	leafAKI := CertAKIEmbedded(leaf)
 	if leafAKI == "" {
@@ -187,10 +196,14 @@ func TestCertSKIEmbedded(t *testing.T) {
 	if !strings.Contains(leafAKI, ":") || len(leafAKI) < 5 {
 		t.Errorf("Leaf embedded AKI format unexpected: %q", leafAKI)
 	}
+	if leafAKI != ColonHex(leaf.AuthorityKeyId) {
+		t.Errorf("Leaf embedded AKI = %q, want ColonHex(AuthorityKeyId) = %q", leafAKI, ColonHex(leaf.AuthorityKeyId))
+	}
 }
 
 func TestCertSKI_vs_Embedded(t *testing.T) {
 	// WHY: When a CA embeds a legacy SHA-1 SKI, computed (RFC 7093) and embedded values must differ; confusing them breaks chain resolution.
+	t.Parallel()
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	var spki struct {
@@ -229,6 +242,7 @@ func TestCertSKI_vs_Embedded(t *testing.T) {
 
 func TestCertSKIEmbedded_empty(t *testing.T) {
 	// WHY: Certs without a SubjectKeyId extension must return empty string, not panic on nil slice access.
+	t.Parallel()
 	cert := &x509.Certificate{SubjectKeyId: nil}
 	if got := CertSKIEmbedded(cert); got != "" {
 		t.Errorf("expected empty string for nil SubjectKeyId, got %q", got)
@@ -237,6 +251,7 @@ func TestCertSKIEmbedded_empty(t *testing.T) {
 
 func TestCertAKIEmbedded_empty(t *testing.T) {
 	// WHY: Root certs and self-signed certs often lack an AuthorityKeyId; must return empty string without error.
+	t.Parallel()
 	cert := &x509.Certificate{AuthorityKeyId: nil}
 	if got := CertAKIEmbedded(cert); got != "" {
 		t.Errorf("expected empty string for nil AuthorityKeyId, got %q", got)
@@ -245,6 +260,7 @@ func TestCertAKIEmbedded_empty(t *testing.T) {
 
 func TestCertSKI_errorReturnsEmpty(t *testing.T) {
 	// WHY: Malformed SPKI data must return empty string gracefully, not panic; callers rely on empty-string as "no SKI available."
+	t.Parallel()
 	cert := &x509.Certificate{RawSubjectPublicKeyInfo: []byte{}}
 	ski := CertSKI(cert)
 	if ski != "" {
@@ -254,6 +270,7 @@ func TestCertSKI_errorReturnsEmpty(t *testing.T) {
 
 func TestColonHex(t *testing.T) {
 	// WHY: ColonHex formats SKI/AKI/fingerprint bytes for display; edge cases (nil, empty, single byte) must not panic or produce malformed output.
+	t.Parallel()
 	tests := []struct {
 		input    []byte
 		expected string
@@ -407,6 +424,7 @@ func TestDefaultPasswords(t *testing.T) {
 	// "password", "changeit") used by PKCS#12 and JKS files in a stable
 	// order; missing any breaks auto-decryption, and order matters because
 	// DeduplicatePasswords places defaults first.
+	t.Parallel()
 	passwords := DefaultPasswords()
 	if len(passwords) < 3 {
 		t.Fatalf("expected at least 3 default passwords, got %d", len(passwords))
@@ -624,6 +642,7 @@ func TestPublicKeyAlgorithmName(t *testing.T) {
 
 func TestParsePEMCertificateRequest_errors(t *testing.T) {
 	// WHY: Each CSR parse failure mode (no PEM, wrong block type, corrupt DER) needs a distinct error message for user diagnostics.
+	t.Parallel()
 	tests := []struct {
 		name    string
 		input   []byte
@@ -647,6 +666,7 @@ func TestParsePEMCertificateRequest_errors(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			_, err := ParsePEMCertificateRequest(tt.input)
 			if err == nil {
 				t.Fatal("expected error")
@@ -662,6 +682,7 @@ func TestParsePEMCertificateRequest_LegacyBlockType(t *testing.T) {
 	// WHY: Older tools (Netscape, MSIE) emit "NEW CERTIFICATE REQUEST" instead of
 	// "CERTIFICATE REQUEST". The DER payload is identical; rejecting the legacy type
 	// would break interop with CSRs from these tools for no benefit.
+	t.Parallel()
 	leaf, key := generateLeafWithSANs(t)
 	csrPEM, _, err := GenerateCSR(leaf, key)
 	if err != nil {
@@ -864,6 +885,7 @@ func TestKeyMatchesCert(t *testing.T) {
 
 func TestMultiCertPEM_Concatenation(t *testing.T) {
 	// WHY: PEM concatenation is how chain bundles are built; order and cert type must be preserved or TLS servers will serve broken chains.
+	t.Parallel()
 	caPEM, intPEM, leafPEM := generateTestPKI(t)
 
 	// Parse each cert
@@ -967,6 +989,7 @@ func TestMarshalPublicKeyToPEM_RoundTrip(t *testing.T) {
 	// WHY: MarshalPublicKeyToPEM is used for key export; round-trip with .Equal()
 	// proves no information is lost. One key type suffices for this thin wrapper
 	// over x509.MarshalPKIXPublicKey (T-13).
+	t.Parallel()
 	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 
 	pemStr, err := MarshalPublicKeyToPEM(&ecKey.PublicKey)
@@ -996,6 +1019,7 @@ func TestCertFingerprintColon(t *testing.T) {
 	// expected by OpenSSL and other tools. Also verifies the fingerprint is
 	// computed from cert.Raw (not some other field) by cross-checking against
 	// a manual hash.
+	t.Parallel()
 	_, _, leafPEM := generateTestPKI(t)
 	cert, _ := ParsePEMCertificate([]byte(leafPEM))
 
@@ -1032,6 +1056,7 @@ func TestCertFingerprintColon(t *testing.T) {
 func TestParsePEMPrivateKeyWithPasswords_NoPasswordsEncryptedKey(t *testing.T) {
 	// WHY: Encrypted keys with nil or empty password lists must fail gracefully,
 	// not panic or silently return a zero-value key.
+	t.Parallel()
 	key, _ := rsa.GenerateKey(rand.Reader, 2048)
 	block := &pem.Block{
 		Type:  "RSA PRIVATE KEY",
@@ -1068,6 +1093,7 @@ func TestParsePEMPrivateKeyWithPasswords_NoPasswordsEncryptedKey(t *testing.T) {
 func TestParsePEMCertificate_ReturnsFirstCertFromBundle(t *testing.T) {
 	// WHY: ParsePEMCertificate silently drops certs after the first one.
 	// Callers need to know this behavior is intentional and documented.
+	t.Parallel()
 	caPEM, _, leafPEM := generateTestPKI(t)
 	ca, err := ParsePEMCertificate([]byte(caPEM))
 	if err != nil {

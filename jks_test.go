@@ -565,6 +565,7 @@ func TestDecodeJKS_TruncatedWithCorrectMagic(t *testing.T) {
 	// WHY: A JKS file that starts with the correct magic bytes (0xFEEDFEED)
 	// but is truncated is a real scenario (e.g., incomplete download, disk
 	// corruption). DecodeJKS must return an error, not panic or hang.
+	t.Parallel()
 	data := buildJKSPrivateKey(t, "changeit")
 
 	// Verify the data actually starts with JKS magic bytes.

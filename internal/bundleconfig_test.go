@@ -9,6 +9,7 @@ import (
 
 func TestLoadBundleConfigs_NewFormatWithDefaults(t *testing.T) {
 	// WHY: Verifies that defaultSubject fields are inherited by all bundles that lack their own subject; without this, bundles could silently lose required subject metadata.
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bundles.yaml")
 	yaml := `
@@ -52,6 +53,7 @@ bundles:
 
 func TestLoadBundleConfigs_NewFormatWithOverride(t *testing.T) {
 	// WHY: Ensures a bundle's explicit subject completely replaces the default, not merges with it; a merge bug would silently inject unwanted fields into CSRs.
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bundles.yaml")
 	yaml := `
@@ -92,6 +94,7 @@ bundles:
 
 func TestLoadBundleConfigs_OldFormat(t *testing.T) {
 	// WHY: The parser supports a legacy bare-array YAML format for backward compatibility; without this test, a refactor could break existing configs.
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bundles.yaml")
 	yaml := `
@@ -119,6 +122,7 @@ func TestLoadBundleConfigs_OldFormat(t *testing.T) {
 
 func TestLoadBundleConfigs_InvalidYAML(t *testing.T) {
 	// WHY: Malformed YAML must produce a clear error rather than silently returning empty configs, which would cause a confusing no-bundles-exported situation.
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bundles.yaml")
 	if err := os.WriteFile(path, []byte("{{{{not yaml"), 0644); err != nil {
@@ -136,6 +140,7 @@ func TestLoadBundleConfigs_InvalidYAML(t *testing.T) {
 
 func TestLoadBundleConfigs_MissingFile(t *testing.T) {
 	// WHY: A missing config file must return an error, not silently proceed with zero bundles.
+	t.Parallel()
 	_, err := LoadBundleConfigs("/nonexistent/bundles.yaml")
 	if err == nil {
 		t.Error("expected error for missing file, got nil")
@@ -148,6 +153,7 @@ func TestLoadBundleConfigs_MissingFile(t *testing.T) {
 func TestLoadBundleConfigs_DefaultSubjectIndependence(t *testing.T) {
 	// WHY: Guards against a shallow-copy bug where modifying one bundle's inherited
 	// default subject would corrupt other bundles' subjects.
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bundles.yaml")
 	yamlContent := `
@@ -189,6 +195,7 @@ bundles:
 
 func TestLoadBundleConfigs_OldFormatNilSubject(t *testing.T) {
 	// WHY: Old-format configs have no defaultSubject mechanism; Subject must remain nil so downstream code knows no subject override was requested.
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bundles.yaml")
 	yamlContent := `
@@ -216,6 +223,7 @@ func TestLoadBundleConfigs_OwnSubjectNotMergedWithDefault(t *testing.T) {
 	// be merged in. This verifies the nil-check behavior: bundle.Subject != nil
 	// means the default is skipped entirely. A bug here would cause fields from
 	// defaultSubject to leak into bundles that define their own subject.
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bundles.yaml")
 	yamlContent := `
@@ -275,6 +283,7 @@ bundles:
 
 func TestLoadBundleConfigs_EmptyBundles(t *testing.T) {
 	// WHY: An empty bundles array with a defaultSubject falls through to old-format parsing, which should fail; this guards against silently accepting a misconfigured file.
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bundles.yaml")
 	yamlContent := `

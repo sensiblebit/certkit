@@ -8,6 +8,7 @@ import (
 func TestProcessFile_NonexistentFile(t *testing.T) {
 	// WHY: The os.ReadFile error path in ProcessFile must return a descriptive
 	// wrapped error for missing files.
+	t.Parallel()
 	cfg := newTestConfig(t)
 
 	err := ProcessFile("/nonexistent/path/cert.pem", cfg.Store, cfg.Passwords)
@@ -21,6 +22,7 @@ func TestProcessFile_NonexistentFile(t *testing.T) {
 
 func TestIsSkippableDir(t *testing.T) {
 	// WHY: IsSkippableDir gates directory traversal during scans; a false negative would cause wasteful scanning of .git or node_modules trees, while a false positive would skip legitimate certificate directories.
+	t.Parallel()
 	tests := []struct {
 		name string
 		want bool
@@ -41,6 +43,7 @@ func TestIsSkippableDir(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			if got := IsSkippableDir(tt.name); got != tt.want {
 				t.Errorf("IsSkippableDir(%q) = %v, want %v", tt.name, got, tt.want)
 			}

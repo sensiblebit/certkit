@@ -18,6 +18,7 @@ import (
 
 func TestDefaultOptions(t *testing.T) {
 	// WHY: Default options define the contract for callers who omit configuration; wrong defaults silently break verification or AIA fetching.
+	t.Parallel()
 	opts := DefaultOptions()
 	if !opts.FetchAIA {
 		t.Error("FetchAIA should default to true")
@@ -41,6 +42,7 @@ func TestDefaultOptions(t *testing.T) {
 
 func TestBundle_customRoots(t *testing.T) {
 	// WHY: Custom trust stores are the primary offline testing path; this verifies a full 3-tier chain resolves correctly without network access.
+	t.Parallel()
 	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	caTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
@@ -151,6 +153,7 @@ func TestBundle_mozillaRoots(t *testing.T) {
 
 func TestBundle_verifyFails(t *testing.T) {
 	// WHY: An orphan cert (no trusted root) must fail verification; silently passing would produce bundles that TLS clients reject.
+	t.Parallel()
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
@@ -174,6 +177,7 @@ func TestBundle_verifyFails(t *testing.T) {
 func TestBundle_twoCertChain(t *testing.T) {
 	// WHY: Two-tier chain (leaf+root, no intermediate) is the simplest valid chain;
 	// verifies Bundle works without intermediates.
+	t.Parallel()
 	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	caTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
@@ -222,6 +226,7 @@ func TestBundle_twoCertChain(t *testing.T) {
 
 func TestBundle_unknownTrustStore(t *testing.T) {
 	// WHY: Invalid trust store names must produce a clear error; silently falling back to system roots would mask configuration mistakes.
+	t.Parallel()
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
@@ -248,6 +253,7 @@ func TestBundle_unknownTrustStore(t *testing.T) {
 func TestBundle_verifyFalsePassthrough(t *testing.T) {
 	// WHY: When Verify=false, all supplied intermediates must pass through even if
 	// chain is incomplete -- callers may handle verification themselves.
+	t.Parallel()
 	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	caTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
@@ -316,6 +322,7 @@ func TestFetchLeafFromURL_withPort(t *testing.T) {
 
 func TestFetchLeafFromURL_badHost(t *testing.T) {
 	// WHY: Non-existent hosts must return an error, not hang or panic; callers depend on error return to report unreachable servers.
+	t.Parallel()
 	_, err := FetchLeafFromURL(context.Background(), "https://this-does-not-exist.invalid", 2*time.Second)
 	if err == nil {
 		t.Error("expected error for non-existent host")
@@ -327,6 +334,7 @@ func TestFetchLeafFromURL_badHost(t *testing.T) {
 
 func TestFetchLeafFromURL_invalidURL(t *testing.T) {
 	// WHY: Malformed URLs must produce a "parsing URL" error, not a confusing network error downstream.
+	t.Parallel()
 	_, err := FetchLeafFromURL(context.Background(), "://bad", 2*time.Second)
 	if err == nil {
 		t.Error("expected error for invalid URL")
@@ -338,6 +346,7 @@ func TestFetchLeafFromURL_invalidURL(t *testing.T) {
 
 func TestFetchCertificatesFromURL_HTTP404(t *testing.T) {
 	// WHY: AIA URLs that return HTTP 404 must produce a clear error; silently ignoring would leave chains incomplete.
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
@@ -409,6 +418,7 @@ func TestFetchCertificatesFromURL_Formats(t *testing.T) {
 
 func TestFetchCertificatesFromURL_Garbage(t *testing.T) {
 	// WHY: Non-certificate responses must produce a clear parse error, not return corrupt data.
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("this is not a certificate"))
 	}))
@@ -426,6 +436,7 @@ func TestFetchCertificatesFromURL_Garbage(t *testing.T) {
 
 func TestFetchAIACertificates_maxDepthZero(t *testing.T) {
 	// WHY: maxDepth=0 must prevent all AIA fetches; without this guard, deep chains could cause infinite recursion or excessive network calls.
+	t.Parallel()
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
@@ -450,6 +461,7 @@ func TestFetchAIACertificates_maxDepthZero(t *testing.T) {
 
 func TestDetectAndSwapLeaf_ReversedChain(t *testing.T) {
 	// WHY: Users sometimes pass certs in reversed order (CA first); the swap heuristic must detect this and reorder to produce a valid chain.
+	t.Parallel()
 	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	caTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
@@ -505,6 +517,7 @@ func TestDetectAndSwapLeaf_ReversedChain(t *testing.T) {
 func TestDetectAndSwapLeaf_MultipleNonCACerts(t *testing.T) {
 	// WHY: detectAndSwapLeaf should NOT swap when multiple non-CA certs exist
 	// in extras — the heuristic only fires for exactly one candidate.
+	t.Parallel()
 	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	caTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
@@ -556,6 +569,7 @@ func TestDetectAndSwapLeaf_MultipleNonCACerts(t *testing.T) {
 
 func TestDetectAndSwapLeaf_NoSwapWhenLeafIsCorrect(t *testing.T) {
 	// WHY: When the leaf is already correctly positioned, no swap should occur; a false swap would put the CA cert as the leaf.
+	t.Parallel()
 	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	caTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
@@ -676,6 +690,7 @@ func TestMozillaRootPool(t *testing.T) {
 
 func TestCheckSHA1Signatures(t *testing.T) {
 	// WHY: SHA-1 detection must warn on SHA-1 certs and not false-positive on SHA-256 certs.
+	t.Parallel()
 	tests := []struct {
 		name      string
 		certs     []*x509.Certificate
@@ -701,6 +716,7 @@ func TestCheckSHA1Signatures(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			warnings := checkSHA1Signatures(tt.certs)
 			if len(warnings) != tt.wantCount {
 				t.Errorf("expected %d warnings, got %d: %v", tt.wantCount, len(warnings), warnings)
@@ -716,6 +732,7 @@ func TestCheckSHA1Signatures(t *testing.T) {
 
 func TestCheckExpiryWarnings(t *testing.T) {
 	// WHY: Expiry warnings must fire for expired and soon-expiring certs but not for far-future certs; wrong thresholds cause missed or false alerts.
+	t.Parallel()
 	tests := []struct {
 		name         string
 		notAfter     time.Duration
@@ -728,6 +745,7 @@ func TestCheckExpiryWarnings(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			certs := []*x509.Certificate{
 				{
 					Subject:  pkix.Name{CommonName: "test-cert"},
@@ -747,6 +765,7 @@ func TestCheckExpiryWarnings(t *testing.T) {
 
 func TestFetchAIACertificates_duplicateURLs(t *testing.T) {
 	// WHY: Duplicate AIA URLs in a cert must be deduplicated to avoid redundant HTTP fetches and duplicate certs in the chain.
+	t.Parallel()
 	issuerKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	issuerTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),

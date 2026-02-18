@@ -20,6 +20,7 @@ import (
 
 func TestGenerateCSRFiles_FromTemplate(t *testing.T) {
 	// WHY: Template-based CSR generation is the primary flow; verifies CN propagation from JSON template and key file creation.
+	t.Parallel()
 	dir := t.TempDir()
 	tmplPath := filepath.Join(dir, "template.json")
 
@@ -71,6 +72,7 @@ func TestGenerateCSRFiles_FromTemplate(t *testing.T) {
 
 func TestGenerateCSRFiles_FromCert(t *testing.T) {
 	// WHY: CSR generation from existing cert extracts subject/SANs for renewal; verifies CN is correctly transferred from the certificate.
+	t.Parallel()
 	dir := t.TempDir()
 
 	// Create a test cert
@@ -114,6 +116,7 @@ func TestGenerateCSRFiles_FromCert(t *testing.T) {
 
 func TestGenerateCSRFiles_FromCSR(t *testing.T) {
 	// WHY: CSR-to-CSR generation allows re-keying with a different algorithm; verifies CN transfer and that Ed25519 key generation works.
+	t.Parallel()
 	dir := t.TempDir()
 
 	// Create a source CSR
@@ -152,6 +155,7 @@ func TestGenerateCSRFiles_FromCSR(t *testing.T) {
 
 func TestGenerateCSRFiles_WithExistingKey(t *testing.T) {
 	// WHY: When a pre-existing key is provided, no new key should be generated; verifies the key reuse path and that key.pem is NOT created in output.
+	t.Parallel()
 	dir := t.TempDir()
 
 	// Generate and write a key
@@ -196,6 +200,7 @@ func TestGenerateCSRFiles_WithExistingKey(t *testing.T) {
 
 func TestGenerateCSRFiles_Stdout(t *testing.T) {
 	// WHY: When no OutPath is set, CSR and key must be returned in-memory (stdout mode) without writing files; verifies the no-file-write code path.
+	t.Parallel()
 	dir := t.TempDir()
 	tmplPath := filepath.Join(dir, "template.json")
 	tmpl := certkit.CSRTemplate{
@@ -234,6 +239,7 @@ func TestGenerateCSRFiles_Stdout(t *testing.T) {
 
 func TestGenerateCSRFiles_NoInputError(t *testing.T) {
 	// WHY: Calling GenerateCSRFiles with no input source must produce a clear "exactly one" error; prevents silent empty CSR generation.
+	t.Parallel()
 	_, err := GenerateCSRFiles(CSROptions{
 		Algorithm: "ecdsa",
 		Curve:     "P-256",
@@ -249,6 +255,7 @@ func TestGenerateCSRFiles_NoInputError(t *testing.T) {
 
 func TestGenerateCSRFiles_MultipleInputError(t *testing.T) {
 	// WHY: Specifying multiple input sources (template + cert) is ambiguous; must produce an error to prevent unexpected behavior.
+	t.Parallel()
 	_, err := GenerateCSRFiles(CSROptions{
 		TemplatePath: "a.json",
 		CertPath:     "b.pem",

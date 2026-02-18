@@ -1,11 +1,9 @@
 package certkit
 
 import (
-	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
@@ -127,68 +125,4 @@ func generateLeafWithSANs(t *testing.T) (*x509.Certificate, *ecdsa.PrivateKey) {
 		t.Fatal(err)
 	}
 	return cert, key
-}
-
-// badSSLChain holds the results of a TLS handshake with a badssl.com endpoint.
-type badSSLChain struct {
-	leaf          *x509.Certificate
-	intermediates []*x509.Certificate
-	allCerts      []*x509.Certificate
-}
-
-// fetchBadSSLChain connects to a badssl.com host via TLS (with InsecureSkipVerify
-// since many endpoints have intentionally invalid certificates) and returns
-// the peer certificates from the handshake. Skips the test on connection failure.
-func fetchBadSSLChain(t *testing.T, host string) badSSLChain {
-	t.Helper()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	dialer := &tls.Dialer{
-		NetDialer: &net.Dialer{Timeout: 10 * time.Second},
-		Config: &tls.Config{
-			InsecureSkipVerify: true, //nolint:gosec // required for intentionally broken TLS endpoints
-			ServerName:         host,
-		},
-	}
-
-	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, "443"))
-	if err != nil {
-		t.Skipf("cannot connect to %s: %v", host, err)
-	}
-	defer func() { _ = conn.Close() }()
-
-	tlsConn := conn.(*tls.Conn)
-	certs := tlsConn.ConnectionState().PeerCertificates
-	if len(certs) == 0 {
-		t.Skipf("no certificates returned by %s", host)
-	}
-
-	result := badSSLChain{
-		leaf:     certs[0],
-		allCerts: certs,
-	}
-	if len(certs) > 1 {
-		result.intermediates = certs[1:]
-	}
-	return result
-}
-
-// skipIfBadSSLUnavailable is a sentinel check for table-driven tests. It
-// attempts a quick TLS connection to badssl.com and skips if unreachable.
-func skipIfBadSSLUnavailable(t *testing.T) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	dialer := &tls.Dialer{
-		NetDialer: &net.Dialer{Timeout: 5 * time.Second},
-		Config:    &tls.Config{},
-	}
-	conn, err := dialer.DialContext(ctx, "tcp", "badssl.com:443")
-	if err != nil {
-		t.Skipf("badssl.com unavailable: %v", err)
-	}
-	_ = conn.Close()
 }

@@ -33,6 +33,7 @@ func newTestBundle(t *testing.T, leaf testLeaf, ca testCA) *certkit.BundleResult
 
 func TestWriteBundleFiles_CreatesAllFiles(t *testing.T) {
 	// WHY: A full bundle export produces up to 12 output files; verifies all expected files are created on disk for a standard cert+key+chain bundle.
+	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "bundle.example.com", []string{"bundle.example.com"}, nil)
 
@@ -107,6 +108,7 @@ func TestWriteBundleFiles_CreatesAllFiles(t *testing.T) {
 
 func TestWriteBundleFiles_WildcardPrefix(t *testing.T) {
 	// WHY: Wildcard CNs (*.example.com) contain filesystem-unsafe characters; verifies the asterisk is replaced with underscore in output filenames.
+	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "*.wildcard.com", []string{"*.wildcard.com"}, nil)
 
@@ -130,6 +132,7 @@ func TestWriteBundleFiles_WildcardPrefix(t *testing.T) {
 
 func TestWriteBundleFiles_K8sYAMLDecode(t *testing.T) {
 	// WHY: K8s TLS secrets must have correct apiVersion, kind, type, and base64-encoded tls.crt/tls.key; verifies the secret is deployable and the key matches the cert.
+	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "k8s.example.com", []string{"k8s.example.com"}, nil)
 
@@ -222,6 +225,7 @@ func TestWriteBundleFiles_K8sYAMLDecode(t *testing.T) {
 
 func TestWriteBundleFiles_K8sYAMLDecode_Wildcard(t *testing.T) {
 	// WHY: K8s secret names cannot contain wildcards; verifies the "_." prefix is stripped from metadata.name for wildcard certificates.
+	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "*.k8s-wild.com", []string{"*.k8s-wild.com"}, nil)
 
@@ -256,6 +260,7 @@ func TestWriteBundleFiles_K8sYAMLDecode_Wildcard(t *testing.T) {
 
 func TestWriteBundleFiles_ChainExcludesRoot(t *testing.T) {
 	// WHY: chain.pem must exclude the root CA (servers should not send roots), while fullchain.pem includes it; verifies the critical distinction between the two files.
+	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "chain.example.com", []string{"chain.example.com"}, nil)
 
@@ -309,6 +314,7 @@ func TestWriteBundleFiles_ChainExcludesRoot(t *testing.T) {
 
 func TestWriteBundleFiles_SensitiveFilePermissions(t *testing.T) {
 	// WHY: Private key, PKCS#12, and K8s secret files contain sensitive material; verifies they are written with 0600 permissions to prevent unauthorized access.
+	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "perms.example.com", []string{"perms.example.com"}, nil)
 
@@ -346,6 +352,7 @@ func TestWriteBundleFiles_SensitiveFilePermissions(t *testing.T) {
 
 func TestWriteBundleFiles_PKCS12Password(t *testing.T) {
 	// WHY: Exported PKCS#12 files must use the "changeit" password convention; verifies decoding succeeds with correct password, fails with wrong password, and key matches cert.
+	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "p12pass.example.com", []string{"p12pass.example.com"}, nil)
 
@@ -397,6 +404,7 @@ func TestWriteBundleFiles_PKCS12Password(t *testing.T) {
 
 func TestWriteBundleFiles_NoIntermediates(t *testing.T) {
 	// WHY: Bundles without intermediates must not create an intermediates.pem file; verifies the conditional file creation logic and that other files are still produced.
+	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "no-int.example.com", []string{"no-int.example.com"}, nil)
 
@@ -444,6 +452,7 @@ func TestWriteBundleFiles_NoIntermediates(t *testing.T) {
 
 func TestWriteBundleFiles_NoRoot(t *testing.T) {
 	// WHY: Bundles without a root CA must not create a root.pem file; verifies the conditional file creation logic for the root-absent case.
+	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "no-root.example.com", []string{"no-root.example.com"}, nil)
 
@@ -491,6 +500,7 @@ func TestWriteBundleFiles_NoRoot(t *testing.T) {
 
 func TestWriteBundleFiles_K8sTlsCrtExcludesRoot(t *testing.T) {
 	// WHY: K8s tls.crt must contain leaf + intermediates only (not the root); including the root wastes space and violates TLS best practices.
+	t.Parallel()
 	// Build a proper 3-tier PKI: root → intermediate → leaf
 	rootCA := newRSACA(t)
 
@@ -570,6 +580,7 @@ func TestWriteBundleFiles_K8sTlsCrtExcludesRoot(t *testing.T) {
 
 func TestExportBundles_EndToEnd(t *testing.T) {
 	// WHY: Integration test for the full export pipeline (store -> chain resolution -> file writing); verifies the bundle directory is created and populated.
+	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "e2e.example.com", []string{"e2e.example.com"}, nil)
 
@@ -617,6 +628,7 @@ func TestExportBundles_EndToEnd(t *testing.T) {
 func TestExportBundles_EmptyBundleNameSkipped(t *testing.T) {
 	// WHY: Keys matched to certs with empty BundleName must be silently skipped,
 	// not cause errors or write to empty-named directories.
+	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "no-bundle.example.com", []string{"no-bundle.example.com"}, nil)
 
