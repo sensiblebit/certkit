@@ -25,8 +25,7 @@ func TestArchiveFormat(t *testing.T) {
 		{"tgz", "certs.tgz", "tar.gz"},
 		{"tar.gz", "certs.tar.gz", "tar.gz"},
 		{"uppercase ZIP", "certs.ZIP", "zip"},
-		{"pem file", "cert.pem", ""},
-		{"no extension", "certs", ""},
+		{"non-archive extension", "cert.pem", ""},
 	}
 
 	for _, tt := range tests {

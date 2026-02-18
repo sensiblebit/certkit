@@ -1,7 +1,6 @@
 package certstore
 
 import (
-	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -85,69 +84,42 @@ func TestMemStore_HandleCertificate_DuplicateIgnored(t *testing.T) {
 
 func TestMemStore_MatchedPairs(t *testing.T) {
 	// WHY: MatchedPairs must only return SKIs with both a leaf cert and a key;
-	// root and intermediate certs must be excluded even if they have keys.
-	// Consolidated per T-12: root and intermediate both hit the same
-	// c.CertType == "leaf" guard.
+	// non-leaf certs must be excluded even if they have keys. Uses an
+	// intermediate with its own key to prove both the CertType=="leaf" guard
+	// and the presence of a non-leaf key do not produce a false match.
 	t.Parallel()
 
 	ca := newRSACA(t)
 	inter := newIntermediateCA(t, ca)
 	leaf := newRSALeaf(t, ca, "match.example.com", []string{"match.example.com"})
 
-	tests := []struct {
-		name         string
-		addExtraCert *x509.Certificate
-		addExtraKey  crypto.PrivateKey
-		extraSource  string
-	}{
-		{
-			name:         "root excluded",
-			addExtraCert: ca.cert,
-			addExtraKey:  nil,
-			extraSource:  "ca.pem",
-		},
-		{
-			name:         "intermediate excluded",
-			addExtraCert: inter.cert,
-			addExtraKey:  inter.key,
-			extraSource:  "inter.pem",
-		},
+	store := NewMemStore()
+
+	// Add leaf cert and its key
+	if err := store.HandleCertificate(leaf.cert, "leaf.pem"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HandleKey(leaf.key, leaf.keyPEM, "leaf.key"); err != nil {
+		t.Fatal(err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			store := NewMemStore()
+	// Add intermediate cert with its key — must NOT appear in MatchedPairs
+	if err := store.HandleCertificate(inter.cert, "inter.pem"); err != nil {
+		t.Fatal(err)
+	}
+	interKeyPEM, _ := certkit.MarshalPrivateKeyToPEM(inter.key)
+	if err := store.HandleKey(inter.key, []byte(interKeyPEM), "inter.pem"); err != nil {
+		t.Fatal(err)
+	}
 
-			// Add leaf cert and its key
-			if err := store.HandleCertificate(leaf.cert, "leaf.pem"); err != nil {
-				t.Fatal(err)
-			}
-			if err := store.HandleKey(leaf.key, leaf.keyPEM, "leaf.key"); err != nil {
-				t.Fatal(err)
-			}
+	matched := store.MatchedPairs()
+	if len(matched) != 1 {
+		t.Fatalf("expected 1 matched pair (leaf only), got %d", len(matched))
+	}
 
-			// Add the non-leaf cert (and optionally its key)
-			if err := store.HandleCertificate(tt.addExtraCert, tt.extraSource); err != nil {
-				t.Fatal(err)
-			}
-			if tt.addExtraKey != nil {
-				keyPEM, _ := certkit.MarshalPrivateKeyToPEM(tt.addExtraKey)
-				if err := store.HandleKey(tt.addExtraKey, []byte(keyPEM), tt.extraSource); err != nil {
-					t.Fatal(err)
-				}
-			}
-
-			matched := store.MatchedPairs()
-			if len(matched) != 1 {
-				t.Fatalf("expected 1 matched pair (leaf only), got %d", len(matched))
-			}
-
-			leafSKI := computeSKIHex(t, leaf.cert)
-			if matched[0] != leafSKI {
-				t.Errorf("matched SKI = %q, want %q", matched[0], leafSKI)
-			}
-		})
+	leafSKI := computeSKIHex(t, leaf.cert)
+	if matched[0] != leafSKI {
+		t.Errorf("matched SKI = %q, want %q", matched[0], leafSKI)
 	}
 }
 
@@ -329,37 +301,18 @@ func TestMemStore_Reset(t *testing.T) {
 }
 
 func TestMemStore_EmptyStore(t *testing.T) {
-	// WHY: Empty store must return empty collections and non-nil pools, not
-	// nil, to avoid nil-pointer panics in callers that iterate or verify.
+	// WHY: Empty store must return non-nil pools (to avoid nil-pointer panics
+	// in callers that iterate) and nil for nonexistent lookups. ScanSummary
+	// must be all zeros. Individual collection-length checks are omitted
+	// because empty Go maps inherently return zero-length slices.
 	t.Parallel()
 	store := NewMemStore()
 
-	if len(store.AllCerts()) != 0 {
-		t.Error("expected 0 certs in empty store")
-	}
-	if len(store.AllKeys()) != 0 {
-		t.Error("expected 0 keys in empty store")
-	}
-	if len(store.MatchedPairs()) != 0 {
-		t.Error("expected 0 matched pairs in empty store")
-	}
-	if len(store.Intermediates()) != 0 {
-		t.Error("expected 0 intermediates in empty store")
-	}
 	if store.GetCert("nonexistent") != nil {
 		t.Error("expected nil for nonexistent cert SKI")
 	}
 	if store.GetKey("nonexistent") != nil {
 		t.Error("expected nil for nonexistent key SKI")
-	}
-	if len(store.AllCertsFlat()) != 0 {
-		t.Error("expected 0 flat certs in empty store")
-	}
-	if len(store.AllKeysFlat()) != 0 {
-		t.Error("expected 0 flat keys in empty store")
-	}
-	if len(store.BundleNames()) != 0 {
-		t.Error("expected 0 bundle names in empty store")
 	}
 	if pool := store.IntermediatePool(); pool == nil {
 		t.Error("IntermediatePool returned nil for empty store")

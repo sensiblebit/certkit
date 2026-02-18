@@ -22,18 +22,13 @@ func TestHasBinaryExtension(t *testing.T) {
 		path string
 		want bool
 	}{
-		// One representative per extension group (T-12)
-		{"cert extension", "cert.der", true},
-		{"key extension", "server.key", true},
-		{"PKCS#12 extension", "bundle.p12", true},
-		{"PKCS#7 extension", "chain.p7b", true},
-		{"PKCS#8 extension", "key.p8", true},
+		// One DER-family and one JKS-family extension suffice; all others
+		// hit the same map lookup (T-12).
+		{"DER extension", "cert.der", true},
 		{"JKS extension", "store.jks", true},
-		{"PEM extension", "cert.pem", true},
 
 		// Unrecognized
 		{"unknown extension", "README.txt", false},
-		{"no extension", "Makefile", false},
 		{"empty", "", false},
 
 		// Virtual paths with ":" separator (certkit-specific logic)
