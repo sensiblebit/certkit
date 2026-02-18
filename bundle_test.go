@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -108,6 +109,7 @@ func TestBundle_customRoots(t *testing.T) {
 
 func TestBundle_mozillaRoots(t *testing.T) {
 	// WHY: Verifies the embedded Mozilla trust store works for real-world chains; catches root cert staleness or AIA resolution bugs.
+	t.Parallel()
 	leaf, err := FetchLeafFromURL(context.Background(), "https://google.com", 5*time.Second)
 	if err != nil {
 		t.Skipf("cannot connect to google.com: %v", err)
@@ -297,6 +299,7 @@ func TestBundle_verifyFalsePassthrough(t *testing.T) {
 
 func TestFetchLeafFromURL(t *testing.T) {
 	// WHY: FetchLeafFromURL is the entry point for remote cert inspection; must return the leaf (not a CA) with a populated CN.
+	t.Parallel()
 	cert, err := FetchLeafFromURL(context.Background(), "https://google.com", 5*time.Second)
 	if err != nil {
 		t.Skipf("cannot connect to google.com: %v", err)
@@ -311,6 +314,7 @@ func TestFetchLeafFromURL(t *testing.T) {
 
 func TestFetchLeafFromURL_withPort(t *testing.T) {
 	// WHY: URLs with explicit port must work; naive URL parsing could double-append :443 or fail to extract the host.
+	t.Parallel()
 	cert, err := FetchLeafFromURL(context.Background(), "https://google.com:443", 5*time.Second)
 	if err != nil {
 		t.Skipf("cannot connect to google.com:443: %v", err)
@@ -778,9 +782,9 @@ func TestFetchAIACertificates_duplicateURLs(t *testing.T) {
 	}
 	issuerBytes, _ := x509.CreateCertificate(rand.Reader, issuerTemplate, issuerTemplate, &issuerKey.PublicKey, issuerKey)
 
-	fetchCount := 0
+	var fetchCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fetchCount++
+		fetchCount.Add(1)
 		_, _ = w.Write(issuerBytes)
 	}))
 	defer srv.Close()
@@ -801,8 +805,8 @@ func TestFetchAIACertificates_duplicateURLs(t *testing.T) {
 	if len(fetched) != 1 {
 		t.Errorf("expected 1 fetched cert (deduped), got %d", len(fetched))
 	}
-	if fetchCount != 1 {
-		t.Errorf("expected 1 HTTP fetch (deduped), got %d", fetchCount)
+	if n := fetchCount.Load(); n != 1 {
+		t.Errorf("expected 1 HTTP fetch (deduped), got %d", n)
 	}
 }
 

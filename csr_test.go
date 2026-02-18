@@ -96,56 +96,6 @@ func TestGenerateCSR_withKey(t *testing.T) {
 	}
 }
 
-func TestGenerateCSR_autoGenerate(t *testing.T) {
-	// WHY: When no key is provided, GenerateCSR must auto-generate an ECDSA P-256 key and return it; callers depend on this for key+CSR generation in one step.
-	t.Parallel()
-	leaf, _ := generateLeafWithSANs(t)
-
-	csrPEM, keyPEM, err := GenerateCSR(leaf, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if keyPEM == "" {
-		t.Fatal("expected non-empty keyPEM for auto-generated key")
-	}
-
-	keyBlock, _ := pem.Decode([]byte(keyPEM))
-	if keyBlock == nil || keyBlock.Type != "PRIVATE KEY" {
-		t.Fatal("failed to decode key PEM or wrong block type")
-	}
-	parsedKey, err := x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ecKey, ok := parsedKey.(*ecdsa.PrivateKey)
-	if !ok {
-		t.Fatalf("expected *ecdsa.PrivateKey, got %T", parsedKey)
-	}
-	if ecKey.Curve != elliptic.P256() {
-		t.Errorf("expected P-256 curve, got %v", ecKey.Curve.Params().Name)
-	}
-
-	block, _ := pem.Decode([]byte(csrPEM))
-	if block == nil {
-		t.Fatal("failed to decode CSR PEM")
-	}
-	csr, err := x509.ParseCertificateRequest(block.Bytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := csr.CheckSignature(); err != nil {
-		t.Fatalf("CSR signature invalid: %v", err)
-	}
-
-	if csr.Subject.CommonName != leaf.Subject.CommonName {
-		t.Errorf("CN=%q, want %q", csr.Subject.CommonName, leaf.Subject.CommonName)
-	}
-	if len(csr.DNSNames) != 2 {
-		t.Errorf("DNSNames count=%d, want 2", len(csr.DNSNames))
-	}
-}
-
 func TestGenerateCSR_nonSignerKey(t *testing.T) {
 	// WHY: Keys that do not implement crypto.Signer must be rejected with a clear error, not panic during CSR signing.
 	t.Parallel()
@@ -649,6 +599,7 @@ func TestGenerateCSR_ParsePEMRoundTrip(t *testing.T) {
 	// WHY: Per T-6, the CSR encode/decode path needs a round-trip test that
 	// generates a CSR via GenerateCSR and parses it back via ParsePEMCertificateRequest,
 	// then verifies all subject fields and SANs survive the cycle intact.
+	// Also verifies the auto-generated key is ECDSA P-256 (the documented default).
 	t.Parallel()
 	leaf, _ := generateLeafWithSANs(t)
 
@@ -663,7 +614,24 @@ func TestGenerateCSR_ParsePEMRoundTrip(t *testing.T) {
 		t.Fatal("auto-generated key PEM is empty")
 	}
 
-	// Parse via the public API
+	// Verify auto-generated key is ECDSA P-256
+	keyBlock, _ := pem.Decode([]byte(keyPEM))
+	if keyBlock == nil || keyBlock.Type != "PRIVATE KEY" {
+		t.Fatal("failed to decode key PEM or wrong block type")
+	}
+	parsedKey, err := x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
+	if err != nil {
+		t.Fatalf("parsing auto-generated key: %v", err)
+	}
+	ecKey, ok := parsedKey.(*ecdsa.PrivateKey)
+	if !ok {
+		t.Fatalf("expected auto-generated *ecdsa.PrivateKey, got %T", parsedKey)
+	}
+	if ecKey.Curve != elliptic.P256() {
+		t.Errorf("expected P-256 curve, got %v", ecKey.Curve.Params().Name)
+	}
+
+	// Parse CSR via the public API
 	csr, err := ParsePEMCertificateRequest([]byte(csrPEM))
 	if err != nil {
 		t.Fatalf("ParsePEMCertificateRequest: %v", err)

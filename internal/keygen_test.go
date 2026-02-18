@@ -1,6 +1,8 @@
 package internal
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rsa"
 	"os"
 	"path/filepath"
@@ -10,28 +12,33 @@ import (
 	"github.com/sensiblebit/certkit"
 )
 
-func TestGenerateKey(t *testing.T) {
-	// WHY: Core key generation must succeed for all three supported algorithms
-	// and curve aliases; a failure here would break the entire keygen command.
+func TestGenerateKey_CurveAliases(t *testing.T) {
+	// WHY: parseCurve maps OpenSSL-style aliases (secp384r1, prime256v1) to Go
+	// elliptic curves; this is certkit-owned dispatch logic. RSA/Ed25519 are
+	// direct stdlib pass-through tested via GenerateKeyFiles and error paths.
 	t.Parallel()
 	tests := []struct {
 		name      string
-		algorithm string
-		bits      int
 		curve     string
+		wantCurve elliptic.Curve
 	}{
-		{"RSA", "rsa", 2048, ""},
-		{"ECDSA curve alias", "ecdsa", 0, "secp384r1"},
-		{"Ed25519", "ed25519", 0, ""},
+		{"secp384r1", "secp384r1", elliptic.P384()},
+		{"prime256v1", "prime256v1", elliptic.P256()},
+		{"secp521r1", "secp521r1", elliptic.P521()},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			signer, err := GenerateKey(tt.algorithm, tt.bits, tt.curve)
+			t.Parallel()
+			signer, err := GenerateKey("ecdsa", 0, tt.curve)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if signer == nil {
-				t.Fatal("expected non-nil signer")
+			ecKey, ok := signer.(*ecdsa.PrivateKey)
+			if !ok {
+				t.Fatalf("expected *ecdsa.PrivateKey, got %T", signer)
+			}
+			if ecKey.Curve != tt.wantCurve {
+				t.Errorf("curve = %s, want %s", ecKey.Curve.Params().Name, tt.wantCurve.Params().Name)
 			}
 		})
 	}

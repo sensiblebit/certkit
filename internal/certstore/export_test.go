@@ -542,59 +542,52 @@ func TestGenerateCSR_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestGenerateCSR_WWWExclusion(t *testing.T) {
-	// WHY: When cert has exactly [CN, www.CN] as SANs, the CSR should exclude
-	// the www variant to simplify renewal — verifies shouldExcludeWWW logic.
+func TestGenerateCSR_SANExclusion(t *testing.T) {
+	// WHY: CSR generation excludes redundant SANs — www.CN when bare CN exists,
+	// and bare domain when wildcard covers it. Verifies shouldExcludeWWW and
+	// wildcard deduplication logic.
 	t.Parallel()
 
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "example.com", []string{"example.com", "www.example.com"})
-
-	csrPEM, _, err := GenerateCSR(leaf.cert, leaf.keyPEM, nil)
-	if err != nil {
-		t.Fatalf("GenerateCSR: %v", err)
+	tests := []struct {
+		name    string
+		sans    []string
+		wantDNS string
+	}{
+		{
+			"www excluded when bare CN present",
+			[]string{"example.com", "www.example.com"},
+			"example.com",
+		},
+		{
+			"bare domain excluded when wildcard present",
+			[]string{"*.example.com", "example.com"},
+			"*.example.com",
+		},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ca := newRSACA(t)
+			leaf := newRSALeaf(t, ca, "example.com", tt.sans)
 
-	block, _ := pem.Decode(csrPEM)
-	csr, err := x509.ParseCertificateRequest(block.Bytes)
-	if err != nil {
-		t.Fatalf("parse CSR: %v", err)
-	}
+			csrPEM, _, err := GenerateCSR(leaf.cert, leaf.keyPEM, nil)
+			if err != nil {
+				t.Fatalf("GenerateCSR: %v", err)
+			}
 
-	// Should only contain "example.com", not "www.example.com"
-	if len(csr.DNSNames) != 1 {
-		t.Fatalf("expected 1 DNS name, got %d: %v", len(csr.DNSNames), csr.DNSNames)
-	}
-	if csr.DNSNames[0] != "example.com" {
-		t.Errorf("expected DNS name 'example.com', got %q", csr.DNSNames[0])
-	}
-}
+			block, _ := pem.Decode(csrPEM)
+			csr, err := x509.ParseCertificateRequest(block.Bytes)
+			if err != nil {
+				t.Fatalf("parse CSR: %v", err)
+			}
 
-func TestGenerateCSR_WildcardExclusion(t *testing.T) {
-	// WHY: When cert has a wildcard SAN like *.example.com, the bare domain
-	// (example.com) should be excluded from the CSR since wildcard covers it.
-	t.Parallel()
-
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "example.com", []string{"*.example.com", "example.com"})
-
-	csrPEM, _, err := GenerateCSR(leaf.cert, leaf.keyPEM, nil)
-	if err != nil {
-		t.Fatalf("GenerateCSR: %v", err)
-	}
-
-	block, _ := pem.Decode(csrPEM)
-	csr, err := x509.ParseCertificateRequest(block.Bytes)
-	if err != nil {
-		t.Fatalf("parse CSR: %v", err)
-	}
-
-	// Should only contain "*.example.com", not bare "example.com"
-	if len(csr.DNSNames) != 1 {
-		t.Fatalf("expected 1 DNS name, got %d: %v", len(csr.DNSNames), csr.DNSNames)
-	}
-	if csr.DNSNames[0] != "*.example.com" {
-		t.Errorf("expected DNS name '*.example.com', got %q", csr.DNSNames[0])
+			if len(csr.DNSNames) != 1 {
+				t.Fatalf("expected 1 DNS name, got %d: %v", len(csr.DNSNames), csr.DNSNames)
+			}
+			if csr.DNSNames[0] != tt.wantDNS {
+				t.Errorf("expected DNS name %q, got %q", tt.wantDNS, csr.DNSNames[0])
+			}
+		})
 	}
 }
 
