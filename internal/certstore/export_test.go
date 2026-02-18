@@ -13,6 +13,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// Verify mockBundleWriter satisfies BundleWriter interface.
+var _ BundleWriter = (*mockBundleWriter)(nil)
+
 func TestGenerateBundleFiles_AllFileTypes(t *testing.T) {
 	// WHY: Verifies that GenerateBundleFiles produces the complete set of output
 	// files (PEM, chain, fullchain, intermediates, root, key, P12, K8s, JSON,
@@ -698,6 +701,171 @@ func TestGenerateJSON_IPAddresses(t *testing.T) {
 			t.Errorf("expected SAN %q not found in %v", expected, sans)
 		}
 	}
+}
+
+func TestExportMatchedBundles(t *testing.T) {
+	// WHY: ExportMatchedBundles is the shared orchestration function used by both
+	// CLI and WASM exports. It coordinates store -> Bundle -> GenerateBundleFiles
+	// -> BundleWriter. Verifying the full pipeline with a mock writer catches
+	// integration bugs (folder naming, wildcard sanitization, continue-on-error).
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "export.example.com", []string{"export.example.com"})
+
+	store := NewMemStore()
+	if err := store.HandleCertificate(leaf.cert, "test"); err != nil {
+		t.Fatalf("store cert: %v", err)
+	}
+	if err := store.HandleCertificate(ca.cert, "test"); err != nil {
+		t.Fatalf("store CA cert: %v", err)
+	}
+	if err := store.HandleKey(leaf.key, leaf.keyPEM, "test"); err != nil {
+		t.Fatalf("store key: %v", err)
+	}
+
+	skis := store.MatchedPairs()
+	if len(skis) == 0 {
+		t.Fatal("expected at least one matched pair")
+	}
+	store.SetBundleName(skis[0], "my-bundle")
+
+	var written []mockWriteCall
+	writer := &mockBundleWriter{calls: &written}
+
+	err := ExportMatchedBundles(t.Context(), ExportMatchedBundleInput{
+		Store:  store,
+		SKIs:   skis,
+		Writer: writer,
+		BundleOpts: certkit.BundleOptions{
+			CustomRoots: []*x509.Certificate{ca.cert},
+			TrustStore:  "custom",
+			Verify:      true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ExportMatchedBundles: %v", err)
+	}
+
+	if len(written) != 1 {
+		t.Fatalf("expected 1 write call, got %d", len(written))
+	}
+	call := written[0]
+
+	// Folder should use bundle name, not sanitized CN
+	if call.folder != "my-bundle" {
+		t.Errorf("folder = %q, want %q", call.folder, "my-bundle")
+	}
+
+	// Should have generated multiple files (PEM, key, chain, etc.)
+	if len(call.files) < 5 {
+		t.Errorf("expected at least 5 bundle files, got %d", len(call.files))
+	}
+
+	// Verify at least one .pem and one .key file exist
+	var hasPEM, hasKey bool
+	for _, f := range call.files {
+		if strings.HasSuffix(f.Name, ".pem") && !strings.Contains(f.Name, "chain") && !strings.Contains(f.Name, "root") && !strings.Contains(f.Name, "intermediates") {
+			hasPEM = true
+		}
+		if strings.HasSuffix(f.Name, ".key") {
+			hasKey = true
+		}
+	}
+	if !hasPEM {
+		t.Error("expected a .pem file in output")
+	}
+	if !hasKey {
+		t.Error("expected a .key file in output")
+	}
+}
+
+func TestExportMatchedBundles_SkipsMissingSKI(t *testing.T) {
+	// WHY: When a SKI in the input list has no matching cert or key (stale
+	// reference), ExportMatchedBundles must skip it without error rather than
+	// panicking on nil records.
+	t.Parallel()
+
+	store := NewMemStore()
+	var written []mockWriteCall
+	writer := &mockBundleWriter{calls: &written}
+
+	err := ExportMatchedBundles(t.Context(), ExportMatchedBundleInput{
+		Store:  store,
+		SKIs:   []string{"deadbeef"},
+		Writer: writer,
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if len(written) != 0 {
+		t.Errorf("expected 0 write calls for missing SKI, got %d", len(written))
+	}
+}
+
+func TestExportMatchedBundles_WildcardFolder(t *testing.T) {
+	// WHY: Wildcard certs without a bundle name should use SanitizeFileName on
+	// the CN, replacing * with _ in the folder name.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "*.wild.example.com", []string{"*.wild.example.com"})
+
+	store := NewMemStore()
+	if err := store.HandleCertificate(leaf.cert, "test"); err != nil {
+		t.Fatalf("store cert: %v", err)
+	}
+	if err := store.HandleCertificate(ca.cert, "test"); err != nil {
+		t.Fatalf("store CA cert: %v", err)
+	}
+	if err := store.HandleKey(leaf.key, leaf.keyPEM, "test"); err != nil {
+		t.Fatalf("store key: %v", err)
+	}
+
+	skis := store.MatchedPairs()
+	if len(skis) == 0 {
+		t.Fatal("expected at least one matched pair")
+	}
+
+	var written []mockWriteCall
+	writer := &mockBundleWriter{calls: &written}
+
+	err := ExportMatchedBundles(t.Context(), ExportMatchedBundleInput{
+		Store:  store,
+		SKIs:   skis,
+		Writer: writer,
+		BundleOpts: certkit.BundleOptions{
+			CustomRoots: []*x509.Certificate{ca.cert},
+			TrustStore:  "custom",
+			Verify:      true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ExportMatchedBundles: %v", err)
+	}
+
+	if len(written) != 1 {
+		t.Fatalf("expected 1 write call, got %d", len(written))
+	}
+
+	// Folder should have * replaced with _
+	if written[0].folder != "_.wild.example.com" {
+		t.Errorf("folder = %q, want %q", written[0].folder, "_.wild.example.com")
+	}
+}
+
+type mockWriteCall struct {
+	folder string
+	files  []BundleFile
+}
+
+type mockBundleWriter struct {
+	calls *[]mockWriteCall
+}
+
+func (w *mockBundleWriter) WriteBundleFiles(folder string, files []BundleFile) error {
+	*w.calls = append(*w.calls, mockWriteCall{folder: folder, files: files})
+	return nil
 }
 
 func TestGenerateBundleFiles_PKCS12RoundTrip(t *testing.T) {

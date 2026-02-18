@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"crypto/x509"
 	"encoding/json"
 	"net"
 	"os"
@@ -9,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/sensiblebit/certkit"
 )
 
 func assertColonHex(t *testing.T, label, value string, wantBytes int) {
@@ -199,6 +202,49 @@ func TestInspectFile_ContainerFormats(t *testing.T) {
 				t.Errorf("expected to find leaf certificate with CN=%s", tt.cn)
 			}
 		})
+	}
+}
+
+func TestInspectFile_PKCS7(t *testing.T) {
+	// WHY: inspectDERData has a PKCS#7 branch that extracts certs from SignedData
+	// containers. Without this test, a broken PKCS#7 decode path would silently
+	// return "no objects found" for .p7c files.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "p7.example.com", []string{"p7.example.com"}, nil)
+
+	p7Data, err := certkit.EncodePKCS7([]*x509.Certificate{leaf.cert, ca.cert})
+	if err != nil {
+		t.Fatalf("EncodePKCS7: %v", err)
+	}
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bundle.p7c")
+	if err := os.WriteFile(path, p7Data, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := InspectFile(path, nil)
+	if err != nil {
+		t.Fatalf("InspectFile: %v", err)
+	}
+
+	var certs int
+	var foundLeaf bool
+	for _, r := range results {
+		if r.Type == "certificate" {
+			certs++
+			if strings.Contains(r.Subject, "p7.example.com") {
+				foundLeaf = true
+			}
+		}
+	}
+	if certs != 2 {
+		t.Errorf("expected 2 certificates from PKCS#7, got %d", certs)
+	}
+	if !foundLeaf {
+		t.Error("expected to find leaf certificate with CN=p7.example.com")
 	}
 }
 

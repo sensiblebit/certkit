@@ -334,3 +334,96 @@ func TestExportBundles_EmptyBundleNameSkipped(t *testing.T) {
 		t.Errorf("expected empty output dir (cert has no bundle name), got %d entries", len(entries))
 	}
 }
+
+func TestDetermineBundleName(t *testing.T) {
+	// WHY: determineBundleName maps cert CNs to bundle folder names using exact
+	// string matching against configs. A wrong match would put bundle files in
+	// the wrong directory; a missed match would fall through to the sanitized CN.
+	t.Parallel()
+
+	configs := []BundleConfig{
+		{
+			CommonNames: []string{"example.com", "*.example.com"},
+			BundleName:  "example-bundle",
+		},
+		{
+			CommonNames: []string{"other.com"},
+			// Empty BundleName — should fall back to sanitized CN.
+		},
+	}
+
+	tests := []struct {
+		name string
+		cn   string
+		want string
+	}{
+		{"exact match with bundle name", "example.com", "example-bundle"},
+		{"wildcard match with bundle name", "*.example.com", "example-bundle"},
+		{"match with empty bundle name", "other.com", "other.com"},
+		{"no match falls back to CN", "unmatched.com", "unmatched.com"},
+		{"no match wildcard sanitized", "*.unmatched.com", "_.unmatched.com"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := determineBundleName(tt.cn, configs)
+			if got != tt.want {
+				t.Errorf("determineBundleName(%q) = %q, want %q", tt.cn, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAssignBundleNames(t *testing.T) {
+	// WHY: AssignBundleNames iterates all certs and applies determineBundleName;
+	// verifies that bundle names are correctly assigned to the store's CertRecords
+	// so the export pipeline creates properly named output folders.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf1 := newRSALeaf(t, ca, "app.example.com", []string{"app.example.com"}, nil)
+	// Use ECDSA leaf for unique serial number (200 vs 100) to avoid certID collision.
+	leaf2 := newECDSALeaf(t, ca, "*.wild.example.com", []string{"*.wild.example.com"})
+
+	store := certstore.NewMemStore()
+	if err := store.HandleCertificate(leaf1.cert, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HandleCertificate(leaf2.cert, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HandleCertificate(ca.cert, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HandleKey(leaf1.key, leaf1.keyPEM, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HandleKey(leaf2.key, leaf2.keyPEM, "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	configs := []BundleConfig{
+		{
+			CommonNames: []string{"app.example.com"},
+			BundleName:  "app-bundle",
+		},
+		// No config for *.wild.example.com — should get sanitized CN
+	}
+
+	AssignBundleNames(store, configs)
+
+	// Verify bundle names via BundleNames (returns names with both cert+key)
+	bundleNames := store.BundleNames()
+	nameSet := make(map[string]bool, len(bundleNames))
+	for _, bn := range bundleNames {
+		nameSet[bn] = true
+	}
+
+	if !nameSet["app-bundle"] {
+		t.Error("expected 'app-bundle' in BundleNames")
+	}
+	if !nameSet["_.wild.example.com"] {
+		t.Errorf("expected '_.wild.example.com' in BundleNames, got %v", bundleNames)
+	}
+}

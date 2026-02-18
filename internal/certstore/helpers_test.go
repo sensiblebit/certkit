@@ -169,3 +169,30 @@ func TestFormatCN(t *testing.T) {
 		})
 	}
 }
+
+func TestSanitizeFileName(t *testing.T) {
+	// WHY: SanitizeFileName is used in export paths to produce filesystem-safe
+	// names from certificate CNs; wildcard asterisks must become underscores.
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"wildcard CN", "*.example.com", "_.example.com"},
+		{"no wildcard", "example.com", "example.com"},
+		{"multiple wildcards", "*.*.example.com", "_._.example.com"},
+		{"empty string", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := SanitizeFileName(tt.input)
+			if got != tt.want {
+				t.Errorf("SanitizeFileName(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
