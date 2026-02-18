@@ -52,51 +52,6 @@ func TestGenerateCSR_DoesNotCopyEmailAddresses(t *testing.T) {
 	}
 }
 
-func TestGenerateCSR_withKey(t *testing.T) {
-	// WHY: Verifies that GenerateCSR copies Subject, DNS SANs, IP SANs, and URIs
-	// from the source certificate to the CSR template.
-	t.Parallel()
-	leaf, key := generateLeafWithSANs(t)
-
-	csrPEM, keyPEM, err := GenerateCSR(leaf, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if keyPEM != "" {
-		t.Error("expected empty keyPEM when private key is provided")
-	}
-
-	block, _ := pem.Decode([]byte(csrPEM))
-	if block == nil || block.Type != "CERTIFICATE REQUEST" {
-		t.Fatal("failed to decode CSR PEM")
-	}
-	csr, err := x509.ParseCertificateRequest(block.Bytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if csr.Subject.CommonName != leaf.Subject.CommonName {
-		t.Errorf("CN=%q, want %q", csr.Subject.CommonName, leaf.Subject.CommonName)
-	}
-	if len(csr.Subject.Organization) != 1 || csr.Subject.Organization[0] != "Test Org" {
-		t.Errorf("Organization=%v, want [Test Org]", csr.Subject.Organization)
-	}
-	if len(csr.DNSNames) != 2 {
-		t.Errorf("DNSNames count=%d, want 2", len(csr.DNSNames))
-	}
-	if len(csr.IPAddresses) != len(leaf.IPAddresses) {
-		t.Fatalf("IPAddresses count=%d, want %d", len(csr.IPAddresses), len(leaf.IPAddresses))
-	}
-	for i, got := range csr.IPAddresses {
-		if !got.Equal(leaf.IPAddresses[i]) {
-			t.Errorf("IPAddresses[%d]=%v, want %v", i, got, leaf.IPAddresses[i])
-		}
-	}
-	if len(csr.URIs) != 1 || csr.URIs[0].String() != "spiffe://example.com/workload" {
-		t.Errorf("URIs=%v, want [spiffe://example.com/workload]", csr.URIs)
-	}
-}
-
 func TestGenerateCSR_nonSignerKey(t *testing.T) {
 	// WHY: Keys that do not implement crypto.Signer must be rejected with a clear error, not panic during CSR signing.
 	t.Parallel()
@@ -518,67 +473,95 @@ func TestGenerateCSR_ParsePEMRoundTrip(t *testing.T) {
 	// WHY: Per T-6, the CSR encode/decode path needs a round-trip test that
 	// generates a CSR via GenerateCSR and parses it back via ParsePEMCertificateRequest,
 	// then verifies all subject fields and SANs survive the cycle intact.
-	// Also verifies the auto-generated key is ECDSA (the documented default).
+	// Covers both the auto-key path (key=nil) and provided-key path (keyPEM="").
 	t.Parallel()
-	leaf, _ := generateLeafWithSANs(t)
+	leaf, existingKey := generateLeafWithSANs(t)
 
-	csrPEM, keyPEM, err := GenerateCSR(leaf, nil)
-	if err != nil {
-		t.Fatalf("GenerateCSR: %v", err)
-	}
-	if csrPEM == "" {
-		t.Fatal("CSR PEM is empty")
-	}
-	if keyPEM == "" {
-		t.Fatal("auto-generated key PEM is empty")
-	}
+	// Subtest: auto-generated key
+	t.Run("auto key", func(t *testing.T) {
+		t.Parallel()
+		csrPEM, keyPEM, err := GenerateCSR(leaf, nil)
+		if err != nil {
+			t.Fatalf("GenerateCSR: %v", err)
+		}
+		if csrPEM == "" {
+			t.Fatal("CSR PEM is empty")
+		}
+		if keyPEM == "" {
+			t.Fatal("auto-generated key PEM is empty")
+		}
 
-	// Verify auto-generated key is ECDSA P-256
-	keyBlock, _ := pem.Decode([]byte(keyPEM))
-	if keyBlock == nil || keyBlock.Type != "PRIVATE KEY" {
-		t.Fatal("failed to decode key PEM or wrong block type")
-	}
-	parsedKey, err := x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
-	if err != nil {
-		t.Fatalf("parsing auto-generated key: %v", err)
-	}
-	if _, ok := parsedKey.(*ecdsa.PrivateKey); !ok {
-		t.Fatalf("expected auto-generated *ecdsa.PrivateKey, got %T", parsedKey)
-	}
+		// Verify auto-generated key is ECDSA P-256
+		keyBlock, _ := pem.Decode([]byte(keyPEM))
+		if keyBlock == nil || keyBlock.Type != "PRIVATE KEY" {
+			t.Fatal("failed to decode key PEM or wrong block type")
+		}
+		parsedKey, err := x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
+		if err != nil {
+			t.Fatalf("parsing auto-generated key: %v", err)
+		}
+		if _, ok := parsedKey.(*ecdsa.PrivateKey); !ok {
+			t.Fatalf("expected auto-generated *ecdsa.PrivateKey, got %T", parsedKey)
+		}
 
-	// Parse CSR via the public API
+		verifyCSRFields(t, csrPEM, leaf)
+	})
+
+	// Subtest: provided key (keyPEM must be empty)
+	t.Run("provided key", func(t *testing.T) {
+		t.Parallel()
+		csrPEM, keyPEM, err := GenerateCSR(leaf, existingKey)
+		if err != nil {
+			t.Fatalf("GenerateCSR: %v", err)
+		}
+		if keyPEM != "" {
+			t.Error("expected empty keyPEM when private key is provided")
+		}
+
+		verifyCSRFields(t, csrPEM, leaf)
+	})
+}
+
+// verifyCSRFields parses a CSR PEM and checks that all subject and SAN fields
+// match the source certificate. Used by TestGenerateCSR_ParsePEMRoundTrip.
+func verifyCSRFields(t *testing.T, csrPEM string, leaf *x509.Certificate) {
+	t.Helper()
+
 	csr, err := ParsePEMCertificateRequest([]byte(csrPEM))
 	if err != nil {
 		t.Fatalf("ParsePEMCertificateRequest: %v", err)
 	}
-
-	// Verify signature
 	if err := VerifyCSR(csr); err != nil {
 		t.Fatalf("CSR signature invalid: %v", err)
 	}
-
-	// Verify subject fields survived
 	if csr.Subject.CommonName != leaf.Subject.CommonName {
 		t.Errorf("CN = %q, want %q", csr.Subject.CommonName, leaf.Subject.CommonName)
 	}
-
-	// Verify DNS names survived with correct values.
+	if len(csr.Subject.Organization) != len(leaf.Subject.Organization) {
+		t.Errorf("Organization = %v, want %v", csr.Subject.Organization, leaf.Subject.Organization)
+	}
 	if len(csr.DNSNames) != len(leaf.DNSNames) {
-		t.Fatalf("CSR DNSNames count = %d, want %d", len(csr.DNSNames), len(leaf.DNSNames))
+		t.Fatalf("DNSNames count = %d, want %d", len(csr.DNSNames), len(leaf.DNSNames))
 	}
 	for i, got := range csr.DNSNames {
 		if got != leaf.DNSNames[i] {
 			t.Errorf("DNSNames[%d] = %q, want %q", i, got, leaf.DNSNames[i])
 		}
 	}
-
-	// Verify IP addresses survived with correct values.
 	if len(csr.IPAddresses) != len(leaf.IPAddresses) {
 		t.Fatalf("IP addresses count = %d, want %d", len(csr.IPAddresses), len(leaf.IPAddresses))
 	}
 	for i, got := range csr.IPAddresses {
 		if !got.Equal(leaf.IPAddresses[i]) {
 			t.Errorf("IPAddresses[%d] = %v, want %v", i, got, leaf.IPAddresses[i])
+		}
+	}
+	if len(csr.URIs) != len(leaf.URIs) {
+		t.Errorf("URIs count = %d, want %d", len(csr.URIs), len(leaf.URIs))
+	}
+	for i, got := range csr.URIs {
+		if got.String() != leaf.URIs[i].String() {
+			t.Errorf("URIs[%d] = %q, want %q", i, got, leaf.URIs[i])
 		}
 	}
 }

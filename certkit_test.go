@@ -1149,3 +1149,152 @@ func TestParsePEMPrivateKeyWithPasswords_CorruptNotEncrypted(t *testing.T) {
 		t.Errorf("error should not be 'no PEM block' — PEM block exists, DER is corrupt: %v", err)
 	}
 }
+
+func TestIsPEM(t *testing.T) {
+	// WHY: IsPEM gates PEM-vs-binary dispatch throughout the codebase;
+	// false positives on binary data or false negatives on valid PEM
+	// would route data to the wrong parser.
+	t.Parallel()
+	tests := []struct {
+		name string
+		data []byte
+		want bool
+	}{
+		{"valid PEM cert", []byte("-----BEGIN CERTIFICATE-----\ndata\n-----END CERTIFICATE-----"), true},
+		{"valid PEM key", []byte("-----BEGIN PRIVATE KEY-----\ndata"), true},
+		{"prefix only", []byte("-----BEGIN"), true},
+		{"nil", nil, false},
+		{"empty", []byte{}, false},
+		{"plain text", []byte("hello world"), false},
+		{"binary data", []byte{0x30, 0x82, 0x01, 0x22}, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := IsPEM(tt.data); got != tt.want {
+				t.Errorf("IsPEM(%q) = %v, want %v", tt.data, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCertFingerprints(t *testing.T) {
+	// WHY: Fingerprints are used in display output, JSON, and cert matching.
+	// Wrong format (length, case, separator) would break downstream consumers.
+	t.Parallel()
+	_, _, leafPEM := generateTestPKI(t)
+	cert, _ := ParsePEMCertificate([]byte(leafPEM))
+
+	t.Run("SHA256 hex", func(t *testing.T) {
+		t.Parallel()
+		fp := CertFingerprint(cert)
+		// SHA-256 = 32 bytes = 64 hex chars
+		if len(fp) != 64 {
+			t.Errorf("SHA-256 fingerprint length = %d, want 64", len(fp))
+		}
+		if fp != strings.ToLower(fp) {
+			t.Errorf("SHA-256 fingerprint should be lowercase, got %q", fp)
+		}
+	})
+
+	t.Run("SHA1 hex", func(t *testing.T) {
+		t.Parallel()
+		fp := CertFingerprintSHA1(cert)
+		// SHA-1 = 20 bytes = 40 hex chars
+		if len(fp) != 40 {
+			t.Errorf("SHA-1 fingerprint length = %d, want 40", len(fp))
+		}
+		if fp != strings.ToLower(fp) {
+			t.Errorf("SHA-1 fingerprint should be lowercase, got %q", fp)
+		}
+	})
+
+	t.Run("SHA256 colon", func(t *testing.T) {
+		t.Parallel()
+		fp := CertFingerprintColonSHA256(cert)
+		// 32 bytes = 32 pairs + 31 colons = 95 chars, uppercase
+		if len(fp) != 95 {
+			t.Errorf("SHA-256 colon fingerprint length = %d, want 95", len(fp))
+		}
+		if fp != strings.ToUpper(fp) {
+			t.Errorf("SHA-256 colon fingerprint should be uppercase, got %q", fp)
+		}
+		if strings.Count(fp, ":") != 31 {
+			t.Errorf("expected 31 colons, got %d", strings.Count(fp, ":"))
+		}
+	})
+
+	t.Run("SHA1 colon", func(t *testing.T) {
+		t.Parallel()
+		fp := CertFingerprintColonSHA1(cert)
+		// 20 bytes = 20 pairs + 19 colons = 59 chars, uppercase
+		if len(fp) != 59 {
+			t.Errorf("SHA-1 colon fingerprint length = %d, want 59", len(fp))
+		}
+		if fp != strings.ToUpper(fp) {
+			t.Errorf("SHA-1 colon fingerprint should be uppercase, got %q", fp)
+		}
+	})
+
+	t.Run("deterministic", func(t *testing.T) {
+		t.Parallel()
+		fp1 := CertFingerprint(cert)
+		fp2 := CertFingerprint(cert)
+		if fp1 != fp2 {
+			t.Error("fingerprint should be deterministic")
+		}
+	})
+}
+
+func TestColonHex_EdgeCases(t *testing.T) {
+	// WHY: ColonHex is used for SKI, AKI, and fingerprint display. Edge cases
+	// (empty, single byte) must produce correct format without panics.
+	t.Parallel()
+	tests := []struct {
+		name string
+		data []byte
+		want string
+	}{
+		{"empty", []byte{}, ""},
+		{"single byte", []byte{0xab}, "ab"},
+		{"two bytes", []byte{0xab, 0xcd}, "ab:cd"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := ColonHex(tt.data); got != tt.want {
+				t.Errorf("ColonHex(%x) = %q, want %q", tt.data, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestComputeSKILegacy(t *testing.T) {
+	// WHY: ComputeSKILegacy uses SHA-1 (RFC 5280) for cross-matching with
+	// legacy certificates. It must return 20 bytes (SHA-1 output size) and
+	// differ from ComputeSKI (which uses truncated SHA-256).
+	t.Parallel()
+	_, _, leafPEM := generateTestPKI(t)
+	cert, _ := ParsePEMCertificate([]byte(leafPEM))
+
+	legacy, err := ComputeSKILegacy(cert.PublicKey)
+	if err != nil {
+		t.Fatalf("ComputeSKILegacy: %v", err)
+	}
+	if len(legacy) != 20 {
+		t.Errorf("legacy SKI length = %d, want 20 (SHA-1)", len(legacy))
+	}
+
+	modern, err := ComputeSKI(cert.PublicKey)
+	if err != nil {
+		t.Fatalf("ComputeSKI: %v", err)
+	}
+	if len(modern) != 20 {
+		t.Errorf("modern SKI length = %d, want 20 (truncated SHA-256)", len(modern))
+	}
+
+	// Legacy (SHA-1) and modern (truncated SHA-256) must differ
+	if string(legacy) == string(modern) {
+		t.Error("legacy SKI (SHA-1) should differ from modern SKI (truncated SHA-256)")
+	}
+}
