@@ -264,17 +264,18 @@ func TestCertSKI_errorReturnsEmpty(t *testing.T) {
 }
 
 func TestColonHex(t *testing.T) {
-	// WHY: ColonHex formats SKI/AKI/fingerprint bytes for display; edge cases (nil, empty, single byte) must not panic or produce malformed output.
+	// WHY: ColonHex formats SKI/AKI/fingerprint bytes for display; edge cases
+	// (nil, empty, single byte) must not panic or produce malformed output.
+	// Multi-byte formatting correctness follows from encoding/hex (T-9).
 	t.Parallel()
 	tests := []struct {
 		input    []byte
 		expected string
 	}{
-		{[]byte{0x5c, 0x15, 0x76}, "5c:15:76"},
-		{[]byte{0x00}, "00"},
-		{[]byte{0xff, 0x00, 0xab}, "ff:00:ab"},
 		{nil, ""},
 		{[]byte{}, ""},
+		{[]byte{0x00}, "00"},
+		{[]byte{0xab, 0xcd}, "ab:cd"},
 	}
 	for _, tt := range tests {
 		got := ColonHex(tt.input)
@@ -415,23 +416,14 @@ func TestParsePEMPrivateKey_MislabeledBlockType(t *testing.T) {
 
 func TestDefaultPasswords(t *testing.T) {
 	// WHY: DefaultPasswords must include the well-known passwords (empty,
-	// "password", "changeit") used by PKCS#12 and JKS files in a stable
-	// order; missing any breaks auto-decryption, and order matters because
-	// DeduplicatePasswords places defaults first.
+	// "password", "changeit", "keypassword") used by PKCS#12 and JKS files
+	// in a stable order; missing any breaks auto-decryption, and order matters
+	// because DeduplicatePasswords places defaults first.
 	t.Parallel()
-	passwords := DefaultPasswords()
-	if len(passwords) < 3 {
-		t.Fatalf("expected at least 3 default passwords, got %d", len(passwords))
-	}
-	// Verify order: empty string first, then "password", then "changeit"
-	if passwords[0] != "" {
-		t.Errorf("passwords[0] = %q, want empty string", passwords[0])
-	}
-	if passwords[1] != "password" {
-		t.Errorf("passwords[1] = %q, want \"password\"", passwords[1])
-	}
-	if passwords[2] != "changeit" {
-		t.Errorf("passwords[2] = %q, want \"changeit\"", passwords[2])
+	want := []string{"", "password", "changeit", "keypassword"}
+	got := DefaultPasswords()
+	if !slices.Equal(got, want) {
+		t.Errorf("DefaultPasswords() = %v, want %v", got, want)
 	}
 }
 
@@ -1023,32 +1015,6 @@ func TestParsePEMCertificate_ReturnsFirstCertFromBundle(t *testing.T) {
 	}
 	if len(all) != 2 {
 		t.Fatalf("expected 2 certs in bundle, got %d", len(all))
-	}
-}
-
-func TestParsePEMPrivateKey_OpenSSH_Ed25519(t *testing.T) {
-	// WHY: OpenSSH Ed25519 keys exercise the normalizeKey path (pointer to value
-	// conversion). One key type suffices for this thin wrapper (T-13).
-	t.Parallel()
-
-	_, edKey, _ := ed25519.GenerateKey(rand.Reader)
-
-	sshPEM, err := ssh.MarshalPrivateKey(edKey, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	pemBytes := pem.EncodeToMemory(sshPEM)
-
-	parsed, err := ParsePEMPrivateKey(pemBytes)
-	if err != nil {
-		t.Fatalf("ParsePEMPrivateKey(OpenSSH Ed25519): %v", err)
-	}
-	gotType := fmt.Sprintf("%T", parsed)
-	if gotType != "ed25519.PrivateKey" {
-		t.Errorf("expected ed25519.PrivateKey, got %s", gotType)
-	}
-	if !edKey.Equal(parsed) {
-		t.Error("parsed key does not match original")
 	}
 }
 

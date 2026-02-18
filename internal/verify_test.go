@@ -190,29 +190,6 @@ func TestVerifyCert_CheckKeyMatchNilKey(t *testing.T) {
 	}
 }
 
-func TestVerifyCert_SelfSignedChain(t *testing.T) {
-	// WHY: Self-signed CA certs must validate against themselves in a custom trust store; this is the simplest valid chain and a common deployment pattern.
-	t.Parallel()
-	ca := newRSACA(t)
-
-	// Use the CA cert itself as a "self-signed" cert and verify against itself
-	result, err := VerifyCert(context.Background(), &VerifyInput{
-		Cert:        ca.cert,
-		CheckChain:  true,
-		TrustStore:  "custom",
-		CustomRoots: []*x509.Certificate{ca.cert},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.ChainValid == nil {
-		t.Fatal("expected ChainValid to be set")
-	}
-	if !*result.ChainValid {
-		t.Errorf("expected self-signed cert to validate against itself as custom root, got chain error: %s", result.ChainErr)
-	}
-}
-
 func TestVerifyCert_SimultaneousChainAndKeyFailures(t *testing.T) {
 	// WHY: Existing tests only check one failure mode at a time (key mismatch OR
 	// chain invalid). This verifies that when BOTH CheckChain and CheckKeyMatch

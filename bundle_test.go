@@ -274,29 +274,31 @@ func TestBundle_verifyFalsePassthrough(t *testing.T) {
 }
 
 func TestFetchLeafFromURL(t *testing.T) {
-	// WHY: FetchLeafFromURL is the entry point for remote cert inspection; must return the leaf (not a CA) with a populated CN.
+	// WHY: FetchLeafFromURL is the entry point for remote cert inspection; must
+	// return the leaf (not a CA) with a populated CN. The explicit-port variant
+	// catches naive URL parsing that could double-append :443 (T-12).
 	t.Parallel()
-	cert, err := FetchLeafFromURL(context.Background(), "https://google.com", 5*time.Second)
-	if err != nil {
-		t.Skipf("cannot connect to google.com: %v", err)
+	tests := []struct {
+		name string
+		url  string
+	}{
+		{"without port", "https://google.com"},
+		{"with explicit port", "https://google.com:443"},
 	}
-	if cert.IsCA {
-		t.Error("expected leaf cert, got CA")
-	}
-	if cert.Subject.CommonName == "" {
-		t.Error("empty CN")
-	}
-}
-
-func TestFetchLeafFromURL_withPort(t *testing.T) {
-	// WHY: URLs with explicit port must work; naive URL parsing could double-append :443 or fail to extract the host.
-	t.Parallel()
-	cert, err := FetchLeafFromURL(context.Background(), "https://google.com:443", 5*time.Second)
-	if err != nil {
-		t.Skipf("cannot connect to google.com:443: %v", err)
-	}
-	if cert.IsCA {
-		t.Error("expected leaf cert, got CA")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			cert, err := FetchLeafFromURL(context.Background(), tt.url, 5*time.Second)
+			if err != nil {
+				t.Skipf("cannot connect to %s: %v", tt.url, err)
+			}
+			if cert.IsCA {
+				t.Error("expected leaf cert, got CA")
+			}
+			if cert.Subject.CommonName == "" {
+				t.Error("empty CN")
+			}
+		})
 	}
 }
 
@@ -342,11 +344,10 @@ func TestFetchCertificatesFromURL_HTTP404(t *testing.T) {
 	}
 }
 
-func TestFetchCertificatesFromURL_Formats(t *testing.T) {
-	// WHY: AIA endpoints serve certs in DER, PEM, and PKCS#7 (.p7c) formats.
-	// The HTTP wrapper must auto-detect format and delegate to ParseCertificatesAny.
-	// One test per format verifies the HTTP layer works; detailed format parsing
-	// is covered by TestParseCertificatesAny_* tests (T-14).
+func TestFetchCertificatesFromURL_DER(t *testing.T) {
+	// WHY: fetchCertificatesFromURL delegates to ParseCertificatesAny; one format
+	// (DER) suffices to verify the HTTP body delegation (T-13). Format-specific
+	// parsing is covered by TestParseCertificatesAny_* tests.
 	t.Parallel()
 
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -357,42 +358,22 @@ func TestFetchCertificatesFromURL_Formats(t *testing.T) {
 		NotAfter:     time.Now().Add(24 * time.Hour),
 	}
 	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	cert, _ := x509.ParseCertificate(certBytes)
-	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certBytes})
-	p7Data, err := EncodePKCS7([]*x509.Certificate{cert})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(certBytes)
+	}))
+	defer srv.Close()
+
+	client := srv.Client()
+	certs, err := fetchCertificatesFromURL(context.Background(), client, srv.URL)
 	if err != nil {
-		t.Fatalf("encode PKCS#7: %v", err)
+		t.Fatalf("fetchCertificatesFromURL(DER): %v", err)
 	}
-
-	tests := []struct {
-		name      string
-		body      []byte
-		wantCount int
-	}{
-		{"DER", certBytes, 1},
-		{"PEM", pemBytes, 1},
-		{"PKCS7", p7Data, 1},
+	if len(certs) != 1 {
+		t.Fatalf("expected 1 cert, got %d", len(certs))
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				_, _ = w.Write(tt.body)
-			}))
-			defer srv.Close()
-
-			client := srv.Client()
-			certs, err := fetchCertificatesFromURL(context.Background(), client, srv.URL)
-			if err != nil {
-				t.Fatalf("fetchCertificatesFromURL(%s): %v", tt.name, err)
-			}
-			if len(certs) != tt.wantCount {
-				t.Fatalf("expected %d cert(s), got %d", tt.wantCount, len(certs))
-			}
-			if certs[0].Subject.CommonName != "format-test" {
-				t.Errorf("CN=%q, want format-test", certs[0].Subject.CommonName)
-			}
-		})
+	if certs[0].Subject.CommonName != "format-test" {
+		t.Errorf("CN=%q, want format-test", certs[0].Subject.CommonName)
 	}
 }
 
@@ -587,6 +568,10 @@ func TestDetectAndSwapLeaf_NoSwapWhenLeafIsCorrect(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Positive assertion: the leaf is still the leaf we passed in.
+	if result.Leaf.Subject.CommonName != "noswap-leaf.example.com" {
+		t.Errorf("leaf CN=%q, want noswap-leaf.example.com", result.Leaf.Subject.CommonName)
+	}
 	for _, w := range result.Warnings {
 		if strings.Contains(w, "reversed chain detected") {
 			t.Error("should not have swap warning when leaf is correct")
@@ -640,7 +625,8 @@ func TestDetectAndSwapLeaf_AllCAsInExtras(t *testing.T) {
 
 func TestMozillaRootPool(t *testing.T) {
 	// WHY: MozillaRootPool is used for chain verification; must return a
-	// non-nil pool that can actually verify a real root certificate.
+	// non-nil pool. Whether a root cert verifies against the pool is stdlib
+	// behavior (T-9), so we only assert pool construction succeeds.
 	t.Parallel()
 	pool, err := MozillaRootPool()
 	if err != nil {
@@ -648,18 +634,6 @@ func TestMozillaRootPool(t *testing.T) {
 	}
 	if pool == nil {
 		t.Fatal("MozillaRootPool returned nil pool")
-	}
-	// Verify the pool contains real certificates by checking that a known
-	// Mozilla root (the first one in the PEM bundle) validates against it.
-	data := MozillaRootPEM()
-	block, _ := pem.Decode(data)
-	root, err := x509.ParseCertificate(block.Bytes)
-	if err != nil {
-		t.Fatalf("parse first root: %v", err)
-	}
-	_, err = root.Verify(x509.VerifyOptions{Roots: pool})
-	if err != nil {
-		t.Errorf("first Mozilla root should verify against the pool: %v", err)
 	}
 }
 

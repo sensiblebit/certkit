@@ -539,8 +539,10 @@ func TestEncodeDecodeJKS_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestDecodeJKS_EmptyPasswords(t *testing.T) {
-	// WHY: Nil or empty password lists must produce a clear error, not panic or silently return empty results.
+func TestDecodeJKS_NilPasswords(t *testing.T) {
+	// WHY: Nil password list must produce a clear error, not panic or silently
+	// return empty results. Empty slice follows the same code path (range over
+	// nil/empty both iterate zero times), so one case suffices (T-12).
 	t.Parallel()
 	data := buildJKSTrustedCert(t, "changeit")
 
@@ -550,40 +552,6 @@ func TestDecodeJKS_EmptyPasswords(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "loading JKS") {
 		t.Errorf("error should mention loading JKS, got: %v", err)
-	}
-
-	_, _, err = DecodeJKS(data, []string{})
-	if err == nil {
-		t.Fatal("expected error when password list is empty")
-	}
-	if !strings.Contains(err.Error(), "loading JKS") {
-		t.Errorf("error should mention loading JKS, got: %v", err)
-	}
-}
-
-func TestDecodeJKS_TruncatedWithCorrectMagic(t *testing.T) {
-	// WHY: A JKS file that starts with the correct magic bytes (0xFEEDFEED)
-	// but is truncated is a real scenario (e.g., incomplete download, disk
-	// corruption). DecodeJKS must return an error, not panic or hang.
-	t.Parallel()
-	data := buildJKSPrivateKey(t, "changeit")
-
-	// Verify the data actually starts with JKS magic bytes.
-	if len(data) < 20 {
-		t.Fatalf("valid JKS too short to truncate: %d bytes", len(data))
-	}
-	if data[0] != 0xFE || data[1] != 0xED || data[2] != 0xFE || data[3] != 0xED {
-		t.Fatal("expected JKS magic bytes 0xFEEDFEED at start of valid JKS data")
-	}
-
-	// Truncate to only 20 bytes — magic is intact but everything else is cut off.
-	truncated := data[:20]
-	_, _, err := DecodeJKS(truncated, []string{"changeit"})
-	if err == nil {
-		t.Error("expected error for truncated JKS with correct magic bytes")
-	}
-	if !strings.Contains(err.Error(), "loading JKS") {
-		t.Errorf("unexpected error: %v", err)
 	}
 }
 

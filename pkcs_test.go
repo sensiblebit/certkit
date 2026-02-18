@@ -36,11 +36,12 @@ func TestEncodeContainers_InvalidKey(t *testing.T) {
 		wantSub string
 		encode  func(key any) ([]byte, error)
 	}{
+		// struct{}{} and nil both hit the same default branch in validatePKCS12KeyType
+		// for PKCS12/PKCS12Legacy; one unsupported type suffices per T-12.
+		// JKS nil is kept because it hits x509.MarshalPKCS8PrivateKey, a different path.
 		{"PKCS12/unsupported", struct{}{}, "unsupported private key type", func(k any) ([]byte, error) { return EncodePKCS12(k, cert, nil, "pass") }},
 		{"PKCS12Legacy/unsupported", struct{}{}, "unsupported private key type", func(k any) ([]byte, error) { return EncodePKCS12Legacy(k, cert, nil, "pass") }},
 		{"JKS/unsupported", struct{}{}, "unknown key type", func(k any) ([]byte, error) { return EncodeJKS(k, cert, nil, "changeit") }},
-		{"PKCS12/nil", nil, "unsupported private key type", func(k any) ([]byte, error) { return EncodePKCS12(k, cert, nil, "pass") }},
-		{"PKCS12Legacy/nil", nil, "unsupported private key type", func(k any) ([]byte, error) { return EncodePKCS12Legacy(k, cert, nil, "pass") }},
 		{"JKS/nil", nil, "unknown key type", func(k any) ([]byte, error) { return EncodeJKS(k, cert, nil, "changeit") }},
 	}
 	for _, tt := range tests {
@@ -123,28 +124,17 @@ func TestDecodePKCS12_wrongPassword(t *testing.T) {
 	}
 }
 
-func TestEncodePKCS7_EmptyInput(t *testing.T) {
-	// WHY: Both nil and empty cert lists must be rejected; producing a PKCS#7
-	// with no certs would create a valid-looking but useless container.
+func TestEncodePKCS7_NilInput(t *testing.T) {
+	// WHY: Nil cert list must be rejected; producing a PKCS#7 with no certs
+	// would create a valid-looking but useless container. Empty slice follows
+	// the same len(certs)==0 code path, so one case suffices (T-12).
 	t.Parallel()
-	tests := []struct {
-		name  string
-		certs []*x509.Certificate
-	}{
-		{"nil", nil},
-		{"empty slice", []*x509.Certificate{}},
+	_, err := EncodePKCS7(nil)
+	if err == nil {
+		t.Fatal("expected error for nil cert list")
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			_, err := EncodePKCS7(tt.certs)
-			if err == nil {
-				t.Fatal("expected error for empty cert list")
-			}
-			if !strings.Contains(err.Error(), "no certificates") {
-				t.Errorf("error should mention no certificates, got: %v", err)
-			}
-		})
+	if !strings.Contains(err.Error(), "no certificates") {
+		t.Errorf("error should mention no certificates, got: %v", err)
 	}
 }
 

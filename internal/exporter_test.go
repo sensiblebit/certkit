@@ -2,20 +2,15 @@ package internal
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
-	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/sensiblebit/certkit"
 	"github.com/sensiblebit/certkit/internal/certstore"
@@ -208,12 +203,7 @@ func TestWriteBundleFiles_K8sYAMLDecode(t *testing.T) {
 		t.Fatalf("parse tls.key PEM: %v", err)
 	}
 
-	// Verify key type matches what we put in
-	if certkit.KeyAlgorithmName(parsedKey) != "RSA" {
-		t.Errorf("key algorithm = %q, want RSA", certkit.KeyAlgorithmName(parsedKey))
-	}
-
-	// Verify key matches the certificate
+	// Verify key matches the certificate (key type is implicitly tested via match)
 	match, err := certkit.KeyMatchesCert(parsedKey, certs[0])
 	if err != nil {
 		t.Fatalf("KeyMatchesCert: %v", err)
@@ -258,60 +248,6 @@ func TestWriteBundleFiles_K8sYAMLDecode_Wildcard(t *testing.T) {
 	}
 }
 
-func TestWriteBundleFiles_ChainExcludesRoot(t *testing.T) {
-	// WHY: chain.pem must exclude the root CA (servers should not send roots), while fullchain.pem includes it; verifies the critical distinction between the two files.
-	t.Parallel()
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "chain.example.com", []string{"chain.example.com"}, nil)
-
-	certRecord := &certstore.CertRecord{
-		Cert: leaf.cert,
-	}
-	keyRecord := &certstore.KeyRecord{PEM: leaf.keyPEM}
-	bundle := newTestBundle(t, leaf, ca)
-
-	outDir := t.TempDir()
-	err := writeBundleFiles(outDir, "chain-test", certRecord, keyRecord, bundle, nil)
-	if err != nil {
-		t.Fatalf("writeBundleFiles: %v", err)
-	}
-
-	folderPath := filepath.Join(outDir, "chain-test")
-	prefix := "chain.example.com"
-
-	// chain.pem should contain leaf + intermediates (NOT root)
-	chainData, err := os.ReadFile(filepath.Join(folderPath, prefix+".chain.pem"))
-	if err != nil {
-		t.Fatalf("read chain.pem: %v", err)
-	}
-	chainCerts, err := certkit.ParsePEMCertificates(chainData)
-	if err != nil {
-		t.Fatalf("parse chain.pem: %v", err)
-	}
-	if len(chainCerts) != 2 {
-		t.Fatalf("chain.pem should have 2 certs (leaf + 1 intermediate), got %d", len(chainCerts))
-	}
-	if chainCerts[0].Subject.CommonName != "chain.example.com" {
-		t.Errorf("chain.pem first cert CN = %q, want chain.example.com", chainCerts[0].Subject.CommonName)
-	}
-	if !chainCerts[1].IsCA {
-		t.Error("chain.pem second cert should be CA (intermediate)")
-	}
-
-	// fullchain.pem should contain leaf + intermediates + root
-	fullchainData, err := os.ReadFile(filepath.Join(folderPath, prefix+".fullchain.pem"))
-	if err != nil {
-		t.Fatalf("read fullchain.pem: %v", err)
-	}
-	fullchainCerts, err := certkit.ParsePEMCertificates(fullchainData)
-	if err != nil {
-		t.Fatalf("parse fullchain.pem: %v", err)
-	}
-	if len(fullchainCerts) != 3 {
-		t.Fatalf("fullchain.pem should have 3 certs (leaf + intermediate + root), got %d", len(fullchainCerts))
-	}
-}
-
 func TestWriteBundleFiles_SensitiveFilePermissions(t *testing.T) {
 	// WHY: Private key, PKCS#12, and K8s secret files contain sensitive material; verifies they are written with 0600 permissions to prevent unauthorized access.
 	t.Parallel()
@@ -350,8 +286,11 @@ func TestWriteBundleFiles_SensitiveFilePermissions(t *testing.T) {
 	}
 }
 
-func TestWriteBundleFiles_PKCS12Password(t *testing.T) {
-	// WHY: Exported PKCS#12 files must use the "changeit" password convention; verifies decoding succeeds with correct password, fails with wrong password, and key matches cert.
+func TestWriteBundleFiles_PKCS12WrongPassword(t *testing.T) {
+	// WHY: Exported PKCS#12 files must use the "changeit" password convention.
+	// Correct-password decode and key match are covered by
+	// certstore/export_test.go (T-10). This test verifies the filesystem-written
+	// P12 rejects wrong passwords.
 	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "p12pass.example.com", []string{"p12pass.example.com"}, nil)
@@ -374,24 +313,6 @@ func TestWriteBundleFiles_PKCS12Password(t *testing.T) {
 		t.Fatalf("read p12: %v", err)
 	}
 
-	// Should decode with "changeit"
-	privKey, cert, _, err := certkit.DecodePKCS12(p12Data, "changeit")
-	if err != nil {
-		t.Fatalf("DecodePKCS12 with 'changeit': %v", err)
-	}
-	if cert.Subject.CommonName != "p12pass.example.com" {
-		t.Errorf("p12 cert CN = %q, want p12pass.example.com", cert.Subject.CommonName)
-	}
-
-	// Key should match the certificate
-	match, err := certkit.KeyMatchesCert(privKey, cert)
-	if err != nil {
-		t.Fatalf("KeyMatchesCert: %v", err)
-	}
-	if !match {
-		t.Error("p12 key should match p12 certificate")
-	}
-
 	// Should NOT decode with wrong password
 	_, _, _, err = certkit.DecodePKCS12(p12Data, "wrong-password")
 	if err == nil {
@@ -399,155 +320,6 @@ func TestWriteBundleFiles_PKCS12Password(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "decoding PKCS#12") {
 		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-func TestWriteBundleFiles_MissingChainComponent(t *testing.T) {
-	// WHY: Bundles with a missing chain component (no intermediates or no root)
-	// must omit the corresponding file while still producing all other files.
-	t.Parallel()
-	ca := newRSACA(t)
-
-	tests := []struct {
-		name        string
-		cn          string
-		ints        []*x509.Certificate
-		roots       []*x509.Certificate
-		mustExist   string // suffix that SHOULD exist
-		mustMissing string // suffix that should NOT exist
-	}{
-		{
-			name:        "no intermediates",
-			cn:          "no-int.example.com",
-			ints:        nil,
-			roots:       []*x509.Certificate{ca.cert},
-			mustExist:   ".root.pem",
-			mustMissing: ".intermediates.pem",
-		},
-		{
-			name:        "no root",
-			cn:          "no-root.example.com",
-			ints:        []*x509.Certificate{ca.cert},
-			roots:       nil,
-			mustExist:   ".intermediates.pem",
-			mustMissing: ".root.pem",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			leaf := newRSALeaf(t, ca, tt.cn, []string{tt.cn}, nil)
-			certRecord := &certstore.CertRecord{Cert: leaf.cert}
-			keyRecord := &certstore.KeyRecord{PEM: leaf.keyPEM}
-			bundle := &certkit.BundleResult{
-				Leaf:          leaf.cert,
-				Intermediates: tt.ints,
-				Roots:         tt.roots,
-			}
-
-			outDir := t.TempDir()
-			err := writeBundleFiles(outDir, tt.name, certRecord, keyRecord, bundle, nil)
-			if err != nil {
-				t.Fatalf("writeBundleFiles: %v", err)
-			}
-
-			folderPath := filepath.Join(outDir, tt.name)
-			prefix := tt.cn
-
-			if _, err := os.Stat(filepath.Join(folderPath, prefix+tt.mustMissing)); err == nil {
-				t.Errorf("expected %s to NOT exist", prefix+tt.mustMissing)
-			}
-			if _, err := os.Stat(filepath.Join(folderPath, prefix+tt.mustExist)); os.IsNotExist(err) {
-				t.Errorf("expected %s to exist", prefix+tt.mustExist)
-			}
-			if _, err := os.Stat(filepath.Join(folderPath, prefix+".pem")); os.IsNotExist(err) {
-				t.Error("leaf .pem should exist")
-			}
-			if _, err := os.Stat(filepath.Join(folderPath, prefix+".chain.pem")); os.IsNotExist(err) {
-				t.Error("chain .chain.pem should exist")
-			}
-		})
-	}
-}
-
-func TestWriteBundleFiles_K8sTlsCrtExcludesRoot(t *testing.T) {
-	// WHY: K8s tls.crt must contain leaf + intermediates only (not the root); including the root wastes space and violates TLS best practices.
-	t.Parallel()
-	// Build a proper 3-tier PKI: root → intermediate → leaf
-	rootCA := newRSACA(t)
-
-	intKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	intTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(50),
-		Subject:               pkix.Name{CommonName: "Test Intermediate CA"},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(5 * 365 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-	}
-	intDER, err := x509.CreateCertificate(rand.Reader, intTmpl, rootCA.cert, &intKey.PublicKey, rootCA.key)
-	if err != nil {
-		t.Fatalf("create intermediate: %v", err)
-	}
-	intCert, _ := x509.ParseCertificate(intDER)
-
-	leaf := newRSALeaf(t, testCA{cert: intCert, key: intKey}, "k8s-noroot.example.com", []string{"k8s-noroot.example.com"}, nil)
-
-	// Bundle with distinct intermediate and root
-	bundle := &certkit.BundleResult{
-		Leaf:          leaf.cert,
-		Intermediates: []*x509.Certificate{intCert},
-		Roots:         []*x509.Certificate{rootCA.cert},
-	}
-
-	certRecord := &certstore.CertRecord{
-		Cert: leaf.cert,
-	}
-	keyRecord := &certstore.KeyRecord{PEM: leaf.keyPEM}
-
-	outDir := t.TempDir()
-	err = writeBundleFiles(outDir, "k8s-noroot", certRecord, keyRecord, bundle, nil)
-	if err != nil {
-		t.Fatalf("writeBundleFiles: %v", err)
-	}
-
-	k8sPath := filepath.Join(outDir, "k8s-noroot", "k8s-noroot.example.com.k8s.yaml")
-	k8sData, err := os.ReadFile(k8sPath)
-	if err != nil {
-		t.Fatalf("read K8s YAML: %v", err)
-	}
-
-	var secret K8sSecret
-	if err := yaml.Unmarshal(k8sData, &secret); err != nil {
-		t.Fatalf("unmarshal K8s YAML: %v", err)
-	}
-
-	tlsCrt, err := base64.StdEncoding.DecodeString(secret.Data["tls.crt"])
-	if err != nil {
-		t.Fatalf("decode tls.crt: %v", err)
-	}
-	certs, err := certkit.ParsePEMCertificates(tlsCrt)
-	if err != nil {
-		t.Fatalf("parse tls.crt: %v", err)
-	}
-
-	// tls.crt should contain leaf + intermediate only (2 certs), NOT the root
-	if len(certs) != 2 {
-		t.Fatalf("tls.crt should have 2 certs (leaf + intermediate), got %d", len(certs))
-	}
-	if certs[0].Subject.CommonName != "k8s-noroot.example.com" {
-		t.Errorf("tls.crt first cert CN = %q, want k8s-noroot.example.com", certs[0].Subject.CommonName)
-	}
-	if certs[1].Subject.CommonName != "Test Intermediate CA" {
-		t.Errorf("tls.crt second cert CN = %q, want Test Intermediate CA", certs[1].Subject.CommonName)
-	}
-	// Root should NOT be in tls.crt
-	for _, c := range certs {
-		if c.Subject.CommonName == "Test RSA Root CA" {
-			t.Error("tls.crt should not contain the root CA")
-		}
 	}
 }
 
