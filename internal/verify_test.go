@@ -243,6 +243,12 @@ func TestVerifyCert_NoChecksEnabled(t *testing.T) {
 	if result.NotAfter == "" {
 		t.Error("NotAfter should be set")
 	}
+	if len(result.SANs) == 0 {
+		t.Error("SANs should be populated")
+	}
+	if result.SKI == "" {
+		t.Error("SKI should be set")
+	}
 	if result.KeyMatch != nil {
 		t.Error("KeyMatch should be nil when CheckKeyMatch is false")
 	}

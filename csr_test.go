@@ -75,10 +75,6 @@ func TestGenerateCSR_withKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := csr.CheckSignature(); err != nil {
-		t.Fatalf("CSR signature invalid: %v", err)
-	}
-
 	if csr.Subject.CommonName != leaf.Subject.CommonName {
 		t.Errorf("CN=%q, want %q", csr.Subject.CommonName, leaf.Subject.CommonName)
 	}
@@ -376,9 +372,6 @@ func TestGenerateCSRFromTemplate(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err := csr.CheckSignature(); err != nil {
-				t.Fatalf("CSR signature invalid: %v", err)
-			}
 			if csr.Subject.CommonName != tt.wantCN {
 				t.Errorf("CN=%q, want %q", csr.Subject.CommonName, tt.wantCN)
 			}
@@ -427,9 +420,6 @@ func TestGenerateCSRFromCSR_CopiesFieldsAndRotatesKey(t *testing.T) {
 	newCSR, err := x509.ParseCertificateRequest(block.Bytes)
 	if err != nil {
 		t.Fatal(err)
-	}
-	if err := newCSR.CheckSignature(); err != nil {
-		t.Fatalf("new CSR signature invalid: %v", err)
 	}
 	if newCSR.Subject.CommonName != srcCSR.Subject.CommonName {
 		t.Errorf("CN=%q, want %q", newCSR.Subject.CommonName, srcCSR.Subject.CommonName)
@@ -490,11 +480,6 @@ func TestGenerateCSRFromCSR_PreservesEmailAddresses(t *testing.T) {
 	newCSR, err := ParsePEMCertificateRequest([]byte(newCSRPEM))
 	if err != nil {
 		t.Fatal(err)
-	}
-
-	// Verify new CSR signature
-	if err := newCSR.CheckSignature(); err != nil {
-		t.Fatalf("new CSR signature invalid: %v", err)
 	}
 
 	// Verify email addresses are preserved

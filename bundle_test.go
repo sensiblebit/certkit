@@ -544,8 +544,14 @@ func TestCheckExpiryWarnings(t *testing.T) {
 			if len(warnings) != tt.wantCount {
 				t.Fatalf("got %d warnings, want %d", len(warnings), tt.wantCount)
 			}
-			if tt.wantContains != "" && !strings.Contains(warnings[0], tt.wantContains) {
-				t.Errorf("warning %q should contain %q", warnings[0], tt.wantContains)
+			if tt.wantContains != "" {
+				if !strings.Contains(warnings[0], tt.wantContains) {
+					t.Errorf("warning %q should contain %q", warnings[0], tt.wantContains)
+				}
+				// Verify warning includes cert identity (CN)
+				if !strings.Contains(warnings[0], "test-cert") {
+					t.Errorf("warning %q should contain cert CN 'test-cert'", warnings[0])
+				}
 			}
 		})
 	}

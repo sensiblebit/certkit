@@ -109,21 +109,7 @@ func TestInspectFile_PrivateKey(t *testing.T) {
 	if keyResult.KeySize != "2048" {
 		t.Errorf("key size = %s, want 2048", keyResult.KeySize)
 	}
-	// SKI colon-hex: 20 bytes = 40 hex chars + 19 colons = 59 chars.
-	// Verify format, not just length, to catch a function returning a fixed string.
-	ski := keyResult.SKI
-	if len(ski) != 59 {
-		t.Fatalf("SKI length = %d, want 59 (colon-hex for 20 bytes), got %q", len(ski), ski)
-	}
-	skiParts := strings.Split(ski, ":")
-	if len(skiParts) != 20 {
-		t.Fatalf("SKI colon-hex has %d octets, want 20", len(skiParts))
-	}
-	for i, p := range skiParts {
-		if len(p) != 2 {
-			t.Errorf("SKI octet[%d] = %q, want 2 hex chars", i, p)
-		}
-	}
+	assertColonHex(t, "SKI", keyResult.SKI, 20)
 }
 
 func TestInspectFile_NotFound(t *testing.T) {

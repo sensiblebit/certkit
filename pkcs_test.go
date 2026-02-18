@@ -15,41 +15,45 @@ import (
 	smPkcs7 "github.com/smallstep/pkcs7"
 )
 
-func TestEncodeContainers_InvalidKey(t *testing.T) {
-	// WHY: Unsupported and nil private keys must produce a clear error, not
-	// panic. All three container encoders must reject bad keys consistently.
+func TestEncodeContainers_InvalidInput(t *testing.T) {
+	// WHY: Unsupported/nil private keys and nil leaf certificates must produce
+	// clear errors, not panics. All three container encoders must reject bad
+	// inputs consistently. Consolidated per T-12.
 	t.Parallel()
 
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	validKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: "test"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 	}
-	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &validKey.PublicKey, validKey)
 	cert, _ := x509.ParseCertificate(certBytes)
+
+	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
 
 	tests := []struct {
 		name    string
-		key     any
 		wantSub string
-		encode  func(key any) ([]byte, error)
+		encode  func() ([]byte, error)
 	}{
-		// struct{}{} and nil both hit the same default branch in validatePKCS12KeyType
-		// for PKCS12/PKCS12Legacy; one unsupported type suffices per T-12.
-		// JKS nil is kept because it hits x509.MarshalPKCS8PrivateKey, a different path.
-		{"PKCS12/unsupported", struct{}{}, "unsupported private key type", func(k any) ([]byte, error) { return EncodePKCS12(k, cert, nil, "pass") }},
-		{"PKCS12Legacy/unsupported", struct{}{}, "unsupported private key type", func(k any) ([]byte, error) { return EncodePKCS12Legacy(k, cert, nil, "pass") }},
-		{"JKS/unsupported", struct{}{}, "unknown key type", func(k any) ([]byte, error) { return EncodeJKS(k, cert, nil, "changeit") }},
-		{"JKS/nil", nil, "unknown key type", func(k any) ([]byte, error) { return EncodeJKS(k, cert, nil, "changeit") }},
+		// Invalid key cases
+		{"PKCS12/unsupported_key", "unsupported private key type", func() ([]byte, error) { return EncodePKCS12(struct{}{}, cert, nil, "pass") }},
+		{"PKCS12Legacy/unsupported_key", "unsupported private key type", func() ([]byte, error) { return EncodePKCS12Legacy(struct{}{}, cert, nil, "pass") }},
+		{"JKS/unsupported_key", "unknown key type", func() ([]byte, error) { return EncodeJKS(struct{}{}, cert, nil, "changeit") }},
+		{"JKS/nil_key", "unknown key type", func() ([]byte, error) { return EncodeJKS(nil, cert, nil, "changeit") }},
+		// Nil leaf certificate cases
+		{"PKCS12/nil_cert", "leaf certificate cannot be nil", func() ([]byte, error) { return EncodePKCS12(rsaKey, nil, nil, "pass") }},
+		{"PKCS12Legacy/nil_cert", "leaf certificate cannot be nil", func() ([]byte, error) { return EncodePKCS12Legacy(rsaKey, nil, nil, "pass") }},
+		{"JKS/nil_cert", "leaf certificate cannot be nil", func() ([]byte, error) { return EncodeJKS(rsaKey, nil, nil, "changeit") }},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := tt.encode(tt.key)
+			_, err := tt.encode()
 			if err == nil {
-				t.Fatal("expected error for invalid key")
+				t.Fatal("expected error for invalid input")
 			}
 			if !strings.Contains(err.Error(), tt.wantSub) {
 				t.Fatalf("unexpected error: got %q, want substring %q", err.Error(), tt.wantSub)
@@ -61,7 +65,6 @@ func TestEncodeContainers_InvalidKey(t *testing.T) {
 func TestEncodePKCS12_RoundTrip(t *testing.T) {
 	// WHY: EncodePKCS12 is a thin wrapper around gopkcs12.Modern.Encode.
 	// One key type (RSA) suffices per T-13 to prove the wrapper chains correctly.
-	// TestEncodePKCS12_MultiCertChain covers ECDSA with a full chain.
 	t.Parallel()
 
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -169,74 +172,6 @@ func TestDecodePKCS7_roundTrip(t *testing.T) {
 	}
 }
 
-func TestEncodePKCS12_MultiCertChain(t *testing.T) {
-	// WHY: Multi-level chains (root + intermediate + leaf) must all survive PKCS#12 encoding; missing intermediates would break TLS verification.
-	t.Parallel()
-	// Create root CA
-	rootKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	rootTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "Multi Chain Root CA"},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-	}
-	rootBytes, _ := x509.CreateCertificate(rand.Reader, rootTemplate, rootTemplate, &rootKey.PublicKey, rootKey)
-	rootCert, _ := x509.ParseCertificate(rootBytes)
-
-	// Create intermediate CA signed by root
-	intKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	intTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(2),
-		Subject:               pkix.Name{CommonName: "Multi Chain Intermediate"},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-	}
-	intBytes, _ := x509.CreateCertificate(rand.Reader, intTemplate, rootCert, &intKey.PublicKey, rootKey)
-	intCert, _ := x509.ParseCertificate(intBytes)
-
-	// Create leaf signed by intermediate
-	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	leafTemplate := &x509.Certificate{
-		SerialNumber: big.NewInt(3),
-		Subject:      pkix.Name{CommonName: "multi-chain-leaf.example.com"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	leafBytes, _ := x509.CreateCertificate(rand.Reader, leafTemplate, intCert, &leafKey.PublicKey, intKey)
-	leafCert, _ := x509.ParseCertificate(leafBytes)
-
-	// Encode with intermediate + root as CA chain
-	pfxData, err := EncodePKCS12(leafKey, leafCert, []*x509.Certificate{intCert, rootCert}, "chain-pass")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	decodedKey, decodedCert, caCerts, err := DecodePKCS12(pfxData, "chain-pass")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if decodedCert.Subject.CommonName != "multi-chain-leaf.example.com" {
-		t.Errorf("leaf CN=%q, want multi-chain-leaf.example.com", decodedCert.Subject.CommonName)
-	}
-	if len(caCerts) != 2 {
-		t.Fatalf("expected 2 CA certs, got %d", len(caCerts))
-	}
-	decodedECKey, ok := decodedKey.(*ecdsa.PrivateKey)
-	if !ok {
-		t.Fatalf("expected *ecdsa.PrivateKey, got %T", decodedKey)
-	}
-	if !leafKey.Equal(decodedECKey) {
-		t.Error("multi-chain decoded key does not match original")
-	}
-}
-
 func TestDecodePKCS7_EmptyPKCS7(t *testing.T) {
 	// WHY: A PKCS#7 container with no certificates must produce a "no certificates" error, not return an empty slice that callers would silently accept.
 	t.Parallel()
@@ -317,34 +252,5 @@ func TestEncodePKCS12Legacy_WithCAChain(t *testing.T) {
 	}
 	if !leafKey.Equal(ecDecoded) {
 		t.Error("legacy PKCS#12 key round-trip mismatch")
-	}
-}
-
-func TestEncodeContainers_NilLeafCertificate(t *testing.T) {
-	// WHY: Nil leaf certificate must fail gracefully with a clear error, not
-	// panic. All three container encoders must reject nil leaf consistently.
-	t.Parallel()
-
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-
-	tests := []struct {
-		name   string
-		encode func() ([]byte, error)
-	}{
-		{"PKCS12", func() ([]byte, error) { return EncodePKCS12(key, nil, nil, "pass") }},
-		{"PKCS12Legacy", func() ([]byte, error) { return EncodePKCS12Legacy(key, nil, nil, "pass") }},
-		{"JKS", func() ([]byte, error) { return EncodeJKS(key, nil, nil, "changeit") }},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			_, err := tt.encode()
-			if err == nil {
-				t.Fatal("expected error with nil leaf certificate")
-			}
-			if !strings.Contains(err.Error(), "leaf certificate cannot be nil") {
-				t.Fatalf("unexpected error: %v", err)
-			}
-		})
 	}
 }

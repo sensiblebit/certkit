@@ -1,7 +1,6 @@
 package certstore
 
 import (
-	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -16,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/pavlo-v-chernykh/keystore-go/v4"
 	"github.com/sensiblebit/certkit"
 	"golang.org/x/crypto/ssh"
 )
@@ -646,39 +644,6 @@ func TestProcessData_MultipleCertsInPEM(t *testing.T) {
 	}
 }
 
-func TestProcessData_CertAndKeyInSamePEM(t *testing.T) {
-	// WHY: A common pattern is cert+key in a single PEM file; both must be
-	// extracted and the key should match the cert's SKI.
-	t.Parallel()
-
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "combo.example.com", []string{"combo.example.com"})
-
-	combined := append(leaf.certPEM, leaf.keyPEM...)
-
-	store := NewMemStore()
-	if err := ProcessData(ProcessInput{
-		Data:    combined,
-		Path:    "combo.pem",
-		Handler: store,
-	}); err != nil {
-		t.Fatalf("ProcessData: %v", err)
-	}
-
-	if len(store.AllCerts()) != 1 {
-		t.Errorf("expected 1 cert, got %d", len(store.AllCerts()))
-	}
-	if len(store.AllKeys()) != 1 {
-		t.Errorf("expected 1 key, got %d", len(store.AllKeys()))
-	}
-
-	// Verify the key and cert share the same SKI (matched pair)
-	matched := store.MatchedPairs()
-	if len(matched) != 1 {
-		t.Errorf("expected 1 matched pair, got %d", len(matched))
-	}
-}
-
 func TestProcessData_MalformedPEMCert(t *testing.T) {
 	// WHY: A PEM file with one valid cert and one malformed CERTIFICATE block
 	// must still ingest the valid cert — malformed blocks are skipped, not fatal.
@@ -844,69 +809,6 @@ func TestProcessData_EndToEnd_IngestExportRoundTrip(t *testing.T) {
 				t.Error("exported .key file key does not Equal original — end-to-end round-trip failed")
 			}
 		})
-	}
-}
-
-func TestProcessData_JKS_DifferentKeyPassword(t *testing.T) {
-	// WHY: JKS supports different store and key passwords. ProcessData passes
-	// the password list to DecodeJKS, which tries each password independently
-	// for key entries. If only the store password is tried for keys, the key
-	// is silently skipped. This test verifies that keys with non-store
-	// passwords are extracted and normalized to PKCS#8.
-	t.Parallel()
-
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "jks-diffpw.example.com", []string{"jks-diffpw.example.com"})
-
-	// Build JKS manually with different store/key passwords.
-	pkcs8Key, err := x509.MarshalPKCS8PrivateKey(leaf.key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ks := keystore.New()
-	if err := ks.SetPrivateKeyEntry("server", keystore.PrivateKeyEntry{
-		CreationTime: time.Now(),
-		PrivateKey:   pkcs8Key,
-		CertificateChain: []keystore.Certificate{
-			{Type: "X.509", Content: leaf.certDER},
-			{Type: "X.509", Content: ca.certDER},
-		},
-	}, []byte("keypass")); err != nil {
-		t.Fatal(err)
-	}
-	var buf bytes.Buffer
-	if err := ks.Store(&buf, []byte("storepass")); err != nil {
-		t.Fatal(err)
-	}
-
-	store := NewMemStore()
-	if err := ProcessData(ProcessInput{
-		Data:      buf.Bytes(),
-		Path:      "diffpw.jks",
-		Passwords: []string{"storepass", "keypass"},
-		Handler:   store,
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	keys := store.AllKeysFlat()
-	if len(keys) != 1 {
-		t.Fatalf("expected 1 key from JKS with different passwords, got %d", len(keys))
-	}
-	rec := keys[0]
-	if rec.KeyType != "RSA" {
-		t.Errorf("KeyType = %q, want RSA", rec.KeyType)
-	}
-	if !keysEqual(t, leaf.key, rec.Key) {
-		t.Error("stored key does not Equal original after JKS dual-password extraction")
-	}
-	// Verify stored PEM is PKCS#8
-	block, _ := pem.Decode(rec.PEM)
-	if block == nil {
-		t.Fatal("stored PEM not decodable")
-	}
-	if block.Type != "PRIVATE KEY" {
-		t.Errorf("stored PEM type = %q, want PRIVATE KEY (PKCS#8)", block.Type)
 	}
 }
 

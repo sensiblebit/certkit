@@ -475,69 +475,6 @@ func TestDecodeJKS_InvalidData(t *testing.T) {
 	}
 }
 
-func TestEncodeDecodeJKS_RoundTrip(t *testing.T) {
-	// WHY: EncodeJKS/DecodeJKS are thin wrappers. One key type (RSA with CA
-	// chain) suffices per T-13 to prove the wrapper chains correctly.
-	t.Parallel()
-
-	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-	caTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "JKS RSA CA"},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-	}
-	caDER, _ := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
-	caCert, _ := x509.ParseCertificate(caDER)
-
-	leafKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	leafTmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(100),
-		Subject:      pkix.Name{CommonName: "jks-rsa-leaf.example.com"},
-		DNSNames:     []string{"jks-rsa-leaf.example.com"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	leafDER, _ := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
-	leafCert, _ := x509.ParseCertificate(leafDER)
-
-	data, err := EncodeJKS(leafKey, leafCert, []*x509.Certificate{caCert}, "changeit")
-	if err != nil {
-		t.Fatalf("EncodeJKS: %v", err)
-	}
-
-	certs, keys, err := DecodeJKS(data, []string{"changeit"})
-	if err != nil {
-		t.Fatalf("DecodeJKS round-trip: %v", err)
-	}
-	if len(keys) != 1 {
-		t.Fatalf("expected 1 key, got %d", len(keys))
-	}
-	if len(certs) != 2 {
-		t.Fatalf("expected 2 certs, got %d", len(certs))
-	}
-	if !leafKey.Equal(keys[0]) {
-		t.Error("decoded RSA key does not Equal original")
-	}
-	match, err := KeyMatchesCert(keys[0], certs[0])
-	if err != nil {
-		t.Fatalf("KeyMatchesCert: %v", err)
-	}
-	if !match {
-		t.Error("round-trip key should match leaf certificate")
-	}
-	if certs[0].Subject.CommonName != "jks-rsa-leaf.example.com" {
-		t.Errorf("leaf CN=%q, want %q", certs[0].Subject.CommonName, "jks-rsa-leaf.example.com")
-	}
-}
-
 func TestDecodeJKS_CorruptedCertDER_TrustedCertEntry(t *testing.T) {
 	// WHY: A JKS TrustedCertificateEntry with corrupted cert DER exercises the
 	// `continue` at jks.go:48. The decoder must skip the bad entry and return

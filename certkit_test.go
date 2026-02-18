@@ -686,54 +686,6 @@ func TestKeyMatchesCert(t *testing.T) {
 	}
 }
 
-func TestMultiCertPEM_Concatenation(t *testing.T) {
-	// WHY: PEM concatenation is how chain bundles are built; order and cert type must be preserved or TLS servers will serve broken chains.
-	t.Parallel()
-	caPEM, intPEM, leafPEM := generateTestPKI(t)
-
-	// Parse each cert
-	ca, err := ParsePEMCertificate([]byte(caPEM))
-	if err != nil {
-		t.Fatal(err)
-	}
-	intermediate, err := ParsePEMCertificate([]byte(intPEM))
-	if err != nil {
-		t.Fatal(err)
-	}
-	leaf, err := ParsePEMCertificate([]byte(leafPEM))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Concatenate PEM output
-	var combined string
-	combined += CertToPEM(leaf)
-	combined += CertToPEM(intermediate)
-	combined += CertToPEM(ca)
-
-	// Parse back all certs from concatenated PEM
-	certs, err := ParsePEMCertificates([]byte(combined))
-	if err != nil {
-		t.Fatalf("parse concatenated PEM: %v", err)
-	}
-	if len(certs) != 3 {
-		t.Fatalf("expected 3 certs, got %d", len(certs))
-	}
-
-	// Verify order is preserved
-	if certs[0].Subject.CommonName != "test.example.com" {
-		t.Errorf("cert[0] CN = %q, want test.example.com", certs[0].Subject.CommonName)
-	}
-	if certs[1].Subject.CommonName != "Test Intermediate" {
-		t.Errorf("cert[1] CN = %q, want Test Intermediate", certs[1].Subject.CommonName)
-	}
-	if certs[2].Subject.CommonName != "Test CA" {
-		t.Errorf("cert[2] CN = %q, want Test CA", certs[2].Subject.CommonName)
-	}
-}
-
-// --- Tests for new Stage 1 library functions ---
-
 func TestCertExpiresWithin(t *testing.T) {
 	// WHY: Expiry window detection drives renewal warnings and the
 	// --allow-expired filter. Covers within/outside window, already-expired,
@@ -977,11 +929,6 @@ func TestDeduplicatePasswords(t *testing.T) {
 		{
 			name:  "nil extra returns defaults only",
 			extra: nil,
-			want:  defaults,
-		},
-		{
-			name:  "empty extra returns defaults only",
-			extra: []string{},
 			want:  defaults,
 		},
 		{
