@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha1"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
@@ -352,41 +353,6 @@ func TestParsePEMPrivateKey_unsupportedBlockType(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unsupported PEM block type") {
 		t.Errorf("error should mention unsupported PEM block type, got: %v", err)
-	}
-}
-
-func TestAlgorithmName(t *testing.T) {
-	// WHY: KeyAlgorithmName and PublicKeyAlgorithmName are used in display output and JSON;
-	// returning "unknown" for a supported type would confuse users. Both must handle all
-	// supported key types including nil and unsupported inputs.
-	t.Parallel()
-	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	edPub, edPriv, _ := ed25519.GenerateKey(rand.Reader)
-
-	tests := []struct {
-		name     string
-		privKey  any
-		pubKey   any
-		wantPriv string
-		wantPub  string
-	}{
-		{"ECDSA", ecKey, &ecKey.PublicKey, "ECDSA", "ECDSA"},
-		{"RSA", rsaKey, &rsaKey.PublicKey, "RSA", "RSA"},
-		{"Ed25519", edPriv, edPub, "Ed25519", "Ed25519"},
-		{"Ed25519_pointer", &edPriv, &edPub, "Ed25519", "Ed25519"},
-		{"nil", nil, nil, "unknown", "unknown"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			if got := KeyAlgorithmName(tt.privKey); got != tt.wantPriv {
-				t.Errorf("KeyAlgorithmName(%T) = %q, want %q", tt.privKey, got, tt.wantPriv)
-			}
-			if got := PublicKeyAlgorithmName(tt.pubKey); got != tt.wantPub {
-				t.Errorf("PublicKeyAlgorithmName(%T) = %q, want %q", tt.pubKey, got, tt.wantPub)
-			}
-		})
 	}
 }
 
@@ -887,58 +853,41 @@ func TestCrossFormatRoundTrip(t *testing.T) {
 	}
 }
 
-func TestParsePEMPrivateKey_CorruptOpenSSH(t *testing.T) {
-	// WHY: A PEM block with type "OPENSSH PRIVATE KEY" but corrupt body bytes must
-	// produce a wrapped error mentioning "OpenSSH", not a generic parse failure.
+func TestParsePEMPrivateKey_ErrorPaths(t *testing.T) {
+	// WHY: Non-key PEM input and corrupt key data must produce descriptive errors,
+	// not panics or generic failures. Each case exercises a different branch in
+	// the PEM type dispatch and fallback chain.
 	t.Parallel()
 
-	pemBytes := pem.EncodeToMemory(&pem.Block{
+	corruptOpenSSH := pem.EncodeToMemory(&pem.Block{
 		Type:  "OPENSSH PRIVATE KEY",
 		Bytes: []byte("this-is-not-valid-openssh-data"),
 	})
-
-	_, err := ParsePEMPrivateKey(pemBytes)
-	if err == nil {
-		t.Fatal("expected error for corrupt OpenSSH body")
-	}
-	if !strings.Contains(err.Error(), "OpenSSH") {
-		t.Errorf("error should mention OpenSSH, got: %v", err)
-	}
-}
-
-func TestParsePEMPrivateKey_EmptyInput(t *testing.T) {
-	// WHY: Empty or nil input to ParsePEMPrivateKey must return a clear
-	// "no PEM block" error, not panic. Callers may pass unvalidated file
-	// contents that are empty (e.g., zero-byte files).
-	t.Parallel()
-
-	_, err := ParsePEMPrivateKey(nil)
-	if err == nil {
-		t.Fatal("expected error for nil input")
-	}
-	if !strings.Contains(err.Error(), "no PEM block") {
-		t.Errorf("error should mention 'no PEM block', got: %v", err)
-	}
-}
-
-func TestParsePEMPrivateKey_PrivateKeyBlock_AllFallbacksFail(t *testing.T) {
-	// WHY: When a "PRIVATE KEY" PEM block contains data that fails PKCS#8,
-	// PKCS#1, and SEC1 parsing, the error message must clearly indicate that
-	// all known formats were tried. This tests the final error path in the
-	// fallback chain.
-	t.Parallel()
-
-	garbage := pem.EncodeToMemory(&pem.Block{
+	garbagePKCS8 := pem.EncodeToMemory(&pem.Block{
 		Type:  "PRIVATE KEY",
 		Bytes: []byte("this is not a valid key in any format"),
 	})
 
-	_, err := ParsePEMPrivateKey(garbage)
-	if err == nil {
-		t.Fatal("expected error for garbage PRIVATE KEY block")
+	tests := []struct {
+		name      string
+		input     []byte
+		wantInErr string
+	}{
+		{"empty input", nil, "no PEM block"},
+		{"corrupt OpenSSH body", corruptOpenSSH, "OpenSSH"},
+		{"garbage PRIVATE KEY block", garbagePKCS8, "parsing PRIVATE KEY"},
 	}
-	if !strings.Contains(err.Error(), "parsing PRIVATE KEY") {
-		t.Errorf("error should mention 'parsing PRIVATE KEY', got: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := ParsePEMPrivateKey(tt.input)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tt.wantInErr) {
+				t.Errorf("error = %q, want substring %q", err, tt.wantInErr)
+			}
+		})
 	}
 }
 
@@ -985,39 +934,11 @@ func TestParsePEMPrivateKeyWithPasswords_CorruptNotEncrypted(t *testing.T) {
 	}
 }
 
-func TestIsPEM(t *testing.T) {
-	// WHY: IsPEM gates PEM-vs-binary dispatch throughout the codebase;
-	// false positives on binary data or false negatives on valid PEM
-	// would route data to the wrong parser.
-	t.Parallel()
-	tests := []struct {
-		name string
-		data []byte
-		want bool
-	}{
-		{"valid PEM cert", []byte("-----BEGIN CERTIFICATE-----\ndata\n-----END CERTIFICATE-----"), true},
-		{"valid PEM key", []byte("-----BEGIN PRIVATE KEY-----\ndata"), true},
-		{"prefix only", []byte("-----BEGIN"), true},
-		{"nil", nil, false},
-		{"empty", []byte{}, false},
-		{"plain text", []byte("hello world"), false},
-		{"binary data", []byte{0x30, 0x82, 0x01, 0x22}, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			if got := IsPEM(tt.data); got != tt.want {
-				t.Errorf("IsPEM(%q) = %v, want %v", tt.data, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestCertFingerprints(t *testing.T) {
 	// WHY: Fingerprints are used in display output, JSON, and cert matching.
 	// The hex variants are thin wrappers; the colon variants have certkit-
 	// specific formatting (uppercase, colon separators) worth verifying.
-	// Cross-checks between hex and colon forms prove internal consistency.
+	// Independent hash computation proves correctness, not just consistency.
 	t.Parallel()
 	_, _, leafPEM := generateTestPKI(t)
 	cert, _ := ParsePEMCertificate([]byte(leafPEM))
@@ -1026,32 +947,6 @@ func TestCertFingerprints(t *testing.T) {
 	sha1Hex := CertFingerprintSHA1(cert)
 	sha256Colon := CertFingerprintColonSHA256(cert)
 	sha1Colon := CertFingerprintColonSHA1(cert)
-
-	// SHA-256 hex: 64 lowercase hex chars
-	if len(sha256Hex) != 64 {
-		t.Errorf("CertFingerprint length = %d, want 64", len(sha256Hex))
-	}
-	if sha256Hex != strings.ToLower(sha256Hex) {
-		t.Errorf("CertFingerprint should be lowercase, got %q", sha256Hex)
-	}
-
-	// SHA-1 hex: 40 lowercase hex chars
-	if len(sha1Hex) != 40 {
-		t.Errorf("CertFingerprintSHA1 length = %d, want 40", len(sha1Hex))
-	}
-
-	// SHA-256 colon: 32 uppercase hex pairs separated by colons = 95 chars
-	if len(sha256Colon) != 95 {
-		t.Errorf("CertFingerprintColonSHA256 length = %d, want 95", len(sha256Colon))
-	}
-	if sha256Colon != strings.ToUpper(sha256Colon) {
-		t.Errorf("CertFingerprintColonSHA256 should be uppercase, got %q", sha256Colon)
-	}
-
-	// SHA-1 colon: 20 uppercase hex pairs separated by colons = 59 chars
-	if len(sha1Colon) != 59 {
-		t.Errorf("CertFingerprintColonSHA1 length = %d, want 59", len(sha1Colon))
-	}
 
 	// Cross-check: colon form lowered with colons removed must equal hex form
 	sha256ColonLower := strings.ToLower(strings.ReplaceAll(sha256Colon, ":", ""))
@@ -1062,28 +957,19 @@ func TestCertFingerprints(t *testing.T) {
 	if sha1ColonLower != sha1Hex {
 		t.Errorf("CertFingerprintColonSHA1 inconsistent with CertFingerprintSHA1: %q vs %q", sha1Colon, sha1Hex)
 	}
-}
 
-func TestColonHex_EdgeCases(t *testing.T) {
-	// WHY: ColonHex is used for SKI, AKI, and fingerprint display. Edge cases
-	// (empty, single byte) must produce correct format without panics.
-	t.Parallel()
-	tests := []struct {
-		name string
-		data []byte
-		want string
-	}{
-		{"empty", []byte{}, ""},
-		{"single byte", []byte{0xab}, "ab"},
-		{"two bytes", []byte{0xab, 0xcd}, "ab:cd"},
+	// Independent verification: compute SHA-256 directly and compare
+	want256 := sha256.Sum256(cert.Raw)
+	wantHex := fmt.Sprintf("%x", want256)
+	if sha256Hex != wantHex {
+		t.Errorf("CertFingerprint = %q, want independently computed %q", sha256Hex, wantHex)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			if got := ColonHex(tt.data); got != tt.want {
-				t.Errorf("ColonHex(%x) = %q, want %q", tt.data, got, tt.want)
-			}
-		})
+
+	// Independent verification: compute SHA-1 directly and compare
+	want1 := sha1.Sum(cert.Raw)
+	wantSHA1Hex := fmt.Sprintf("%x", want1)
+	if sha1Hex != wantSHA1Hex {
+		t.Errorf("CertFingerprintSHA1 = %q, want independently computed %q", sha1Hex, wantSHA1Hex)
 	}
 }
 

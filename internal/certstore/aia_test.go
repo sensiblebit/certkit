@@ -91,12 +91,34 @@ func TestResolveAIA_SkipsResolvedAndRoots(t *testing.T) {
 		setup func(t *testing.T, store *MemStore)
 	}{
 		{"issuer_in_store", func(t *testing.T, store *MemStore) {
+			// Leaf must have an AIA URL so the test proves the issuer-presence
+			// check prevents the fetch, not the absence of URLs.
 			ca := newRSACA(t)
-			leaf := newRSALeaf(t, ca, "has-issuer.example.com", []string{"has-issuer.example.com"})
+			leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			leafTmpl := &x509.Certificate{
+				SerialNumber:          big.NewInt(100),
+				Subject:               pkix.Name{CommonName: "has-issuer.example.com"},
+				DNSNames:              []string{"has-issuer.example.com"},
+				NotBefore:             time.Now().Add(-time.Hour),
+				NotAfter:              time.Now().Add(24 * time.Hour),
+				IssuingCertificateURL: []string{"http://example.com/ca.cer"},
+				AuthorityKeyId:        ca.cert.SubjectKeyId,
+			}
+			leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, ca.cert, &leafKey.PublicKey, ca.key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			leafCert, err := x509.ParseCertificate(leafDER)
+			if err != nil {
+				t.Fatal(err)
+			}
 			if err := store.HandleCertificate(ca.cert, "ca.pem"); err != nil {
 				t.Fatal(err)
 			}
-			if err := store.HandleCertificate(leaf.cert, "leaf.pem"); err != nil {
+			if err := store.HandleCertificate(leafCert, "leaf.pem"); err != nil {
 				t.Fatal(err)
 			}
 		}},

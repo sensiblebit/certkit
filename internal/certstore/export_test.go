@@ -757,26 +757,38 @@ func TestExportMatchedBundles(t *testing.T) {
 		t.Errorf("folder = %q, want %q", call.folder, "my-bundle")
 	}
 
-	// Should have generated multiple files (PEM, key, chain, etc.)
-	if len(call.files) < 5 {
-		t.Errorf("expected at least 5 bundle files, got %d", len(call.files))
+	// GenerateBundleFiles always produces: .pem, .chain.pem, .fullchain.pem,
+	// .key, .p12, .k8s.yaml, .json, .yaml, .csr, .csr.json (10 files).
+	// With a custom root, .root.pem is also present (11 total).
+	// No intermediates in this chain (CA signs leaf directly), so no .intermediates.pem.
+	expectedSuffixes := []string{
+		".pem",
+		".chain.pem",
+		".fullchain.pem",
+		".root.pem",
+		".key",
+		".p12",
+		".k8s.yaml",
+		".json",
+		".yaml",
+		".csr",
+		".csr.json",
 	}
 
-	// Verify at least one .pem and one .key file exist
-	var hasPEM, hasKey bool
+	if len(call.files) != len(expectedSuffixes) {
+		t.Errorf("expected %d bundle files, got %d", len(expectedSuffixes), len(call.files))
+	}
+
+	fileNames := make(map[string]bool, len(call.files))
 	for _, f := range call.files {
-		if strings.HasSuffix(f.Name, ".pem") && !strings.Contains(f.Name, "chain") && !strings.Contains(f.Name, "root") && !strings.Contains(f.Name, "intermediates") {
-			hasPEM = true
-		}
-		if strings.HasSuffix(f.Name, ".key") {
-			hasKey = true
-		}
+		fileNames[f.Name] = true
 	}
-	if !hasPEM {
-		t.Error("expected a .pem file in output")
-	}
-	if !hasKey {
-		t.Error("expected a .key file in output")
+	prefix := "export.example.com"
+	for _, suffix := range expectedSuffixes {
+		want := prefix + suffix
+		if !fileNames[want] {
+			t.Errorf("missing expected file %q", want)
+		}
 	}
 }
 
