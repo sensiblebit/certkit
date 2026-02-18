@@ -36,14 +36,14 @@ func TestEncodeContainers_InvalidInput(t *testing.T) {
 		wantSub string
 		encode  func() ([]byte, error)
 	}{
-		// Invalid key cases
+		// Invalid key cases — PKCS12Legacy uses the same validatePKCS12KeyType
+		// as PKCS12, so one PKCS12 case suffices (T-12).
 		{"PKCS12/unsupported_key", "unsupported private key type", func() ([]byte, error) { return EncodePKCS12(struct{}{}, cert, nil, "pass") }},
-		{"PKCS12Legacy/unsupported_key", "unsupported private key type", func() ([]byte, error) { return EncodePKCS12Legacy(struct{}{}, cert, nil, "pass") }},
 		{"JKS/unsupported_key", "unknown key type", func() ([]byte, error) { return EncodeJKS(struct{}{}, cert, nil, "changeit") }},
 		{"JKS/nil_key", "unknown key type", func() ([]byte, error) { return EncodeJKS(nil, cert, nil, "changeit") }},
-		// Nil leaf certificate cases
+		// Nil leaf certificate cases — PKCS12Legacy has the same nil-cert
+		// guard as PKCS12, so one PKCS12 case suffices (T-12).
 		{"PKCS12/nil_cert", "leaf certificate cannot be nil", func() ([]byte, error) { return EncodePKCS12(rsaKey, nil, nil, "pass") }},
-		{"PKCS12Legacy/nil_cert", "leaf certificate cannot be nil", func() ([]byte, error) { return EncodePKCS12Legacy(rsaKey, nil, nil, "pass") }},
 		{"JKS/nil_cert", "leaf certificate cannot be nil", func() ([]byte, error) { return EncodeJKS(rsaKey, nil, nil, "changeit") }},
 	}
 	for _, tt := range tests {

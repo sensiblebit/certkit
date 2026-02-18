@@ -105,10 +105,9 @@ func TestGenerateBundleFiles_NoIntermediates(t *testing.T) {
 		t.Fatalf("GenerateBundleFiles: %v", err)
 	}
 
-	// Must produce files (not an empty slice) — without this check,
-	// a bug returning zero files would silently pass.
-	if len(files) == 0 {
-		t.Fatal("expected non-empty file list")
+	// Full set is 12 files; no intermediates omits intermediates.pem → 11.
+	if len(files) != 11 {
+		t.Fatalf("expected 11 files (full set minus intermediates.pem), got %d", len(files))
 	}
 
 	for _, f := range files {
@@ -143,10 +142,9 @@ func TestGenerateBundleFiles_NoRoot(t *testing.T) {
 		t.Fatalf("GenerateBundleFiles: %v", err)
 	}
 
-	// Must produce files (not an empty slice) — without this check,
-	// a bug returning zero files would pass all assertions below vacuously.
-	if len(files) == 0 {
-		t.Fatal("expected non-empty file list")
+	// Full set is 12 files; no root omits root.pem → 11.
+	if len(files) != 11 {
+		t.Fatalf("expected 11 files (full set minus root.pem), got %d", len(files))
 	}
 
 	var chainData, fullchainData []byte

@@ -118,76 +118,6 @@ func buildJKSPrivateKey(t *testing.T, password string) []byte {
 	return buf.Bytes()
 }
 
-func buildJKSMixed(t *testing.T, password string) []byte {
-	t.Helper()
-
-	// Trusted cert
-	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("generate CA key: %v", err)
-	}
-	caTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "JKS Mixed CA"},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-	}
-	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatalf("create CA: %v", err)
-	}
-	caCert, _ := x509.ParseCertificate(caDER)
-
-	// Private key entry with leaf
-	leafKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("generate leaf key: %v", err)
-	}
-	leafTmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(200),
-		Subject:      pkix.Name{CommonName: "jks-mixed-leaf.example.com"},
-		DNSNames:     []string{"jks-mixed-leaf.example.com"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatalf("create leaf: %v", err)
-	}
-
-	pkcs8Key, err := x509.MarshalPKCS8PrivateKey(leafKey)
-	if err != nil {
-		t.Fatalf("marshal PKCS8: %v", err)
-	}
-
-	ks := keystore.New()
-	if err := ks.SetTrustedCertificateEntry("ca", keystore.TrustedCertificateEntry{
-		CreationTime: time.Now(),
-		Certificate:  keystore.Certificate{Type: "X.509", Content: caDER},
-	}); err != nil {
-		t.Fatalf("set trusted cert entry: %v", err)
-	}
-	if err := ks.SetPrivateKeyEntry("server", keystore.PrivateKeyEntry{
-		CreationTime: time.Now(),
-		PrivateKey:   pkcs8Key,
-		CertificateChain: []keystore.Certificate{
-			{Type: "X.509", Content: leafDER},
-		},
-	}, []byte(password)); err != nil {
-		t.Fatalf("set private key entry: %v", err)
-	}
-
-	var buf bytes.Buffer
-	if err := ks.Store(&buf, []byte(password)); err != nil {
-		t.Fatalf("store JKS: %v", err)
-	}
-	return buf.Bytes()
-}
-
 func TestDecodeJKS_EntryTypes(t *testing.T) {
 	// WHY: JKS files contain different entry types — TrustedCertificateEntry (cert-only,
 	// no key), PrivateKeyEntry (key + cert chain), or a mix of both. The decoder must
@@ -220,13 +150,10 @@ func TestDecodeJKS_EntryTypes(t *testing.T) {
 			wantKeys:    1,
 			wantKeyType: "*rsa.PrivateKey",
 		},
-		{
-			name:      "MixedEntries",
-			build:     buildJKSMixed,
-			password:  "changeit",
-			wantCerts: 2, // 1 trusted cert + 1 leaf from private key chain
-			wantKeys:  1,
-		},
+		// MixedEntries removed: same counts as PrivateKeyEntry (2 certs,
+		// 1 key) with no CN or key-type assertions — a count-only duplicate.
+		// Mixed-entry behavior is covered by TestDecodeJKS_CorruptedKeyData
+		// (TrustedCertEntry + PrivateKeyEntry with bad key).
 	}
 
 	for _, tt := range tests {

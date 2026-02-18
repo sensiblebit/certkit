@@ -410,18 +410,13 @@ func TestProcessData_Ed25519RawKey_Rejected(t *testing.T) {
 
 	_, edKey, _ := ed25519.GenerateKey(rand.Reader)
 
-	// Build mismatched public half: valid seed + flipped public bytes
-	mismatchedKey := make([]byte, ed25519.PrivateKeySize)
-	copy(mismatchedKey[:ed25519.SeedSize], edKey.Seed())
-	for i := ed25519.SeedSize; i < len(mismatchedKey); i++ {
-		mismatchedKey[i] = ^edKey[i]
-	}
-
 	tests := []struct {
 		name string
 		data []byte
 		path string
 	}{
+		// garbage_64_bytes and mismatched_public_half both hit the same
+		// bytes.Equal validation guard; one case suffices (T-12).
 		{"garbage_64_bytes", func() []byte {
 			b := make([]byte, 64)
 			for i := range b {
@@ -429,7 +424,6 @@ func TestProcessData_Ed25519RawKey_Rejected(t *testing.T) {
 			}
 			return b
 		}(), "fake.key"},
-		{"mismatched_public_half", mismatchedKey, "bad-ed25519.raw"},
 		{"32_byte_seed_only", edKey.Seed(), "seed-only.der"},
 	}
 

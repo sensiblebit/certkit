@@ -137,23 +137,26 @@ func TestInspectFile_ContainerFormats(t *testing.T) {
 	ca := newRSACA(t)
 
 	tests := []struct {
-		name     string
-		cn       string
-		filename string
-		makeData func(t *testing.T, leaf testLeaf, ca testCA) []byte
+		name      string
+		cn        string
+		filename  string
+		wantCerts int // exact expected count
+		makeData  func(t *testing.T, leaf testLeaf, ca testCA) []byte
 	}{
 		{
-			name:     "PKCS#12",
-			cn:       "p12.example.com",
-			filename: "bundle.p12",
+			name:      "PKCS#12",
+			cn:        "p12.example.com",
+			filename:  "bundle.p12",
+			wantCerts: 2, // leaf + CA
 			makeData: func(t *testing.T, leaf testLeaf, ca testCA) []byte {
 				return newPKCS12Bundle(t, leaf, ca, "changeit")
 			},
 		},
 		{
-			name:     "JKS",
-			cn:       "jks.example.com",
-			filename: "keystore.jks",
+			name:      "JKS",
+			cn:        "jks.example.com",
+			filename:  "keystore.jks",
+			wantCerts: 2, // leaf + CA in chain
 			makeData: func(t *testing.T, leaf testLeaf, ca testCA) []byte {
 				return newJKSBundle(t, leaf, ca, "changeit")
 			},
@@ -186,8 +189,8 @@ func TestInspectFile_ContainerFormats(t *testing.T) {
 					keys++
 				}
 			}
-			if certs < 1 {
-				t.Errorf("expected at least 1 certificate, got %d", certs)
+			if certs != tt.wantCerts {
+				t.Errorf("expected %d certificates, got %d", tt.wantCerts, certs)
 			}
 			if keys != 1 {
 				t.Errorf("expected 1 private key, got %d", keys)

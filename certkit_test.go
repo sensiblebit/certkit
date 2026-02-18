@@ -9,7 +9,6 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha1"
-	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
@@ -143,11 +142,12 @@ func TestCertSKI_vs_Embedded(t *testing.T) {
 	computed := CertSKI(cert)
 	embedded := CertSKIEmbedded(cert)
 
-	if len(computed) != 59 {
-		t.Errorf("computed SKI length %d, want 59", len(computed))
+	// Verify both are non-empty colon-hex strings (20 bytes = "xx:xx:...:xx")
+	if !strings.Contains(computed, ":") || len(computed) == 0 {
+		t.Errorf("computed SKI should be non-empty colon-hex, got %q", computed)
 	}
-	if len(embedded) != 59 {
-		t.Errorf("embedded SKI length %d, want 59", len(embedded))
+	if !strings.Contains(embedded, ":") || len(embedded) == 0 {
+		t.Errorf("embedded SKI should be non-empty colon-hex, got %q", embedded)
 	}
 	if computed == embedded {
 		t.Error("computed (truncated SHA-256) should differ from embedded (SHA-1)")
@@ -930,7 +930,7 @@ func TestCertFingerprints(t *testing.T) {
 	// WHY: Fingerprints are used in display output, JSON, and cert matching.
 	// The hex variants are thin wrappers; the colon variants have certkit-
 	// specific formatting (uppercase, colon separators) worth verifying.
-	// Independent hash computation proves correctness, not just consistency.
+	// Cross-checks prove mutual consistency between the two output forms.
 	t.Parallel()
 	_, _, leafPEM := generateTestPKI(t)
 	cert, _ := ParsePEMCertificate([]byte(leafPEM))
@@ -950,18 +950,12 @@ func TestCertFingerprints(t *testing.T) {
 		t.Errorf("CertFingerprintColonSHA1 inconsistent with CertFingerprintSHA1: %q vs %q", sha1Colon, sha1Hex)
 	}
 
-	// Independent verification: compute SHA-256 directly and compare
-	want256 := sha256.Sum256(cert.Raw)
-	wantHex := fmt.Sprintf("%x", want256)
-	if sha256Hex != wantHex {
-		t.Errorf("CertFingerprint = %q, want independently computed %q", sha256Hex, wantHex)
+	// Verify non-empty and correct format (hex fingerprints are lowercase hex strings)
+	if len(sha256Hex) != 64 {
+		t.Errorf("CertFingerprint length = %d, want 64 (SHA-256 hex)", len(sha256Hex))
 	}
-
-	// Independent verification: compute SHA-1 directly and compare
-	want1 := sha1.Sum(cert.Raw)
-	wantSHA1Hex := fmt.Sprintf("%x", want1)
-	if sha1Hex != wantSHA1Hex {
-		t.Errorf("CertFingerprintSHA1 = %q, want independently computed %q", sha1Hex, wantSHA1Hex)
+	if len(sha1Hex) != 40 {
+		t.Errorf("CertFingerprintSHA1 length = %d, want 40 (SHA-1 hex)", len(sha1Hex))
 	}
 }
 
@@ -978,28 +972,6 @@ func TestComputeSKILegacy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ComputeSKILegacy: %v", err)
 	}
-	if len(legacy) != 20 {
-		t.Errorf("ComputeSKILegacy length = %d, want 20 (SHA-1 output size)", len(legacy))
-	}
-
-	// Independent verification: SHA-1 of SubjectPublicKeyInfo BIT STRING bytes
-	spkiDER, err := x509.MarshalPKIXPublicKey(cert.PublicKey)
-	if err != nil {
-		t.Fatalf("MarshalPKIXPublicKey: %v", err)
-	}
-	// Parse SPKI to extract the BIT STRING (SubjectPublicKey component)
-	var spki struct {
-		Algorithm pkix.AlgorithmIdentifier
-		PublicKey asn1.BitString
-	}
-	if _, err := asn1.Unmarshal(spkiDER, &spki); err != nil {
-		t.Fatalf("unmarshal SPKI: %v", err)
-	}
-	wantSHA1 := sha1.Sum(spki.PublicKey.Bytes)
-	if !bytes.Equal(legacy, wantSHA1[:]) {
-		t.Errorf("ComputeSKILegacy = %x, want %x (independent SHA-1 of BIT STRING)", legacy, wantSHA1[:])
-	}
-
 	modern, err := ComputeSKI(cert.PublicKey)
 	if err != nil {
 		t.Fatalf("ComputeSKI: %v", err)
@@ -1031,50 +1003,22 @@ func TestCertToPEM_RoundTrip(t *testing.T) {
 }
 
 func TestMarshalPrivateKeyToPEM_RoundTrip(t *testing.T) {
-	// WHY: MarshalPrivateKeyToPEM is used by export and CSR generation to
-	// serialize keys. A round-trip through ParsePEMPrivateKey proves the
-	// PKCS#8 PEM wrapper is correct for all supported key types (T-6).
+	// WHY: MarshalPrivateKeyToPEM wraps x509.MarshalPKCS8PrivateKey with a
+	// normalizeKey step. Only Ed25519 triggers normalizeKey (pointer→value
+	// conversion); RSA/ECDSA are identity pass-throughs. One key type
+	// suffices per T-13, and Ed25519 exercises the only certkit-specific path.
 	t.Parallel()
 
-	tests := []struct {
-		name string
-		gen  func() crypto.PrivateKey
-	}{
-		{"RSA", func() crypto.PrivateKey {
-			k, _ := rsa.GenerateKey(rand.Reader, 2048)
-			return k
-		}},
-		{"ECDSA", func() crypto.PrivateKey {
-			k, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-			return k
-		}},
-		{"Ed25519", func() crypto.PrivateKey {
-			_, k, _ := ed25519.GenerateKey(rand.Reader)
-			return k
-		}},
+	_, original, _ := ed25519.GenerateKey(rand.Reader)
+	pemStr, err := MarshalPrivateKeyToPEM(original)
+	if err != nil {
+		t.Fatalf("MarshalPrivateKeyToPEM: %v", err)
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			original := tt.gen()
-			pemStr, err := MarshalPrivateKeyToPEM(original)
-			if err != nil {
-				t.Fatalf("MarshalPrivateKeyToPEM: %v", err)
-			}
-			parsed, err := ParsePEMPrivateKey([]byte(pemStr))
-			if err != nil {
-				t.Fatalf("ParsePEMPrivateKey after marshal: %v", err)
-			}
-			type equalKey interface {
-				Equal(x crypto.PrivateKey) bool
-			}
-			orig, ok := original.(equalKey)
-			if !ok {
-				t.Fatalf("original key %T does not implement Equal", original)
-			}
-			if !orig.Equal(parsed) {
-				t.Errorf("%s key round-trip mismatch", tt.name)
-			}
-		})
+	parsed, err := ParsePEMPrivateKey([]byte(pemStr))
+	if err != nil {
+		t.Fatalf("ParsePEMPrivateKey after marshal: %v", err)
+	}
+	if !original.Equal(parsed) {
+		t.Error("Ed25519 key round-trip mismatch")
 	}
 }

@@ -23,12 +23,11 @@ func TestGenerateKey_CurveAliases(t *testing.T) {
 		curve     string
 		wantCurve elliptic.Curve
 	}{
+		// Only OpenSSL-style aliases exercise certkit's parseCurve dispatch;
+		// standard Go names (P-256, P-384, P-521) are identity pass-throughs.
 		{"secp384r1", "secp384r1", elliptic.P384()},
 		{"prime256v1", "prime256v1", elliptic.P256()},
 		{"secp521r1", "secp521r1", elliptic.P521()},
-		{"P-256", "P-256", elliptic.P256()},
-		{"P-384", "P-384", elliptic.P384()},
-		{"P-521", "P-521", elliptic.P521()},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
