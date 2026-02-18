@@ -597,8 +597,35 @@ func TestExportBundles_EndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected bundle directory %s to exist: %v", bundleDir, err)
 	}
-	if len(entries) == 0 {
-		t.Error("bundle directory is empty — expected exported files")
+
+	// Verify specific expected files, not just non-empty directory
+	expectedFiles := []string{
+		"e2e.example.com.pem",
+		"e2e.example.com.key",
+		"e2e.example.com.json",
+		"e2e.example.com.yaml",
+	}
+	entryNames := make(map[string]bool, len(entries))
+	for _, e := range entries {
+		entryNames[e.Name()] = true
+	}
+	for _, name := range expectedFiles {
+		if !entryNames[name] {
+			t.Errorf("expected file %s in bundle directory", name)
+		}
+	}
+
+	// Verify leaf PEM is parseable with correct CN
+	leafPEM, err := os.ReadFile(filepath.Join(bundleDir, "e2e.example.com.pem"))
+	if err != nil {
+		t.Fatalf("read leaf PEM: %v", err)
+	}
+	leafCert, err := certkit.ParsePEMCertificate(leafPEM)
+	if err != nil {
+		t.Fatalf("parse leaf PEM: %v", err)
+	}
+	if leafCert.Subject.CommonName != "e2e.example.com" {
+		t.Errorf("leaf CN = %q, want e2e.example.com", leafCert.Subject.CommonName)
 	}
 }
 

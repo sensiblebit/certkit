@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha1"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
@@ -973,14 +974,30 @@ func TestCertFingerprintColon(t *testing.T) {
 	_, _, leafPEM := generateTestPKI(t)
 	cert, _ := ParsePEMCertificate([]byte(leafPEM))
 
+	// Independently compute expected fingerprints from cert.Raw
+	sha256Hash := sha256.Sum256(cert.Raw)
+	var sha256Parts []string
+	for _, b := range sha256Hash {
+		sha256Parts = append(sha256Parts, fmt.Sprintf("%02X", b))
+	}
+	expectedSHA256 := strings.Join(sha256Parts, ":")
+
+	sha1Hash := sha1.Sum(cert.Raw)
+	var sha1Parts []string
+	for _, b := range sha1Hash {
+		sha1Parts = append(sha1Parts, fmt.Sprintf("%02X", b))
+	}
+	expectedSHA1 := strings.Join(sha1Parts, ":")
+
 	tests := []struct {
 		name    string
 		fp      string
 		wantLen int
 		pattern string
+		wantVal string
 	}{
-		{"SHA256", CertFingerprintColonSHA256(cert), 95, `^[0-9A-F]{2}(:[0-9A-F]{2}){31}$`},
-		{"SHA1", CertFingerprintColonSHA1(cert), 59, `^[0-9A-F]{2}(:[0-9A-F]{2}){19}$`},
+		{"SHA256", CertFingerprintColonSHA256(cert), 95, `^[0-9A-F]{2}(:[0-9A-F]{2}){31}$`, expectedSHA256},
+		{"SHA1", CertFingerprintColonSHA1(cert), 59, `^[0-9A-F]{2}(:[0-9A-F]{2}){19}$`, expectedSHA1},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -990,9 +1007,11 @@ func TestCertFingerprintColon(t *testing.T) {
 			if !regexp.MustCompile(tt.pattern).MatchString(tt.fp) {
 				t.Errorf("fingerprint format invalid: %s", tt.fp)
 			}
+			if tt.fp != tt.wantVal {
+				t.Errorf("fingerprint value = %s, want %s", tt.fp, tt.wantVal)
+			}
 		})
 	}
-
 }
 
 func TestParsePEMCertificate_ReturnsFirstCertFromBundle(t *testing.T) {
@@ -1356,43 +1375,6 @@ func TestCrossFormatRoundTrip(t *testing.T) {
 	}
 	if !priv.Equal(keys[0]) {
 		t.Error("round-trip lost key material")
-	}
-}
-
-func TestComputeSKI_EquivalentToCertSKI(t *testing.T) {
-	// WHY: ComputeSKI and CertSKI use different code paths — ComputeSKI marshals
-	// the public key via marshalPublicKeyDER, while CertSKI reads cert.RawSubjectPublicKeyInfo.
-	// A divergence would silently break SKI-based key-certificate matching.
-	t.Parallel()
-
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	template := &x509.Certificate{
-		SerialNumber:       big.NewInt(1),
-		Subject:            pkix.Name{CommonName: "ski-equiv-ECDSA"},
-		NotBefore:          time.Now().Add(-time.Hour),
-		NotAfter:           time.Now().Add(24 * time.Hour),
-		KeyUsage:           x509.KeyUsageDigitalSignature,
-		SignatureAlgorithm: x509.ECDSAWithSHA256,
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cert, _ := x509.ParseCertificate(certDER)
-
-	computedSKI, err := ComputeSKI(&key.PublicKey)
-	if err != nil {
-		t.Fatalf("ComputeSKI: %v", err)
-	}
-	certSKI := CertSKI(cert)
-	computedHex := ColonHex(computedSKI)
-
-	if computedHex != certSKI {
-		t.Errorf("ComputeSKI = %s, CertSKI = %s — these must match for key-cert matching to work", computedHex, certSKI)
 	}
 }
 

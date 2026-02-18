@@ -1155,11 +1155,21 @@ func TestProcessData_PEMMixedEncrypted_PartialPasswordMatch(t *testing.T) {
 	for _, rec := range store.AllKeys() {
 		switch rec.KeyType {
 		case "RSA":
-			if rec.Key.(*rsa.PrivateKey).Equal(rsaKey1) {
+			rsaKey, ok := rec.Key.(*rsa.PrivateKey)
+			if !ok {
+				t.Errorf("RSA key record has unexpected type %T", rec.Key)
+				continue
+			}
+			if rsaKey.Equal(rsaKey1) {
 				gotRSA = true
 			}
 		case "ECDSA":
-			if rec.Key.(*ecdsa.PrivateKey).Equal(ecKey) {
+			ecStored, ok := rec.Key.(*ecdsa.PrivateKey)
+			if !ok {
+				t.Errorf("ECDSA key record has unexpected type %T", rec.Key)
+				continue
+			}
+			if ecStored.Equal(ecKey) {
 				gotECDSA = true
 			}
 		}

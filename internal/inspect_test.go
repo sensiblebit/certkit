@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/sensiblebit/certkit"
 )
 
 func TestInspectFile_Certificate(t *testing.T) {
@@ -60,8 +62,9 @@ func TestInspectFile_PrivateKey(t *testing.T) {
 	// which are tested across all algorithms in the root package.
 	t.Parallel()
 	dir := t.TempDir()
+	keyPEM := rsaKeyPEM(t)
 	keyFile := filepath.Join(dir, "key.pem")
-	if err := os.WriteFile(keyFile, rsaKeyPEM(t), 0600); err != nil {
+	if err := os.WriteFile(keyFile, keyPEM, 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -87,7 +90,24 @@ func TestInspectFile_PrivateKey(t *testing.T) {
 		t.Errorf("key size = %s, want 2048", keyResult.KeySize)
 	}
 	if keyResult.SKI == "" {
-		t.Error("expected SKI to be populated")
+		t.Fatal("expected SKI to be populated")
+	}
+
+	// Verify SKI against independently computed value from the same key
+	parsedKey, err := certkit.ParsePEMPrivateKey(keyPEM)
+	if err != nil {
+		t.Fatalf("parse key for SKI verification: %v", err)
+	}
+	pub, err := certkit.GetPublicKey(parsedKey)
+	if err != nil {
+		t.Fatalf("GetPublicKey: %v", err)
+	}
+	expectedSKI, err := certkit.ComputeSKI(pub)
+	if err != nil {
+		t.Fatalf("ComputeSKI: %v", err)
+	}
+	if keyResult.SKI != certkit.ColonHex(expectedSKI) {
+		t.Errorf("SKI = %q, want %q", keyResult.SKI, certkit.ColonHex(expectedSKI))
 	}
 }
 
@@ -103,84 +123,81 @@ func TestInspectFile_NotFound(t *testing.T) {
 	}
 }
 
-func TestInspectFile_PKCS12(t *testing.T) {
-	// WHY: PKCS#12 files contain certs and keys; verifies InspectFile extracts and reports both object types with correct leaf CN.
+func TestInspectFile_ContainerFormats(t *testing.T) {
+	// WHY: Container formats (PKCS#12, JKS) embed certs and keys in binary
+	// structures; verifies InspectFile extracts both object types with correct
+	// leaf CN for each format. Consolidated per T-12.
 	t.Parallel()
 	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "p12.example.com", []string{"p12.example.com"}, nil)
-	p12 := newPKCS12Bundle(t, leaf, ca, "changeit")
 
-	dir := t.TempDir()
-	p12File := filepath.Join(dir, "bundle.p12")
-	if err := os.WriteFile(p12File, p12, 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	results, err := InspectFile(p12File, []string{"changeit"})
-	if err != nil {
-		t.Fatalf("InspectFile failed: %v", err)
-	}
-
-	var certs, keys int
-	for _, r := range results {
-		switch r.Type {
-		case "certificate":
-			certs++
-		case "private_key":
-			keys++
-		}
-	}
-	if certs < 1 {
-		t.Errorf("expected at least 1 certificate, got %d", certs)
-	}
-	if keys != 1 {
-		t.Errorf("expected 1 private key, got %d", keys)
+	tests := []struct {
+		name     string
+		cn       string
+		filename string
+		makeData func(t *testing.T, leaf testLeaf, ca testCA) []byte
+	}{
+		{
+			name:     "PKCS#12",
+			cn:       "p12.example.com",
+			filename: "bundle.p12",
+			makeData: func(t *testing.T, leaf testLeaf, ca testCA) []byte {
+				return newPKCS12Bundle(t, leaf, ca, "changeit")
+			},
+		},
+		{
+			name:     "JKS",
+			cn:       "jks.example.com",
+			filename: "keystore.jks",
+			makeData: func(t *testing.T, leaf testLeaf, ca testCA) []byte {
+				return newJKSBundle(t, leaf, ca, "changeit")
+			},
+		},
 	}
 
-	// Verify leaf CN is present
-	found := false
-	for _, r := range results {
-		if r.Type == "certificate" && strings.Contains(r.Subject, "p12.example.com") {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("expected to find leaf certificate with CN=p12.example.com")
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			leaf := newRSALeaf(t, ca, tt.cn, []string{tt.cn}, nil)
+			data := tt.makeData(t, leaf, ca)
 
-func TestInspectFile_JKS(t *testing.T) {
-	// WHY: JKS is a Java-specific format; verifies InspectFile can decode it and report both certificate and key entries.
-	t.Parallel()
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "jks.example.com", []string{"jks.example.com"}, nil)
-	jks := newJKSBundle(t, leaf, ca, "changeit")
+			dir := t.TempDir()
+			path := filepath.Join(dir, tt.filename)
+			if err := os.WriteFile(path, data, 0644); err != nil {
+				t.Fatal(err)
+			}
 
-	dir := t.TempDir()
-	jksFile := filepath.Join(dir, "keystore.jks")
-	if err := os.WriteFile(jksFile, jks, 0644); err != nil {
-		t.Fatal(err)
-	}
+			results, err := InspectFile(path, []string{"changeit"})
+			if err != nil {
+				t.Fatalf("InspectFile failed: %v", err)
+			}
 
-	results, err := InspectFile(jksFile, []string{"changeit"})
-	if err != nil {
-		t.Fatalf("InspectFile failed: %v", err)
-	}
+			var certs, keys int
+			for _, r := range results {
+				switch r.Type {
+				case "certificate":
+					certs++
+				case "private_key":
+					keys++
+				}
+			}
+			if certs < 1 {
+				t.Errorf("expected at least 1 certificate, got %d", certs)
+			}
+			if keys != 1 {
+				t.Errorf("expected 1 private key, got %d", keys)
+			}
 
-	var certs, keys int
-	for _, r := range results {
-		switch r.Type {
-		case "certificate":
-			certs++
-		case "private_key":
-			keys++
-		}
-	}
-	if certs < 1 {
-		t.Errorf("expected at least 1 certificate, got %d", certs)
-	}
-	if keys != 1 {
-		t.Errorf("expected 1 private key, got %d", keys)
+			// Verify leaf CN is present
+			found := false
+			for _, r := range results {
+				if r.Type == "certificate" && strings.Contains(r.Subject, tt.cn) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("expected to find leaf certificate with CN=%s", tt.cn)
+			}
+		})
 	}
 }
 
