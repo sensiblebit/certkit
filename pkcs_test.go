@@ -60,8 +60,7 @@ func TestEncodeContainers_InvalidKey(t *testing.T) {
 func TestEncodePKCS12_RoundTrip(t *testing.T) {
 	// WHY: EncodePKCS12 is a thin wrapper around gopkcs12.Modern.Encode.
 	// One key type (RSA) suffices per T-13 to prove the wrapper chains correctly.
-	// TestEncodePKCS12_withChain covers ECDSA; Ed25519 normalization is tested
-	// via TestMarshalPrivateKeyToPEM_Ed25519Pointer.
+	// TestEncodePKCS12_MultiCertChain covers ECDSA with a full chain.
 	t.Parallel()
 
 	key, err := rsa.GenerateKey(rand.Reader, 2048)

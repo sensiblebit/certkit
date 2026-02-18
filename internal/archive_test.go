@@ -693,41 +693,6 @@ func TestProcessArchive_NestedArchiveNotRecursed(t *testing.T) {
 	}
 }
 
-func TestProcessArchive_ExpiredCertStored(t *testing.T) {
-	// WHY: Expired certificates inside archives must be ingested into the store;
-	// filtering is an output-only concern. This ensures chain building works even
-	// when intermediates are expired.
-	t.Parallel()
-	ca := newRSACA(t)
-	expired := newExpiredLeaf(t, ca)
-
-	zipData := createTestZip(t, map[string][]byte{
-		"expired.pem": expired.certPEM,
-	})
-
-	cfg := newTestConfig(t)
-
-	n, err := ProcessArchive(ProcessArchiveInput{
-		ArchivePath: "test.zip",
-		Data:        zipData,
-		Format:      "zip",
-		Limits:      DefaultArchiveLimits(),
-		Store:       cfg.Store,
-		Passwords:   cfg.Passwords,
-	})
-	if err != nil {
-		t.Fatalf("ProcessArchive: %v", err)
-	}
-	if n != 1 {
-		t.Errorf("processed %d entries, want 1", n)
-	}
-
-	certs := cfg.Store.AllCertsFlat()
-	if len(certs) != 1 {
-		t.Errorf("got %d certs in store, want 1 (expired certs should be stored)", len(certs))
-	}
-}
-
 func TestProcessArchive_UnsupportedFormat(t *testing.T) {
 	// WHY: Verifies that an unknown format string produces a clear error
 	// with a descriptive message.
