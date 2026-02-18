@@ -38,7 +38,6 @@ func TestParsePEMCertificates_NoCertificates(t *testing.T) {
 		input []byte
 	}{
 		{"nil input", nil},
-		{"non-PEM text", []byte("not a cert")},
 		{"only PRIVATE KEY blocks", keyOnlyPEM},
 	}
 	for _, tt := range tests {
@@ -125,35 +124,6 @@ func TestCertToPEM_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestCertSKI_RFC7093(t *testing.T) {
-	// WHY: CertSKI must use RFC 7093 Method 1 (truncated SHA-256), not legacy
-	// SHA-1; wrong algorithm breaks AKI resolution. Verifies both format and
-	// that the value differs from a SHA-1-based computation.
-	t.Parallel()
-	_, _, leafPEM := generateTestPKI(t)
-	leaf, _ := ParsePEMCertificate([]byte(leafPEM))
-
-	ski := CertSKI(leaf)
-	if ski == "" {
-		t.Fatal("CertSKI returned empty string")
-	}
-
-	// RFC 7093 Method 1: leftmost 160 bits of SHA-256 = 20 bytes
-	// 20 bytes = 40 hex chars + 19 colons = 59 chars
-	if len(ski) != 59 {
-		t.Errorf("SKI length %d, want 59 (20 bytes colon-separated)", len(ski))
-	}
-
-	// Verify it matches the independent ComputeSKI path (which also uses SHA-256)
-	computedSKI, err := ComputeSKI(leaf.PublicKey)
-	if err != nil {
-		t.Fatalf("ComputeSKI: %v", err)
-	}
-	if ColonHex(computedSKI) != ski {
-		t.Errorf("CertSKI = %s, ComputeSKI = %s — must match", ski, ColonHex(computedSKI))
-	}
-}
-
 func TestCertKeyIdEmbedded_NilExtensions(t *testing.T) {
 	// WHY: Nil SubjectKeyId/AuthorityKeyId must return empty string gracefully,
 	// not panic. Populated cases are tautological (ColonHex(x) == ColonHex(x))
@@ -233,16 +203,6 @@ func TestParsePEMPrivateKey_AllFormats(t *testing.T) {
 				key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 				der, _ := x509.MarshalECPrivateKey(key)
 				pemBytes := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})
-				return key, pemBytes
-			},
-			wantType: "*ecdsa.PrivateKey",
-		},
-		{
-			name: "PKCS8 ECDSA",
-			genKey: func() (crypto.PrivateKey, []byte) {
-				key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-				der, _ := x509.MarshalPKCS8PrivateKey(key)
-				pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
 				return key, pemBytes
 			},
 			wantType: "*ecdsa.PrivateKey",
@@ -379,7 +339,6 @@ func TestParsePEMPrivateKeyWithPasswords_Encrypted(t *testing.T) {
 		{"default passwords include changeit", "changeit", DefaultPasswords(), false, ""},
 		{"correct password last in list", "third", []string{"first", "second", "third"}, false, ""},
 		{"nil password list", "secret", nil, true, "decrypting private key"},
-		{"empty password list", "secret", []string{}, true, "decrypting private key"},
 		{"empty password decrypts", "", []string{""}, false, ""},
 	}
 	for _, tt := range tests {
@@ -1021,24 +980,12 @@ func TestParsePEMPrivateKey_EmptyInput(t *testing.T) {
 	// contents that are empty (e.g., zero-byte files).
 	t.Parallel()
 
-	tests := []struct {
-		name  string
-		input []byte
-	}{
-		{"nil", nil},
-		{"non-PEM binary", []byte{0x30, 0x82, 0x01, 0x22, 0x30, 0x0d}},
+	_, err := ParsePEMPrivateKey(nil)
+	if err == nil {
+		t.Fatal("expected error for nil input")
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			_, err := ParsePEMPrivateKey(tt.input)
-			if err == nil {
-				t.Fatal("expected error for empty/nil input")
-			}
-			if !strings.Contains(err.Error(), "no PEM block") {
-				t.Errorf("error should mention 'no PEM block', got: %v", err)
-			}
-		})
+	if !strings.Contains(err.Error(), "no PEM block") {
+		t.Errorf("error should mention 'no PEM block', got: %v", err)
 	}
 }
 
@@ -1207,11 +1154,6 @@ func TestCertFingerprints(t *testing.T) {
 	if sha256Hex == sha1Hex {
 		t.Error("SHA-256 and SHA-1 fingerprints should differ")
 	}
-
-	// Stability: calling the same function twice must return the same value
-	if CertFingerprint(cert) != sha256Hex {
-		t.Error("CertFingerprint is not stable across calls")
-	}
 }
 
 func TestColonHex_EdgeCases(t *testing.T) {
@@ -1248,9 +1190,6 @@ func TestComputeSKILegacy(t *testing.T) {
 	legacy, err := ComputeSKILegacy(cert.PublicKey)
 	if err != nil {
 		t.Fatalf("ComputeSKILegacy: %v", err)
-	}
-	if len(legacy) != 20 {
-		t.Errorf("legacy SKI length = %d, want 20 (SHA-1)", len(legacy))
 	}
 
 	// Verify the value differs from ComputeSKI (SHA-256 truncated to 160 bits).

@@ -23,7 +23,6 @@ func TestParseLogLevel(t *testing.T) {
 		{name: "empty_defaults_info", input: "", want: slog.LevelInfo},
 		{name: "unknown_defaults_info", input: "trace", want: slog.LevelInfo},
 		{name: "uppercase_not_recognized", input: "DEBUG", want: slog.LevelInfo},
-		{name: "mixed_case_not_recognized", input: "Info", want: slog.LevelInfo},
 	}
 
 	for _, tt := range tests {

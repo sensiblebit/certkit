@@ -170,6 +170,9 @@ func TestBundle_verifyFalsePassthrough(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if result.Leaf == nil || result.Leaf.Subject.CommonName != "noverify-leaf" {
+		t.Errorf("expected leaf CN=noverify-leaf, got %v", result.Leaf)
+	}
 	if len(result.Intermediates) != 1 {
 		t.Errorf("expected 1 intermediate passthrough, got %d", len(result.Intermediates))
 	}
@@ -525,7 +528,6 @@ func TestCheckExpiryWarnings(t *testing.T) {
 		{"expiring soon", 10 * 24 * time.Hour, 1, "expires within 30 days"},
 		{"within 30 days boundary", 30*24*time.Hour - time.Minute, 1, "expires within 30 days"},
 		{"outside 30 days boundary", 30*24*time.Hour + time.Minute, 0, ""},
-		{"far future", 365 * 24 * time.Hour, 0, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

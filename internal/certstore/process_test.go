@@ -87,57 +87,39 @@ func TestProcessData_PEMPrivateKey(t *testing.T) {
 
 func TestProcessData_PEMEncryptedKey_CorrectPassword(t *testing.T) {
 	// WHY: Encrypted PEM keys with the correct password must be decrypted and
-	// stored with key material matching the original. Covers both PKCS#1 RSA
-	// and SEC1 ECDSA encoding paths under legacy PEM encryption.
+	// stored with key material matching the original. One key type (RSA/PKCS#1)
+	// suffices — the format-specific parsing paths are tested in
+	// certkit_test.go:TestParsePEMPrivateKeyWithPasswords_Encrypted (T-13).
 	t.Parallel()
 
 	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	ecDER, _ := x509.MarshalECPrivateKey(ecKey)
+	//nolint:staticcheck // testing legacy encrypted PEM
+	encBlock, err := x509.EncryptPEMBlock(rand.Reader, "RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(rsaKey), []byte("testpass"), x509.PEMCipherAES256)
+	if err != nil {
+		t.Fatalf("encrypt PEM: %v", err)
+	}
+	encPEM := pem.EncodeToMemory(encBlock)
 
-	tests := []struct {
-		name     string
-		key      crypto.PrivateKey
-		pemType  string
-		derBytes []byte
-		wantType string
-	}{
-		{"RSA", rsaKey, "RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(rsaKey), "RSA"},
-		{"ECDSA", ecKey, "EC PRIVATE KEY", ecDER, "ECDSA"},
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{
+		Data:      encPEM,
+		Path:      "encrypted.pem",
+		Passwords: []string{"testpass"},
+		Handler:   store,
+	}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			//nolint:staticcheck // testing legacy encrypted PEM
-			encBlock, err := x509.EncryptPEMBlock(rand.Reader, tt.pemType, tt.derBytes, []byte("testpass"), x509.PEMCipherAES256)
-			if err != nil {
-				t.Fatalf("encrypt PEM: %v", err)
-			}
-			encPEM := pem.EncodeToMemory(encBlock)
-
-			store := NewMemStore()
-			if err := ProcessData(ProcessInput{
-				Data:      encPEM,
-				Path:      "encrypted.pem",
-				Passwords: []string{"testpass"},
-				Handler:   store,
-			}); err != nil {
-				t.Fatalf("ProcessData: %v", err)
-			}
-
-			if len(store.AllKeys()) != 1 {
-				t.Fatalf("expected 1 key, got %d", len(store.AllKeys()))
-			}
-			for _, rec := range store.AllKeys() {
-				if rec.KeyType != tt.wantType {
-					t.Errorf("KeyType = %q, want %s", rec.KeyType, tt.wantType)
-				}
-				if !keysEqual(t, tt.key, rec.Key) {
-					t.Error("stored key does not Equal original after decryption")
-				}
-			}
-		})
+	if len(store.AllKeys()) != 1 {
+		t.Fatalf("expected 1 key, got %d", len(store.AllKeys()))
+	}
+	for _, rec := range store.AllKeys() {
+		if rec.KeyType != "RSA" {
+			t.Errorf("KeyType = %q, want RSA", rec.KeyType)
+		}
+		if !keysEqual(t, rsaKey, rec.Key) {
+			t.Error("stored key does not Equal original after decryption")
+		}
 	}
 }
 

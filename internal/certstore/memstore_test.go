@@ -161,17 +161,6 @@ func TestMemStore_Intermediates(t *testing.T) {
 	}
 }
 
-func TestMemStore_IntermediatePool_Empty(t *testing.T) {
-	// WHY: An empty store must return a non-nil pool to avoid nil-pointer
-	// panics in callers that pass it to x509.Verify.
-	t.Parallel()
-	store := NewMemStore()
-	pool := store.IntermediatePool()
-	if pool == nil {
-		t.Fatal("IntermediatePool returned nil for empty store")
-	}
-}
-
 func TestMemStore_HasIssuer(t *testing.T) {
 	// WHY: HasIssuer drives AIA fetching decisions; must match by raw ASN.1
 	// subject/issuer bytes, skip self-references, and return false when the
@@ -326,8 +315,8 @@ func TestMemStore_Reset(t *testing.T) {
 }
 
 func TestMemStore_EmptyStore(t *testing.T) {
-	// WHY: Empty store must return empty collections, not nil, to avoid
-	// nil-pointer panics in callers that iterate.
+	// WHY: Empty store must return empty collections and non-nil pools, not
+	// nil, to avoid nil-pointer panics in callers that iterate or verify.
 	t.Parallel()
 	store := NewMemStore()
 
@@ -357,6 +346,9 @@ func TestMemStore_EmptyStore(t *testing.T) {
 	}
 	if len(store.BundleNames()) != 0 {
 		t.Error("expected 0 bundle names in empty store")
+	}
+	if pool := store.IntermediatePool(); pool == nil {
+		t.Error("IntermediatePool returned nil for empty store")
 	}
 
 	summary := store.ScanSummary()

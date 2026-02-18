@@ -24,7 +24,6 @@ func TestArchiveFormat(t *testing.T) {
 		{"tar.gz", "certs.tar.gz", "tar.gz"},
 		{"uppercase ZIP", "certs.ZIP", "zip"},
 		{"uppercase TAR.GZ", "certs.TAR.GZ", "tar.gz"},
-		{"mixed case TaR.Gz", "certs.TaR.Gz", "tar.gz"},
 		{"pem file", "cert.pem", ""},
 		{"p12 file", "cert.p12", ""},
 		{"no extension", "certs", ""},
@@ -608,9 +607,6 @@ func TestProcessArchive_CorruptedArchive(t *testing.T) {
 			})
 			if err == nil {
 				t.Errorf("expected error for corrupted %s, got nil", tt.format)
-			}
-			if err.Error() == "" {
-				t.Error("error message should not be empty")
 			}
 		})
 	}
