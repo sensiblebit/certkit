@@ -336,6 +336,17 @@ func TestResolveAIA_MaxDepthDefault(t *testing.T) {
 	if fetchCount != 2 {
 		t.Errorf("expected 2 fetches (intermediate + root) with default depth, got %d", fetchCount)
 	}
+
+	// Verify the fetched certs are actually in the store — without this,
+	// a fetcher that returned valid DER but HandleCertificate silently
+	// failed would still show fetchCount==2.
+	allCerts := store.AllCertsFlat()
+	if len(allCerts) != 3 {
+		t.Errorf("expected 3 certs in store (leaf + intermediate + root), got %d", len(allCerts))
+	}
+	if !store.HasIssuer(leafCert) {
+		t.Error("leaf should have its issuer in the store after AIA resolution")
+	}
 }
 
 func TestResolveAIA_PKCS7Response(t *testing.T) {

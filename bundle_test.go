@@ -711,7 +711,9 @@ func TestIsIssuedByMozillaRoot(t *testing.T) {
 	// positives skip resolution and leave chains incomplete. Consolidated per T-12.
 	t.Parallel()
 
-	// Build a known Mozilla root cert
+	// Build a cert whose RawIssuer matches a Mozilla root's RawSubject.
+	// This is stronger than testing a self-signed Mozilla root against itself
+	// (which is tautological since RawIssuer == RawSubject for self-signed certs).
 	pemData := MozillaRootPEM()
 	block, _ := pem.Decode(pemData)
 	if block == nil {
@@ -722,23 +724,49 @@ func TestIsIssuedByMozillaRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Build a private CA cert (unknown issuer)
+	// Create a fake CA whose RawSubject exactly matches the Mozilla root's,
+	// then use it to sign a leaf. This gives the leaf a RawIssuer that matches
+	// the Mozilla root's RawSubject — proving IsIssuedByMozillaRoot works for
+	// non-root certs (not just tautological self-signed root lookups).
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	template := &x509.Certificate{
+	fakeCA := &x509.Certificate{
+		SerialNumber:          big.NewInt(998),
+		RawSubject:            mozRoot.RawSubject, // exact DER bytes
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	fakeCABytes, _ := x509.CreateCertificate(rand.Reader, fakeCA, fakeCA, &key.PublicKey, key)
+	fakeCACert, _ := x509.ParseCertificate(fakeCABytes)
+
+	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	issuedByMozilla := &x509.Certificate{
+		SerialNumber: big.NewInt(999),
+		Subject:      pkix.Name{CommonName: "issued-by-mozilla-root"},
+		NotBefore:    time.Now().Add(-1 * time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+	}
+	certBytes, _ := x509.CreateCertificate(rand.Reader, issuedByMozilla, fakeCACert, &leafKey.PublicKey, key)
+	issuedCert, _ := x509.ParseCertificate(certBytes)
+
+	// Build a private CA cert (unknown issuer)
+	privateTemplate := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: "private-ca-leaf"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 	}
-	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	privateCert, _ := x509.ParseCertificate(certBytes)
+	privateCertBytes, _ := x509.CreateCertificate(rand.Reader, privateTemplate, privateTemplate, &key.PublicKey, key)
+	privateCert, _ := x509.ParseCertificate(privateCertBytes)
 
 	tests := []struct {
 		name string
 		cert *x509.Certificate
 		want bool
 	}{
-		{"known Mozilla root", mozRoot, true},
+		{"cert issued by Mozilla root", issuedCert, true},
 		{"private CA cert", privateCert, false},
 	}
 	for _, tt := range tests {

@@ -102,6 +102,12 @@ func TestGenerateBundleFiles_NoIntermediates(t *testing.T) {
 		t.Fatalf("GenerateBundleFiles: %v", err)
 	}
 
+	// Must produce files (not an empty slice) — without this check,
+	// a bug returning zero files would silently pass.
+	if len(files) == 0 {
+		t.Fatal("expected non-empty file list")
+	}
+
 	for _, f := range files {
 		if f.Name == "direct.intermediates.pem" {
 			t.Error("intermediates.pem should not be present when bundle has no intermediates")
@@ -132,6 +138,12 @@ func TestGenerateBundleFiles_NoRoot(t *testing.T) {
 	})
 	if err != nil {
 		t.Fatalf("GenerateBundleFiles: %v", err)
+	}
+
+	// Must produce files (not an empty slice) — without this check,
+	// a bug returning zero files would pass all assertions below vacuously.
+	if len(files) == 0 {
+		t.Fatal("expected non-empty file list")
 	}
 
 	var chainData, fullchainData []byte

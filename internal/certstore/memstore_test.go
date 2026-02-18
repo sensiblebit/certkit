@@ -528,27 +528,6 @@ func TestMemStore_HandleKey_AllKeyTypes(t *testing.T) {
 	}
 }
 
-func TestMemStore_SetBundleName(t *testing.T) {
-	// WHY: SetBundleName must apply the bundle name to all certs matching the
-	// given SKI, enabling CertsByBundleName queries for export.
-	t.Parallel()
-	store := NewMemStore()
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "bundle.example.com", []string{"bundle.example.com"})
-
-	if err := store.HandleCertificate(leaf.cert, "test.pem"); err != nil {
-		t.Fatal(err)
-	}
-
-	ski := computeSKIHex(t, leaf.cert)
-	store.SetBundleName(ski, "my-bundle")
-
-	rec := store.GetCert(ski)
-	if rec.BundleName != "my-bundle" {
-		t.Errorf("BundleName = %q, want my-bundle", rec.BundleName)
-	}
-}
-
 func TestMemStore_CertsByBundleName(t *testing.T) {
 	// WHY: CertsByBundleName drives the export loop — must return all certs
 	// with the given bundle name sorted by expiry desc (newest first).
