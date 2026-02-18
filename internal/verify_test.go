@@ -61,13 +61,12 @@ func TestVerifyCert_KeyMatch(t *testing.T) {
 }
 
 func TestVerifyCert_ExpiryCheck(t *testing.T) {
-	// WHY: The expiry window check must trigger when the cert expires within
-	// the window, not trigger when outside the window, and always trigger for
-	// already-expired certs. Each case covers a distinct code path.
+	// WHY: Verifies VerifyCert wires ExpiryDuration to result.Expiry correctly.
+	// The "already expired" case is covered by TestCertExpiresWithin in the
+	// root package (T-10); here we only test the wiring through VerifyCert.
 	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "expiry.example.com", []string{"expiry.example.com"}, nil)
-	expired := newExpiredLeaf(t, ca)
 
 	tests := []struct {
 		name       string
@@ -77,7 +76,6 @@ func TestVerifyCert_ExpiryCheck(t *testing.T) {
 	}{
 		{"within window triggers", leaf.cert, 400 * 24 * time.Hour, true},
 		{"outside window does not trigger", leaf.cert, 30 * 24 * time.Hour, false},
-		{"already expired always triggers", expired.cert, 1 * time.Hour, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

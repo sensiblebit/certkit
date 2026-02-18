@@ -633,7 +633,7 @@ func TestDecodeJKS_MultiplePrivateKeyEntries(t *testing.T) {
 		t.Errorf("expected 2 keys, got %d", len(keys))
 	}
 	if len(certs) != 2 {
-		t.Errorf("expected 2 certs, got %d", len(certs))
+		t.Fatalf("expected 2 certs, got %d", len(certs))
 	}
 
 	// Verify both original keys are present (material equality, not just types).
@@ -651,6 +651,18 @@ func TestDecodeJKS_MultiplePrivateKeyEntries(t *testing.T) {
 	}
 	if !foundKey2 {
 		t.Error("ECDSA key material not preserved through JKS round-trip")
+	}
+
+	// Verify both cert identities are present (not just count).
+	certCNs := map[string]bool{}
+	for _, c := range certs {
+		certCNs[c.Subject.CommonName] = true
+	}
+	if !certCNs["server-key"] {
+		t.Error("server-key cert not found in decoded certs")
+	}
+	if !certCNs["client-key"] {
+		t.Error("client-key cert not found in decoded certs")
 	}
 }
 

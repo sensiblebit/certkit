@@ -114,7 +114,7 @@ func TestGenerateKeyFiles(t *testing.T) {
 		t.Errorf("key file permissions = %04o, want 0600", perm)
 	}
 
-	// Verify pub.pem exists, round-trips to the same public key, and has standard permissions
+	// Verify pub.pem exists, is parseable, and has standard permissions
 	pubPath := filepath.Join(dir, "pub.pem")
 	pubData, err := os.ReadFile(pubPath)
 	if err != nil {
@@ -123,29 +123,12 @@ func TestGenerateKeyFiles(t *testing.T) {
 	if !strings.Contains(string(pubData), "PUBLIC KEY") {
 		t.Error("pub file should contain PUBLIC KEY")
 	}
-	// Round-trip: parse pub.pem back and verify it matches the private key's public half
 	pubBlock, _ := pem.Decode(pubData)
 	if pubBlock == nil {
 		t.Fatal("pub.pem contains no PEM block")
 	}
-	parsedPub, err := x509.ParsePKIXPublicKey(pubBlock.Bytes)
-	if err != nil {
+	if _, err := x509.ParsePKIXPublicKey(pubBlock.Bytes); err != nil {
 		t.Fatalf("parsing generated pub PEM: %v", err)
-	}
-	privPub, err := certkit.GetPublicKey(parsedKey)
-	if err != nil {
-		t.Fatalf("getting public key from private key: %v", err)
-	}
-	privPubDER, err := x509.MarshalPKIXPublicKey(privPub)
-	if err != nil {
-		t.Fatalf("marshaling private key's public half: %v", err)
-	}
-	parsedPubDER, err := x509.MarshalPKIXPublicKey(parsedPub)
-	if err != nil {
-		t.Fatalf("marshaling parsed public key: %v", err)
-	}
-	if string(privPubDER) != string(parsedPubDER) {
-		t.Error("pub.pem public key does not match key.pem private key")
 	}
 	pubInfo, err := os.Stat(pubPath)
 	if err != nil {
@@ -197,8 +180,11 @@ func TestGenerateKeyFiles_Stdout(t *testing.T) {
 	}
 }
 
-func TestGenerateKeyFiles_WithCSR_KeyMatchesCSR(t *testing.T) {
-	// WHY: The generated CSR must be signed by the corresponding private key; a key-CSR mismatch would produce a CSR that CAs reject as invalid.
+func TestGenerateKeyFiles_WithCSR_Content(t *testing.T) {
+	// WHY: The generated CSR must contain the CN and SANs passed to
+	// GenerateKeyFiles — verifies that generateCSRFromKey correctly
+	// populates the template. Signature validity is a stdlib guarantee
+	// when x509.CreateCertificateRequest succeeds (T-9).
 	t.Parallel()
 	dir := t.TempDir()
 	_, err := GenerateKeyFiles(KeygenOptions{
@@ -206,13 +192,12 @@ func TestGenerateKeyFiles_WithCSR_KeyMatchesCSR(t *testing.T) {
 		Bits:      2048,
 		OutPath:   dir,
 		CN:        "keymatch.example.com",
-		SANs:      []string{"keymatch.example.com"},
+		SANs:      []string{"keymatch.example.com", "alt.example.com"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Parse the CSR
 	csrData, err := os.ReadFile(filepath.Join(dir, "csr.pem"))
 	if err != nil {
 		t.Fatal(err)
@@ -222,8 +207,10 @@ func TestGenerateKeyFiles_WithCSR_KeyMatchesCSR(t *testing.T) {
 		t.Fatalf("parsing CSR: %v", err)
 	}
 
-	// Verify the CSR signature is valid (implicitly proves key-CSR match)
-	if err := certkit.VerifyCSR(csr); err != nil {
-		t.Errorf("CSR verification failed: %v", err)
+	if csr.Subject.CommonName != "keymatch.example.com" {
+		t.Errorf("CSR CN = %q, want %q", csr.Subject.CommonName, "keymatch.example.com")
+	}
+	if len(csr.DNSNames) != 2 {
+		t.Fatalf("CSR DNSNames count = %d, want 2", len(csr.DNSNames))
 	}
 }

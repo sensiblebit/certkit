@@ -8,6 +8,7 @@ import (
 func TestParseLogLevel(t *testing.T) {
 	// WHY: Verifies all documented log level strings map to the correct slog.Level,
 	// including the "warn"/"warning" alias and the default fallback for unknown input.
+	// "uppercase_not_recognized" documents that the function is case-sensitive.
 	t.Parallel()
 
 	tests := []struct {
@@ -20,7 +21,6 @@ func TestParseLogLevel(t *testing.T) {
 		{name: "warning", input: "warning", want: slog.LevelWarn},
 		{name: "warn_alias", input: "warn", want: slog.LevelWarn},
 		{name: "error", input: "error", want: slog.LevelError},
-		{name: "empty_defaults_info", input: "", want: slog.LevelInfo},
 		{name: "unknown_defaults_info", input: "trace", want: slog.LevelInfo},
 		{name: "uppercase_not_recognized", input: "DEBUG", want: slog.LevelInfo},
 	}

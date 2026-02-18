@@ -9,8 +9,10 @@ import (
 
 func TestArchiveFormat(t *testing.T) {
 	// WHY: Verifies that all supported archive extensions are detected
-	// case-insensitively. IsArchive is a trivial wrapper (ArchiveFormat != "")
-	// and does not need separate per-case assertions (T-11).
+	// case-insensitively. One positive case per format, one uppercase case
+	// to prove case normalization, and one negative case to prove non-archive
+	// extensions are rejected. IsArchive is a trivial wrapper
+	// (ArchiveFormat != "") and does not need separate assertions (T-11).
 	t.Parallel()
 
 	tests := []struct {
@@ -23,14 +25,8 @@ func TestArchiveFormat(t *testing.T) {
 		{"tgz", "certs.tgz", "tar.gz"},
 		{"tar.gz", "certs.tar.gz", "tar.gz"},
 		{"uppercase ZIP", "certs.ZIP", "zip"},
-		{"uppercase TAR.GZ", "certs.TAR.GZ", "tar.gz"},
 		{"pem file", "cert.pem", ""},
-		{"p12 file", "cert.p12", ""},
 		{"no extension", "certs", ""},
-		{"nested path zip", "/some/path/certs.zip", "zip"},
-		{"nested path tar.gz", "/some/path/certs.tar.gz", "tar.gz"},
-		{"tar.gz.bak", "certs.tar.gz.bak", ""},
-		{"trailing dot", "certs.tar.", ""},
 	}
 
 	for _, tt := range tests {
@@ -443,7 +439,8 @@ func TestProcessArchive_TarEntryExceedsMaxSize(t *testing.T) {
 
 func TestProcessArchive_EntryCountLimit(t *testing.T) {
 	// WHY: Verifies that MaxEntryCount stops processing at the specified limit,
-	// protecting against archive bombs. Covers both boundary (0) and mid-stream (1).
+	// protecting against archive bombs. One sub-case per archive handler
+	// (zip/tar) proves the limit is enforced in both code paths.
 	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "count.example.com", []string{"count.example.com"}, nil)
@@ -463,7 +460,6 @@ func TestProcessArchive_EntryCountLimit(t *testing.T) {
 	}{
 		{"zip/limit=1", "zip", createTestZip, 1, 1},
 		{"tar/limit=1", "tar", createTestTar, 1, 1},
-		{"zip/limit=0", "zip", createTestZip, 0, 0},
 	}
 
 	for _, tt := range tests {

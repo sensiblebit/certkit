@@ -1191,8 +1191,10 @@ func TestComputeSKILegacy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ComputeSKILegacy: %v", err)
 	}
+	if len(legacy) != 20 {
+		t.Errorf("ComputeSKILegacy length = %d, want 20 (SHA-1 output size)", len(legacy))
+	}
 
-	// Verify the value differs from ComputeSKI (SHA-256 truncated to 160 bits).
 	modern, err := ComputeSKI(cert.PublicKey)
 	if err != nil {
 		t.Fatalf("ComputeSKI: %v", err)

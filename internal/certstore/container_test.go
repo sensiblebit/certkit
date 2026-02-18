@@ -15,28 +15,17 @@ import (
 )
 
 func TestParseContainerData_EmptyData(t *testing.T) {
-	// WHY: Empty input (nil or zero-length) must return a clear "empty data"
-	// error, not panic or return a nil ContainerContents without error.
+	// WHY: Empty input must return a clear "empty data" error, not panic or
+	// return nil ContainerContents without error. len(nil) == len([]byte{}) == 0,
+	// so one case covers the guard.
 	t.Parallel()
 
-	tests := []struct {
-		name string
-		data []byte
-	}{
-		{"nil", nil},
-		{"empty slice", []byte{}},
+	_, err := ParseContainerData(nil, nil)
+	if err == nil {
+		t.Fatal("expected error for empty data")
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			_, err := ParseContainerData(tt.data, nil)
-			if err == nil {
-				t.Fatal("expected error for empty data")
-			}
-			if !strings.Contains(err.Error(), "empty data") {
-				t.Errorf("error should mention empty data, got: %v", err)
-			}
-		})
+	if !strings.Contains(err.Error(), "empty data") {
+		t.Errorf("error should mention empty data, got: %v", err)
 	}
 }
 

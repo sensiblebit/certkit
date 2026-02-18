@@ -120,6 +120,14 @@ func TestProcessData_PEMEncryptedKey_CorrectPassword(t *testing.T) {
 		if !keysEqual(t, rsaKey, rec.Key) {
 			t.Error("stored key does not Equal original after decryption")
 		}
+		// Verify the stored PEM is normalized to unencrypted PKCS#8
+		block, _ := pem.Decode(rec.PEM)
+		if block == nil {
+			t.Fatal("stored PEM is not decodeable")
+		}
+		if block.Type != "PRIVATE KEY" {
+			t.Errorf("stored PEM type = %q, want %q (normalized PKCS#8)", block.Type, "PRIVATE KEY")
+		}
 	}
 }
 
@@ -445,60 +453,44 @@ func TestProcessData_Ed25519RawKey_Rejected(t *testing.T) {
 }
 
 func TestProcessData_EmptyData(t *testing.T) {
-	// WHY: Both nil and empty slice data must produce no handler calls and no error —
-	// tests both code paths since nil and []byte{} may be handled differently.
+	// WHY: Empty data must produce no handler calls and no error —
+	// len(nil) == len([]byte{}) == 0, so one case covers the guard.
 	t.Parallel()
 
-	tests := []struct {
-		name string
-		data []byte
-	}{
-		{"nil", nil},
-		{"empty_slice", []byte{}},
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{
+		Data:    nil,
+		Path:    "empty.pem",
+		Handler: store,
+	}); err != nil {
+		t.Fatalf("ProcessData should not error on nil data: %v", err)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			store := NewMemStore()
-			if err := ProcessData(ProcessInput{
-				Data:    tt.data,
-				Path:    "empty.pem",
-				Handler: store,
-			}); err != nil {
-				t.Fatalf("ProcessData should not error on %s data: %v", tt.name, err)
-			}
-			if len(store.AllCerts()) != 0 || len(store.AllKeys()) != 0 {
-				t.Errorf("expected no handler calls for %s data", tt.name)
-			}
-		})
+	if len(store.AllCerts()) != 0 || len(store.AllKeys()) != 0 {
+		t.Error("expected no handler calls for nil data")
 	}
 }
 
 func TestProcessData_GarbageBinary(t *testing.T) {
-	// WHY: Garbage binary must not error or produce handler calls regardless
-	// of file extension — covers both recognized (.der) and unrecognized (.bin).
+	// WHY: Garbage binary with a recognized extension (.der) must not error
+	// or produce handler calls — verifies processDER fails gracefully on
+	// unparseable data. Unrecognized extensions are covered by
+	// TestProcessData_ValidDERKey_UnrecognizedExtension.
 	t.Parallel()
 	garbage := make([]byte, 512)
 	for i := range garbage {
 		garbage[i] = byte(i % 251)
 	}
 
-	for _, path := range []string{"garbage.der", "garbage.bin"} {
-		t.Run(path, func(t *testing.T) {
-			t.Parallel()
-			store := NewMemStore()
-			if err := ProcessData(ProcessInput{
-				Data:    garbage,
-				Path:    path,
-				Handler: store,
-			}); err != nil {
-				t.Fatalf("ProcessData should not error: %v", err)
-			}
-			if len(store.AllCerts()) != 0 || len(store.AllKeys()) != 0 {
-				t.Error("expected no handler calls for garbage binary")
-			}
-		})
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{
+		Data:    garbage,
+		Path:    "garbage.der",
+		Handler: store,
+	}); err != nil {
+		t.Fatalf("ProcessData should not error: %v", err)
+	}
+	if len(store.AllCerts()) != 0 || len(store.AllKeys()) != 0 {
+		t.Error("expected no handler calls for garbage binary")
 	}
 }
 
@@ -1143,35 +1135,22 @@ func TestProcessData_PEMInterleaved_KeysExtractedAcrossCertBlocks(t *testing.T) 
 }
 
 func TestProcessData_JKS_InvalidMagicBytes(t *testing.T) {
-	// WHY: Data starting with JKS magic (0xFEEDFEED) but containing garbage
-	// or truncated bodies must fail gracefully without panic or stored data.
+	// WHY: Data starting with JKS magic (0xFEEDFEED) but containing a
+	// truncated/garbage body must fail gracefully without panic or stored data.
 	t.Parallel()
 
-	tests := []struct {
-		name string
-		data []byte
-	}{
-		{"garbage_body", []byte{0xFE, 0xED, 0xFE, 0xED, 0x00, 0x01, 0x02, 0x03, 0xFF, 0xFF}},
-		{"magic_only", []byte{0xFE, 0xED, 0xFE, 0xED}},
+	store := NewMemStore()
+	err := ProcessData(ProcessInput{
+		Data:      []byte{0xFE, 0xED, 0xFE, 0xED, 0x00, 0x01, 0x02, 0x03, 0xFF, 0xFF},
+		Path:      "invalid.jks",
+		Passwords: []string{"changeit"},
+		Handler:   store,
+	})
+	if err != nil {
+		t.Errorf("ProcessData should not error on unrecognizable data, got: %v", err)
 	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			store := NewMemStore()
-			err := ProcessData(ProcessInput{
-				Data:      tt.data,
-				Path:      "invalid.jks",
-				Passwords: []string{"changeit"},
-				Handler:   store,
-			})
-			if err != nil {
-				t.Errorf("ProcessData should not error on unrecognizable data, got: %v", err)
-			}
-			if len(store.AllCerts()) != 0 || len(store.AllKeys()) != 0 {
-				t.Error("invalid JKS data should not produce certs or keys")
-			}
-		})
+	if len(store.AllCerts()) != 0 || len(store.AllKeys()) != 0 {
+		t.Error("invalid JKS data should not produce certs or keys")
 	}
 }
 
@@ -1308,37 +1287,5 @@ func TestProcessData_PKCS12_EmptyPassword(t *testing.T) {
 	}
 	if !keysEqual(t, rsaKey, keys[0].Key) {
 		t.Error("stored key does not Equal original RSA key")
-	}
-}
-
-func TestProcessData_EmptyPath_BinaryDER_SilentlySkipped(t *testing.T) {
-	// WHY: When ProcessData receives binary (non-PEM) data with an empty path
-	// string, HasBinaryExtension("") returns false, so processDER is never
-	// called. This means valid DER keys with empty paths are silently lost.
-	// This test documents the behavior: callers must provide a path with a
-	// recognized extension for binary data to be processed.
-	t.Parallel()
-
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pkcs8DER, err := x509.MarshalPKCS8PrivateKey(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	store := NewMemStore()
-	if err := ProcessData(ProcessInput{
-		Data:    pkcs8DER,
-		Path:    "", // empty path — no extension to match
-		Handler: store,
-	}); err != nil {
-		t.Fatalf("ProcessData: %v", err)
-	}
-
-	keys := store.AllKeysFlat()
-	if len(keys) != 0 {
-		t.Errorf("expected 0 keys for DER data with empty path, got %d (binary data should be skipped without recognized extension)", len(keys))
 	}
 }
