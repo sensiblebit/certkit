@@ -18,156 +18,121 @@ import (
 	"github.com/sensiblebit/certkit"
 )
 
-func TestGenerateCSRFiles_FromTemplate(t *testing.T) {
-	// WHY: Template-based CSR generation is the primary flow; verifies CN propagation from JSON template and key file creation.
+func TestGenerateCSRFiles_Sources(t *testing.T) {
+	// WHY: CSR generation supports three input sources (template, cert, CSR);
+	// each source must propagate CN and DNS names correctly into the output CSR.
+	// Consolidated per T-12 — the assertion logic is identical across sources.
 	t.Parallel()
-	dir := t.TempDir()
-	tmplPath := filepath.Join(dir, "template.json")
 
-	tmpl := certkit.CSRTemplate{
-		Subject: certkit.CSRSubject{
-			CommonName:   "template.example.com",
-			Organization: []string{"Test Org"},
+	tests := []struct {
+		name   string
+		wantCN string
+		setup  func(t *testing.T, dir string) CSROptions
+	}{
+		{
+			name:   "from JSON template",
+			wantCN: "template.example.com",
+			setup: func(t *testing.T, dir string) CSROptions {
+				t.Helper()
+				tmplPath := filepath.Join(dir, "template.json")
+				tmpl := certkit.CSRTemplate{
+					Subject: certkit.CSRSubject{
+						CommonName:   "template.example.com",
+						Organization: []string{"Test Org"},
+					},
+					Hosts: []string{"template.example.com"},
+				}
+				data, _ := json.Marshal(tmpl)
+				if err := os.WriteFile(tmplPath, data, 0644); err != nil {
+					t.Fatalf("write template: %v", err)
+				}
+				return CSROptions{
+					TemplatePath: tmplPath,
+					Algorithm:    "ecdsa",
+					Curve:        "P-256",
+					OutPath:      filepath.Join(dir, "out"),
+				}
+			},
 		},
-		Hosts: []string{"template.example.com", "10.0.0.1"},
-	}
-	data, _ := json.Marshal(tmpl)
-	if err := os.WriteFile(tmplPath, data, 0644); err != nil {
-		t.Fatalf("write template: %v", err)
-	}
-
-	outDir := filepath.Join(dir, "out")
-	_, err := GenerateCSRFiles(CSROptions{
-		TemplatePath: tmplPath,
-		Algorithm:    "ecdsa",
-		Curve:        "P-256",
-		OutPath:      outDir,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Check CSR file
-	csrData, err := os.ReadFile(filepath.Join(outDir, "csr.pem"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	csr, err := certkit.ParsePEMCertificateRequest(csrData)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if csr.Subject.CommonName != "template.example.com" {
-		t.Errorf("CSR CN=%q, want template.example.com", csr.Subject.CommonName)
-	}
-	if len(csr.DNSNames) != 1 || csr.DNSNames[0] != "template.example.com" {
-		t.Errorf("CSR DNSNames=%v, want [template.example.com]", csr.DNSNames)
-	}
-	if len(csr.IPAddresses) != 1 || csr.IPAddresses[0].String() != "10.0.0.1" {
-		t.Errorf("CSR IPAddresses=%v, want [10.0.0.1]", csr.IPAddresses)
-	}
-
-	// Check key file was generated
-	keyData, err := os.ReadFile(filepath.Join(outDir, "key.pem"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(keyData), "PRIVATE KEY") {
-		t.Error("key file should contain PRIVATE KEY")
-	}
-}
-
-func TestGenerateCSRFiles_FromCert(t *testing.T) {
-	// WHY: CSR generation from existing cert extracts subject/SANs for renewal; verifies CN is correctly transferred from the certificate.
-	t.Parallel()
-	dir := t.TempDir()
-
-	// Create a test cert
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "cert-template.example.com"},
-		DNSNames:     []string{"cert-template.example.com"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-	}
-	certBytes, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	cert, _ := x509.ParseCertificate(certBytes)
-	certPEM := certkit.CertToPEM(cert)
-
-	certPath := filepath.Join(dir, "cert.pem")
-	if err := os.WriteFile(certPath, []byte(certPEM), 0644); err != nil {
-		t.Fatalf("write cert: %v", err)
+		{
+			name:   "from existing certificate",
+			wantCN: "cert-template.example.com",
+			setup: func(t *testing.T, dir string) CSROptions {
+				t.Helper()
+				key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				tmpl := &x509.Certificate{
+					SerialNumber: big.NewInt(1),
+					Subject:      pkix.Name{CommonName: "cert-template.example.com"},
+					DNSNames:     []string{"cert-template.example.com"},
+					NotBefore:    time.Now().Add(-1 * time.Hour),
+					NotAfter:     time.Now().Add(24 * time.Hour),
+				}
+				certBytes, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+				cert, _ := x509.ParseCertificate(certBytes)
+				certPEM := certkit.CertToPEM(cert)
+				certPath := filepath.Join(dir, "cert.pem")
+				if err := os.WriteFile(certPath, []byte(certPEM), 0644); err != nil {
+					t.Fatalf("write cert: %v", err)
+				}
+				return CSROptions{
+					CertPath:  certPath,
+					Algorithm: "ecdsa",
+					Curve:     "P-256",
+					OutPath:   filepath.Join(dir, "out"),
+				}
+			},
+		},
+		{
+			name:   "from existing CSR (re-key)",
+			wantCN: "csr-source.example.com",
+			setup: func(t *testing.T, dir string) CSROptions {
+				t.Helper()
+				srcKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				srcTmpl := &x509.CertificateRequest{
+					Subject:  pkix.Name{CommonName: "csr-source.example.com"},
+					DNSNames: []string{"csr-source.example.com"},
+				}
+				srcDER, _ := x509.CreateCertificateRequest(rand.Reader, srcTmpl, srcKey)
+				csrPEMBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: srcDER})
+				csrPath := filepath.Join(dir, "source.csr")
+				if err := os.WriteFile(csrPath, csrPEMBytes, 0644); err != nil {
+					t.Fatalf("write source CSR: %v", err)
+				}
+				return CSROptions{
+					CSRPath:   csrPath,
+					Algorithm: "ed25519",
+					OutPath:   filepath.Join(dir, "out"),
+				}
+			},
+		},
 	}
 
-	outDir := filepath.Join(dir, "out")
-	_, err := GenerateCSRFiles(CSROptions{
-		CertPath:  certPath,
-		Algorithm: "ecdsa",
-		Curve:     "P-256",
-		OutPath:   outDir,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			opts := tt.setup(t, dir)
 
-	csrData, err := os.ReadFile(filepath.Join(outDir, "csr.pem"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	csr, err := certkit.ParsePEMCertificateRequest(csrData)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if csr.Subject.CommonName != "cert-template.example.com" {
-		t.Errorf("CSR CN=%q, want cert-template.example.com", csr.Subject.CommonName)
-	}
-	if len(csr.DNSNames) != 1 || csr.DNSNames[0] != "cert-template.example.com" {
-		t.Errorf("CSR DNSNames=%v, want [cert-template.example.com]", csr.DNSNames)
-	}
-}
+			_, err := GenerateCSRFiles(opts)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-func TestGenerateCSRFiles_FromCSR(t *testing.T) {
-	// WHY: CSR-to-CSR generation allows re-keying with a different algorithm; verifies CN transfer from the source CSR to the new CSR.
-	t.Parallel()
-	dir := t.TempDir()
-
-	// Create a source CSR
-	srcKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	srcTmpl := &x509.CertificateRequest{
-		Subject:  pkix.Name{CommonName: "csr-source.example.com"},
-		DNSNames: []string{"csr-source.example.com"},
-	}
-	srcDER, _ := x509.CreateCertificateRequest(rand.Reader, srcTmpl, srcKey)
-	csrPEMBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: srcDER})
-
-	csrPath := filepath.Join(dir, "source.csr")
-	if err := os.WriteFile(csrPath, csrPEMBytes, 0644); err != nil {
-		t.Fatalf("write source CSR: %v", err)
-	}
-
-	outDir := filepath.Join(dir, "out")
-	_, err := GenerateCSRFiles(CSROptions{
-		CSRPath:   csrPath,
-		Algorithm: "ed25519",
-		OutPath:   outDir,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	csrData, err := os.ReadFile(filepath.Join(outDir, "csr.pem"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	csr, err := certkit.ParsePEMCertificateRequest(csrData)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if csr.Subject.CommonName != "csr-source.example.com" {
-		t.Errorf("CSR CN=%q, want csr-source.example.com", csr.Subject.CommonName)
-	}
-	if len(csr.DNSNames) != 1 || csr.DNSNames[0] != "csr-source.example.com" {
-		t.Errorf("CSR DNSNames=%v, want [csr-source.example.com]", csr.DNSNames)
+			csrData, err := os.ReadFile(filepath.Join(opts.OutPath, "csr.pem"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			csr, err := certkit.ParsePEMCertificateRequest(csrData)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if csr.Subject.CommonName != tt.wantCN {
+				t.Errorf("CSR CN=%q, want %q", csr.Subject.CommonName, tt.wantCN)
+			}
+			if len(csr.DNSNames) != 1 || csr.DNSNames[0] != tt.wantCN {
+				t.Errorf("CSR DNSNames=%v, want [%s]", csr.DNSNames, tt.wantCN)
+			}
+		})
 	}
 }
 

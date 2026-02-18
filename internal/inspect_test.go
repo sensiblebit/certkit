@@ -8,47 +8,70 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
-func TestInspectFile_Certificate(t *testing.T) {
-	// WHY: Core inspect path for PEM certificates; verifies subject, SHA-256 fingerprint, and type are correctly extracted from InspectFile output.
+func assertColonHex(t *testing.T, label, value string, wantBytes int) {
+	t.Helper()
+	wantLen := wantBytes*3 - 1 // 2 hex + 1 colon per byte, minus trailing colon
+	if len(value) != wantLen {
+		t.Fatalf("%s length = %d, want %d (colon-hex for %d bytes), got %q", label, len(value), wantLen, wantBytes, value)
+	}
+	parts := strings.Split(value, ":")
+	if len(parts) != wantBytes {
+		t.Fatalf("%s colon-hex has %d octets, want %d", label, len(parts), wantBytes)
+	}
+	for i, p := range parts {
+		if len(p) != 2 {
+			t.Errorf("%s octet[%d] = %q, want 2 hex chars", label, i, p)
+		}
+	}
+}
+
+func TestInspectFile_CertificateFormats_PEM_DER(t *testing.T) {
+	// WHY: PEM and DER are two encodings for the same data; verifies InspectFile
+	// extracts correct subject, type, and colon-hex fingerprints from both.
+	// Consolidated per T-12 — assertion logic is identical across encodings.
 	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "inspect.example.com", []string{"inspect.example.com"}, nil)
 
-	dir := t.TempDir()
-	certFile := filepath.Join(dir, "cert.pem")
-	if err := os.WriteFile(certFile, leaf.certPEM, 0644); err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name     string
+		filename string
+		data     []byte
+	}{
+		{"PEM", "cert.pem", leaf.certPEM},
+		{"DER", "cert.der", leaf.certDER},
 	}
 
-	results, err := InspectFile(certFile, []string{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(results) == 0 {
-		t.Fatal("expected at least one result")
-	}
-	if results[0].Type != "certificate" {
-		t.Errorf("expected type=certificate, got %s", results[0].Type)
-	}
-	if !strings.Contains(results[0].Subject, "inspect.example.com") {
-		t.Errorf("subject should contain CN, got %s", results[0].Subject)
-	}
-	// SHA-256 colon-hex: 32 bytes = 64 hex chars + 31 colons = 95 chars.
-	// Verify format, not just length, to catch a function returning a fixed string.
-	sha := results[0].SHA256
-	if len(sha) != 95 {
-		t.Fatalf("SHA-256 length = %d, want 95 (colon-hex for 32 bytes), got %q", len(sha), sha)
-	}
-	parts := strings.Split(sha, ":")
-	if len(parts) != 32 {
-		t.Fatalf("SHA-256 colon-hex has %d octets, want 32", len(parts))
-	}
-	for i, p := range parts {
-		if len(p) != 2 {
-			t.Errorf("SHA-256 octet[%d] = %q, want 2 hex chars", i, p)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			certFile := filepath.Join(dir, tt.filename)
+			if err := os.WriteFile(certFile, tt.data, 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			results, err := InspectFile(certFile, []string{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(results) == 0 {
+				t.Fatal("expected at least one result")
+			}
+			if results[0].Type != "certificate" {
+				t.Errorf("expected type=certificate, got %s", results[0].Type)
+			}
+			if !strings.Contains(results[0].Subject, "inspect.example.com") {
+				t.Errorf("subject should contain CN, got %s", results[0].Subject)
+			}
+			// SHA-256 colon-hex: 32 bytes = 64 hex chars + 31 colons = 95 chars.
+			assertColonHex(t, "SHA-256", results[0].SHA256, 32)
+			// SHA-1 colon-hex: 20 bytes = 40 hex chars + 19 colons = 59 chars.
+			assertColonHex(t, "SHA-1", results[0].SHA1, 20)
+		})
 	}
 }
 
@@ -361,39 +384,6 @@ func TestFormatInspectResults_UnsupportedFormat(t *testing.T) {
 	}
 }
 
-func TestInspectFile_DERCertificate(t *testing.T) {
-	// WHY: DER certificates lack PEM headers; verifies the DER detection fallback in InspectFile produces correct subject and fingerprints.
-	t.Parallel()
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "der-inspect.example.com", []string{"der-inspect.example.com"}, nil)
-
-	dir := t.TempDir()
-	derFile := filepath.Join(dir, "cert.der")
-	if err := os.WriteFile(derFile, leaf.certDER, 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	results, err := InspectFile(derFile, []string{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(results) == 0 {
-		t.Fatal("expected at least one result")
-	}
-	if results[0].Type != "certificate" {
-		t.Errorf("expected type=certificate, got %s", results[0].Type)
-	}
-	if !strings.Contains(results[0].Subject, "der-inspect.example.com") {
-		t.Errorf("subject should contain CN, got %s", results[0].Subject)
-	}
-	if results[0].SHA256 == "" {
-		t.Error("expected SHA-256 fingerprint to be populated")
-	}
-	if results[0].SHA1 == "" {
-		t.Error("expected SHA-1 fingerprint to be populated")
-	}
-}
-
 func TestFormatInspectResults_JSON_ValidJSON(t *testing.T) {
 	// WHY: JSON format is the machine-readable contract for inspect output; verifies valid JSON with trailing newline, and round-trip fidelity for all fields.
 	t.Parallel()
@@ -491,6 +481,14 @@ func TestInspectFile_ExpiredCert(t *testing.T) {
 	}
 	if !strings.Contains(results[0].Subject, "expired") {
 		t.Errorf("subject should contain 'expired', got %s", results[0].Subject)
+	}
+	// Verify the certificate is actually expired by parsing NotAfter
+	notAfter, err := time.Parse(time.RFC3339, results[0].NotAfter)
+	if err != nil {
+		t.Fatalf("NotAfter should be RFC 3339, got %q: %v", results[0].NotAfter, err)
+	}
+	if !notAfter.Before(time.Now()) {
+		t.Errorf("expired cert NotAfter = %v, expected to be in the past", notAfter)
 	}
 }
 

@@ -3,6 +3,8 @@ package internal
 import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
+	"crypto/x509"
+	"encoding/pem"
 	"os"
 	"path/filepath"
 	"strings"
@@ -24,6 +26,9 @@ func TestGenerateKey_CurveAliases(t *testing.T) {
 		{"secp384r1", "secp384r1", elliptic.P384()},
 		{"prime256v1", "prime256v1", elliptic.P256()},
 		{"secp521r1", "secp521r1", elliptic.P521()},
+		{"P-256", "P-256", elliptic.P256()},
+		{"P-384", "P-384", elliptic.P384()},
+		{"P-521", "P-521", elliptic.P521()},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -109,7 +114,7 @@ func TestGenerateKeyFiles(t *testing.T) {
 		t.Errorf("key file permissions = %04o, want 0600", perm)
 	}
 
-	// Verify pub.pem exists and has standard permissions
+	// Verify pub.pem exists, round-trips to the same public key, and has standard permissions
 	pubPath := filepath.Join(dir, "pub.pem")
 	pubData, err := os.ReadFile(pubPath)
 	if err != nil {
@@ -117,6 +122,30 @@ func TestGenerateKeyFiles(t *testing.T) {
 	}
 	if !strings.Contains(string(pubData), "PUBLIC KEY") {
 		t.Error("pub file should contain PUBLIC KEY")
+	}
+	// Round-trip: parse pub.pem back and verify it matches the private key's public half
+	pubBlock, _ := pem.Decode(pubData)
+	if pubBlock == nil {
+		t.Fatal("pub.pem contains no PEM block")
+	}
+	parsedPub, err := x509.ParsePKIXPublicKey(pubBlock.Bytes)
+	if err != nil {
+		t.Fatalf("parsing generated pub PEM: %v", err)
+	}
+	privPub, err := certkit.GetPublicKey(parsedKey)
+	if err != nil {
+		t.Fatalf("getting public key from private key: %v", err)
+	}
+	privPubDER, err := x509.MarshalPKIXPublicKey(privPub)
+	if err != nil {
+		t.Fatalf("marshaling private key's public half: %v", err)
+	}
+	parsedPubDER, err := x509.MarshalPKIXPublicKey(parsedPub)
+	if err != nil {
+		t.Fatalf("marshaling parsed public key: %v", err)
+	}
+	if string(privPubDER) != string(parsedPubDER) {
+		t.Error("pub.pem public key does not match key.pem private key")
 	}
 	pubInfo, err := os.Stat(pubPath)
 	if err != nil {

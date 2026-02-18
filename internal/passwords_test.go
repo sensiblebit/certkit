@@ -11,7 +11,9 @@ import (
 )
 
 func TestProcessPasswords_FromFile(t *testing.T) {
-	// WHY: Passwords can be loaded from a file for automation; verifies file-sourced passwords are included in the result alongside defaults.
+	// WHY: Passwords can be loaded from a file for automation; verifies file-sourced
+	// passwords are included in the result with correct ordering (defaults first,
+	// then extras). Order matters because decryption attempts use the first match.
 	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "passwords.txt")
@@ -24,22 +26,10 @@ func TestProcessPasswords_FromFile(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify file passwords are present
-	for _, want := range []string{"filepass1", "filepass2"} {
-		if !slices.Contains(result, want) {
-			t.Errorf("expected password %q from file to be present", want)
-		}
-	}
-	// Verify defaults are also present (DeduplicatePasswords prepends them)
-	for _, want := range certkit.DefaultPasswords() {
-		if !slices.Contains(result, want) {
-			t.Errorf("expected default password %q to be present", want)
-		}
-	}
-	// Verify total count: 4 defaults + 2 file passwords = 6
-	wantLen := len(certkit.DefaultPasswords()) + 2
-	if len(result) != wantLen {
-		t.Errorf("result length = %d, want %d (defaults + file passwords)", len(result), wantLen)
+	// DeduplicatePasswords returns defaults first, then unique extras in order.
+	want := append(slices.Clone(certkit.DefaultPasswords()), "filepass1", "filepass2")
+	if !slices.Equal(result, want) {
+		t.Errorf("result = %v, want %v", result, want)
 	}
 }
 

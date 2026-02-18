@@ -251,6 +251,8 @@ func TestExportBundles_EndToEnd(t *testing.T) {
 		"e2e.example.com.key",
 		"e2e.example.com.json",
 		"e2e.example.com.yaml",
+		"e2e.example.com.p12",
+		"e2e.example.com.k8s.yaml",
 	}
 	entryNames := make(map[string]bool, len(entries))
 	for _, e := range entries {

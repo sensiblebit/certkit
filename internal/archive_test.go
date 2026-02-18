@@ -8,30 +8,30 @@ import (
 )
 
 func TestArchiveFormat(t *testing.T) {
-	// WHY: Verifies that all supported archive extensions are detected,
-	// case-insensitively, and that IsArchive agrees with ArchiveFormat.
+	// WHY: Verifies that all supported archive extensions are detected
+	// case-insensitively. IsArchive is a trivial wrapper (ArchiveFormat != "")
+	// and does not need separate per-case assertions (T-11).
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		path      string
-		want      string
-		isArchive bool
+		name string
+		path string
+		want string
 	}{
-		{"zip", "certs.zip", "zip", true},
-		{"tar", "certs.tar", "tar", true},
-		{"tgz", "certs.tgz", "tar.gz", true},
-		{"tar.gz", "certs.tar.gz", "tar.gz", true},
-		{"uppercase ZIP", "certs.ZIP", "zip", true},
-		{"uppercase TAR.GZ", "certs.TAR.GZ", "tar.gz", true},
-		{"mixed case TaR.Gz", "certs.TaR.Gz", "tar.gz", true},
-		{"pem file", "cert.pem", "", false},
-		{"p12 file", "cert.p12", "", false},
-		{"no extension", "certs", "", false},
-		{"nested path zip", "/some/path/certs.zip", "zip", true},
-		{"nested path tar.gz", "/some/path/certs.tar.gz", "tar.gz", true},
-		{"tar.gz.bak", "certs.tar.gz.bak", "", false},
-		{"trailing dot", "certs.tar.", "", false},
+		{"zip", "certs.zip", "zip"},
+		{"tar", "certs.tar", "tar"},
+		{"tgz", "certs.tgz", "tar.gz"},
+		{"tar.gz", "certs.tar.gz", "tar.gz"},
+		{"uppercase ZIP", "certs.ZIP", "zip"},
+		{"uppercase TAR.GZ", "certs.TAR.GZ", "tar.gz"},
+		{"mixed case TaR.Gz", "certs.TaR.Gz", "tar.gz"},
+		{"pem file", "cert.pem", ""},
+		{"p12 file", "cert.p12", ""},
+		{"no extension", "certs", ""},
+		{"nested path zip", "/some/path/certs.zip", "zip"},
+		{"nested path tar.gz", "/some/path/certs.tar.gz", "tar.gz"},
+		{"tar.gz.bak", "certs.tar.gz.bak", ""},
+		{"trailing dot", "certs.tar.", ""},
 	}
 
 	for _, tt := range tests {
@@ -40,9 +40,6 @@ func TestArchiveFormat(t *testing.T) {
 			got := ArchiveFormat(tt.path)
 			if got != tt.want {
 				t.Errorf("ArchiveFormat(%q) = %q, want %q", tt.path, got, tt.want)
-			}
-			if gotBool := IsArchive(tt.path); gotBool != tt.isArchive {
-				t.Errorf("IsArchive(%q) = %v, want %v", tt.path, gotBool, tt.isArchive)
 			}
 		})
 	}
