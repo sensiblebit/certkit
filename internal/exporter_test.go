@@ -620,8 +620,12 @@ func TestExportBundles_EndToEnd(t *testing.T) {
 	}
 
 	bundleDir := filepath.Join(outDir, "e2e-bundle")
-	if _, err := os.Stat(bundleDir); os.IsNotExist(err) {
-		t.Errorf("expected bundle directory %s to exist", bundleDir)
+	entries, err := os.ReadDir(bundleDir)
+	if err != nil {
+		t.Fatalf("expected bundle directory %s to exist: %v", bundleDir, err)
+	}
+	if len(entries) == 0 {
+		t.Error("bundle directory is empty — expected exported files")
 	}
 }
 

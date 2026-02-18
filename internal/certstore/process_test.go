@@ -1358,12 +1358,15 @@ func TestProcessData_JKS_InvalidMagicBytes(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			store := NewMemStore()
-			_ = ProcessData(ProcessInput{
+			err := ProcessData(ProcessInput{
 				Data:      tt.data,
 				Path:      "invalid.jks",
 				Passwords: []string{"changeit"},
 				Handler:   store,
 			})
+			if err != nil {
+				t.Errorf("ProcessData should not error on unrecognizable data, got: %v", err)
+			}
 			if len(store.AllCerts()) != 0 || len(store.AllKeys()) != 0 {
 				t.Error("invalid JKS data should not produce certs or keys")
 			}

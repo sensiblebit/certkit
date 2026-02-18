@@ -9,6 +9,7 @@ import (
 	"crypto/x509/pkix"
 	"fmt"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
@@ -296,32 +297,50 @@ func TestResolveAIA_DeduplicatesURLs(t *testing.T) {
 }
 
 func TestResolveAIA_MaxDepthDefault(t *testing.T) {
-	// WHY: MaxDepth=0 must use the default of 5, not prevent all fetches.
+	// WHY: MaxDepth=0 must use the default of 5, not 0 or 1. A 2-level chain
+	// (leaf → intermediate → root) requires depth >= 2; this proves depth=0
+	// allows multi-level resolution. MaxDepth=1 would only fetch the first
+	// intermediate, leaving the chain incomplete.
 	t.Parallel()
 	store := NewMemStore()
 
-	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	caTmpl := &x509.Certificate{
+	// Create a 3-cert chain: root → intermediate → leaf, each with AIA URLs.
+	rootKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	rootTmpl := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "Depth CA"},
+		Subject:               pkix.Name{CommonName: "Depth Root CA"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
 		IsCA:                  true,
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign,
 	}
-	caDER, _ := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
-	caCert, _ := x509.ParseCertificate(caDER)
+	rootDER, _ := x509.CreateCertificate(rand.Reader, rootTmpl, rootTmpl, &rootKey.PublicKey, rootKey)
+	rootCert, _ := x509.ParseCertificate(rootDER)
+
+	intKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	intTmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(2),
+		Subject:               pkix.Name{CommonName: "Depth Intermediate CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		IssuingCertificateURL: []string{"http://example.com/root.cer"},
+	}
+	intDER, _ := x509.CreateCertificate(rand.Reader, intTmpl, rootCert, &intKey.PublicKey, rootKey)
+	intCert, _ := x509.ParseCertificate(intDER)
 
 	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	leafTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(2),
+		SerialNumber:          big.NewInt(3),
 		Subject:               pkix.Name{CommonName: "depth-test.example.com"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
-		IssuingCertificateURL: []string{"http://example.com/ca.cer"},
+		IssuingCertificateURL: []string{"http://example.com/intermediate.cer"},
 	}
-	leafDER, _ := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
+	leafDER, _ := x509.CreateCertificate(rand.Reader, leafTmpl, intCert, &leafKey.PublicKey, intKey)
 	leafCert, _ := x509.ParseCertificate(leafDER)
 
 	if err := store.HandleCertificate(leafCert, "leaf.pem"); err != nil {
@@ -329,19 +348,22 @@ func TestResolveAIA_MaxDepthDefault(t *testing.T) {
 	}
 
 	fetchCount := 0
-	fetcher := func(_ context.Context, _ string) ([]byte, error) {
+	fetcher := func(_ context.Context, url string) ([]byte, error) {
 		fetchCount++
-		return caDER, nil
+		if strings.Contains(url, "intermediate") {
+			return intDER, nil
+		}
+		return rootDER, nil
 	}
 
 	ResolveAIA(context.Background(), ResolveAIAInput{
 		Store:    store,
 		Fetch:    fetcher,
-		MaxDepth: 0, // should default to 5
+		MaxDepth: 0, // should default to 5, allowing both fetches
 	})
 
-	if fetchCount != 1 {
-		t.Errorf("expected 1 fetch with default depth, got %d", fetchCount)
+	if fetchCount != 2 {
+		t.Errorf("expected 2 fetches (intermediate + root) with default depth, got %d", fetchCount)
 	}
 }
 

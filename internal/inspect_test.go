@@ -1,15 +1,15 @@
 package internal
 
 import (
+	"crypto/sha256"
 	"encoding/json"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
-
-	"github.com/sensiblebit/certkit"
 )
 
 func TestInspectFile_Certificate(t *testing.T) {
@@ -41,8 +41,13 @@ func TestInspectFile_Certificate(t *testing.T) {
 		t.Fatal("expected SHA-256 fingerprint")
 	}
 
-	// Verify SHA-256 matches what we'd compute independently
-	expectedSHA256 := certkit.CertFingerprintColonSHA256(leaf.cert)
+	// Verify SHA-256 independently from cert.Raw using crypto/sha256
+	hash := sha256.Sum256(leaf.cert.Raw)
+	var parts []string
+	for _, b := range hash {
+		parts = append(parts, fmt.Sprintf("%02X", b))
+	}
+	expectedSHA256 := strings.Join(parts, ":")
 	if results[0].SHA256 != expectedSHA256 {
 		t.Errorf("SHA256 = %q, want %q", results[0].SHA256, expectedSHA256)
 	}

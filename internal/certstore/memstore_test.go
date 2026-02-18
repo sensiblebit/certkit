@@ -733,7 +733,18 @@ func TestMemStore_AllCertsFlat(t *testing.T) {
 
 	flat := store.AllCertsFlat()
 	if len(flat) != 2 {
-		t.Errorf("expected 2 flat certs, got %d", len(flat))
+		t.Fatalf("expected 2 flat certs, got %d", len(flat))
+	}
+	// Verify the returned records contain the expected certificates
+	cns := make(map[string]bool)
+	for _, rec := range flat {
+		cns[rec.Cert.Subject.CommonName] = true
+	}
+	if !cns["flat.example.com"] {
+		t.Error("expected flat.example.com in AllCertsFlat results")
+	}
+	if !cns[ca.cert.Subject.CommonName] {
+		t.Errorf("expected CA %q in AllCertsFlat results", ca.cert.Subject.CommonName)
 	}
 }
 

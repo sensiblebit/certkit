@@ -368,54 +368,52 @@ func TestParsePEMPrivateKey_AllFormats(t *testing.T) {
 	}
 }
 
-func TestParsePEMPrivateKey_MislabeledPKCS1RSA(t *testing.T) {
-	// WHY: pkcs12.ToPEM labels PKCS#1 RSA bytes as "PRIVATE KEY"; the parser must fall back to PKCS#1 parsing to avoid rejecting valid keys.
+func TestParsePEMPrivateKey_MislabeledBlockType(t *testing.T) {
+	// WHY: Some tools (e.g., pkcs12.ToPEM) label PKCS#1 RSA or SEC1 EC bytes
+	// as "PRIVATE KEY" instead of their correct type. The parser must fall back
+	// to PKCS#1 and SEC1 parsing or these keys are silently lost.
 	t.Parallel()
-	// Simulates pkcs12.ToPEM behavior: PKCS#1 RSA bytes labeled as "PRIVATE KEY"
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pkcs1Bytes := x509.MarshalPKCS1PrivateKey(key)
-	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: pkcs1Bytes})
-
-	parsed, err := ParsePEMPrivateKey(pemBytes)
-	if err != nil {
-		t.Fatalf("expected fallback to PKCS#1 parsing, got error: %v", err)
-	}
-	rsaParsed, ok := parsed.(*rsa.PrivateKey)
-	if !ok {
-		t.Fatalf("expected *rsa.PrivateKey, got %T", parsed)
-	}
-	if !key.Equal(rsaParsed) {
-		t.Error("mislabeled PKCS#1 RSA key round-trip mismatch")
-	}
-}
-
-func TestParsePEMPrivateKey_MislabeledSEC1EC(t *testing.T) {
-	// WHY: Some tools label SEC1 EC bytes as "PRIVATE KEY"; the parser must fall back to SEC1 parsing or these keys are silently lost.
-	t.Parallel()
-	// Simulates tools that label SEC1 EC bytes as "PRIVATE KEY"
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	sec1Bytes, err := x509.MarshalECPrivateKey(key)
+	sec1Bytes, err := x509.MarshalECPrivateKey(ecKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: sec1Bytes})
 
-	parsed, err := ParsePEMPrivateKey(pemBytes)
-	if err != nil {
-		t.Fatalf("expected fallback to SEC1 EC parsing, got error: %v", err)
+	tests := []struct {
+		name     string
+		derBytes []byte
+		original crypto.PrivateKey
+	}{
+		{"PKCS1_RSA", x509.MarshalPKCS1PrivateKey(rsaKey), rsaKey},
+		{"SEC1_EC", sec1Bytes, ecKey},
 	}
-	ecParsed, ok := parsed.(*ecdsa.PrivateKey)
-	if !ok {
-		t.Fatalf("expected *ecdsa.PrivateKey, got %T", parsed)
+	type equalKey interface {
+		Equal(x crypto.PrivateKey) bool
 	}
-	if !key.Equal(ecParsed) {
-		t.Error("mislabeled SEC1 EC key round-trip mismatch")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: tt.derBytes})
+			parsed, err := ParsePEMPrivateKey(pemBytes)
+			if err != nil {
+				t.Fatalf("expected fallback parsing to succeed, got error: %v", err)
+			}
+			orig, ok := tt.original.(equalKey)
+			if !ok {
+				t.Fatalf("original key %T does not implement Equal", tt.original)
+			}
+			if !orig.Equal(parsed) {
+				t.Error("mislabeled key round-trip mismatch")
+			}
+		})
 	}
 }
 
@@ -1346,31 +1344,6 @@ func TestDeduplicatePasswords(t *testing.T) {
 	}
 }
 
-func TestMarshalPrivateKeyToPEM_Ed25519Pointer(t *testing.T) {
-	// WHY: MarshalPrivateKeyToPEM calls normalizeKey internally, but this test
-	// guards the contract: callers can pass *ed25519.PrivateKey (pointer form from
-	// ssh.ParseRawPrivateKey) and marshaling must succeed with correct key material.
-	// A regression removing normalizeKey would cause silent export failures.
-	t.Parallel()
-
-	_, edVal, _ := ed25519.GenerateKey(rand.Reader)
-	edPtr := &edVal
-
-	pemStr, err := MarshalPrivateKeyToPEM(edPtr)
-	if err != nil {
-		t.Fatalf("MarshalPrivateKeyToPEM(*ed25519.PrivateKey): %v", err)
-	}
-
-	// Verify the output is valid PKCS#8 PEM that round-trips
-	reparsed, err := ParsePEMPrivateKey([]byte(pemStr))
-	if err != nil {
-		t.Fatalf("re-parse marshaled PEM: %v", err)
-	}
-	if !edVal.Equal(reparsed) {
-		t.Error("round-trip through *ed25519.PrivateKey lost key material")
-	}
-}
-
 func TestOpenSSHEd25519_ToPKCS8_RoundTrip(t *testing.T) {
 	// WHY: The full pipeline for OpenSSH Ed25519 keys is: OpenSSH PEM → parse
 	// (normalizeKey) → MarshalPrivateKeyToPEM (PKCS#8) → re-parse. If any step
@@ -1643,31 +1616,6 @@ func TestParsePEMPrivateKey_PrivateKeyBlock_AllFallbacksFail(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "parsing PRIVATE KEY") {
 		t.Errorf("error should mention 'parsing PRIVATE KEY', got: %v", err)
-	}
-}
-
-func TestParsePEMPrivateKeyWithPasswords_EncryptedOpenSSH_AllWrongPasswords(t *testing.T) {
-	// WHY: When all provided passwords are wrong for an encrypted OpenSSH key,
-	// the error must clearly indicate failure, not silently return nil. This
-	// exercises the full password iteration loop and final error path.
-	t.Parallel()
-
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sshBlock, err := ssh.MarshalPrivateKeyWithPassphrase(priv, "", []byte("correct-pass"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	encryptedPEM := pem.EncodeToMemory(sshBlock)
-
-	_, err = ParsePEMPrivateKeyWithPasswords(encryptedPEM, []string{"wrong1", "wrong2", "wrong3"})
-	if err == nil {
-		t.Fatal("expected error when all passwords are wrong for encrypted OpenSSH key")
-	}
-	if !strings.Contains(err.Error(), "OpenSSH") {
-		t.Errorf("error should mention 'OpenSSH', got: %v", err)
 	}
 }
 

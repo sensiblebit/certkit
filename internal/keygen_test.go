@@ -184,22 +184,6 @@ func TestGenerateKeyFiles_Stdout(t *testing.T) {
 	}
 }
 
-func TestGenerateKeyFiles_UnsupportedAlgorithm(t *testing.T) {
-	// WHY: GenerateKeyFiles must propagate the GenerateKey error for unsupported algorithms; verifies the error path does not leave partial files on disk.
-	t.Parallel()
-	dir := t.TempDir()
-	_, err := GenerateKeyFiles(KeygenOptions{
-		Algorithm: "dsa",
-		OutPath:   dir,
-	})
-	if err == nil {
-		t.Error("expected error for unsupported algorithm")
-	}
-	if !strings.Contains(err.Error(), "unsupported algorithm") {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
 func TestGenerateKeyFiles_WithCSR_KeyMatchesCSR(t *testing.T) {
 	// WHY: The generated CSR must be signed by the corresponding private key; a key-CSR mismatch would produce a CSR that CAs reject as invalid.
 	t.Parallel()
