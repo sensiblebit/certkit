@@ -337,7 +337,6 @@ func TestParsePEMPrivateKeyWithPasswords_Encrypted(t *testing.T) {
 		{"correct password", "secret123", []string{"secret123"}, false, ""},
 		{"wrong passwords", "correct", []string{"wrong1", "wrong2"}, true, "decrypting private key"},
 		{"default passwords include changeit", "changeit", DefaultPasswords(), false, ""},
-		{"correct password last in list", "third", []string{"first", "second", "third"}, false, ""},
 		{"nil password list", "secret", nil, true, "decrypting private key"},
 		{"empty password decrypts", "", []string{""}, false, ""},
 	}

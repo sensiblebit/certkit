@@ -530,7 +530,8 @@ func TestProcessData_ValidDERKey_UnrecognizedExtension(t *testing.T) {
 
 func TestProcessData_PEMWithIgnoredBlocks(t *testing.T) {
 	// WHY: Non-cert/non-key PEM blocks (e.g. DH PARAMETERS) must be silently
-	// skipped while certs and keys in the same file are still ingested.
+	// skipped while certs in the same file are still ingested. Key extraction
+	// past non-key blocks is covered by TestProcessData_PEMInterleaved.
 	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "mixed-blocks.example.com", []string{"mixed-blocks.example.com"})
@@ -541,7 +542,6 @@ func TestProcessData_PEMWithIgnoredBlocks(t *testing.T) {
 		Bytes: []byte("fake-dh-params-data"),
 	})
 	combined := append(leaf.certPEM, dhBlock...)
-	combined = append(combined, leaf.keyPEM...)
 
 	if err := ProcessData(ProcessInput{
 		Data:    combined,
@@ -553,9 +553,6 @@ func TestProcessData_PEMWithIgnoredBlocks(t *testing.T) {
 
 	if len(store.AllCerts()) != 1 {
 		t.Errorf("expected 1 cert, got %d", len(store.AllCerts()))
-	}
-	if len(store.AllKeys()) != 1 {
-		t.Errorf("expected 1 key, got %d", len(store.AllKeys()))
 	}
 }
 

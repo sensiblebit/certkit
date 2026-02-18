@@ -97,13 +97,9 @@ func TestBundle_mozillaRoots(t *testing.T) {
 		t.Error("root certificate should be a CA")
 	}
 
-	// Verify chain ordering: leaf → intermediates → root
-	if len(result.Intermediates) > 0 {
-		// First intermediate should be issued by something other than itself
-		inter := result.Intermediates[0]
-		if !inter.IsCA {
-			t.Error("intermediate should be a CA")
-		}
+	// Verify first intermediate is a CA (guaranteed non-empty by check above)
+	if !result.Intermediates[0].IsCA {
+		t.Error("intermediate should be a CA")
 	}
 }
 

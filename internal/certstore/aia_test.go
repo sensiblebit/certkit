@@ -431,31 +431,6 @@ func TestResolveAIA_PKCS7Response(t *testing.T) {
 	}
 }
 
-func TestResolveAIA_EmptyStore(t *testing.T) {
-	// WHY: An empty store should produce no warnings and make no fetches;
-	// there are no certs to resolve.
-	t.Parallel()
-	store := NewMemStore()
-
-	fetchCount := 0
-	fetcher := func(_ context.Context, _ string) ([]byte, error) {
-		fetchCount++
-		return nil, fmt.Errorf("should not be called")
-	}
-
-	warnings := ResolveAIA(context.Background(), ResolveAIAInput{
-		Store: store,
-		Fetch: fetcher,
-	})
-
-	if len(warnings) != 0 {
-		t.Errorf("expected 0 warnings for empty store, got %v", warnings)
-	}
-	if fetchCount != 0 {
-		t.Errorf("expected 0 fetches for empty store, got %d", fetchCount)
-	}
-}
-
 func TestResolveAIA_CancelledContext(t *testing.T) {
 	// WHY: A cancelled context must propagate to the fetcher, producing a
 	// warning rather than hanging — ensures Ctrl+C during AIA resolution

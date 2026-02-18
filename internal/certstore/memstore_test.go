@@ -1,6 +1,7 @@
 package certstore
 
 import (
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -84,56 +85,69 @@ func TestMemStore_HandleCertificate_DuplicateIgnored(t *testing.T) {
 
 func TestMemStore_MatchedPairs(t *testing.T) {
 	// WHY: MatchedPairs must only return SKIs with both a leaf cert and a key;
-	// root certs and intermediate certs must be excluded even if they have keys.
+	// root and intermediate certs must be excluded even if they have keys.
+	// Consolidated per T-12: root and intermediate both hit the same
+	// c.CertType == "leaf" guard.
 	t.Parallel()
-	store := NewMemStore()
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "match.example.com", []string{"match.example.com"})
 
-	// Add leaf cert and its key
-	if err := store.HandleCertificate(leaf.cert, "leaf.pem"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.HandleKey(leaf.key, leaf.keyPEM, "leaf.key"); err != nil {
-		t.Fatal(err)
-	}
-
-	// Add root cert (should not appear in matched pairs)
-	if err := store.HandleCertificate(ca.cert, "ca.pem"); err != nil {
-		t.Fatal(err)
-	}
-
-	matched := store.MatchedPairs()
-	if len(matched) != 1 {
-		t.Fatalf("expected 1 matched pair, got %d", len(matched))
-	}
-
-	leafSKI := computeSKIHex(t, leaf.cert)
-	if matched[0] != leafSKI {
-		t.Errorf("matched SKI = %q, want %q", matched[0], leafSKI)
-	}
-}
-
-func TestMemStore_MatchedPairs_IntermediateExcluded(t *testing.T) {
-	// WHY: Intermediate CAs should not appear in matched pairs even if they
-	// have corresponding keys in the store.
-	t.Parallel()
-	store := NewMemStore()
 	ca := newRSACA(t)
 	inter := newIntermediateCA(t, ca)
+	leaf := newRSALeaf(t, ca, "match.example.com", []string{"match.example.com"})
 
-	if err := store.HandleCertificate(inter.cert, "inter.pem"); err != nil {
-		t.Fatal(err)
-	}
-	// Simulating a key for the intermediate
-	keyPEM, _ := certkit.MarshalPrivateKeyToPEM(inter.key)
-	if err := store.HandleKey(inter.key, []byte(keyPEM), "inter.key"); err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name         string
+		addExtraCert *x509.Certificate
+		addExtraKey  crypto.PrivateKey
+		extraSource  string
+	}{
+		{
+			name:         "root excluded",
+			addExtraCert: ca.cert,
+			addExtraKey:  nil,
+			extraSource:  "ca.pem",
+		},
+		{
+			name:         "intermediate excluded",
+			addExtraCert: inter.cert,
+			addExtraKey:  inter.key,
+			extraSource:  "inter.pem",
+		},
 	}
 
-	matched := store.MatchedPairs()
-	if len(matched) != 0 {
-		t.Errorf("expected 0 matched pairs for intermediate, got %d", len(matched))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			store := NewMemStore()
+
+			// Add leaf cert and its key
+			if err := store.HandleCertificate(leaf.cert, "leaf.pem"); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.HandleKey(leaf.key, leaf.keyPEM, "leaf.key"); err != nil {
+				t.Fatal(err)
+			}
+
+			// Add the non-leaf cert (and optionally its key)
+			if err := store.HandleCertificate(tt.addExtraCert, tt.extraSource); err != nil {
+				t.Fatal(err)
+			}
+			if tt.addExtraKey != nil {
+				keyPEM, _ := certkit.MarshalPrivateKeyToPEM(tt.addExtraKey)
+				if err := store.HandleKey(tt.addExtraKey, []byte(keyPEM), tt.extraSource); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			matched := store.MatchedPairs()
+			if len(matched) != 1 {
+				t.Fatalf("expected 1 matched pair (leaf only), got %d", len(matched))
+			}
+
+			leafSKI := computeSKIHex(t, leaf.cert)
+			if matched[0] != leafSKI {
+				t.Errorf("matched SKI = %q, want %q", matched[0], leafSKI)
+			}
+		})
 	}
 }
 
