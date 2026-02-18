@@ -458,6 +458,7 @@ func TestAlgorithmName(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			if got := KeyAlgorithmName(tt.privKey); got != tt.wantPriv {
 				t.Errorf("KeyAlgorithmName(%T) = %q, want %q", tt.privKey, got, tt.wantPriv)
 			}

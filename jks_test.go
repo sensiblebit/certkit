@@ -8,6 +8,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"fmt"
 	"math/big"
 	"strings"
 	"testing"
@@ -249,8 +250,8 @@ func TestDecodeJKS_EntryTypes(t *testing.T) {
 				}
 			}
 			if tt.wantKeyType != "" && len(keys) > 0 {
-				if _, ok := keys[0].(*rsa.PrivateKey); !ok {
-					t.Errorf("key type: got %T, want %s", keys[0], tt.wantKeyType)
+				if got := fmt.Sprintf("%T", keys[0]); got != tt.wantKeyType {
+					t.Errorf("key type: got %s, want %s", got, tt.wantKeyType)
 				}
 			}
 		})
