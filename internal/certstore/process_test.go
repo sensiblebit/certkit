@@ -1229,11 +1229,12 @@ func TestProcessData_DERKeyWithPEMExtension(t *testing.T) {
 }
 
 func TestProcessData_CrossFormatSKIEquality(t *testing.T) {
-	// WHY: The same key ingested from all supported container formats must
-	// produce the same SKI. A format-dependent SKI difference would prevent
+	// WHY: The same key ingested from different key-only formats must produce
+	// the same SKI. A format-dependent SKI difference would prevent
 	// deduplication and break bundle matching. Ed25519 is the critical case
-	// due to pointer normalization across formats (T-13: RSA adds no unique
-	// coverage since HandleKey uses the same ComputeSKI path for all types).
+	// due to pointer normalization. PKCS#12 and JKS are excluded per T-13:
+	// container formats go through the same normalizePrivateKey + HandleKey
+	// path, so they add no unique certstore-level coverage.
 	t.Parallel()
 
 	ca := newRSACA(t)
@@ -1257,8 +1258,6 @@ func TestProcessData_CrossFormatSKIEquality(t *testing.T) {
 		{"PKCS#8 DER", edPKCS8DER, "key.der"},
 		{"Raw 64-byte", raw64, "key.der"},
 		{"OpenSSH", sshPEM, "key.pem"},
-		{"PKCS#12", newPKCS12Bundle(t, edLeaf, ca, "test"), "bundle.p12"},
-		{"JKS", newJKSBundle(t, edLeaf, ca, "changeit"), "bundle.jks"},
 	}
 
 	var skis []string
@@ -1268,7 +1267,7 @@ func TestProcessData_CrossFormatSKIEquality(t *testing.T) {
 			Data:      f.data,
 			Path:      f.path,
 			Handler:   store,
-			Passwords: []string{"", "test", "changeit"},
+			Passwords: []string{""},
 		}); err != nil {
 			t.Fatalf("%s: ProcessData: %v", f.name, err)
 		}

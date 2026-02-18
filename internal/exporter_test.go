@@ -43,8 +43,13 @@ func TestWriteBundleFiles_WildcardPrefix(t *testing.T) {
 	}
 
 	path := filepath.Join(outDir, "wildcard-bundle", "_.wildcard.com.pem")
-	if _, err := os.Stat(path); os.IsNotExist(err) {
-		t.Errorf("expected wildcard file with underscore prefix, file not found: %s", path)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("expected wildcard file with underscore prefix: %v", err)
+	}
+	certs, err := certkit.ParsePEMCertificates(data)
+	if err != nil || len(certs) == 0 {
+		t.Errorf("wildcard PEM file is not parseable or empty: err=%v, certs=%d", err, len(certs))
 	}
 }
 

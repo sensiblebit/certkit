@@ -41,10 +41,10 @@ func TestParseContainerData_EmptyData(t *testing.T) {
 }
 
 func TestParseContainerData_Ed25519KeyNormalization(t *testing.T) {
-	// WHY: PKCS#12 and JKS take different code paths in ParseContainerData
-	// (DecodePKCS12 vs DecodeJKS) that both call normalizeKey. This verifies
-	// Ed25519 keys emerge as value type (ed25519.PrivateKey, not pointer)
-	// from both container formats — consolidated per T-12.
+	// WHY: PKCS#12 and JKS take different decode paths in ParseContainerData
+	// (DecodePKCS12 vs DecodeJKS). This verifies Ed25519 keys extracted from
+	// both container formats are returned as value type (ed25519.PrivateKey,
+	// not pointer) and Equal the original key — consolidated per T-12.
 	t.Parallel()
 
 	ca := newEd25519CA(t)

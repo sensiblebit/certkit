@@ -1,6 +1,7 @@
 package certkit
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -8,9 +9,11 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha1"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -1180,62 +1183,52 @@ func TestIsPEM(t *testing.T) {
 
 func TestCertFingerprints(t *testing.T) {
 	// WHY: Fingerprints are used in display output, JSON, and cert matching.
-	// Wrong format (length, case, separator) would break downstream consumers.
+	// Wrong digest, format (length, case, separator) would break downstream
+	// consumers. Each sub-test verifies the value against an independently
+	// computed digest, not just format properties.
 	t.Parallel()
 	_, _, leafPEM := generateTestPKI(t)
 	cert, _ := ParsePEMCertificate([]byte(leafPEM))
 
+	// Independently compute expected digests from cert.Raw.
+	wantSHA256 := sha256.Sum256(cert.Raw)
+	wantSHA1 := sha1.Sum(cert.Raw)
+
 	t.Run("SHA256 hex", func(t *testing.T) {
 		t.Parallel()
 		fp := CertFingerprint(cert)
-		// SHA-256 = 32 bytes = 64 hex chars
-		if len(fp) != 64 {
-			t.Errorf("SHA-256 fingerprint length = %d, want 64", len(fp))
-		}
-		if fp != strings.ToLower(fp) {
-			t.Errorf("SHA-256 fingerprint should be lowercase, got %q", fp)
+		want := hex.EncodeToString(wantSHA256[:])
+		if fp != want {
+			t.Errorf("CertFingerprint = %q, want %q", fp, want)
 		}
 	})
 
 	t.Run("SHA1 hex", func(t *testing.T) {
 		t.Parallel()
 		fp := CertFingerprintSHA1(cert)
-		// SHA-1 = 20 bytes = 40 hex chars
-		if len(fp) != 40 {
-			t.Errorf("SHA-1 fingerprint length = %d, want 40", len(fp))
-		}
-		if fp != strings.ToLower(fp) {
-			t.Errorf("SHA-1 fingerprint should be lowercase, got %q", fp)
+		want := hex.EncodeToString(wantSHA1[:])
+		if fp != want {
+			t.Errorf("CertFingerprintSHA1 = %q, want %q", fp, want)
 		}
 	})
 
 	t.Run("SHA256 colon", func(t *testing.T) {
 		t.Parallel()
 		fp := CertFingerprintColonSHA256(cert)
-		// 32 bytes = 32 pairs + 31 colons = 95 chars, uppercase
-		if len(fp) != 95 {
-			t.Errorf("SHA-256 colon fingerprint length = %d, want 95", len(fp))
-		}
-		if fp != strings.ToUpper(fp) {
-			t.Errorf("SHA-256 colon fingerprint should be uppercase, got %q", fp)
-		}
-		if strings.Count(fp, ":") != 31 {
-			t.Errorf("expected 31 colons, got %d", strings.Count(fp, ":"))
+		want := strings.ToUpper(ColonHex(wantSHA256[:]))
+		if fp != want {
+			t.Errorf("CertFingerprintColonSHA256 = %q, want %q", fp, want)
 		}
 	})
 
 	t.Run("SHA1 colon", func(t *testing.T) {
 		t.Parallel()
 		fp := CertFingerprintColonSHA1(cert)
-		// 20 bytes = 20 pairs + 19 colons = 59 chars, uppercase
-		if len(fp) != 59 {
-			t.Errorf("SHA-1 colon fingerprint length = %d, want 59", len(fp))
-		}
-		if fp != strings.ToUpper(fp) {
-			t.Errorf("SHA-1 colon fingerprint should be uppercase, got %q", fp)
+		want := strings.ToUpper(ColonHex(wantSHA1[:]))
+		if fp != want {
+			t.Errorf("CertFingerprintColonSHA1 = %q, want %q", fp, want)
 		}
 	})
-
 }
 
 func TestColonHex_EdgeCases(t *testing.T) {
@@ -1277,4 +1270,12 @@ func TestComputeSKILegacy(t *testing.T) {
 		t.Errorf("legacy SKI length = %d, want 20 (SHA-1)", len(legacy))
 	}
 
+	// Verify the value differs from ComputeSKI (SHA-256 truncated to 160 bits).
+	modern, err := ComputeSKI(cert.PublicKey)
+	if err != nil {
+		t.Fatalf("ComputeSKI: %v", err)
+	}
+	if bytes.Equal(legacy, modern) {
+		t.Error("ComputeSKILegacy should differ from ComputeSKI (SHA-1 vs truncated SHA-256)")
+	}
 }

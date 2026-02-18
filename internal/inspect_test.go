@@ -413,32 +413,52 @@ func TestFormatInspectResults_JSON_ValidJSON(t *testing.T) {
 		t.Fatalf("expected 2 results, got %d", len(parsed))
 	}
 
-	// Verify first result (certificate)
-	if parsed[0].Type != "certificate" {
-		t.Errorf("parsed[0].Type = %q, want %q", parsed[0].Type, "certificate")
+	// Verify first result (certificate) — all populated fields must round-trip.
+	cert := parsed[0]
+	if cert.Type != "certificate" {
+		t.Errorf("cert.Type = %q, want %q", cert.Type, "certificate")
 	}
-	if parsed[0].Subject != "CN=json-test.example.com,O=TestOrg" {
-		t.Errorf("parsed[0].Subject = %q, want %q", parsed[0].Subject, "CN=json-test.example.com,O=TestOrg")
+	if cert.Subject != "CN=json-test.example.com,O=TestOrg" {
+		t.Errorf("cert.Subject = %q, want %q", cert.Subject, "CN=json-test.example.com,O=TestOrg")
 	}
-	if parsed[0].SHA256 != "AA:BB:CC:DD" {
-		t.Errorf("parsed[0].SHA256 = %q, want %q", parsed[0].SHA256, "AA:BB:CC:DD")
+	if cert.Issuer != "CN=Test CA" {
+		t.Errorf("cert.Issuer = %q, want %q", cert.Issuer, "CN=Test CA")
 	}
-	if len(parsed[0].SANs) != 2 {
-		t.Fatalf("parsed[0].SANs count = %d, want 2", len(parsed[0].SANs))
+	if cert.Serial != "12345" {
+		t.Errorf("cert.Serial = %q, want %q", cert.Serial, "12345")
 	}
-	if parsed[0].SANs[0] != "json-test.example.com" {
-		t.Errorf("parsed[0].SANs[0] = %q, want %q", parsed[0].SANs[0], "json-test.example.com")
+	if cert.SHA256 != "AA:BB:CC:DD" {
+		t.Errorf("cert.SHA256 = %q, want %q", cert.SHA256, "AA:BB:CC:DD")
 	}
-	if parsed[0].SKI != "aabbccdd" {
-		t.Errorf("parsed[0].SKI = %q, want %q", parsed[0].SKI, "aabbccdd")
+	if cert.SHA1 != "11:22:33:44" {
+		t.Errorf("cert.SHA1 = %q, want %q", cert.SHA1, "11:22:33:44")
+	}
+	if cert.KeyAlgo != "RSA" {
+		t.Errorf("cert.KeyAlgo = %q, want %q", cert.KeyAlgo, "RSA")
+	}
+	if cert.KeySize != "2048" {
+		t.Errorf("cert.KeySize = %q, want %q", cert.KeySize, "2048")
+	}
+	if cert.SKI != "aabbccdd" {
+		t.Errorf("cert.SKI = %q, want %q", cert.SKI, "aabbccdd")
+	}
+	if len(cert.SANs) != 2 || cert.SANs[0] != "json-test.example.com" || cert.SANs[1] != "www.json-test.example.com" {
+		t.Errorf("cert.SANs = %v, want [json-test.example.com www.json-test.example.com]", cert.SANs)
 	}
 
-	// Verify second result (private_key)
-	if parsed[1].Type != "private_key" {
-		t.Errorf("parsed[1].Type = %q, want %q", parsed[1].Type, "private_key")
+	// Verify second result (private_key) — all populated fields must round-trip.
+	key := parsed[1]
+	if key.Type != "private_key" {
+		t.Errorf("key.Type = %q, want %q", key.Type, "private_key")
 	}
-	if parsed[1].KeyType != "RSA" {
-		t.Errorf("parsed[1].KeyType = %q, want %q", parsed[1].KeyType, "RSA")
+	if key.KeyType != "RSA" {
+		t.Errorf("key.KeyType = %q, want %q", key.KeyType, "RSA")
+	}
+	if key.KeySize != "2048" {
+		t.Errorf("key.KeySize = %q, want %q", key.KeySize, "2048")
+	}
+	if key.SKI != "eeff0011" {
+		t.Errorf("key.SKI = %q, want %q", key.SKI, "eeff0011")
 	}
 }
 
