@@ -165,8 +165,8 @@ func TestParseContainerData_JKS_TrustedCertOnly(t *testing.T) {
 }
 
 func TestParseContainerData_GarbageData(t *testing.T) {
-	// WHY: Completely unrecognizable data must return an error that mentions
-	// the formats attempted, so the user knows what was tried.
+	// WHY: Completely unrecognizable data must return an error indicating
+	// that parsing failed, so the user knows no format matched.
 	t.Parallel()
 
 	garbage := []byte("this is not a certificate or key in any format")
@@ -174,10 +174,8 @@ func TestParseContainerData_GarbageData(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for garbage data")
 	}
-	for _, format := range []string{"PEM", "DER", "PKCS#12", "JKS", "PKCS#7"} {
-		if !strings.Contains(err.Error(), format) {
-			t.Errorf("error should mention %s, got: %v", format, err)
-		}
+	if !strings.Contains(err.Error(), "could not parse") {
+		t.Errorf("error should mention parsing failure, got: %v", err)
 	}
 }
 

@@ -492,78 +492,72 @@ func TestInspectFile_ExpiredCert(t *testing.T) {
 }
 
 func TestFormatInspectResults_Text(t *testing.T) {
-	// WHY: Text format is the default human-readable output; verifies that both certificate and private key sections are rendered with appropriate headers.
+	// WHY: Text format is the default human-readable output; each result type
+	// (certificate, key, CSR) has its own rendering branch with distinct headers
+	// and fields. Covers cert+key headers, CSR fields, and conditional DNS Names.
 	t.Parallel()
-	results := []InspectResult{
-		{Type: "certificate", Subject: "CN=test", SHA256: "AA:BB", KeyAlgo: "RSA", KeySize: "2048"},
-		{Type: "private_key", KeyType: "RSA", KeySize: "2048"},
-	}
-	output, err := FormatInspectResults(results, "text")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(output, "Certificate:") {
-		t.Error("text should contain Certificate header")
-	}
-	if !strings.Contains(output, "Private Key:") {
-		t.Error("text should contain Private Key header")
-	}
-}
 
-func TestFormatInspectResults_TextCSR(t *testing.T) {
-	// WHY: The CSR text rendering branch has its own formatting logic distinct from certificates and keys; without a dedicated test, regressions in CSR fields (Subject, Key, Signature, DNS Names) would go undetected.
-	t.Parallel()
-	results := []InspectResult{
+	tests := []struct {
+		name           string
+		results        []InspectResult
+		mustContain    []string
+		mustNotContain []string
+	}{
 		{
-			Type:        "csr",
-			CSRSubject:  "CN=example.com,O=Test Corp",
-			KeyAlgo:     "ECDSA",
-			KeySize:     "P-256",
-			SigAlg:      "SHA256-RSA",
-			CSRDNSNames: []string{"example.com", "www.example.com"},
+			name: "certificate and key",
+			results: []InspectResult{
+				{Type: "certificate", Subject: "CN=test", SHA256: "AA:BB", KeyAlgo: "RSA", KeySize: "2048"},
+				{Type: "private_key", KeyType: "RSA", KeySize: "2048"},
+			},
+			mustContain: []string{"Certificate:", "Private Key:"},
+		},
+		{
+			name: "CSR with DNS names",
+			results: []InspectResult{
+				{
+					Type:        "csr",
+					CSRSubject:  "CN=example.com,O=Test Corp",
+					KeyAlgo:     "ECDSA",
+					KeySize:     "P-256",
+					SigAlg:      "SHA256-RSA",
+					CSRDNSNames: []string{"example.com", "www.example.com"},
+				},
+			},
+			mustContain: []string{
+				"Certificate Signing Request:",
+				"CN=example.com,O=Test Corp",
+				"ECDSA P-256",
+				"SHA256-RSA",
+				"example.com, www.example.com",
+			},
+		},
+		{
+			name: "CSR without DNS names",
+			results: []InspectResult{
+				{Type: "csr", CSRSubject: "CN=test", KeyAlgo: "RSA", KeySize: "2048", SigAlg: "SHA256-RSA"},
+			},
+			mustContain:    []string{"Certificate Signing Request:"},
+			mustNotContain: []string{"DNS Names:"},
 		},
 	}
-	output, err := FormatInspectResults(results, "text")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(output, "Certificate Signing Request:") {
-		t.Error("text should contain CSR header")
-	}
-	if !strings.Contains(output, "CN=example.com,O=Test Corp") {
-		t.Error("text should contain CSR subject")
-	}
-	if !strings.Contains(output, "ECDSA P-256") {
-		t.Error("text should contain key algorithm and size")
-	}
-	if !strings.Contains(output, "SHA256-RSA") {
-		t.Error("text should contain signature algorithm")
-	}
-	if !strings.Contains(output, "example.com, www.example.com") {
-		t.Error("text should contain DNS names")
-	}
-}
 
-func TestFormatInspectResults_TextCSRNoDNSNames(t *testing.T) {
-	// WHY: CSR DNS Names line is conditional; verifies it is omitted when no DNS names are present, preventing blank or "DNS Names:" lines in output.
-	t.Parallel()
-	results := []InspectResult{
-		{
-			Type:       "csr",
-			CSRSubject: "CN=test",
-			KeyAlgo:    "RSA",
-			KeySize:    "2048",
-			SigAlg:     "SHA256-RSA",
-		},
-	}
-	output, err := FormatInspectResults(results, "text")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(output, "Certificate Signing Request:") {
-		t.Error("text should contain CSR header")
-	}
-	if strings.Contains(output, "DNS Names:") {
-		t.Error("text should not contain DNS Names line when none are present")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			output, err := FormatInspectResults(tt.results, "text")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, s := range tt.mustContain {
+				if !strings.Contains(output, s) {
+					t.Errorf("output should contain %q", s)
+				}
+			}
+			for _, s := range tt.mustNotContain {
+				if strings.Contains(output, s) {
+					t.Errorf("output should not contain %q", s)
+				}
+			}
+		})
 	}
 }

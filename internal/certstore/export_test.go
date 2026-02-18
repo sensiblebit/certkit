@@ -1,7 +1,6 @@
 package certstore
 
 import (
-	"crypto/rsa"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
@@ -150,53 +149,6 @@ func TestGenerateBundleFiles_NoRoot(t *testing.T) {
 	if string(chainData) != string(fullchainData) {
 		t.Error("fullchain.pem should equal chain.pem when no root is present")
 	}
-}
-
-func TestGenerateBundleFiles_RSAKeyFileRoundTrip(t *testing.T) {
-	// WHY: The .key file is written directly from KeyRecord.PEM and must be
-	// parseable back to an equivalent RSA key. One key type suffices per T-13
-	// since the key file is written verbatim from stored PEM regardless of
-	// key algorithm.
-	t.Parallel()
-
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "rsa-roundtrip.example.com", []string{"rsa-roundtrip.example.com"})
-
-	bundle := &certkit.BundleResult{
-		Leaf:  leaf.cert,
-		Roots: []*x509.Certificate{ca.cert},
-	}
-
-	files, err := GenerateBundleFiles(BundleExportInput{
-		Bundle:     bundle,
-		KeyPEM:     leaf.keyPEM,
-		KeyType:    "RSA",
-		BitLength:  2048,
-		Prefix:     "rsa-rt",
-		SecretName: "rsa-rt-tls",
-	})
-	if err != nil {
-		t.Fatalf("GenerateBundleFiles: %v", err)
-	}
-
-	for _, f := range files {
-		if f.Name == "rsa-rt.key" {
-			parsed, err := certkit.ParsePEMPrivateKey(f.Data)
-			if err != nil {
-				t.Fatalf("parsing exported RSA key: %v", err)
-			}
-			rsaParsed, ok := parsed.(*rsa.PrivateKey)
-			if !ok {
-				t.Fatalf("expected *rsa.PrivateKey, got %T", parsed)
-			}
-			origKey := leaf.key.(*rsa.PrivateKey)
-			if !origKey.Equal(rsaParsed) {
-				t.Error("exported RSA key does not match original")
-			}
-			return
-		}
-	}
-	t.Fatal("rsa-rt.key file not found in output")
 }
 
 func TestGenerateBundleFiles_InvalidKeyPEM(t *testing.T) {

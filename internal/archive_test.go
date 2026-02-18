@@ -482,8 +482,8 @@ func TestProcessArchive_TarEntryExceedsMaxSize(t *testing.T) {
 }
 
 func TestProcessArchive_EntryCountLimit(t *testing.T) {
-	// WHY: Verifies that the entry count limit stops processing before
-	// exhausting all entries, protecting against archive bombs with many files.
+	// WHY: Verifies that MaxEntryCount stops processing at the specified limit,
+	// protecting against archive bombs. Covers both boundary (0) and mid-stream (1).
 	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "count.example.com", []string{"count.example.com"}, nil)
@@ -495,12 +495,15 @@ func TestProcessArchive_EntryCountLimit(t *testing.T) {
 	}
 
 	tests := []struct {
-		name    string
-		format  string
-		builder func(t *testing.T, files map[string][]byte) []byte
+		name      string
+		format    string
+		builder   func(t *testing.T, files map[string][]byte) []byte
+		maxCount  int
+		wantCount int
 	}{
-		{"zip", "zip", createTestZip},
-		{"tar", "tar", createTestTar},
+		{"zip/limit=1", "zip", createTestZip, 1, 1},
+		{"tar/limit=1", "tar", createTestTar, 1, 1},
+		{"zip/limit=0", "zip", createTestZip, 0, 0},
 	}
 
 	for _, tt := range tests {
@@ -509,7 +512,7 @@ func TestProcessArchive_EntryCountLimit(t *testing.T) {
 			archiveData := tt.builder(t, files)
 
 			limits := DefaultArchiveLimits()
-			limits.MaxEntryCount = 1
+			limits.MaxEntryCount = tt.maxCount
 
 			cfg := newTestConfig(t)
 			n, err := ProcessArchive(ProcessArchiveInput{
@@ -522,8 +525,8 @@ func TestProcessArchive_EntryCountLimit(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ProcessArchive: %v", err)
 			}
-			if n != 1 {
-				t.Errorf("processed %d entries, want 1 (limit should stop after first)", n)
+			if n != tt.wantCount {
+				t.Errorf("processed %d entries, want %d (MaxEntryCount=%d)", n, tt.wantCount, tt.maxCount)
 			}
 		})
 	}
@@ -743,36 +746,6 @@ func TestProcessArchive_UnsupportedFormat(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unsupported archive format") {
 		t.Errorf("error %q should mention unsupported archive format", err.Error())
-	}
-}
-
-func TestProcessArchive_EntryCountLimitZero(t *testing.T) {
-	// WHY: Verifies that MaxEntryCount=0 immediately stops processing,
-	// producing 0 entries and no error (boundary value test).
-	t.Parallel()
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "zero-limit.example.com", []string{"zero-limit.example.com"}, nil)
-
-	zipData := createTestZip(t, map[string][]byte{
-		"cert.pem": leaf.certPEM,
-	})
-
-	limits := DefaultArchiveLimits()
-	limits.MaxEntryCount = 0
-
-	cfg := newTestConfig(t)
-	n, err := ProcessArchive(ProcessArchiveInput{
-		ArchivePath: "test.zip",
-		Data:        zipData,
-		Format:      "zip",
-		Limits:      limits,
-		Store:       cfg.Store, Passwords: cfg.Passwords,
-	})
-	if err != nil {
-		t.Fatalf("ProcessArchive: %v", err)
-	}
-	if n != 0 {
-		t.Errorf("processed %d entries, want 0 (MaxEntryCount=0)", n)
 	}
 }
 

@@ -326,128 +326,16 @@ func TestVerifyCert_NoChecksEnabled(t *testing.T) {
 	}
 }
 
-func TestFormatVerifyResult_KeyMatchError(t *testing.T) {
-	// WHY: When key comparison itself errors (e.g. unsupported key type), the output must show "ERROR" with the message, not "OK" or "MISMATCH."
-	t.Parallel()
-	result := &VerifyResult{
-		Subject:     "CN=key-match-err.example.com",
-		NotAfter:    "2030-01-01T00:00:00Z",
-		SKI:         "aabbccdd",
-		KeyMatchErr: "comparing key: unsupported key type",
-		Errors:      []string{"comparing key: unsupported key type"},
-	}
-	output := FormatVerifyResult(result)
-	if !strings.Contains(output, "Key Match: ERROR") {
-		t.Error("output should contain 'Key Match: ERROR'")
-	}
-	if !strings.Contains(output, "unsupported key type") {
-		t.Error("output should contain the error message")
-	}
-	if !strings.Contains(output, "Verification FAILED") {
-		t.Error("output should contain 'Verification FAILED'")
-	}
-}
-
-func TestFormatVerifyResult_WithChain(t *testing.T) {
-	// WHY: The chain display must show indexed entries with subject, expiry, SKI, and a [root] tag for the root cert; verifies the chain rendering logic.
-	t.Parallel()
-	chainValid := true
-	result := &VerifyResult{
-		Subject:    "CN=leaf.example.com",
-		NotAfter:   "2030-01-01T00:00:00Z",
-		SKI:        "aabbccdd",
-		ChainValid: &chainValid,
-		Chain: []ChainCert{
-			{Subject: "CN=leaf.example.com", Expiry: "2030-01-01", SKI: "aabbccdd"},
-			{Subject: "CN=Intermediate CA", Expiry: "2035-01-01", SKI: "11223344"},
-			{Subject: "CN=Root CA", Expiry: "2040-01-01", SKI: "55667788", IsRoot: true},
-		},
-	}
-	output := FormatVerifyResult(result)
-
-	if !strings.Contains(output, "Chain:") {
-		t.Error("output should contain Chain: header")
-	}
-	if !strings.Contains(output, "[root]") {
-		t.Error("output should contain [root] tag for root certificate")
-	}
-	if !strings.Contains(output, "CN=leaf.example.com") {
-		t.Error("output should contain leaf subject")
-	}
-	if !strings.Contains(output, "CN=Intermediate CA") {
-		t.Error("output should contain intermediate subject")
-	}
-	if !strings.Contains(output, "CN=Root CA") {
-		t.Error("output should contain root subject")
-	}
-	if !strings.Contains(output, "0:") {
-		t.Error("output should contain entry index 0")
-	}
-	if !strings.Contains(output, "2:") {
-		t.Error("output should contain entry index 2")
-	}
-}
-
-func TestFormatVerifyResult_WithSANs(t *testing.T) {
-	// WHY: SAN display must list all subject alternative names; verifies multiple SANs are rendered in the verify output for user inspection.
-	t.Parallel()
-	result := &VerifyResult{
-		Subject:  "CN=multi.example.com",
-		SANs:     []string{"multi.example.com", "www.multi.example.com", "api.multi.example.com"},
-		NotAfter: "2030-01-01T00:00:00Z",
-		SKI:      "aabbccdd",
-	}
-	output := FormatVerifyResult(result)
-
-	if !strings.Contains(output, "SANs:") {
-		t.Error("output should contain SANs: label")
-	}
-	if !strings.Contains(output, "multi.example.com") {
-		t.Error("output should contain first SAN")
-	}
-	if !strings.Contains(output, "www.multi.example.com") {
-		t.Error("output should contain second SAN")
-	}
-	if !strings.Contains(output, "api.multi.example.com") {
-		t.Error("output should contain third SAN")
-	}
-}
-
-func TestFormatVerifyResult_WithExpiry(t *testing.T) {
-	// WHY: The Expiry output branch in FormatVerifyResult (lines 191-193)
-	// is completely untested — this ensures the expiry info is rendered.
-	t.Parallel()
-	expiring := true
-	result := &VerifyResult{
-		Subject:    "CN=expiry-format.example.com",
-		NotAfter:   "2025-06-15T00:00:00Z",
-		SKI:        "aabbccdd",
-		Expiry:     &expiring,
-		ExpiryInfo: "expires within 30 days (not after: 2025-06-15)",
-		Errors:     []string{"certificate expires within 30 days"},
-	}
-	output := FormatVerifyResult(result)
-
-	if !strings.Contains(output, "Expiry:") {
-		t.Error("output should contain Expiry: label")
-	}
-	if !strings.Contains(output, "expires within 30 days") {
-		t.Error("output should contain expiry info text")
-	}
-	if !strings.Contains(output, "Verification FAILED") {
-		t.Error("output should show FAILED when there are errors")
-	}
-}
-
-func TestFormatVerifyResult_OverallStatus(t *testing.T) {
-	// WHY: The overall status line must show "Verification OK" on success and
-	// "Verification FAILED" with error count on failure; covers both the happy
-	// path and failure rendering in one table-driven test.
+func TestFormatVerifyResult(t *testing.T) {
+	// WHY: FormatVerifyResult has distinct rendering branches for key match
+	// (OK/MISMATCH/ERROR), chain display, SANs, expiry, and overall status.
+	// Each subtest covers a different branch to catch rendering regressions.
 	t.Parallel()
 
 	matchTrue := true
 	matchFalse := false
 	chainValid := true
+	expiring := true
 
 	tests := []struct {
 		name           string
@@ -456,7 +344,55 @@ func TestFormatVerifyResult_OverallStatus(t *testing.T) {
 		mustNotContain []string
 	}{
 		{
-			name: "OK",
+			name: "key match error",
+			result: &VerifyResult{
+				Subject:     "CN=key-match-err.example.com",
+				NotAfter:    "2030-01-01T00:00:00Z",
+				SKI:         "aabbccdd",
+				KeyMatchErr: "comparing key: unsupported key type",
+				Errors:      []string{"comparing key: unsupported key type"},
+			},
+			mustContain: []string{"Key Match: ERROR", "unsupported key type", "Verification FAILED"},
+		},
+		{
+			name: "chain display",
+			result: &VerifyResult{
+				Subject:    "CN=leaf.example.com",
+				NotAfter:   "2030-01-01T00:00:00Z",
+				SKI:        "aabbccdd",
+				ChainValid: &chainValid,
+				Chain: []ChainCert{
+					{Subject: "CN=leaf.example.com", Expiry: "2030-01-01", SKI: "aabbccdd"},
+					{Subject: "CN=Intermediate CA", Expiry: "2035-01-01", SKI: "11223344"},
+					{Subject: "CN=Root CA", Expiry: "2040-01-01", SKI: "55667788", IsRoot: true},
+				},
+			},
+			mustContain: []string{"Chain:", "[root]", "CN=leaf.example.com", "CN=Intermediate CA", "CN=Root CA", "0:", "2:"},
+		},
+		{
+			name: "SANs display",
+			result: &VerifyResult{
+				Subject:  "CN=multi.example.com",
+				SANs:     []string{"multi.example.com", "www.multi.example.com", "api.multi.example.com"},
+				NotAfter: "2030-01-01T00:00:00Z",
+				SKI:      "aabbccdd",
+			},
+			mustContain: []string{"SANs:", "multi.example.com", "www.multi.example.com", "api.multi.example.com"},
+		},
+		{
+			name: "expiry info",
+			result: &VerifyResult{
+				Subject:    "CN=expiry-format.example.com",
+				NotAfter:   "2025-06-15T00:00:00Z",
+				SKI:        "aabbccdd",
+				Expiry:     &expiring,
+				ExpiryInfo: "expires within 30 days (not after: 2025-06-15)",
+				Errors:     []string{"certificate expires within 30 days"},
+			},
+			mustContain: []string{"Expiry:", "expires within 30 days", "Verification FAILED"},
+		},
+		{
+			name: "overall OK",
 			result: &VerifyResult{
 				Subject:    "CN=test",
 				NotAfter:   "2030-01-01T00:00:00Z",
@@ -468,7 +404,7 @@ func TestFormatVerifyResult_OverallStatus(t *testing.T) {
 			mustContain: []string{"CN=test", "2030-01-01T00:00:00Z", "Key Match: OK", "ECDSA P-256", "Chain: VALID", "Verification OK"},
 		},
 		{
-			name: "Failed",
+			name: "overall failed",
 			result: &VerifyResult{
 				Subject:  "CN=bad",
 				NotAfter: "2030-01-01T00:00:00Z",

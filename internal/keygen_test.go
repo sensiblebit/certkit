@@ -70,9 +70,8 @@ func TestGenerateKey_InvalidCurve(t *testing.T) {
 
 func TestGenerateKeyFiles(t *testing.T) {
 	// WHY: Verifies the file-writing path creates key.pem and pub.pem with
-	// correct PEM headers, the key is parseable with the correct algorithm,
-	// and no CSR is created without CN/SANs. One key type suffices because
-	// the file-writing logic is algorithm-agnostic (a thin wrapper).
+	// correct PEM headers, parseable key, correct file permissions, and no
+	// CSR without CN/SANs. One key type suffices (algorithm-agnostic wrapper).
 	t.Parallel()
 	dir := t.TempDir()
 	_, err := GenerateKeyFiles(KeygenOptions{
@@ -84,8 +83,9 @@ func TestGenerateKeyFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Verify key.pem exists and is parseable
-	keyData, err := os.ReadFile(filepath.Join(dir, "key.pem"))
+	// Verify key.pem exists, is parseable, and has secure permissions
+	keyPath := filepath.Join(dir, "key.pem")
+	keyData, err := os.ReadFile(keyPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,53 +99,34 @@ func TestGenerateKeyFiles(t *testing.T) {
 	if certkit.KeyAlgorithmName(parsedKey) != "ECDSA" {
 		t.Errorf("algorithm = %s, want ECDSA", certkit.KeyAlgorithmName(parsedKey))
 	}
+	keyInfo, err := os.Stat(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := keyInfo.Mode().Perm(); perm != 0600 {
+		t.Errorf("key file permissions = %04o, want 0600", perm)
+	}
 
-	// Verify pub.pem exists
-	pubData, err := os.ReadFile(filepath.Join(dir, "pub.pem"))
+	// Verify pub.pem exists and has standard permissions
+	pubPath := filepath.Join(dir, "pub.pem")
+	pubData, err := os.ReadFile(pubPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(pubData), "PUBLIC KEY") {
 		t.Error("pub file should contain PUBLIC KEY")
 	}
-
-	// No CSR should be created without CN/SANs
-	if _, err := os.Stat(filepath.Join(dir, "csr.pem")); err == nil {
-		t.Error("CSR should not be created without CN or SANs")
-	}
-}
-
-func TestGenerateKeyFiles_KeyPermissions(t *testing.T) {
-	// WHY: Private keys must be written with 0600 permissions and public keys with 0644; incorrect permissions would be a security vulnerability.
-	t.Parallel()
-	dir := t.TempDir()
-	_, err := GenerateKeyFiles(KeygenOptions{
-		Algorithm: "ecdsa",
-		Curve:     "P-256",
-		OutPath:   dir,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	keyPath := filepath.Join(dir, "key.pem")
-	info, err := os.Stat(keyPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	perm := info.Mode().Perm()
-	if perm != 0600 {
-		t.Errorf("key file permissions = %04o, want 0600", perm)
-	}
-
-	pubPath := filepath.Join(dir, "pub.pem")
 	pubInfo, err := os.Stat(pubPath)
 	if err != nil {
 		t.Fatal(err)
 	}
-	pubPerm := pubInfo.Mode().Perm()
-	if pubPerm != 0644 {
-		t.Errorf("pub file permissions = %04o, want 0644", pubPerm)
+	if perm := pubInfo.Mode().Perm(); perm != 0644 {
+		t.Errorf("pub file permissions = %04o, want 0644", perm)
+	}
+
+	// No CSR should be created without CN/SANs
+	if _, err := os.Stat(filepath.Join(dir, "csr.pem")); err == nil {
+		t.Error("CSR should not be created without CN or SANs")
 	}
 }
 

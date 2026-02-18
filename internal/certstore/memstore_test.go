@@ -458,6 +458,7 @@ func TestMemStore_HandleKey_UnsupportedKeyType(t *testing.T) {
 func TestMemStore_HandleKey_AllKeyTypes(t *testing.T) {
 	// WHY: Verifies all three key algorithms can be ingested and retrieved
 	// by their computed SKI with correct metadata AND key material equality.
+	// Uses GetKey (SKI-based lookup) to prove keys are stored under the correct SKI.
 	t.Parallel()
 
 	tests := []struct {
@@ -510,20 +511,29 @@ func TestMemStore_HandleKey_AllKeyTypes(t *testing.T) {
 				t.Fatalf("HandleKey: %v", err)
 			}
 
-			keys := store.AllKeys()
-			if len(keys) != 1 {
-				t.Fatalf("expected 1 key, got %d", len(keys))
+			// Compute expected SKI and verify GetKey returns the stored key
+			pub, err := certkit.GetPublicKey(key)
+			if err != nil {
+				t.Fatalf("GetPublicKey: %v", err)
 			}
-			for _, rec := range keys {
-				if rec.KeyType != tt.wantType {
-					t.Errorf("KeyType = %q, want %q", rec.KeyType, tt.wantType)
-				}
-				if rec.BitLength != tt.wantBits {
-					t.Errorf("BitLength = %d, want %d", rec.BitLength, tt.wantBits)
-				}
-				if !keysEqual(t, key, rec.Key) {
-					t.Error("stored key object does not Equal original")
-				}
+			rawSKI, err := certkit.ComputeSKI(pub)
+			if err != nil {
+				t.Fatalf("ComputeSKI: %v", err)
+			}
+			ski := hex.EncodeToString(rawSKI)
+
+			rec := store.GetKey(ski)
+			if rec == nil {
+				t.Fatalf("GetKey(%s) returned nil — key stored under wrong SKI", ski)
+			}
+			if rec.KeyType != tt.wantType {
+				t.Errorf("KeyType = %q, want %q", rec.KeyType, tt.wantType)
+			}
+			if rec.BitLength != tt.wantBits {
+				t.Errorf("BitLength = %d, want %d", rec.BitLength, tt.wantBits)
+			}
+			if !keysEqual(t, key, rec.Key) {
+				t.Error("stored key object does not Equal original")
 			}
 		})
 	}

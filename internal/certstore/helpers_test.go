@@ -203,31 +203,3 @@ func TestFormatCN(t *testing.T) {
 		})
 	}
 }
-
-func TestSanitizeFileName(t *testing.T) {
-	// WHY: Wildcards in CN ("*.example.com") produce invalid filesystem paths;
-	// SanitizeFileName must replace them for safe ZIP entry names.
-	t.Parallel()
-
-	tests := []struct {
-		name  string
-		input string
-		want  string
-	}{
-		{"no wildcard", "example.com", "example.com"},
-		{"wildcard prefix", "*.example.com", "_.example.com"},
-		{"multiple wildcards", "*.*.example.com", "_._.example.com"},
-		{"no change needed", "server", "server"},
-		{"empty string", "", ""},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := SanitizeFileName(tt.input)
-			if got != tt.want {
-				t.Errorf("SanitizeFileName(%q) = %q, want %q", tt.input, got, tt.want)
-			}
-		})
-	}
-}

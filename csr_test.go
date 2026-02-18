@@ -451,10 +451,11 @@ func TestGenerateCSRFromTemplate_WithEmailAndURI(t *testing.T) {
 
 // --- GenerateCSRFromCSR tests ---
 
-func TestGenerateCSRFromCSR_CopiesFields(t *testing.T) {
-	// WHY: Regenerating a CSR from an existing one must preserve all subject and SAN fields; dropped fields would change the cert's identity on renewal.
+func TestGenerateCSRFromCSR_CopiesFieldsAndRotatesKey(t *testing.T) {
+	// WHY: Regenerating a CSR from an existing one must preserve all subject
+	// and SAN fields while using the new key; dropped fields would change the
+	// cert's identity on renewal, and reusing the source key defeats key rotation.
 	t.Parallel()
-	// Create source CSR
 	srcKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	leaf, _ := generateLeafWithSANs(t)
 	srcCSRPEM, _, err := GenerateCSR(leaf, srcKey)
@@ -467,7 +468,6 @@ func TestGenerateCSRFromCSR_CopiesFields(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Generate new CSR from source with different key
 	newKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	newCSRPEM, err := GenerateCSRFromCSR(srcCSR, newKey)
 	if err != nil {
@@ -491,28 +491,8 @@ func TestGenerateCSRFromCSR_CopiesFields(t *testing.T) {
 	if len(newCSR.IPAddresses) != len(srcCSR.IPAddresses) {
 		t.Errorf("IPAddresses count=%d, want %d", len(newCSR.IPAddresses), len(srcCSR.IPAddresses))
 	}
-}
 
-func TestGenerateCSRFromCSR_DifferentKey(t *testing.T) {
-	// WHY: The new CSR must use the new key's public key, not the source's; reusing the source's key would defeat the purpose of key rotation.
-	t.Parallel()
-	// The new CSR should be signed by a different key than the source
-	srcKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	leaf, _ := generateLeafWithSANs(t)
-	srcCSRPEM, _, _ := GenerateCSR(leaf, srcKey)
-	block, _ := pem.Decode([]byte(srcCSRPEM))
-	srcCSR, _ := x509.ParseCertificateRequest(block.Bytes)
-
-	newKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	newCSRPEM, err := GenerateCSRFromCSR(srcCSR, newKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	block, _ = pem.Decode([]byte(newCSRPEM))
-	newCSR, _ := x509.ParseCertificateRequest(block.Bytes)
-
-	// Public keys should differ
+	// Public keys must differ — new CSR uses the rotated key
 	srcPub := srcCSR.PublicKey.(*ecdsa.PublicKey)
 	newPub := newCSR.PublicKey.(*ecdsa.PublicKey)
 	if srcPub.Equal(newPub) {
