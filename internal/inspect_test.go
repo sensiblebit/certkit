@@ -35,8 +35,9 @@ func TestInspectFile_Certificate(t *testing.T) {
 	if !strings.Contains(results[0].Subject, "inspect.example.com") {
 		t.Errorf("subject should contain CN, got %s", results[0].Subject)
 	}
-	if results[0].SHA256 == "" {
-		t.Fatal("expected SHA-256 fingerprint")
+	// SHA-256 colon-hex: 32 bytes = 64 hex chars + 31 colons = 95 chars
+	if len(results[0].SHA256) != 95 {
+		t.Fatalf("SHA-256 length = %d, want 95 (colon-hex for 32 bytes), got %q", len(results[0].SHA256), results[0].SHA256)
 	}
 }
 
@@ -74,8 +75,9 @@ func TestInspectFile_PrivateKey(t *testing.T) {
 	if keyResult.KeySize != "2048" {
 		t.Errorf("key size = %s, want 2048", keyResult.KeySize)
 	}
-	if keyResult.SKI == "" {
-		t.Fatal("expected SKI to be populated")
+	// SKI colon-hex: 20 bytes = 40 hex chars + 19 colons = 59 chars
+	if len(keyResult.SKI) != 59 {
+		t.Fatalf("SKI length = %d, want 59 (colon-hex for 20 bytes), got %q", len(keyResult.SKI), keyResult.SKI)
 	}
 }
 
