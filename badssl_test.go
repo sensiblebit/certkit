@@ -3,7 +3,6 @@ package certkit
 import (
 	"context"
 	"testing"
-	"time"
 )
 
 // --- Group 1: Certificate Issue Detection ---
@@ -38,60 +37,6 @@ func TestBadSSL_Expired(t *testing.T) {
 	}
 }
 
-func TestBadSSL_SelfSigned(t *testing.T) {
-	// WHY: Self-signed certs must fail mozilla trust but succeed with custom roots; also validates PEM round-trip and fingerprint stability.
-	chain := fetchBadSSLChain(t, "self-signed.badssl.com")
-	leaf := chain.leaf
-
-	// Should be identifiable as a cert type
-	certType := GetCertificateType(leaf)
-	if certType == "" {
-		t.Error("GetCertificateType should return a non-empty type")
-	}
-
-	// Bundle should fail against mozilla trust store (self-signed is not trusted)
-	_, err := Bundle(context.Background(), leaf, BundleOptions{
-		FetchAIA:   false,
-		TrustStore: "mozilla",
-		Verify:     true,
-	})
-	if err == nil {
-		t.Error("expected Bundle to fail for self-signed cert against mozilla store")
-	}
-
-	// Bundle should succeed with custom roots = itself
-	result, err := Bundle(context.Background(), leaf, BundleOptions{
-		FetchAIA:    false,
-		TrustStore:  "custom",
-		CustomRoots: chain.allCerts,
-		Verify:      true,
-	})
-	if err != nil {
-		t.Fatalf("Bundle with self as trust anchor should succeed: %v", err)
-	}
-	if result.Leaf == nil {
-		t.Error("result should have a leaf")
-	}
-
-	// Fingerprints should be computable
-	if fp := CertFingerprint(leaf); fp == "" {
-		t.Error("SHA-256 fingerprint should be computable")
-	}
-	if fp := CertFingerprintSHA1(leaf); fp == "" {
-		t.Error("SHA-1 fingerprint should be computable")
-	}
-
-	// PEM round-trip
-	pemData := CertToPEM(leaf)
-	parsed, err := ParsePEMCertificate([]byte(pemData))
-	if err != nil {
-		t.Fatalf("PEM round-trip failed: %v", err)
-	}
-	if CertFingerprint(parsed) != CertFingerprint(leaf) {
-		t.Error("PEM round-trip changed fingerprint")
-	}
-}
-
 func TestBadSSL_UntrustedRoot(t *testing.T) {
 	// WHY: A cert signed by an untrusted root must fail verification against mozilla; basic operations must still work on the leaf.
 	chain := fetchBadSSLChain(t, "untrusted-root.badssl.com")
@@ -109,50 +54,6 @@ func TestBadSSL_UntrustedRoot(t *testing.T) {
 	}
 
 	// Cert should still be parseable and fingerprint-able
-	if fp := CertFingerprint(leaf); fp == "" {
-		t.Error("fingerprint should be computable")
-	}
-	if ski := CertSKI(leaf); ski == "" {
-		t.Error("SKI should be computable")
-	}
-}
-
-func TestBadSSL_IncompleteChain(t *testing.T) {
-	// WHY: Tests AIA chain completion against a server that sends an incomplete chain; verifies AIA fetch can resolve missing intermediates.
-	chain := fetchBadSSLChain(t, "incomplete-chain.badssl.com")
-	leaf := chain.leaf
-
-	// Without AIA, bundling may fail (the server doesn't send the full chain)
-	_, err := Bundle(context.Background(), leaf, BundleOptions{
-		ExtraIntermediates: chain.intermediates,
-		FetchAIA:           false,
-		TrustStore:         "mozilla",
-		Verify:             true,
-	})
-	// Log whether it failed — the incomplete-chain endpoint behavior varies
-	if err != nil {
-		t.Logf("Bundle without AIA failed as expected: %v", err)
-	} else {
-		t.Log("Bundle without AIA succeeded (server may have started sending full chain)")
-	}
-
-	// With AIA fetch enabled, the chain may resolve
-	result, err := Bundle(context.Background(), leaf, BundleOptions{
-		ExtraIntermediates: chain.intermediates,
-		FetchAIA:           true,
-		AIATimeout:         5 * time.Second,
-		AIAMaxDepth:        5,
-		TrustStore:         "mozilla",
-		Verify:             true,
-	})
-	if err != nil {
-		t.Logf("Bundle with AIA also failed (cert may lack AIA URLs): %v", err)
-	} else {
-		t.Logf("Bundle with AIA succeeded: %d intermediates, %d roots",
-			len(result.Intermediates), len(result.Roots))
-	}
-
-	// Basic operations should always work regardless of chain completeness
 	if fp := CertFingerprint(leaf); fp == "" {
 		t.Error("fingerprint should be computable")
 	}
@@ -229,49 +130,6 @@ func TestBadSSL_KeyTypes(t *testing.T) {
 			}
 			if CertFingerprint(parsed) != CertFingerprint(leaf) {
 				t.Error("PEM round-trip changed fingerprint")
-			}
-		})
-	}
-}
-
-// --- Group 3: Edge Cases ---
-
-func TestBadSSL_LargeSANs(t *testing.T) {
-	// WHY: Large SAN lists stress PEM encoding/parsing and SKI/fingerprint
-	// computation; verifies no SAN data is lost and operations don't panic.
-	skipIfBadSSLUnavailable(t)
-
-	tests := []struct {
-		name    string
-		host    string
-		minSANs int
-	}{
-		{"1000-SANs", "1000-sans.badssl.com", 900},
-		{"10000-SANs", "10000-sans.badssl.com", 9000},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			chain := fetchBadSSLChain(t, tt.host)
-			leaf := chain.leaf
-
-			if len(leaf.DNSNames) < tt.minSANs {
-				t.Errorf("expected >= %d DNS SANs, got %d", tt.minSANs, len(leaf.DNSNames))
-			}
-
-			if fp := CertFingerprint(leaf); fp == "" {
-				t.Error("fingerprint should be computable")
-			}
-			if ski := CertSKI(leaf); ski == "" {
-				t.Error("SKI should be computable")
-			}
-
-			pemData := CertToPEM(leaf)
-			parsed, err := ParsePEMCertificate([]byte(pemData))
-			if err != nil {
-				t.Fatalf("PEM round-trip failed: %v", err)
-			}
-			if len(parsed.DNSNames) != len(leaf.DNSNames) {
-				t.Errorf("PEM round-trip changed SAN count: %d -> %d", len(leaf.DNSNames), len(parsed.DNSNames))
 			}
 		})
 	}

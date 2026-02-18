@@ -570,8 +570,8 @@ func TestProcessArchive_TotalSizeLimit(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ProcessArchive: %v", err)
 			}
-			if n > 1 {
-				t.Errorf("processed %d entries, want at most 1 (total size limit should stop)", n)
+			if n != 1 {
+				t.Errorf("processed %d entries, want exactly 1 (total size limit should stop after first)", n)
 			}
 		})
 	}

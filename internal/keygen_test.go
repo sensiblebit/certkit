@@ -21,6 +21,7 @@ func TestGenerateKey(t *testing.T) {
 	}{
 		{"RSA", "rsa", 2048, ""},
 		{"ECDSA curve alias", "ecdsa", 0, "secp384r1"},
+		{"Ed25519", "ed25519", 0, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

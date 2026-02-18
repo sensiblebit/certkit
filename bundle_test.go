@@ -353,109 +353,57 @@ func TestFetchCertificatesFromURL_HTTP404(t *testing.T) {
 	}
 }
 
-func TestFetchCertificatesFromURL_DER(t *testing.T) {
-	// WHY: AIA endpoints commonly serve raw DER (.cer files); the fetcher must auto-detect format.
+func TestFetchCertificatesFromURL_Formats(t *testing.T) {
+	// WHY: AIA endpoints serve certs in DER, PEM, and PKCS#7 (.p7c) formats.
+	// The HTTP wrapper must auto-detect format and delegate to ParseCertificatesAny.
+	// One test per format verifies the HTTP layer works; detailed format parsing
+	// is covered by TestParseCertificatesAny_* tests (T-14).
+	t.Parallel()
+
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "der-test"},
+		Subject:      pkix.Name{CommonName: "format-test"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 	}
 	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write(certBytes)
-	}))
-	defer srv.Close()
-
-	client := srv.Client()
-	certs, err := fetchCertificatesFromURL(context.Background(), client, srv.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(certs) != 1 {
-		t.Fatalf("expected 1 cert, got %d", len(certs))
-	}
-	if certs[0].Subject.CommonName != "der-test" {
-		t.Errorf("CN=%q, want der-test", certs[0].Subject.CommonName)
-	}
-}
-
-func TestFetchCertificatesFromURL_PEM(t *testing.T) {
-	// WHY: Some AIA endpoints serve PEM-encoded certs; the fetcher must handle PEM transparently.
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "pem-test"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-	}
-	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	cert, _ := x509.ParseCertificate(certBytes)
 	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certBytes})
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write(pemBytes)
-	}))
-	defer srv.Close()
-
-	client := srv.Client()
-	certs, err := fetchCertificatesFromURL(context.Background(), client, srv.URL)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(certs) != 1 {
-		t.Fatalf("expected 1 cert, got %d", len(certs))
-	}
-	if certs[0].Subject.CommonName != "pem-test" {
-		t.Errorf("CN=%q, want pem-test", certs[0].Subject.CommonName)
-	}
-}
-
-func TestFetchCertificatesFromURL_PKCS7(t *testing.T) {
-	// WHY: DISA and FPKI AIA endpoints serve .p7c (PKCS#7) files containing
-	// one or more cross-certificates. All certs must be extracted.
-	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	caTmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "p7c-ca"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		IsCA:         true, BasicConstraintsValid: true,
-		KeyUsage: x509.KeyUsageCertSign,
-	}
-	caDER, _ := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
-	caCert, _ := x509.ParseCertificate(caDER)
-
-	interKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	interTmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(2),
-		Subject:      pkix.Name{CommonName: "p7c-intermediate"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		IsCA:         true, BasicConstraintsValid: true,
-		KeyUsage: x509.KeyUsageCertSign,
-	}
-	interDER, _ := x509.CreateCertificate(rand.Reader, interTmpl, caCert, &interKey.PublicKey, caKey)
-	interCert, _ := x509.ParseCertificate(interDER)
-
-	p7Data, err := EncodePKCS7([]*x509.Certificate{interCert, caCert})
+	p7Data, err := EncodePKCS7([]*x509.Certificate{cert})
 	if err != nil {
 		t.Fatalf("encode PKCS#7: %v", err)
 	}
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write(p7Data)
-	}))
-	defer srv.Close()
-
-	client := srv.Client()
-	certs, err := fetchCertificatesFromURL(context.Background(), client, srv.URL)
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name      string
+		body      []byte
+		wantCount int
+	}{
+		{"DER", certBytes, 1},
+		{"PEM", pemBytes, 1},
+		{"PKCS7", p7Data, 1},
 	}
-	if len(certs) != 2 {
-		t.Fatalf("expected 2 certs from PKCS#7, got %d", len(certs))
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write(tt.body)
+			}))
+			defer srv.Close()
+
+			client := srv.Client()
+			certs, err := fetchCertificatesFromURL(context.Background(), client, srv.URL)
+			if err != nil {
+				t.Fatalf("fetchCertificatesFromURL(%s): %v", tt.name, err)
+			}
+			if len(certs) != tt.wantCount {
+				t.Fatalf("expected %d cert(s), got %d", tt.wantCount, len(certs))
+			}
+			if certs[0].Subject.CommonName != "format-test" {
+				t.Errorf("CN=%q, want format-test", certs[0].Subject.CommonName)
+			}
+		})
 	}
 }
 
