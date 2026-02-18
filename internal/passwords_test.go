@@ -10,6 +10,7 @@ import (
 
 func TestProcessPasswords_FromFile(t *testing.T) {
 	// WHY: Passwords can be loaded from a file for automation; verifies file-sourced passwords are included in the result alongside defaults.
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "passwords.txt")
 	if err := os.WriteFile(path, []byte("filepass1\nfilepass2\n"), 0644); err != nil {
@@ -30,6 +31,7 @@ func TestProcessPasswords_FromFile(t *testing.T) {
 
 func TestProcessPasswords_BadFileReturnsError(t *testing.T) {
 	// WHY: A nonexistent password file must return an error; silently ignoring it would cause container decryption to fail with confusing "wrong password" errors.
+	t.Parallel()
 	_, err := ProcessPasswords(nil, "/nonexistent/passwords.txt")
 	if err == nil {
 		t.Error("expected error for nonexistent password file, got nil")
@@ -41,6 +43,7 @@ func TestProcessPasswords_BadFileReturnsError(t *testing.T) {
 
 func TestLoadPasswordsFromFile_BlankLines(t *testing.T) {
 	// WHY: Blank and whitespace-only lines in password files must be skipped; including them would add empty-string duplicates and slow down password iteration.
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "passwords.txt")
 	content := "pass1\n\n  \npass2\n\n"

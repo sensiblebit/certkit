@@ -688,31 +688,60 @@ func TestParsePEMCertificateRequest_LegacyBlockType(t *testing.T) {
 }
 
 func TestGetCertificateType(t *testing.T) {
-	// WHY: Certificate type classification (root vs leaf) drives export logic; misclassifying a CA as a leaf would break chain assembly.
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	// WHY: Certificate type classification (root, intermediate, leaf) drives
+	// export logic; misclassifying any type would put certs in the wrong
+	// output file or break chain assembly.
+	t.Parallel()
+
+	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Root CA"},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	caBytes, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	caCert, _ := x509.ParseCertificate(caBytes)
+
+	intKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	intTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(2),
+		Subject:               pkix.Name{CommonName: "Intermediate CA"},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	intBytes, _ := x509.CreateCertificate(rand.Reader, intTemplate, caCert, &intKey.PublicKey, caKey)
+	intCert, _ := x509.ParseCertificate(intBytes)
+
+	leafTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(3),
+		Subject:      pkix.Name{CommonName: "leaf.example.com"},
+		NotBefore:    time.Now().Add(-1 * time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+	}
+	leafBytes, _ := x509.CreateCertificate(rand.Reader, leafTemplate, leafTemplate, &caKey.PublicKey, caKey)
+	leafCert, _ := x509.ParseCertificate(leafBytes)
 
 	tests := []struct {
-		name     string
-		isCA     bool
-		expected string
+		name string
+		cert *x509.Certificate
+		want string
 	}{
-		{"root (self-signed CA)", true, "root"},
-		{"leaf (non-CA)", false, "leaf"},
+		{"root (self-signed CA)", caCert, "root"},
+		{"intermediate (CA, issuer!=subject)", intCert, "intermediate"},
+		{"leaf (non-CA)", leafCert, "leaf"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tmpl := &x509.Certificate{
-				SerialNumber:          big.NewInt(1),
-				Subject:               pkix.Name{CommonName: tt.name},
-				NotBefore:             time.Now().Add(-1 * time.Hour),
-				NotAfter:              time.Now().Add(24 * time.Hour),
-				IsCA:                  tt.isCA,
-				BasicConstraintsValid: tt.isCA,
-			}
-			certDER, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-			cert, _ := x509.ParseCertificate(certDER)
-			if got := GetCertificateType(cert); got != tt.expected {
-				t.Errorf("GetCertificateType() = %q, want %q", got, tt.expected)
+			t.Parallel()
+			if got := GetCertificateType(tt.cert); got != tt.want {
+				t.Errorf("GetCertificateType() = %q, want %q", got, tt.want)
 			}
 		})
 	}
@@ -997,65 +1026,6 @@ func TestCertFingerprintColon(t *testing.T) {
 				t.Errorf("fingerprint format invalid: %s", fp)
 			}
 		})
-	}
-}
-
-func TestGetCertificateType_Intermediate(t *testing.T) {
-	// WHY: Intermediates (IsCA=true, issuer!=subject) must be classified correctly; misclassifying as "root" would put them in the wrong output file.
-	// Create a root CA
-	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	caTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "Root CA"},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-	}
-	caBytes, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	caCert, err := x509.ParseCertificate(caBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Create an intermediate CA signed by root (IsCA=true, RawIssuer != RawSubject)
-	intKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	intTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(2),
-		Subject:               pkix.Name{CommonName: "Intermediate CA"},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-	}
-	intBytes, err := x509.CreateCertificate(rand.Reader, intTemplate, caCert, &intKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	intCert, err := x509.ParseCertificate(intBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	got := GetCertificateType(intCert)
-	if got != "intermediate" {
-		t.Errorf("GetCertificateType() = %q, want %q", got, "intermediate")
-	}
-
-	// Verify root is still "root" and not confused
-	if rootType := GetCertificateType(caCert); rootType != "root" {
-		t.Errorf("GetCertificateType(root) = %q, want %q", rootType, "root")
 	}
 }
 

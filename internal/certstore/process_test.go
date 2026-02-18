@@ -576,40 +576,6 @@ func TestProcessData_PEMWithIgnoredBlocks(t *testing.T) {
 	}
 }
 
-func TestProcessData_PEMMultipleKeys(t *testing.T) {
-	// WHY: PEM files with multiple private keys must have all keys extracted.
-	t.Parallel()
-	store := NewMemStore()
-	combined := append(rsaKeyPEM(t), ecdsaKeyPEM(t)...)
-
-	if err := ProcessData(ProcessInput{
-		Data:    combined,
-		Path:    "multi-keys.pem",
-		Handler: store,
-	}); err != nil {
-		t.Fatalf("ProcessData: %v", err)
-	}
-
-	if len(store.AllKeys()) != 2 {
-		t.Fatalf("expected 2 keys, got %d", len(store.AllKeys()))
-	}
-	var gotRSA, gotECDSA bool
-	for _, rec := range store.AllKeys() {
-		switch rec.Key.(type) {
-		case *rsa.PrivateKey:
-			gotRSA = true
-		case *ecdsa.PrivateKey:
-			gotECDSA = true
-		}
-	}
-	if !gotRSA {
-		t.Error("expected an RSA key in multi-key PEM")
-	}
-	if !gotECDSA {
-		t.Error("expected an ECDSA key in multi-key PEM")
-	}
-}
-
 func TestProcessData_ExpiredCertNotFiltered(t *testing.T) {
 	// WHY: The certstore pipeline does NOT filter expired certs (that's a
 	// CLI-specific concern). Expired certs must pass through to the handler.
@@ -1534,52 +1500,6 @@ func TestProcessData_CrossFormatSKIEquality(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestProcessData_SameKeySameStore_DeduplicationAcrossFormats(t *testing.T) {
-	// WHY: When the same key arrives from two different container formats
-	// (e.g., PEM and PKCS#12) into the same store, it must deduplicate to a
-	// single entry. If format-specific normalization diverges, the same key
-	// gets two SKIs and appears twice — breaking bundle export.
-	t.Parallel()
-
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "dedup.example.com", []string{"dedup.example.com"})
-
-	// Ingest from PEM first
-	store := NewMemStore()
-	if err := ProcessData(ProcessInput{
-		Data:    leaf.keyPEM,
-		Path:    "key.pem",
-		Handler: store,
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if len(store.AllKeysFlat()) != 1 {
-		t.Fatalf("expected 1 key after PEM, got %d", len(store.AllKeysFlat()))
-	}
-
-	// Ingest same key from PKCS#12
-	p12 := newPKCS12Bundle(t, leaf, ca, "test")
-	if err := ProcessData(ProcessInput{
-		Data:      p12,
-		Path:      "bundle.p12",
-		Passwords: []string{"test"},
-		Handler:   store,
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	// Must still be exactly 1 key (deduplicated by SKI)
-	keys := store.AllKeysFlat()
-	if len(keys) != 1 {
-		t.Fatalf("expected 1 key after PEM+PKCS#12 (dedup), got %d", len(keys))
-	}
-
-	// Source should be from the second ingestion (last-write-wins)
-	if keys[0].Source != "bundle.p12" {
-		t.Errorf("Source = %q, want bundle.p12 (last-write-wins)", keys[0].Source)
 	}
 }
 

@@ -13,63 +13,58 @@ import (
 )
 
 func TestVerifyCert_KeyMatch(t *testing.T) {
-	// WHY: Verifies VerifyCert correctly detects a key-certificate match.
-	// One key type (RSA) suffices because the key-match logic delegates to
-	// certkit.KeyMatchesCert which is tested across all algorithms in the
-	// root package.
+	// WHY: Verifies VerifyCert correctly detects both key-certificate match
+	// and mismatch. A false negative excludes valid keys; a false positive
+	// allows deploying certs with wrong keys.
+	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "verify-rsa.example.com", []string{"verify-rsa.example.com"}, nil)
 
-	result, err := VerifyCert(context.Background(), &VerifyInput{
-		Cert:          leaf.cert,
-		Key:           leaf.key,
-		CheckKeyMatch: true,
-		TrustStore:    "mozilla",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.KeyMatch == nil {
-		t.Fatal("expected KeyMatch to be set")
-	}
-	if !*result.KeyMatch {
-		t.Error("expected RSA key to match RSA certificate")
-	}
-	if len(result.Errors) != 0 {
-		t.Errorf("expected no errors, got %v", result.Errors)
-	}
-}
-
-func TestVerifyCert_KeyMismatch(t *testing.T) {
-	// WHY: A mismatched key must be reported as KeyMatch=false with errors; silent acceptance would allow deploying certs with wrong keys.
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "mismatch.example.com", []string{"mismatch.example.com"}, nil)
-
-	// Generate a different key
 	wrongKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	result, err := VerifyCert(context.Background(), &VerifyInput{
-		Cert:          leaf.cert,
-		Key:           wrongKey,
-		CheckKeyMatch: true,
-		TrustStore:    "mozilla",
-	})
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name       string
+		key        any
+		wantMatch  bool
+		wantErrors bool
+	}{
+		{"matching key", leaf.key, true, false},
+		{"mismatched key", wrongKey, false, true},
 	}
-	if result.KeyMatch == nil || *result.KeyMatch {
-		t.Error("expected key mismatch")
-	}
-	if len(result.Errors) == 0 {
-		t.Error("expected errors for key mismatch")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result, err := VerifyCert(context.Background(), &VerifyInput{
+				Cert:          leaf.cert,
+				Key:           tt.key,
+				CheckKeyMatch: true,
+				TrustStore:    "mozilla",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.KeyMatch == nil {
+				t.Fatal("expected KeyMatch to be set")
+			}
+			if *result.KeyMatch != tt.wantMatch {
+				t.Errorf("KeyMatch = %v, want %v", *result.KeyMatch, tt.wantMatch)
+			}
+			if tt.wantErrors && len(result.Errors) == 0 {
+				t.Error("expected errors for key mismatch")
+			}
+			if !tt.wantErrors && len(result.Errors) != 0 {
+				t.Errorf("expected no errors, got %v", result.Errors)
+			}
+		})
 	}
 }
 
 func TestVerifyCert_ExpiryCheck(t *testing.T) {
 	// WHY: The expiry window check must trigger when the cert expires within the window and not trigger otherwise; verifies both the positive and negative cases.
+	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "expiry.example.com", []string{"expiry.example.com"}, nil)
 
@@ -102,6 +97,7 @@ func TestVerifyCert_ExpiryCheck(t *testing.T) {
 
 func TestVerifyCert_ExpiredCert(t *testing.T) {
 	// WHY: An already-expired cert must always trigger the expiry warning regardless of the window duration; verifies the already-past-NotAfter path.
+	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newExpiredLeaf(t, ca)
 
@@ -120,6 +116,7 @@ func TestVerifyCert_ExpiredCert(t *testing.T) {
 
 func TestVerifyCert_PKCS12(t *testing.T) {
 	// WHY: PKCS#12 bundles embed cert, key, and chain; verifies that all three are correctly extracted and pass both key match and chain validation.
+	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "p12.example.com", []string{"p12.example.com"}, nil)
 	p12Data := newPKCS12Bundle(t, leaf, ca, "changeit")
@@ -151,7 +148,7 @@ func TestVerifyCert_PKCS12(t *testing.T) {
 
 func TestVerifyCert_ChainInvalid(t *testing.T) {
 	// WHY: Chain validation against an unrelated CA must report ChainValid=false with a descriptive error; silent acceptance would be a security issue.
-	// Create a leaf cert signed by one CA, then verify against a different CA.
+	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "untrusted.example.com", []string{"untrusted.example.com"}, nil)
 
@@ -183,6 +180,7 @@ func TestVerifyCert_ChainInvalid(t *testing.T) {
 
 func TestVerifyCert_CheckKeyMatchNilKey(t *testing.T) {
 	// WHY: When CheckKeyMatch=true but Key=nil (e.g. PKCS#7 input), KeyMatch must remain nil (skipped), not false; this distinguishes "not checked" from "failed."
+	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "nilkey.example.com", []string{"nilkey.example.com"}, nil)
 
@@ -206,7 +204,7 @@ func TestVerifyCert_CheckKeyMatchNilKey(t *testing.T) {
 
 func TestVerifyCert_SelfSignedChain(t *testing.T) {
 	// WHY: Self-signed CA certs must validate against themselves in a custom trust store; this is the simplest valid chain and a common deployment pattern.
-	// Create a self-signed non-CA leaf cert and verify it against itself as custom root
+	t.Parallel()
 	ca := newRSACA(t)
 
 	// Use the CA cert itself as a "self-signed" cert and verify against itself
@@ -231,6 +229,7 @@ func TestVerifyCert_SimultaneousChainAndKeyFailures(t *testing.T) {
 	// WHY: Existing tests only check one failure mode at a time (key mismatch OR
 	// chain invalid). This verifies that when BOTH CheckChain and CheckKeyMatch
 	// fail, the Errors slice collects entries for both failures.
+	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "dual-fail.example.com", []string{"dual-fail.example.com"}, nil)
 
@@ -296,6 +295,7 @@ func TestVerifyCert_SimultaneousChainAndKeyFailures(t *testing.T) {
 
 func TestVerifyCert_NoChecksEnabled(t *testing.T) {
 	// WHY: When all checks are disabled (no key match, no chain, no expiry), VerifyCert must still return basic cert info (subject, SANs, NotAfter, SKI) without errors.
+	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "info-only.example.com", []string{"info-only.example.com"}, nil)
 
@@ -328,6 +328,7 @@ func TestVerifyCert_NoChecksEnabled(t *testing.T) {
 
 func TestFormatVerifyResult_KeyMatchError(t *testing.T) {
 	// WHY: When key comparison itself errors (e.g. unsupported key type), the output must show "ERROR" with the message, not "OK" or "MISMATCH."
+	t.Parallel()
 	result := &VerifyResult{
 		Subject:     "CN=key-match-err.example.com",
 		NotAfter:    "2030-01-01T00:00:00Z",
@@ -349,6 +350,7 @@ func TestFormatVerifyResult_KeyMatchError(t *testing.T) {
 
 func TestFormatVerifyResult_WithChain(t *testing.T) {
 	// WHY: The chain display must show indexed entries with subject, expiry, SKI, and a [root] tag for the root cert; verifies the chain rendering logic.
+	t.Parallel()
 	chainValid := true
 	result := &VerifyResult{
 		Subject:    "CN=leaf.example.com",
@@ -388,6 +390,7 @@ func TestFormatVerifyResult_WithChain(t *testing.T) {
 
 func TestFormatVerifyResult_WithSANs(t *testing.T) {
 	// WHY: SAN display must list all subject alternative names; verifies multiple SANs are rendered in the verify output for user inspection.
+	t.Parallel()
 	result := &VerifyResult{
 		Subject:  "CN=multi.example.com",
 		SANs:     []string{"multi.example.com", "www.multi.example.com", "api.multi.example.com"},
@@ -413,6 +416,7 @@ func TestFormatVerifyResult_WithSANs(t *testing.T) {
 func TestFormatVerifyResult_WithExpiry(t *testing.T) {
 	// WHY: The Expiry output branch in FormatVerifyResult (lines 191-193)
 	// is completely untested — this ensures the expiry info is rendered.
+	t.Parallel()
 	expiring := true
 	result := &VerifyResult{
 		Subject:    "CN=expiry-format.example.com",
@@ -435,59 +439,63 @@ func TestFormatVerifyResult_WithExpiry(t *testing.T) {
 	}
 }
 
-func TestFormatVerifyResult_OK(t *testing.T) {
-	// WHY: The happy-path output must show "Key Match: OK", "Chain: VALID", and "Verification OK"; verifies the success rendering when all checks pass.
-	match := true
-	chainValid := true
-	result := &VerifyResult{
-		Subject:    "CN=test",
-		NotAfter:   "2030-01-01T00:00:00Z",
-		SKI:        "aabbccdd",
-		KeyMatch:   &match,
-		KeyInfo:    "ECDSA P-256",
-		ChainValid: &chainValid,
-	}
-	output := FormatVerifyResult(result)
-	if !strings.Contains(output, "CN=test") {
-		t.Error("output should contain subject CN=test")
-	}
-	if !strings.Contains(output, "2030-01-01T00:00:00Z") {
-		t.Error("output should contain not_after date")
-	}
-	if !strings.Contains(output, "Key Match: OK") {
-		t.Error("output should contain key match OK")
-	}
-	if !strings.Contains(output, "ECDSA P-256") {
-		t.Error("output should contain key info")
-	}
-	if !strings.Contains(output, "Chain: VALID") {
-		t.Error("output should contain chain valid")
-	}
-	if !strings.Contains(output, "Verification OK") {
-		t.Error("output should contain Verification OK")
-	}
-}
+func TestFormatVerifyResult_OverallStatus(t *testing.T) {
+	// WHY: The overall status line must show "Verification OK" on success and
+	// "Verification FAILED" with error count on failure; covers both the happy
+	// path and failure rendering in one table-driven test.
+	t.Parallel()
 
-func TestFormatVerifyResult_Failed(t *testing.T) {
-	// WHY: Failed verification must show "MISMATCH" and "Verification FAILED" with error count; verifies the failure rendering path for user-facing output.
-	match := false
-	result := &VerifyResult{
-		Subject:  "CN=bad",
-		NotAfter: "2030-01-01T00:00:00Z",
-		SKI:      "deadbeef",
-		KeyMatch: &match,
-		KeyInfo:  "RSA 2048",
-		Errors:   []string{"key does not match certificate"},
+	matchTrue := true
+	matchFalse := false
+	chainValid := true
+
+	tests := []struct {
+		name           string
+		result         *VerifyResult
+		mustContain    []string
+		mustNotContain []string
+	}{
+		{
+			name: "OK",
+			result: &VerifyResult{
+				Subject:    "CN=test",
+				NotAfter:   "2030-01-01T00:00:00Z",
+				SKI:        "aabbccdd",
+				KeyMatch:   &matchTrue,
+				KeyInfo:    "ECDSA P-256",
+				ChainValid: &chainValid,
+			},
+			mustContain: []string{"CN=test", "2030-01-01T00:00:00Z", "Key Match: OK", "ECDSA P-256", "Chain: VALID", "Verification OK"},
+		},
+		{
+			name: "Failed",
+			result: &VerifyResult{
+				Subject:  "CN=bad",
+				NotAfter: "2030-01-01T00:00:00Z",
+				SKI:      "deadbeef",
+				KeyMatch: &matchFalse,
+				KeyInfo:  "RSA 2048",
+				Errors:   []string{"key does not match certificate"},
+			},
+			mustContain:    []string{"Key Match: MISMATCH", "Verification FAILED", "1 error"},
+			mustNotContain: []string{"Verification OK"},
+		},
 	}
-	output := FormatVerifyResult(result)
-	if !strings.Contains(output, "Key Match: MISMATCH") {
-		t.Error("output should contain MISMATCH")
-	}
-	if !strings.Contains(output, "Verification FAILED") {
-		t.Error("output should contain Verification FAILED")
-	}
-	if !strings.Contains(output, "1 error") {
-		t.Error("output should mention error count")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			output := FormatVerifyResult(tt.result)
+			for _, s := range tt.mustContain {
+				if !strings.Contains(output, s) {
+					t.Errorf("output should contain %q", s)
+				}
+			}
+			for _, s := range tt.mustNotContain {
+				if strings.Contains(output, s) {
+					t.Errorf("output should not contain %q", s)
+				}
+			}
+		})
 	}
 }
 
@@ -495,6 +503,7 @@ func TestVerifyCert_ChainOnlyNoKeyMatch(t *testing.T) {
 	// WHY: CheckChain=true with CheckKeyMatch=false and Key=nil is a real
 	// user scenario (verify chain only, no key available). KeyMatch must
 	// remain nil while ChainValid is populated.
+	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "chain-only.example.com", []string{"chain-only.example.com"}, nil)
 

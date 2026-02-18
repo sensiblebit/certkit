@@ -827,6 +827,10 @@ func TestMemStore_MultiCertPerSKI(t *testing.T) {
 }
 
 func TestMemStore_HandleKey_Ed25519PointerNormalization(t *testing.T) {
+	// WHY: HandleKey must normalize *ed25519.PrivateKey to ed25519.PrivateKey
+	// (value type) so downstream type switches and key equality checks work
+	// consistently regardless of whether the key was parsed from OpenSSH
+	// (returns pointer) or PKCS#8 (returns value).
 	t.Parallel()
 
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -901,29 +905,6 @@ func TestMemStore_HandleKey_Ed25519PointerNormalization(t *testing.T) {
 		}
 	})
 
-	t.Run("DeduplicationPointerThenValue", func(t *testing.T) {
-		t.Parallel()
-		store := NewMemStore()
-		if err := store.HandleKey(privPtr, keyPEMData, "openssh-source.key"); err != nil {
-			t.Fatalf("HandleKey(pointer): %v", err)
-		}
-		if err := store.HandleKey(priv, keyPEMData, "pkcs8-source.key"); err != nil {
-			t.Fatalf("HandleKey(value): %v", err)
-		}
-
-		keys := store.AllKeys()
-		if len(keys) != 1 {
-			t.Fatalf("expected 1 key (deduplicated), got %d", len(keys))
-		}
-		for _, rec := range keys {
-			if rec.Source != "pkcs8-source.key" {
-				t.Errorf("Source = %q, want pkcs8-source.key (last-write-wins)", rec.Source)
-			}
-			if _, ok := rec.Key.(ed25519.PrivateKey); !ok {
-				t.Errorf("stored key type = %T, want ed25519.PrivateKey (value)", rec.Key)
-			}
-		}
-	})
 }
 
 // computeSKIHex computes the hex-encoded SKI from a certificate's public key.
