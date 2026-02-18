@@ -335,46 +335,6 @@ func TestExportBundles_EmptyBundleNameSkipped(t *testing.T) {
 	}
 }
 
-func TestDetermineBundleName(t *testing.T) {
-	// WHY: determineBundleName maps cert CNs to bundle folder names using exact
-	// string matching against configs. A wrong match would put bundle files in
-	// the wrong directory; a missed match would fall through to the sanitized CN.
-	t.Parallel()
-
-	configs := []BundleConfig{
-		{
-			CommonNames: []string{"example.com", "*.example.com"},
-			BundleName:  "example-bundle",
-		},
-		{
-			CommonNames: []string{"other.com"},
-			// Empty BundleName — should fall back to sanitized CN.
-		},
-	}
-
-	tests := []struct {
-		name string
-		cn   string
-		want string
-	}{
-		{"exact match with bundle name", "example.com", "example-bundle"},
-		{"wildcard match with bundle name", "*.example.com", "example-bundle"},
-		{"match with empty bundle name", "other.com", "other.com"},
-		{"no match falls back to CN", "unmatched.com", "unmatched.com"},
-		{"no match wildcard sanitized", "*.unmatched.com", "_.unmatched.com"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := determineBundleName(tt.cn, configs)
-			if got != tt.want {
-				t.Errorf("determineBundleName(%q) = %q, want %q", tt.cn, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestAssignBundleNames(t *testing.T) {
 	// WHY: AssignBundleNames iterates all certs and applies determineBundleName;
 	// verifies that bundle names are correctly assigned to the store's CertRecords

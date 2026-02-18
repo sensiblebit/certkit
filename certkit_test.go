@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha1"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
@@ -928,9 +929,8 @@ func TestParsePEMPrivateKeyWithPasswords_CorruptNotEncrypted(t *testing.T) {
 
 func TestCertFingerprints(t *testing.T) {
 	// WHY: Fingerprints are used in display output, JSON, and cert matching.
-	// The hex variants are thin wrappers; the colon variants have certkit-
-	// specific formatting (uppercase, colon separators) worth verifying.
-	// Cross-checks prove mutual consistency between the two output forms.
+	// Verifies hex and colon variants against independently computed digests
+	// of cert.Raw, and that the colon variants use the ColonHex formatting.
 	t.Parallel()
 	_, _, leafPEM := generateTestPKI(t)
 	cert, _ := ParsePEMCertificate([]byte(leafPEM))
@@ -939,6 +939,16 @@ func TestCertFingerprints(t *testing.T) {
 	sha1Hex := CertFingerprintSHA1(cert)
 	sha256Colon := CertFingerprintColonSHA256(cert)
 	sha1Colon := CertFingerprintColonSHA1(cert)
+
+	// Independent verification: compute expected digests directly from cert.Raw
+	wantSHA256 := fmt.Sprintf("%x", sha256.Sum256(cert.Raw))
+	if sha256Hex != wantSHA256 {
+		t.Errorf("CertFingerprint = %q, want independently computed %q", sha256Hex, wantSHA256)
+	}
+	wantSHA1 := fmt.Sprintf("%x", sha1.Sum(cert.Raw))
+	if sha1Hex != wantSHA1 {
+		t.Errorf("CertFingerprintSHA1 = %q, want independently computed %q", sha1Hex, wantSHA1)
+	}
 
 	// Cross-check: colon form lowered with colons removed must equal hex form
 	sha256ColonLower := strings.ToLower(strings.ReplaceAll(sha256Colon, ":", ""))
@@ -950,12 +960,12 @@ func TestCertFingerprints(t *testing.T) {
 		t.Errorf("CertFingerprintColonSHA1 inconsistent with CertFingerprintSHA1: %q vs %q", sha1Colon, sha1Hex)
 	}
 
-	// Verify non-empty and correct format (hex fingerprints are lowercase hex strings)
-	if len(sha256Hex) != 64 {
-		t.Errorf("CertFingerprint length = %d, want 64 (SHA-256 hex)", len(sha256Hex))
+	// Verify colon variants are uppercase
+	if sha256Colon != strings.ToUpper(sha256Colon) {
+		t.Errorf("CertFingerprintColonSHA256 should be uppercase, got %q", sha256Colon)
 	}
-	if len(sha1Hex) != 40 {
-		t.Errorf("CertFingerprintSHA1 length = %d, want 40 (SHA-1 hex)", len(sha1Hex))
+	if sha1Colon != strings.ToUpper(sha1Colon) {
+		t.Errorf("CertFingerprintColonSHA1 should be uppercase, got %q", sha1Colon)
 	}
 }
 
@@ -972,6 +982,27 @@ func TestComputeSKILegacy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ComputeSKILegacy: %v", err)
 	}
+	if len(legacy) != 20 {
+		t.Fatalf("ComputeSKILegacy length = %d, want 20 (SHA-1)", len(legacy))
+	}
+
+	// Independent verification: manually compute SHA-1 of the SPKI BIT STRING
+	pubDER, err := x509.MarshalPKIXPublicKey(cert.PublicKey)
+	if err != nil {
+		t.Fatalf("MarshalPKIXPublicKey: %v", err)
+	}
+	var spki struct {
+		Algorithm asn1.RawValue
+		PublicKey asn1.BitString
+	}
+	if _, err := asn1.Unmarshal(pubDER, &spki); err != nil {
+		t.Fatalf("asn1.Unmarshal SPKI: %v", err)
+	}
+	want := sha1.Sum(spki.PublicKey.Bytes)
+	if !bytes.Equal(legacy, want[:]) {
+		t.Errorf("ComputeSKILegacy = %x, want independently computed SHA-1 %x", legacy, want[:])
+	}
+
 	modern, err := ComputeSKI(cert.PublicKey)
 	if err != nil {
 		t.Fatalf("ComputeSKI: %v", err)
@@ -1020,5 +1051,38 @@ func TestMarshalPrivateKeyToPEM_RoundTrip(t *testing.T) {
 	}
 	if !original.Equal(parsed) {
 		t.Error("Ed25519 key round-trip mismatch")
+	}
+}
+
+func TestMarshalPublicKeyToPEM_RoundTrip(t *testing.T) {
+	// WHY: MarshalPublicKeyToPEM serializes public keys to PKIX PEM; a round-
+	// trip through x509.ParsePKIXPublicKey proves the PEM wrapper and DER
+	// encoding are correct. One key type (Ed25519) suffices per T-13.
+	t.Parallel()
+
+	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	pemStr, err := MarshalPublicKeyToPEM(pub)
+	if err != nil {
+		t.Fatalf("MarshalPublicKeyToPEM: %v", err)
+	}
+
+	block, _ := pem.Decode([]byte(pemStr))
+	if block == nil {
+		t.Fatal("MarshalPublicKeyToPEM produced no PEM block")
+	}
+	if block.Type != "PUBLIC KEY" {
+		t.Errorf("PEM type = %q, want \"PUBLIC KEY\"", block.Type)
+	}
+
+	parsed, err := x509.ParsePKIXPublicKey(block.Bytes)
+	if err != nil {
+		t.Fatalf("ParsePKIXPublicKey after marshal: %v", err)
+	}
+	parsedEd, ok := parsed.(ed25519.PublicKey)
+	if !ok {
+		t.Fatalf("parsed key type = %T, want ed25519.PublicKey", parsed)
+	}
+	if !pub.Equal(parsedEd) {
+		t.Error("Ed25519 public key round-trip mismatch")
 	}
 }

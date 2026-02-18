@@ -78,6 +78,14 @@ func TestLoadBundleConfigs_OldFormat(t *testing.T) {
 	if configs[0].BundleName != "example-bundle" {
 		t.Errorf("expected bundle name 'example-bundle', got %q", configs[0].BundleName)
 	}
+	if configs[1].BundleName != "other-bundle" {
+		t.Errorf("expected bundle name 'other-bundle', got %q", configs[1].BundleName)
+	}
+	// Old-format configs have no defaultSubject; Subject must remain nil so
+	// downstream code knows no subject override was requested.
+	if configs[0].Subject != nil {
+		t.Errorf("old format should have nil Subject, got %+v", configs[0].Subject)
+	}
 }
 
 func TestLoadBundleConfigs_InvalidYAML(t *testing.T) {
@@ -150,31 +158,6 @@ bundles:
 	configs[0].Subject.Country[0] = "GB"
 	if configs[1].Subject.Country[0] != "US" {
 		t.Errorf("modifying bundle 0 country affected bundle 1: got %q, want US", configs[1].Subject.Country[0])
-	}
-}
-
-func TestLoadBundleConfigs_OldFormatNilSubject(t *testing.T) {
-	// WHY: Old-format configs have no defaultSubject mechanism; Subject must remain nil so downstream code knows no subject override was requested.
-	t.Parallel()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "bundles.yaml")
-	yamlContent := `
-- commonNames: ["example.com"]
-  bundleName: "example"
-`
-	if err := os.WriteFile(path, []byte(yamlContent), 0644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	configs, err := LoadBundleConfigs(path)
-	if err != nil {
-		t.Fatalf("load configs: %v", err)
-	}
-	if len(configs) != 1 {
-		t.Fatalf("expected 1 bundle, got %d", len(configs))
-	}
-	if configs[0].Subject != nil {
-		t.Errorf("old format without subject should have nil Subject, got %+v", configs[0].Subject)
 	}
 }
 
