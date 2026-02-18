@@ -140,7 +140,9 @@ func TestEncodePKCS7_NilInput(t *testing.T) {
 }
 
 func TestDecodePKCS7_roundTrip(t *testing.T) {
-	// WHY: PKCS#7 round-trip must preserve all certs in order with byte-exact equality; any loss breaks chain assembly from .p7b files.
+	// WHY: PKCS#7 round-trip must preserve all certs; any loss breaks chain
+	// assembly from .p7b files. Uses set-based check because PKCS#7 does not
+	// guarantee certificate ordering.
 	t.Parallel()
 	caPEM, intPEM, leafPEM := generateTestPKI(t)
 	ca, _ := ParsePEMCertificate([]byte(caPEM))
@@ -161,11 +163,17 @@ func TestDecodePKCS7_roundTrip(t *testing.T) {
 		t.Fatalf("expected 3 certs, got %d", len(decoded))
 	}
 
-	// Verify each decoded certificate matches the original
-	for i, orig := range original {
-		if !decoded[i].Equal(orig) {
-			t.Errorf("cert[%d]: decoded cert does not match original (CN=%q vs %q)",
-				i, decoded[i].Subject.CommonName, orig.Subject.CommonName)
+	// Verify all original certs are present (set-based, order-independent).
+	for _, orig := range original {
+		found := false
+		for _, dec := range decoded {
+			if dec.Equal(orig) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("cert CN=%q missing from decoded PKCS#7", orig.Subject.CommonName)
 		}
 	}
 }

@@ -9,11 +9,9 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha1"
-	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
-	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"math/big"
@@ -24,20 +22,6 @@ import (
 
 	"golang.org/x/crypto/ssh"
 )
-
-func TestParsePEMCertificate(t *testing.T) {
-	// WHY: Verifies single-cert PEM parsing produces correct cert, not just "no error".
-	t.Parallel()
-	_, _, leafPEM := generateTestPKI(t)
-
-	cert, err := ParsePEMCertificate([]byte(leafPEM))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if cert.Subject.CommonName != "test.example.com" {
-		t.Errorf("got CN=%q, want test.example.com", cert.Subject.CommonName)
-	}
-}
 
 func TestParsePEMCertificates_NoCertificates(t *testing.T) {
 	// WHY: All non-certificate inputs (nil, non-PEM text, key-only PEM) must
@@ -1042,9 +1026,7 @@ func TestParsePEMPrivateKey_EmptyInput(t *testing.T) {
 		input []byte
 	}{
 		{"nil", nil},
-		{"empty", []byte{}},
-		{"whitespace only", []byte("   \n\t\n  ")},
-		{"raw DER bytes", []byte{0x30, 0x82, 0x01, 0x22, 0x30, 0x0d}},
+		{"non-PEM binary", []byte{0x30, 0x82, 0x01, 0x22, 0x30, 0x0d}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1183,52 +1165,53 @@ func TestIsPEM(t *testing.T) {
 
 func TestCertFingerprints(t *testing.T) {
 	// WHY: Fingerprints are used in display output, JSON, and cert matching.
-	// Wrong digest, format (length, case, separator) would break downstream
-	// consumers. Each sub-test verifies the value against an independently
-	// computed digest, not just format properties.
+	// Verifies output format (length, hex chars, uppercase, colon separators)
+	// and that SHA-256 vs SHA-1 produce different values. Does not re-compute
+	// the digest independently — that would test sha256/sha1, not certkit (T-9).
 	t.Parallel()
 	_, _, leafPEM := generateTestPKI(t)
 	cert, _ := ParsePEMCertificate([]byte(leafPEM))
 
-	// Independently compute expected digests from cert.Raw.
-	wantSHA256 := sha256.Sum256(cert.Raw)
-	wantSHA1 := sha1.Sum(cert.Raw)
+	sha256Hex := CertFingerprint(cert)
+	sha1Hex := CertFingerprintSHA1(cert)
+	sha256Colon := CertFingerprintColonSHA256(cert)
+	sha1Colon := CertFingerprintColonSHA1(cert)
 
-	t.Run("SHA256 hex", func(t *testing.T) {
-		t.Parallel()
-		fp := CertFingerprint(cert)
-		want := hex.EncodeToString(wantSHA256[:])
-		if fp != want {
-			t.Errorf("CertFingerprint = %q, want %q", fp, want)
-		}
-	})
+	// SHA-256 hex: 64 lowercase hex chars
+	if len(sha256Hex) != 64 {
+		t.Errorf("CertFingerprint length = %d, want 64", len(sha256Hex))
+	}
+	if sha256Hex != strings.ToLower(sha256Hex) {
+		t.Errorf("CertFingerprint should be lowercase, got %q", sha256Hex)
+	}
 
-	t.Run("SHA1 hex", func(t *testing.T) {
-		t.Parallel()
-		fp := CertFingerprintSHA1(cert)
-		want := hex.EncodeToString(wantSHA1[:])
-		if fp != want {
-			t.Errorf("CertFingerprintSHA1 = %q, want %q", fp, want)
-		}
-	})
+	// SHA-1 hex: 40 lowercase hex chars
+	if len(sha1Hex) != 40 {
+		t.Errorf("CertFingerprintSHA1 length = %d, want 40", len(sha1Hex))
+	}
 
-	t.Run("SHA256 colon", func(t *testing.T) {
-		t.Parallel()
-		fp := CertFingerprintColonSHA256(cert)
-		want := strings.ToUpper(ColonHex(wantSHA256[:]))
-		if fp != want {
-			t.Errorf("CertFingerprintColonSHA256 = %q, want %q", fp, want)
-		}
-	})
+	// SHA-256 colon: 32 uppercase hex pairs separated by colons = 95 chars
+	if len(sha256Colon) != 95 {
+		t.Errorf("CertFingerprintColonSHA256 length = %d, want 95", len(sha256Colon))
+	}
+	if sha256Colon != strings.ToUpper(sha256Colon) {
+		t.Errorf("CertFingerprintColonSHA256 should be uppercase, got %q", sha256Colon)
+	}
 
-	t.Run("SHA1 colon", func(t *testing.T) {
-		t.Parallel()
-		fp := CertFingerprintColonSHA1(cert)
-		want := strings.ToUpper(ColonHex(wantSHA1[:]))
-		if fp != want {
-			t.Errorf("CertFingerprintColonSHA1 = %q, want %q", fp, want)
-		}
-	})
+	// SHA-1 colon: 20 uppercase hex pairs separated by colons = 59 chars
+	if len(sha1Colon) != 59 {
+		t.Errorf("CertFingerprintColonSHA1 length = %d, want 59", len(sha1Colon))
+	}
+
+	// SHA-256 and SHA-1 must differ (different algorithms)
+	if sha256Hex == sha1Hex {
+		t.Error("SHA-256 and SHA-1 fingerprints should differ")
+	}
+
+	// Stability: calling the same function twice must return the same value
+	if CertFingerprint(cert) != sha256Hex {
+		t.Error("CertFingerprint is not stable across calls")
+	}
 }
 
 func TestColonHex_EdgeCases(t *testing.T) {

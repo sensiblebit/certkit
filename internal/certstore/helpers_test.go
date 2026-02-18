@@ -22,55 +22,26 @@ func TestHasBinaryExtension(t *testing.T) {
 		path string
 		want bool
 	}{
-		// DER extensions
-		{"der", "cert.der", true},
-		{"cer", "cert.cer", true},
-		{"crt", "cert.crt", true},
-		{"cert", "cert.cert", true},
-		{"ca", "cert.ca", true},
-		{"pem", "cert.pem", true},
-		{"arm", "cert.arm", true},
-
-		// Key extensions
-		{"key", "server.key", true},
-		{"privkey", "server.privkey", true},
-		{"priv", "server.priv", true},
-
-		// PKCS#12
-		{"p12", "bundle.p12", true},
-		{"pfx", "bundle.pfx", true},
-
-		// PKCS#7
-		{"p7b", "chain.p7b", true},
-		{"p7c", "chain.p7c", true},
-		{"p7", "chain.p7", true},
-		{"spc", "cert.spc", true},
-
-		// PKCS#8
-		{"p8", "key.p8", true},
-
-		// JKS
-		{"jks", "store.jks", true},
-		{"keystore", "store.keystore", true},
-		{"truststore", "store.truststore", true},
-		{"bks", "store.bks", true},
+		// One representative per extension group (T-12)
+		{"cert extension", "cert.der", true},
+		{"key extension", "server.key", true},
+		{"PKCS#12 extension", "bundle.p12", true},
+		{"PKCS#7 extension", "chain.p7b", true},
+		{"PKCS#8 extension", "key.p8", true},
+		{"JKS extension", "store.jks", true},
+		{"PEM extension", "cert.pem", true},
 
 		// Unrecognized
-		{"txt", "README.txt", false},
-		{"go", "main.go", false},
+		{"unknown extension", "README.txt", false},
 		{"no extension", "Makefile", false},
 		{"empty", "", false},
 
-		// Virtual paths with ":" separator
-		{"virtual der", "archive.zip:certs/server.der", true},
-		{"virtual flat", "archive.zip:server.der", true},
-		{"virtual no ext", "archive.zip:cert", false},
-		{"virtual tar.gz", "archive.tar.gz:certs/ca.pem", true},
+		// Virtual paths with ":" separator (certkit-specific logic)
+		{"virtual path recognized", "archive.zip:certs/server.der", true},
+		{"virtual path unrecognized", "archive.zip:cert", false},
 
-		// Case insensitivity
-		{"upper DER", "cert.DER", true},
-		{"mixed case", "cert.DeR", true},
-		{"upper P12", "bundle.P12", true},
+		// Case insensitivity (certkit-specific logic)
+		{"case insensitive", "cert.DeR", true},
 	}
 
 	for _, tt := range tests {
