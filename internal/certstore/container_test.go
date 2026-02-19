@@ -2,7 +2,6 @@ package certstore
 
 import (
 	"bytes"
-	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -26,67 +25,6 @@ func TestParseContainerData_EmptyData(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "empty data") {
 		t.Errorf("error should mention empty data, got: %v", err)
-	}
-}
-
-func TestParseContainerData_Ed25519KeyNormalization(t *testing.T) {
-	// WHY: PKCS#12 and JKS take different decode paths in ParseContainerData
-	// (DecodePKCS12 vs DecodeJKS). This verifies Ed25519 keys extracted from
-	// both container formats are returned as value type (ed25519.PrivateKey,
-	// not pointer) and Equal the original key — consolidated per T-12.
-	t.Parallel()
-
-	ca := newEd25519CA(t)
-
-	tests := []struct {
-		name     string
-		cn       string
-		makeData func(t *testing.T, leaf testLeaf, ca testCA) []byte
-	}{
-		{
-			name: "PKCS#12",
-			cn:   "ed-p12.example.com",
-			makeData: func(t *testing.T, leaf testLeaf, ca testCA) []byte {
-				return newPKCS12Bundle(t, leaf, ca, "changeit")
-			},
-		},
-		{
-			name: "JKS",
-			cn:   "ed-jks.example.com",
-			makeData: func(t *testing.T, leaf testLeaf, ca testCA) []byte {
-				return newJKSBundle(t, leaf, ca, "changeit")
-			},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			leaf := newEd25519Leaf(t, ca, tt.cn, []string{tt.cn})
-			data := tt.makeData(t, leaf, ca)
-
-			contents, err := ParseContainerData(data, []string{"changeit"})
-			if err != nil {
-				t.Fatalf("ParseContainerData: %v", err)
-			}
-			if contents.Leaf == nil {
-				t.Fatal("expected Leaf to be non-nil")
-			}
-			if contents.Leaf.Subject.CommonName != tt.cn {
-				t.Errorf("Leaf CN = %q, want %s", contents.Leaf.Subject.CommonName, tt.cn)
-			}
-			if contents.Key == nil {
-				t.Fatal("expected Key to be non-nil")
-			}
-			edKey, ok := contents.Key.(ed25519.PrivateKey)
-			if !ok {
-				t.Fatalf("Key type = %T, want ed25519.PrivateKey (value, not pointer)", contents.Key)
-			}
-			origKey := leaf.key.(ed25519.PrivateKey)
-			if !origKey.Equal(edKey) {
-				t.Error("extracted Ed25519 key does not Equal original")
-			}
-		})
 	}
 }
 

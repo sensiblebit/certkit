@@ -804,67 +804,11 @@ func TestProcessData_EndToEnd_IngestExportRoundTrip(t *testing.T) {
 	}
 }
 
-func TestProcessData_DER_KeyRoundTrip(t *testing.T) {
-	// WHY: Existing DER key tests check type only, not key equality. A subtle
-	// DER-to-PEM encoding bug that changes key material would pass all prior tests.
-	// One key type (RSA PKCS#8) suffices since the DER-to-PEM normalization path
-	// is identical for all key types (T-13).
-	t.Parallel()
-
-	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rsaPKCS8, err := x509.MarshalPKCS8PrivateKey(rsaKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	store := NewMemStore()
-	if err := ProcessData(ProcessInput{
-		Data:    rsaPKCS8,
-		Path:    "test.der",
-		Handler: store,
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	if len(store.AllKeys()) != 1 {
-		t.Fatalf("expected 1 key, got %d", len(store.AllKeys()))
-	}
-
-	for _, rec := range store.AllKeys() {
-		if rec.KeyType != "RSA" {
-			t.Errorf("KeyType = %q, want RSA", rec.KeyType)
-		}
-		if !keysEqual(t, rsaKey, rec.Key) {
-			t.Error("stored key does not Equal original RSA key")
-		}
-
-		// Verify stored PEM is valid PKCS#8
-		block, _ := pem.Decode(rec.PEM)
-		if block == nil {
-			t.Fatal("stored PEM is not parseable")
-		}
-		if block.Type != "PRIVATE KEY" {
-			t.Errorf("stored PEM type = %q, want PRIVATE KEY (PKCS#8)", block.Type)
-		}
-
-		// Parse stored PEM and verify it equals original
-		reparsed, err := certkit.ParsePEMPrivateKey(rec.PEM)
-		if err != nil {
-			t.Fatalf("re-parse stored PEM: %v", err)
-		}
-		if !keysEqual(t, rsaKey, reparsed) {
-			t.Error("stored PEM round-trip lost key material")
-		}
-	}
-}
-
-func TestProcessData_DER_PKCS1AndSEC1Keys(t *testing.T) {
-	// WHY: processDER has separate branches for PKCS#1 RSA (line 157) and SEC1 EC
-	// (line 171) after PKCS#8 fails. TestProcessData_DER_KeyRoundTrip only tests
-	// PKCS#8 DER, leaving these two code paths completely uncovered.
+func TestProcessData_DER_KeyFormats(t *testing.T) {
+	// WHY: processDER has three branches: PKCS#8 (first attempt), PKCS#1 RSA
+	// (fallback), and SEC1 EC (fallback). All three must ingest correctly,
+	// normalize to PKCS#8 PEM storage, and preserve key material through
+	// round-trip. Consolidated per T-12: same assertion pattern across formats.
 	t.Parallel()
 
 	tests := []struct {
@@ -872,6 +816,22 @@ func TestProcessData_DER_PKCS1AndSEC1Keys(t *testing.T) {
 		makeDER func(t *testing.T) ([]byte, any) // returns DER data and original key
 		wantAlg string
 	}{
+		{
+			name: "PKCS#8 RSA",
+			makeDER: func(t *testing.T) ([]byte, any) {
+				t.Helper()
+				key, err := rsa.GenerateKey(rand.Reader, 2048)
+				if err != nil {
+					t.Fatal(err)
+				}
+				der, err := x509.MarshalPKCS8PrivateKey(key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return der, key
+			},
+			wantAlg: "RSA",
+		},
 		{
 			name: "PKCS#1 RSA",
 			makeDER: func(t *testing.T) ([]byte, any) {
@@ -926,6 +886,24 @@ func TestProcessData_DER_PKCS1AndSEC1Keys(t *testing.T) {
 				}
 				if !keysEqual(t, original, rec.Key) {
 					t.Error("stored key does not Equal original")
+				}
+
+				// Verify stored PEM is valid PKCS#8 (all DER formats normalize to PKCS#8)
+				block, _ := pem.Decode(rec.PEM)
+				if block == nil {
+					t.Fatal("stored PEM is not parseable")
+				}
+				if block.Type != "PRIVATE KEY" {
+					t.Errorf("stored PEM type = %q, want PRIVATE KEY (PKCS#8)", block.Type)
+				}
+
+				// Parse stored PEM and verify key material survives round-trip
+				reparsed, err := certkit.ParsePEMPrivateKey(rec.PEM)
+				if err != nil {
+					t.Fatalf("re-parse stored PEM: %v", err)
+				}
+				if !keysEqual(t, original, reparsed) {
+					t.Error("stored PEM round-trip lost key material")
 				}
 			}
 		})

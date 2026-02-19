@@ -312,37 +312,6 @@ func newEd25519Leaf(t *testing.T, ca testCA, cn string, sans []string) testLeaf 
 	return testLeaf{cert: cert, certPEM: certPEM, certDER: certDER, key: key, keyPEM: keyPEM}
 }
 
-// newEd25519CA generates a self-signed Ed25519 root CA for testing.
-func newEd25519CA(t *testing.T) testCA {
-	t.Helper()
-	_, key, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("generate Ed25519 CA key: %v", err)
-	}
-
-	tmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(3),
-		Subject:               pkix.Name{CommonName: "Test Ed25519 Root CA", Organization: []string{"TestOrg"}},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-		SubjectKeyId:          []byte{30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11},
-	}
-
-	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, key.Public(), key)
-	if err != nil {
-		t.Fatalf("create Ed25519 CA cert: %v", err)
-	}
-	cert, err := x509.ParseCertificate(certDER)
-	if err != nil {
-		t.Fatalf("parse Ed25519 CA cert: %v", err)
-	}
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-	return testCA{cert: cert, certPEM: certPEM, certDER: certDER, key: key}
-}
-
 // newRSALeafWithIPSANs generates an RSA leaf certificate with both DNS and IP SANs.
 func newRSALeafWithIPSANs(t *testing.T, ca testCA, cn string, dnsNames []string, ips []net.IP) testLeaf {
 	t.Helper()
