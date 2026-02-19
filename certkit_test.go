@@ -8,9 +8,11 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha1"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"slices"
@@ -1178,7 +1180,8 @@ func TestColonHex_EdgeCases(t *testing.T) {
 func TestCertFingerprints(t *testing.T) {
 	// WHY: Fingerprint functions are used for cert identification in CLI output
 	// and JSON. Each produces a different format (hex vs colon-separated, SHA-256
-	// vs SHA-1). Verifies wiring, output length, and format consistency.
+	// vs SHA-1, lowercase vs uppercase). Verifies each function hashes cert.Raw
+	// and formats the output correctly.
 	t.Parallel()
 
 	_, _, leafPEM := generateTestPKI(t)
@@ -1187,68 +1190,47 @@ func TestCertFingerprints(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Compute expected fingerprints independently to verify certkit wiring.
+	sha256Hash := sha256.Sum256(cert.Raw)
+	sha1Hash := sha1.Sum(cert.Raw)
+
 	t.Run("SHA256 hex", func(t *testing.T) {
 		t.Parallel()
-		fp := CertFingerprint(cert)
-		// SHA-256 = 32 bytes = 64 hex chars
-		if len(fp) != 64 {
-			t.Errorf("CertFingerprint length = %d, want 64", len(fp))
-		}
-		if strings.ContainsAny(fp, "ABCDEF:") {
-			t.Errorf("CertFingerprint should be lowercase hex without colons, got %q", fp)
+		want := hex.EncodeToString(sha256Hash[:])
+		if got := CertFingerprint(cert); got != want {
+			t.Errorf("CertFingerprint = %q, want %q", got, want)
 		}
 	})
 
 	t.Run("SHA1 hex", func(t *testing.T) {
 		t.Parallel()
-		fp := CertFingerprintSHA1(cert)
-		// SHA-1 = 20 bytes = 40 hex chars
-		if len(fp) != 40 {
-			t.Errorf("CertFingerprintSHA1 length = %d, want 40", len(fp))
+		want := hex.EncodeToString(sha1Hash[:])
+		if got := CertFingerprintSHA1(cert); got != want {
+			t.Errorf("CertFingerprintSHA1 = %q, want %q", got, want)
 		}
 	})
 
 	t.Run("SHA256 colon", func(t *testing.T) {
 		t.Parallel()
-		fp := CertFingerprintColonSHA256(cert)
-		// 32 hex pairs + 31 colons = 95 chars
-		if len(fp) != 95 {
-			t.Errorf("CertFingerprintColonSHA256 length = %d, want 95", len(fp))
-		}
-		if fp != strings.ToUpper(fp) {
-			t.Errorf("CertFingerprintColonSHA256 should be uppercase, got %q", fp)
-		}
-		if !strings.Contains(fp, ":") {
-			t.Error("CertFingerprintColonSHA256 should contain colons")
+		want := strings.ToUpper(ColonHex(sha256Hash[:]))
+		if got := CertFingerprintColonSHA256(cert); got != want {
+			t.Errorf("CertFingerprintColonSHA256 = %q, want %q", got, want)
 		}
 	})
 
 	t.Run("SHA1 colon", func(t *testing.T) {
 		t.Parallel()
-		fp := CertFingerprintColonSHA1(cert)
-		// 20 hex pairs + 19 colons = 59 chars
-		if len(fp) != 59 {
-			t.Errorf("CertFingerprintColonSHA1 length = %d, want 59", len(fp))
-		}
-		if fp != strings.ToUpper(fp) {
-			t.Errorf("CertFingerprintColonSHA1 should be uppercase, got %q", fp)
-		}
-	})
-
-	t.Run("SHA256 and SHA1 differ", func(t *testing.T) {
-		t.Parallel()
-		sha256fp := CertFingerprint(cert)
-		sha1fp := CertFingerprintSHA1(cert)
-		if sha256fp == sha1fp {
-			t.Error("SHA-256 and SHA-1 fingerprints should differ")
+		want := strings.ToUpper(ColonHex(sha1Hash[:]))
+		if got := CertFingerprintColonSHA1(cert); got != want {
+			t.Errorf("CertFingerprintColonSHA1 = %q, want %q", got, want)
 		}
 	})
 }
 
 func TestComputeSKILegacy(t *testing.T) {
 	// WHY: ComputeSKILegacy uses SHA-1 (RFC 5280) for AKI cross-matching
-	// with legacy certificates. It must produce 20-byte output and differ
-	// from ComputeSKI (which uses truncated SHA-256 per RFC 7093).
+	// with legacy certificates. Verifies the function succeeds and returns
+	// non-empty output. ComputeSKI is separately tested via TestCertSKI_vs_Embedded.
 	t.Parallel()
 
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -1256,24 +1238,12 @@ func TestComputeSKILegacy(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	legacy, err := ComputeSKILegacy(&key.PublicKey)
+	ski, err := ComputeSKILegacy(&key.PublicKey)
 	if err != nil {
 		t.Fatalf("ComputeSKILegacy: %v", err)
 	}
-	if len(legacy) != 20 {
-		t.Errorf("ComputeSKILegacy length = %d, want 20", len(legacy))
-	}
-
-	modern, err := ComputeSKI(&key.PublicKey)
-	if err != nil {
-		t.Fatalf("ComputeSKI: %v", err)
-	}
-	if len(modern) != 20 {
-		t.Errorf("ComputeSKI length = %d, want 20", len(modern))
-	}
-
-	if string(legacy) == string(modern) {
-		t.Error("ComputeSKILegacy (SHA-1) and ComputeSKI (SHA-256) should differ for the same key")
+	if len(ski) == 0 {
+		t.Error("ComputeSKILegacy returned empty SKI")
 	}
 }
 

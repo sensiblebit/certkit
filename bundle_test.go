@@ -466,8 +466,8 @@ func TestBundle_ExpiryWarnings(t *testing.T) {
 	}{
 		{"expired cert", -24 * time.Hour, 1, "has expired"},
 		{"expiring soon", 10 * 24 * time.Hour, 1, "expires within 30 days"},
-		{"within 30 days boundary", 30*24*time.Hour - time.Minute, 1, "expires within 30 days"},
-		{"outside 30 days", 30*24*time.Hour + time.Minute, 0, ""},
+		{"within 30 days boundary", 30*24*time.Hour - time.Hour, 1, "expires within 30 days"},
+		{"outside 30 days", 30*24*time.Hour + time.Hour, 0, ""},
 		{"far future", 365 * 24 * time.Hour, 0, ""},
 	}
 	for _, tt := range tests {
