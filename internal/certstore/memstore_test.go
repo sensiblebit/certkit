@@ -107,7 +107,10 @@ func TestMemStore_MatchedPairs(t *testing.T) {
 	if err := store.HandleCertificate(inter.cert, "inter.pem"); err != nil {
 		t.Fatal(err)
 	}
-	interKeyPEM, _ := certkit.MarshalPrivateKeyToPEM(inter.key)
+	interKeyPEM, err := certkit.MarshalPrivateKeyToPEM(inter.key)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := store.HandleKey(inter.key, []byte(interKeyPEM), "inter.pem"); err != nil {
 		t.Fatal(err)
 	}

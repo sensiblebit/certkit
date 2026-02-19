@@ -96,17 +96,26 @@ func TestBundle_mozillaRoots(t *testing.T) {
 func TestBundle_unknownTrustStore(t *testing.T) {
 	// WHY: Invalid trust store names must produce a clear error; silently falling back to system roots would mask configuration mistakes.
 	t.Parallel()
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: "test"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 	}
-	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	cert, _ := x509.ParseCertificate(certBytes)
+	certBytes, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(certBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	_, err := Bundle(context.Background(), cert, BundleOptions{
+	_, err = Bundle(context.Background(), cert, BundleOptions{
 		FetchAIA:   false,
 		TrustStore: "invalid",
 		Verify:     true,
@@ -123,7 +132,10 @@ func TestBundle_verifyFalsePassthrough(t *testing.T) {
 	// WHY: When Verify=false, all supplied intermediates must pass through even if
 	// chain is incomplete -- callers may handle verification themselves.
 	t.Parallel()
-	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	caTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "NoVerify CA"},
@@ -133,18 +145,33 @@ func TestBundle_verifyFalsePassthrough(t *testing.T) {
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign,
 	}
-	caBytes, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
-	caCert, _ := x509.ParseCertificate(caBytes)
+	caBytes, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caCert, err := x509.ParseCertificate(caBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	leafTemplate := &x509.Certificate{
 		SerialNumber: big.NewInt(2),
 		Subject:      pkix.Name{CommonName: "noverify-leaf"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 	}
-	leafBytes, _ := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
-	leafCert, _ := x509.ParseCertificate(leafBytes)
+	leafBytes, err := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafCert, err := x509.ParseCertificate(leafBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	result, err := Bundle(context.Background(), leafCert, BundleOptions{
 		ExtraIntermediates: []*x509.Certificate{caCert},
@@ -231,7 +258,10 @@ func TestFetchLeafFromURL_Errors(t *testing.T) {
 func TestFetchAIACertificates_maxDepthZero(t *testing.T) {
 	// WHY: maxDepth=0 must prevent all AIA fetches; without this guard, deep chains could cause infinite recursion or excessive network calls.
 	t.Parallel()
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	template := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "depth-zero"},
@@ -239,8 +269,14 @@ func TestFetchAIACertificates_maxDepthZero(t *testing.T) {
 		NotAfter:              time.Now().Add(24 * time.Hour),
 		IssuingCertificateURL: []string{"http://example.com/ca.cer"},
 	}
-	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	cert, _ := x509.ParseCertificate(certBytes)
+	certBytes, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(certBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	fetched, warnings := FetchAIACertificates(context.Background(), cert, 1*time.Second, 0)
 	if len(fetched) != 0 {
@@ -256,7 +292,10 @@ func TestFetchAIACertificates_maxDepthZero(t *testing.T) {
 func TestDetectAndSwapLeaf_ReversedChain(t *testing.T) {
 	// WHY: Users sometimes pass certs in reversed order (CA first); the swap heuristic must detect this and reorder to produce a valid chain.
 	t.Parallel()
-	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	caTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "Swap CA"},
@@ -266,10 +305,19 @@ func TestDetectAndSwapLeaf_ReversedChain(t *testing.T) {
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign,
 	}
-	caBytes, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
-	caCert, _ := x509.ParseCertificate(caBytes)
+	caBytes, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caCert, err := x509.ParseCertificate(caBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	leafTemplate := &x509.Certificate{
 		SerialNumber: big.NewInt(2),
 		Subject:      pkix.Name{CommonName: "swap-leaf.example.com"},
@@ -278,8 +326,14 @@ func TestDetectAndSwapLeaf_ReversedChain(t *testing.T) {
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
-	leafBytes, _ := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
-	leafCert, _ := x509.ParseCertificate(leafBytes)
+	leafBytes, err := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafCert, err := x509.ParseCertificate(leafBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Pass CA as "leaf" and real leaf as extra — reversed order
 	result, err := Bundle(context.Background(), caCert, BundleOptions{
@@ -316,7 +370,10 @@ func TestBundle_SHA1Warning(t *testing.T) {
 	// during verification).
 	t.Parallel()
 
-	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	caTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "SHA1-Test CA"},
@@ -326,18 +383,33 @@ func TestBundle_SHA1Warning(t *testing.T) {
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign,
 	}
-	caBytes, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
-	caCert, _ := x509.ParseCertificate(caBytes)
+	caBytes, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caCert, err := x509.ParseCertificate(caBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	leafTemplate := &x509.Certificate{
 		SerialNumber: big.NewInt(2),
 		Subject:      pkix.Name{CommonName: "sha1-leaf.example.com"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 	}
-	leafBytes, _ := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
-	leafCert, _ := x509.ParseCertificate(leafBytes)
+	leafBytes, err := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafCert, err := x509.ParseCertificate(leafBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Simulate a SHA-1 signature on the leaf (can't create real SHA-1 certs
 	// in modern Go, but SignatureAlgorithm is what checkSHA1Signatures reads)
@@ -404,7 +476,10 @@ func TestBundle_ExpiryWarnings(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
 			template := &x509.Certificate{
 				SerialNumber:          big.NewInt(1),
 				Subject:               pkix.Name{CommonName: "expiry-test"},
@@ -414,8 +489,14 @@ func TestBundle_ExpiryWarnings(t *testing.T) {
 				BasicConstraintsValid: true,
 				KeyUsage:              x509.KeyUsageCertSign,
 			}
-			certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-			cert, _ := x509.ParseCertificate(certBytes)
+			certBytes, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cert, err := x509.ParseCertificate(certBytes)
+			if err != nil {
+				t.Fatal(err)
+			}
 
 			// Use Verify=false so expired certs don't fail chain verification
 			result, err := Bundle(context.Background(), cert, BundleOptions{
@@ -451,7 +532,10 @@ func TestBundle_ExpiryWarnings(t *testing.T) {
 func TestFetchAIACertificates_duplicateURLs(t *testing.T) {
 	// WHY: Duplicate AIA URLs in a cert must be deduplicated to avoid redundant HTTP fetches and duplicate certs in the chain.
 	t.Parallel()
-	issuerKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	issuerKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	issuerTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "Issuer CA"},
@@ -461,7 +545,10 @@ func TestFetchAIACertificates_duplicateURLs(t *testing.T) {
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign,
 	}
-	issuerBytes, _ := x509.CreateCertificate(rand.Reader, issuerTemplate, issuerTemplate, &issuerKey.PublicKey, issuerKey)
+	issuerBytes, err := x509.CreateCertificate(rand.Reader, issuerTemplate, issuerTemplate, &issuerKey.PublicKey, issuerKey)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var fetchCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -470,7 +557,10 @@ func TestFetchAIACertificates_duplicateURLs(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	leafTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(2),
 		Subject:               pkix.Name{CommonName: "dup-aia-leaf"},
@@ -478,9 +568,18 @@ func TestFetchAIACertificates_duplicateURLs(t *testing.T) {
 		NotAfter:              time.Now().Add(24 * time.Hour),
 		IssuingCertificateURL: []string{srv.URL + "/ca.cer", srv.URL + "/ca.cer"},
 	}
-	issuerCert, _ := x509.ParseCertificate(issuerBytes)
-	leafBytes, _ := x509.CreateCertificate(rand.Reader, leafTemplate, issuerCert, &leafKey.PublicKey, issuerKey)
-	leafCert, _ := x509.ParseCertificate(leafBytes)
+	issuerCert, err := x509.ParseCertificate(issuerBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafBytes, err := x509.CreateCertificate(rand.Reader, leafTemplate, issuerCert, &leafKey.PublicKey, issuerKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafCert, err := x509.ParseCertificate(leafBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	fetched, _ := FetchAIACertificates(context.Background(), leafCert, 2*time.Second, 5)
 	if len(fetched) != 1 {
@@ -495,7 +594,10 @@ func TestBundle_ExcludeRoot(t *testing.T) {
 	// WHY: ExcludeRoot must suppress root population in BundleResult;
 	// before this fix the option was dead code.
 	t.Parallel()
-	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	caTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "ExcludeRoot CA"},
@@ -505,10 +607,19 @@ func TestBundle_ExcludeRoot(t *testing.T) {
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign,
 	}
-	caBytes, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
-	caCert, _ := x509.ParseCertificate(caBytes)
+	caBytes, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caCert, err := x509.ParseCertificate(caBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	leafTemplate := &x509.Certificate{
 		SerialNumber: big.NewInt(2),
 		Subject:      pkix.Name{CommonName: "exclude-root-leaf.example.com"},
@@ -517,8 +628,14 @@ func TestBundle_ExcludeRoot(t *testing.T) {
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
-	leafBytes, _ := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
-	leafCert, _ := x509.ParseCertificate(leafBytes)
+	leafBytes, err := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafCert, err := x509.ParseCertificate(leafBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	result, err := Bundle(context.Background(), leafCert, BundleOptions{
 		FetchAIA:    false,
@@ -539,7 +656,10 @@ func TestBundle_SelfSignedRoot(t *testing.T) {
 	// WHY: A self-signed cert verified against itself produces a chain of length 1;
 	// before this fix result.Roots was nil, losing the root information.
 	t.Parallel()
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	template := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "Self-Signed Root"},
@@ -549,8 +669,14 @@ func TestBundle_SelfSignedRoot(t *testing.T) {
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign,
 	}
-	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	cert, _ := x509.ParseCertificate(certBytes)
+	certBytes, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(certBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	result, err := Bundle(context.Background(), cert, BundleOptions{
 		FetchAIA:    false,
@@ -574,17 +700,26 @@ func TestBundle_CustomTrustStoreNilRoots(t *testing.T) {
 	// causing verification to always fail. This must produce a clear verification
 	// error, not a panic or confusing message.
 	t.Parallel()
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject:      pkix.Name{CommonName: "nil-roots-test"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 	}
-	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	cert, _ := x509.ParseCertificate(certBytes)
+	certBytes, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(certBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	_, err := Bundle(context.Background(), cert, BundleOptions{
+	_, err = Bundle(context.Background(), cert, BundleOptions{
 		FetchAIA:    false,
 		TrustStore:  "custom",
 		CustomRoots: nil,
@@ -621,7 +756,10 @@ func TestIsIssuedByMozillaRoot(t *testing.T) {
 	// then use it to sign a leaf. This gives the leaf a RawIssuer that matches
 	// the Mozilla root's RawSubject — proving IsIssuedByMozillaRoot works for
 	// non-root certs (not just tautological self-signed root lookups).
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	fakeCA := &x509.Certificate{
 		SerialNumber:          big.NewInt(998),
 		RawSubject:            mozRoot.RawSubject, // exact DER bytes
@@ -631,18 +769,33 @@ func TestIsIssuedByMozillaRoot(t *testing.T) {
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign,
 	}
-	fakeCABytes, _ := x509.CreateCertificate(rand.Reader, fakeCA, fakeCA, &key.PublicKey, key)
-	fakeCACert, _ := x509.ParseCertificate(fakeCABytes)
+	fakeCABytes, err := x509.CreateCertificate(rand.Reader, fakeCA, fakeCA, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fakeCACert, err := x509.ParseCertificate(fakeCABytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	leafKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	issuedByMozilla := &x509.Certificate{
 		SerialNumber: big.NewInt(999),
 		Subject:      pkix.Name{CommonName: "issued-by-mozilla-root"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 	}
-	certBytes, _ := x509.CreateCertificate(rand.Reader, issuedByMozilla, fakeCACert, &leafKey.PublicKey, key)
-	issuedCert, _ := x509.ParseCertificate(certBytes)
+	certBytes, err := x509.CreateCertificate(rand.Reader, issuedByMozilla, fakeCACert, &leafKey.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	issuedCert, err := x509.ParseCertificate(certBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Build a private CA cert (unknown issuer)
 	privateTemplate := &x509.Certificate{
@@ -651,8 +804,14 @@ func TestIsIssuedByMozillaRoot(t *testing.T) {
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 	}
-	privateCertBytes, _ := x509.CreateCertificate(rand.Reader, privateTemplate, privateTemplate, &key.PublicKey, key)
-	privateCert, _ := x509.ParseCertificate(privateCertBytes)
+	privateCertBytes, err := x509.CreateCertificate(rand.Reader, privateTemplate, privateTemplate, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	privateCert, err := x509.ParseCertificate(privateCertBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []struct {
 		name string

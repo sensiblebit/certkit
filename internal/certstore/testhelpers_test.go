@@ -163,7 +163,10 @@ func newECDSALeaf(t *testing.T, ca testCA, cn string, sans []string) testLeaf {
 	}
 
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-	ecBytes, _ := x509.MarshalECPrivateKey(key)
+	ecBytes, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal ECDSA leaf key: %v", err)
+	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: ecBytes})
 	return testLeaf{cert: cert, certPEM: certPEM, certDER: certDER, key: key, keyPEM: keyPEM}
 }
@@ -301,7 +304,10 @@ func newEd25519Leaf(t *testing.T, ca testCA, cn string, sans []string) testLeaf 
 	}
 
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-	keyDER, _ := x509.MarshalPKCS8PrivateKey(key)
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal Ed25519 leaf key: %v", err)
+	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 	return testLeaf{cert: cert, certPEM: certPEM, certDER: certDER, key: key, keyPEM: keyPEM}
 }

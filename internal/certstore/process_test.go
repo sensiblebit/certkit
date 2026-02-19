@@ -92,7 +92,10 @@ func TestProcessData_PEMEncryptedKey_CorrectPassword(t *testing.T) {
 	// certkit_test.go:TestParsePEMPrivateKeyWithPasswords_Encrypted (T-13).
 	t.Parallel()
 
-	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
 	//nolint:staticcheck // testing legacy encrypted PEM
 	encBlock, err := x509.EncryptPEMBlock(rand.Reader, "RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(rsaKey), []byte("testpass"), x509.PEMCipherAES256)
 	if err != nil {
@@ -134,7 +137,10 @@ func TestProcessData_PEMEncryptedKey_CorrectPassword(t *testing.T) {
 func TestProcessData_PEMEncryptedKey_WrongPassword(t *testing.T) {
 	// WHY: Encrypted PEM keys with the wrong password must be silently skipped.
 	t.Parallel()
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
 	block := &pem.Block{
 		Type:  "RSA PRIVATE KEY",
 		Bytes: x509.MarshalPKCS1PrivateKey(key),
@@ -408,7 +414,10 @@ func TestProcessData_Ed25519RawKey_Rejected(t *testing.T) {
 	// seed-only (wrong length) rejection paths.
 	t.Parallel()
 
-	_, edKey, _ := ed25519.GenerateKey(rand.Reader)
+	_, edKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []struct {
 		name string
@@ -686,7 +695,10 @@ func TestProcessData_EndToEnd_IngestExportRoundTrip(t *testing.T) {
 			name: "Ed25519",
 			makeKey: func(t *testing.T) (crypto.PrivateKey, crypto.PublicKey, []byte) {
 				t.Helper()
-				edDER, _ := x509.MarshalPKCS8PrivateKey(edKey)
+				edDER, err := x509.MarshalPKCS8PrivateKey(edKey)
+				if err != nil {
+					t.Fatal(err)
+				}
 				keyPEM := pem.EncodeToMemory(&pem.Block{
 					Type:  "PRIVATE KEY",
 					Bytes: edDER,
@@ -744,7 +756,10 @@ func TestProcessData_EndToEnd_IngestExportRoundTrip(t *testing.T) {
 			}
 
 			// Build export input and generate bundle files
-			cert, _ := x509.ParseCertificate(certDER)
+			cert, err := x509.ParseCertificate(certDER)
+			if err != nil {
+				t.Fatalf("parse cert: %v", err)
+			}
 			bundle := &certkit.BundleResult{Leaf: cert}
 			files, err := GenerateBundleFiles(BundleExportInput{
 				Bundle:     bundle,
@@ -1312,10 +1327,16 @@ func TestProcessData_CrossFormatSKIEquality(t *testing.T) {
 	edLeaf := newEd25519Leaf(t, ca, "ed-cross.example.com", []string{"ed-cross.example.com"})
 	edKey := edLeaf.key.(ed25519.PrivateKey)
 
-	edPKCS8DER, _ := x509.MarshalPKCS8PrivateKey(edKey)
+	edPKCS8DER, err := x509.MarshalPKCS8PrivateKey(edKey)
+	if err != nil {
+		t.Fatal(err)
+	}
 	raw64 := make([]byte, ed25519.PrivateKeySize)
 	copy(raw64, edKey)
-	sshBlock, _ := ssh.MarshalPrivateKey(edKey, "")
+	sshBlock, err := ssh.MarshalPrivateKey(edKey, "")
+	if err != nil {
+		t.Fatal(err)
+	}
 	sshPEM := pem.EncodeToMemory(sshBlock)
 
 	type formatEntry struct {

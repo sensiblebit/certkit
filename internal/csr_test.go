@@ -42,7 +42,10 @@ func TestGenerateCSRFiles_Sources(t *testing.T) {
 					},
 					Hosts: []string{"template.example.com"},
 				}
-				data, _ := json.Marshal(tmpl)
+				data, err := json.Marshal(tmpl)
+				if err != nil {
+					t.Fatal(err)
+				}
 				if err := os.WriteFile(tmplPath, data, 0644); err != nil {
 					t.Fatalf("write template: %v", err)
 				}
@@ -59,7 +62,10 @@ func TestGenerateCSRFiles_Sources(t *testing.T) {
 			wantCN: "cert-template.example.com",
 			setup: func(t *testing.T, dir string) CSROptions {
 				t.Helper()
-				key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
 				tmpl := &x509.Certificate{
 					SerialNumber: big.NewInt(1),
 					Subject:      pkix.Name{CommonName: "cert-template.example.com"},
@@ -67,8 +73,14 @@ func TestGenerateCSRFiles_Sources(t *testing.T) {
 					NotBefore:    time.Now().Add(-1 * time.Hour),
 					NotAfter:     time.Now().Add(24 * time.Hour),
 				}
-				certBytes, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-				cert, _ := x509.ParseCertificate(certBytes)
+				certBytes, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				cert, err := x509.ParseCertificate(certBytes)
+				if err != nil {
+					t.Fatal(err)
+				}
 				certPEM := certkit.CertToPEM(cert)
 				certPath := filepath.Join(dir, "cert.pem")
 				if err := os.WriteFile(certPath, []byte(certPEM), 0644); err != nil {
@@ -87,12 +99,18 @@ func TestGenerateCSRFiles_Sources(t *testing.T) {
 			wantCN: "csr-source.example.com",
 			setup: func(t *testing.T, dir string) CSROptions {
 				t.Helper()
-				srcKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				srcKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
 				srcTmpl := &x509.CertificateRequest{
 					Subject:  pkix.Name{CommonName: "csr-source.example.com"},
 					DNSNames: []string{"csr-source.example.com"},
 				}
-				srcDER, _ := x509.CreateCertificateRequest(rand.Reader, srcTmpl, srcKey)
+				srcDER, err := x509.CreateCertificateRequest(rand.Reader, srcTmpl, srcKey)
+				if err != nil {
+					t.Fatal(err)
+				}
 				csrPEMBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: srcDER})
 				csrPath := filepath.Join(dir, "source.csr")
 				if err := os.WriteFile(csrPath, csrPEMBytes, 0644); err != nil {
@@ -142,8 +160,14 @@ func TestGenerateCSRFiles_WithExistingKey(t *testing.T) {
 	dir := t.TempDir()
 
 	// Generate and write a key
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	keyPEM, _ := certkit.MarshalPrivateKeyToPEM(key)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPEM, err := certkit.MarshalPrivateKeyToPEM(key)
+	if err != nil {
+		t.Fatal(err)
+	}
 	keyPath := filepath.Join(dir, "existing.key")
 	if err := os.WriteFile(keyPath, []byte(keyPEM), 0600); err != nil {
 		t.Fatalf("write key: %v", err)
@@ -155,13 +179,16 @@ func TestGenerateCSRFiles_WithExistingKey(t *testing.T) {
 		Subject: certkit.CSRSubject{CommonName: "existing-key.example.com"},
 		Hosts:   []string{"existing-key.example.com"},
 	}
-	data, _ := json.Marshal(tmpl)
+	data, err := json.Marshal(tmpl)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(tmplPath, data, 0644); err != nil {
 		t.Fatalf("write template: %v", err)
 	}
 
 	outDir := filepath.Join(dir, "out")
-	_, err := GenerateCSRFiles(CSROptions{
+	_, err = GenerateCSRFiles(CSROptions{
 		TemplatePath: tmplPath,
 		KeyPath:      keyPath,
 		OutPath:      outDir,
@@ -198,7 +225,10 @@ func TestGenerateCSRFiles_Stdout(t *testing.T) {
 		Subject: certkit.CSRSubject{CommonName: "stdout.example.com"},
 		Hosts:   []string{"stdout.example.com"},
 	}
-	data, _ := json.Marshal(tmpl)
+	data, err := json.Marshal(tmpl)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(tmplPath, data, 0644); err != nil {
 		t.Fatalf("write template: %v", err)
 	}

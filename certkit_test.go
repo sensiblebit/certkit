@@ -30,8 +30,14 @@ func TestParsePEMCertificates_NoCertificates(t *testing.T) {
 	// empty slice or panic.
 	t.Parallel()
 
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	der, _ := x509.MarshalPKCS8PrivateKey(key)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
 	keyOnlyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
 
 	tests := []struct {
@@ -58,8 +64,14 @@ func TestParsePEMCertificates_NoCertificates(t *testing.T) {
 func TestParsePEMCertificates_mixedBlockTypes(t *testing.T) {
 	// WHY: PEM bundles often contain keys alongside certs; the parser must skip non-CERTIFICATE blocks without error.
 	t.Parallel()
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	keyDER, _ := x509.MarshalPKCS8PrivateKey(key)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
@@ -67,7 +79,10 @@ func TestParsePEMCertificates_mixedBlockTypes(t *testing.T) {
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 	}
-	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	certBytes, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var pemData []byte
 	pemData = append(pemData, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})...)
@@ -120,13 +135,19 @@ func TestCertSKI_vs_Embedded(t *testing.T) {
 	// CertSKIEmbedded must differ. Also verifies CertSKI is wired correctly
 	// to ComputeSKI by comparing their outputs for the same key.
 	t.Parallel()
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	var spki struct {
 		Algorithm asn1.RawValue
 		PublicKey asn1.BitString
 	}
-	pubKeyDER, _ := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	pubKeyDER, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if _, err := asn1.Unmarshal(pubKeyDER, &spki); err != nil {
 		t.Fatal(err)
 	}
@@ -139,8 +160,14 @@ func TestCertSKI_vs_Embedded(t *testing.T) {
 		NotAfter:     time.Now().Add(24 * time.Hour),
 		SubjectKeyId: sha1Hash[:], // SHA-1 embedded SKI
 	}
-	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	cert, _ := x509.ParseCertificate(certBytes)
+	certBytes, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(certBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	computed := CertSKI(cert)
 	embedded := CertSKIEmbedded(cert)
@@ -184,14 +211,21 @@ func TestParsePEMPrivateKey_AllFormats(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name     string
-		genKey   func() (crypto.PrivateKey, []byte) // returns key and PEM
-		wantType string                             // e.g. "*ecdsa.PrivateKey"
+		genKey   func(t *testing.T) (crypto.PrivateKey, []byte) // returns key and PEM
+		wantType string                                         // e.g. "*ecdsa.PrivateKey"
 	}{
 		{
 			name: "SEC1 ECDSA",
-			genKey: func() (crypto.PrivateKey, []byte) {
-				key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-				der, _ := x509.MarshalECPrivateKey(key)
+			genKey: func(t *testing.T) (crypto.PrivateKey, []byte) {
+				t.Helper()
+				key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				der, err := x509.MarshalECPrivateKey(key)
+				if err != nil {
+					t.Fatal(err)
+				}
 				pemBytes := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der})
 				return key, pemBytes
 			},
@@ -199,8 +233,12 @@ func TestParsePEMPrivateKey_AllFormats(t *testing.T) {
 		},
 		{
 			name: "PKCS1 RSA",
-			genKey: func() (crypto.PrivateKey, []byte) {
-				key, _ := rsa.GenerateKey(rand.Reader, 2048)
+			genKey: func(t *testing.T) (crypto.PrivateKey, []byte) {
+				t.Helper()
+				key, err := rsa.GenerateKey(rand.Reader, 2048)
+				if err != nil {
+					t.Fatal(err)
+				}
 				der := x509.MarshalPKCS1PrivateKey(key)
 				pemBytes := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: der})
 				return key, pemBytes
@@ -209,9 +247,16 @@ func TestParsePEMPrivateKey_AllFormats(t *testing.T) {
 		},
 		{
 			name: "PKCS8 Ed25519",
-			genKey: func() (crypto.PrivateKey, []byte) {
-				_, priv, _ := ed25519.GenerateKey(rand.Reader)
-				der, _ := x509.MarshalPKCS8PrivateKey(priv)
+			genKey: func(t *testing.T) (crypto.PrivateKey, []byte) {
+				t.Helper()
+				_, priv, err := ed25519.GenerateKey(rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				der, err := x509.MarshalPKCS8PrivateKey(priv)
+				if err != nil {
+					t.Fatal(err)
+				}
 				pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
 				return priv, pemBytes
 			},
@@ -221,7 +266,7 @@ func TestParsePEMPrivateKey_AllFormats(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			original, pemBytes := tt.genKey()
+			original, pemBytes := tt.genKey(t)
 			parsed, err := ParsePEMPrivateKey(pemBytes)
 			if err != nil {
 				t.Fatalf("ParsePEMPrivateKey failed: %v", err)
@@ -302,7 +347,10 @@ func TestParsePEMPrivateKeyWithPasswords_Encrypted(t *testing.T) {
 	// in the password iteration logic.
 	t.Parallel()
 
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
 	encrypt := func(t *testing.T, password string) []byte {
 		t.Helper()
 		block := &pem.Block{
@@ -431,7 +479,10 @@ func TestGetCertificateType(t *testing.T) {
 	// output file or break chain assembly.
 	t.Parallel()
 
-	caKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	caTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(1),
 		Subject:               pkix.Name{CommonName: "Root CA"},
@@ -441,10 +492,19 @@ func TestGetCertificateType(t *testing.T) {
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign,
 	}
-	caBytes, _ := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
-	caCert, _ := x509.ParseCertificate(caBytes)
+	caBytes, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caCert, err := x509.ParseCertificate(caBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	intKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	intKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	intTemplate := &x509.Certificate{
 		SerialNumber:          big.NewInt(2),
 		Subject:               pkix.Name{CommonName: "Intermediate CA"},
@@ -454,8 +514,14 @@ func TestGetCertificateType(t *testing.T) {
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign,
 	}
-	intBytes, _ := x509.CreateCertificate(rand.Reader, intTemplate, caCert, &intKey.PublicKey, caKey)
-	intCert, _ := x509.ParseCertificate(intBytes)
+	intBytes, err := x509.CreateCertificate(rand.Reader, intTemplate, caCert, &intKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intCert, err := x509.ParseCertificate(intBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	leafTemplate := &x509.Certificate{
 		SerialNumber: big.NewInt(3),
@@ -463,8 +529,14 @@ func TestGetCertificateType(t *testing.T) {
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 	}
-	leafBytes, _ := x509.CreateCertificate(rand.Reader, leafTemplate, leafTemplate, &caKey.PublicKey, caKey)
-	leafCert, _ := x509.ParseCertificate(leafBytes)
+	leafBytes, err := x509.CreateCertificate(rand.Reader, leafTemplate, leafTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafCert, err := x509.ParseCertificate(leafBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []struct {
 		name string
@@ -505,9 +577,18 @@ func TestKeyMatchesCert(t *testing.T) {
 	// mismatch, cross-algorithm, unsupported type, nil key, and nil cert.
 	t.Parallel()
 
-	ecKey1, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	ecKey2, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	ecKey1, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ecKey2, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	makeCert := func(t *testing.T, pub any, signer any) *x509.Certificate {
 		t.Helper()
@@ -517,8 +598,14 @@ func TestKeyMatchesCert(t *testing.T) {
 			NotBefore:    time.Now().Add(-1 * time.Hour),
 			NotAfter:     time.Now().Add(24 * time.Hour),
 		}
-		der, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, signer)
-		cert, _ := x509.ParseCertificate(der)
+		der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, signer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cert, err := x509.ParseCertificate(der)
+		if err != nil {
+			t.Fatal(err)
+		}
 		return cert
 	}
 
@@ -566,17 +653,27 @@ func TestCertExpiresWithin(t *testing.T) {
 	// and zero-duration edge cases.
 	t.Parallel()
 
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	makeCert := func(notAfter time.Duration) *x509.Certificate {
+	makeCert := func(t *testing.T, notAfter time.Duration) *x509.Certificate {
+		t.Helper()
 		tmpl := &x509.Certificate{
 			SerialNumber: big.NewInt(1),
 			Subject:      pkix.Name{CommonName: "expiry-test"},
 			NotBefore:    time.Now().Add(-48 * time.Hour),
 			NotAfter:     time.Now().Add(notAfter),
 		}
-		der, _ := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-		cert, _ := x509.ParseCertificate(der)
+		der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cert, err := x509.ParseCertificate(der)
+		if err != nil {
+			t.Fatal(err)
+		}
 		return cert
 	}
 
@@ -594,7 +691,7 @@ func TestCertExpiresWithin(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			cert := makeCert(tt.notAfter)
+			cert := makeCert(t, tt.notAfter)
 			if got := CertExpiresWithin(cert, tt.window); got != tt.want {
 				t.Errorf("CertExpiresWithin(notAfter=%v, window=%v) = %v, want %v",
 					tt.notAfter, tt.window, got, tt.want)
@@ -687,7 +784,10 @@ func TestParseCertificatesAny(t *testing.T) {
 				t.Helper()
 				_, _, leafPEM := generateTestPKI(t)
 				block, _ := pem.Decode([]byte(leafPEM))
-				cert, _ := x509.ParseCertificate(block.Bytes)
+				cert, err := x509.ParseCertificate(block.Bytes)
+				if err != nil {
+					t.Fatalf("parsing leaf certificate: %v", err)
+				}
 				p7Data, err := EncodePKCS7([]*x509.Certificate{cert})
 				if err != nil {
 					t.Fatalf("encode PKCS#7: %v", err)
@@ -705,7 +805,10 @@ func TestParseCertificatesAny(t *testing.T) {
 				var certs []*x509.Certificate
 				for _, pemStr := range []string{leafPEM, interPEM, caPEM} {
 					block, _ := pem.Decode([]byte(pemStr))
-					cert, _ := x509.ParseCertificate(block.Bytes)
+					cert, err := x509.ParseCertificate(block.Bytes)
+					if err != nil {
+						t.Fatalf("parsing certificate: %v", err)
+					}
 					certs = append(certs, cert)
 				}
 				p7Data, err := EncodePKCS7(certs)
@@ -811,8 +914,14 @@ func TestCrossFormatRoundTrip(t *testing.T) {
 	// Ed25519 via PKCS#8 PEM → JKS exercises the normalizeKey path.
 	t.Parallel()
 
-	_, priv, _ := ed25519.GenerateKey(rand.Reader)
-	der, _ := x509.MarshalPKCS8PrivateKey(priv)
+	_, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der, err := x509.MarshalPKCS8PrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
 	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
 
 	parsed, err := ParsePEMPrivateKey(pemBytes)
@@ -836,7 +945,10 @@ func TestCrossFormatRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create cert: %v", err)
 	}
-	cert, _ := x509.ParseCertificate(certDER)
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatalf("parsing certificate: %v", err)
+	}
 
 	jksData, err := EncodeJKS(parsed, cert, nil, "changeit")
 	if err != nil {
@@ -945,7 +1057,10 @@ func TestCertFingerprints(t *testing.T) {
 	// and the two algorithms produce different output.
 	t.Parallel()
 	_, _, leafPEM := generateTestPKI(t)
-	cert, _ := ParsePEMCertificate([]byte(leafPEM))
+	cert, err := ParsePEMCertificate([]byte(leafPEM))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	sha256Hex := CertFingerprint(cert)
 	sha1Hex := CertFingerprintSHA1(cert)
@@ -995,7 +1110,10 @@ func TestComputeSKILegacy(t *testing.T) {
 	// Confusing them would break cross-matching with legacy certificates.
 	t.Parallel()
 	_, _, leafPEM := generateTestPKI(t)
-	cert, _ := ParsePEMCertificate([]byte(leafPEM))
+	cert, err := ParsePEMCertificate([]byte(leafPEM))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	legacy, err := ComputeSKILegacy(cert.PublicKey)
 	if err != nil {
@@ -1062,7 +1180,10 @@ func TestMarshalPrivateKeyToPEM_RoundTrip(t *testing.T) {
 	// suffices per T-13, and Ed25519 exercises the only certkit-specific path.
 	t.Parallel()
 
-	_, original, _ := ed25519.GenerateKey(rand.Reader)
+	_, original, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	pemStr, err := MarshalPrivateKeyToPEM(original)
 	if err != nil {
 		t.Fatalf("MarshalPrivateKeyToPEM: %v", err)
@@ -1082,7 +1203,10 @@ func TestMarshalPublicKeyToPEM_RoundTrip(t *testing.T) {
 	// encoding are correct. One key type (Ed25519) suffices per T-13.
 	t.Parallel()
 
-	pub, _, _ := ed25519.GenerateKey(rand.Reader)
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	pemStr, err := MarshalPublicKeyToPEM(pub)
 	if err != nil {
 		t.Fatalf("MarshalPublicKeyToPEM: %v", err)
@@ -1142,9 +1266,18 @@ func TestKeyAlgorithmName(t *testing.T) {
 	// wrong names would confuse users and break JSON consumers.
 	t.Parallel()
 
-	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	_, edKey, _ := ed25519.GenerateKey(rand.Reader)
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, edKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []struct {
 		name string
@@ -1172,9 +1305,18 @@ func TestPublicKeyAlgorithmName(t *testing.T) {
 	// JSON; verifies all key types return the correct human-readable name.
 	t.Parallel()
 
-	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	edPub, _, _ := ed25519.GenerateKey(rand.Reader)
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edPub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []struct {
 		name string

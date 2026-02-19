@@ -46,7 +46,10 @@ func generateTestPKIWithKey(t *testing.T) (caPEM, intermediatePEM, leafPEM, leaf
 	}
 	caPEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caBytes}))
 
-	caCert, _ := x509.ParseCertificate(caBytes)
+	caCert, err := x509.ParseCertificate(caBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 	intKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -66,7 +69,10 @@ func generateTestPKIWithKey(t *testing.T) (caPEM, intermediatePEM, leafPEM, leaf
 	}
 	intermediatePEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: intBytes}))
 
-	intCert, _ := x509.ParseCertificate(intBytes)
+	intCert, err := x509.ParseCertificate(intBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -227,7 +233,10 @@ func generateLeafWithSANs(t *testing.T) (*x509.Certificate, *ecdsa.PrivateKey) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	uri, _ := url.Parse("spiffe://example.com/workload")
+	uri, err := url.Parse("spiffe://example.com/workload")
+	if err != nil {
+		t.Fatal(err)
+	}
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
 		Subject: pkix.Name{

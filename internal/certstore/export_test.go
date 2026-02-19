@@ -517,11 +517,35 @@ func TestGenerateCSR_RoundTrip(t *testing.T) {
 		t.Fatalf("CSR JSON is not valid: %v", err)
 	}
 
-	if _, ok := jsonResult["dns_names"]; !ok {
-		t.Error("CSR JSON missing dns_names field")
+	// dns_names content must match the certificate SANs
+	dnsRaw, ok := jsonResult["dns_names"].([]any)
+	if !ok {
+		t.Fatal("CSR JSON dns_names is not an array")
 	}
+	if len(dnsRaw) != len(wantDNS) {
+		t.Fatalf("CSR JSON dns_names count = %d, want %d", len(dnsRaw), len(wantDNS))
+	}
+	for i, v := range dnsRaw {
+		if s, ok := v.(string); !ok || s != wantDNS[i] {
+			t.Errorf("CSR JSON dns_names[%d] = %v, want %q", i, v, wantDNS[i])
+		}
+	}
+
 	if algo, ok := jsonResult["key_algorithm"].(string); !ok || algo != "RSA" {
 		t.Errorf("key_algorithm = %v, want RSA", jsonResult["key_algorithm"])
+	}
+
+	// pem field must contain a parseable CSR
+	pemStr, ok := jsonResult["pem"].(string)
+	if !ok || pemStr == "" {
+		t.Fatal("CSR JSON pem field is missing or empty")
+	}
+	pemBlock, _ := pem.Decode([]byte(pemStr))
+	if pemBlock == nil {
+		t.Fatal("CSR JSON pem field does not contain valid PEM")
+	}
+	if _, err := x509.ParseCertificateRequest(pemBlock.Bytes); err != nil {
+		t.Fatalf("CSR JSON pem field is not a valid CSR: %v", err)
 	}
 }
 
@@ -993,8 +1017,10 @@ func TestExportMatchedBundles_WriterErrorContinues(t *testing.T) {
 		t.Fatalf("expected at least 2 matched pairs, got %d", len(skis))
 	}
 
+	// Use errOnFolder to fail deterministically for "first.example.com",
+	// regardless of map iteration order from MatchedPairs().
 	var written []mockWriteCall
-	writer := &mockBundleWriter{calls: &written, errOnFirst: true}
+	writer := &mockBundleWriter{calls: &written, errOnFolder: "first.example.com"}
 
 	err := ExportMatchedBundles(t.Context(), ExportMatchedBundleInput{
 		Store:  store,
@@ -1010,9 +1036,19 @@ func TestExportMatchedBundles_WriterErrorContinues(t *testing.T) {
 		t.Fatalf("ExportMatchedBundles: %v", err)
 	}
 
-	// One SKI's write failed, the other should still succeed
+	// Writer must have been called for both bundles, proving no short-circuit.
+	if writer.callCount != 2 {
+		t.Fatalf("expected writer to be called 2 times (1 error + 1 success), got %d", writer.callCount)
+	}
+
+	// Exactly one bundle should have been written successfully.
 	if len(written) != 1 {
 		t.Fatalf("expected 1 successful write, got %d", len(written))
+	}
+
+	// The successful write must be the non-failing bundle.
+	if written[0].folder != "second.example.com" {
+		t.Errorf("successful write folder = %q, want %q", written[0].folder, "second.example.com")
 	}
 }
 
@@ -1022,14 +1058,14 @@ type mockWriteCall struct {
 }
 
 type mockBundleWriter struct {
-	calls      *[]mockWriteCall
-	errOnFirst bool // if true, return an error on the first call
-	callCount  int
+	calls       *[]mockWriteCall
+	errOnFolder string // if non-empty, return an error when folder matches
+	callCount   int
 }
 
 func (w *mockBundleWriter) WriteBundleFiles(folder string, files []BundleFile) error {
 	w.callCount++
-	if w.errOnFirst && w.callCount == 1 {
+	if w.errOnFolder != "" && folder == w.errOnFolder {
 		return fmt.Errorf("mock write error for %s", folder)
 	}
 	*w.calls = append(*w.calls, mockWriteCall{folder: folder, files: files})
