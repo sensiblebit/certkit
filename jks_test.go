@@ -79,7 +79,10 @@ func buildJKSPrivateKey(t *testing.T, password string) []byte {
 	if err != nil {
 		t.Fatalf("generate leaf key: %v", err)
 	}
-	caCert, _ := x509.ParseCertificate(caDER)
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatalf("parse CA cert: %v", err)
+	}
 	leafTmpl := &x509.Certificate{
 		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "jks-leaf.example.com"},
@@ -222,7 +225,10 @@ func TestDecodeJKS_DifferentKeyPassword(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create CA: %v", err)
 	}
-	caCert, _ := x509.ParseCertificate(caDER)
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatalf("parse CA cert: %v", err)
+	}
 
 	leafKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -329,7 +335,10 @@ func TestDecodeJKS_CorruptedKeyData(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	caCert, _ := x509.ParseCertificate(caDER)
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatalf("parse CA cert: %v", err)
+	}
 	leafTmpl := &x509.Certificate{
 		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "corrupt-key-leaf.example.com"},
@@ -439,7 +448,10 @@ func TestDecodeJKS_CorruptedCertDER_PrivateKeyChain(t *testing.T) {
 	t.Parallel()
 
 	password := "changeit"
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
 	pkcs8Key, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
 		t.Fatal(err)
@@ -677,7 +689,10 @@ func TestEncodeJKS_RoundTripWithCAChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	caCert, _ := x509.ParseCertificate(caDER)
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	leafKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -694,7 +709,10 @@ func TestEncodeJKS_RoundTripWithCAChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	leafCert, _ := x509.ParseCertificate(leafDER)
+	leafCert, err := x509.ParseCertificate(leafDER)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	password := "changeit"
 	jksData, err := EncodeJKS(leafKey, leafCert, []*x509.Certificate{caCert}, password)

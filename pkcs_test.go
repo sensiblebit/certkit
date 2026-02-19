@@ -18,17 +18,29 @@ func TestEncodeContainers_InvalidInput(t *testing.T) {
 	// inputs consistently. Consolidated per T-12.
 	t.Parallel()
 
-	validKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	validKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	template := &x509.Certificate{
 		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "test"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 	}
-	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &validKey.PublicKey, validKey)
-	cert, _ := x509.ParseCertificate(certBytes)
+	certBytes, err := x509.CreateCertificate(rand.Reader, template, template, &validKey.PublicKey, validKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(certBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []struct {
 		name    string
@@ -81,7 +93,10 @@ func TestEncodePKCS12_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	cert, _ := x509.ParseCertificate(certBytes)
+	cert, err := x509.ParseCertificate(certBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	pfxData, err := EncodePKCS12(key, cert, nil, "test-pass")
 	if err != nil {
@@ -106,17 +121,29 @@ func TestEncodePKCS12_RoundTrip(t *testing.T) {
 func TestDecodePKCS12_wrongPassword(t *testing.T) {
 	// WHY: Wrong passwords must produce an error, not silently return garbage or a zero-value key; this guards against data corruption on import.
 	t.Parallel()
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	template := &x509.Certificate{
 		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "wrong-pass-test"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 	}
-	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	cert, _ := x509.ParseCertificate(certBytes)
+	certBytes, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(certBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	pfxData, _ := EncodePKCS12(key, cert, nil, "correct")
+	pfxData, err := EncodePKCS12(key, cert, nil, "correct")
+	if err != nil {
+		t.Fatal(err)
+	}
 	gotKey, gotCert, gotCAs, err := DecodePKCS12(pfxData, "wrong")
 	if err == nil {
 		t.Fatal("expected error for wrong password")
@@ -149,9 +176,18 @@ func TestDecodePKCS7_roundTrip(t *testing.T) {
 	// guarantee certificate ordering.
 	t.Parallel()
 	caPEM, intPEM, leafPEM := generateTestPKI(t)
-	ca, _ := ParsePEMCertificate([]byte(caPEM))
-	intermediate, _ := ParsePEMCertificate([]byte(intPEM))
-	leaf, _ := ParsePEMCertificate([]byte(leafPEM))
+	ca, err := ParsePEMCertificate([]byte(caPEM))
+	if err != nil {
+		t.Fatal(err)
+	}
+	intermediate, err := ParsePEMCertificate([]byte(intPEM))
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := ParsePEMCertificate([]byte(leafPEM))
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	original := []*x509.Certificate{leaf, intermediate, ca}
 	derData, err := EncodePKCS7(original)

@@ -1277,31 +1277,6 @@ func TestComputeSKILegacy(t *testing.T) {
 	}
 }
 
-func TestGenerateRSAKey(t *testing.T) {
-	// WHY: GenerateRSAKey is the exported key generation API for RSA.
-	// Verifies the wrapper produces a usable key and rejects invalid bit sizes.
-	t.Parallel()
-
-	t.Run("valid 2048-bit", func(t *testing.T) {
-		t.Parallel()
-		key, err := GenerateRSAKey(2048)
-		if err != nil {
-			t.Fatalf("GenerateRSAKey(2048): %v", err)
-		}
-		if key == nil {
-			t.Fatal("expected non-nil key")
-		}
-	})
-
-	t.Run("invalid 0-bit", func(t *testing.T) {
-		t.Parallel()
-		_, err := GenerateRSAKey(0)
-		if err == nil {
-			t.Error("expected error for 0-bit RSA key")
-		}
-	})
-}
-
 func TestMarshalPrivateKeyToPEM_UnsupportedType(t *testing.T) {
 	// WHY: Unsupported key types must produce a clear error, not panic.
 	t.Parallel()

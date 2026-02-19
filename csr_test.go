@@ -125,6 +125,15 @@ func TestClassifyHosts(t *testing.T) {
 			[]string{"example.com/path"},
 			[]string{"example.com/path"}, nil, nil, nil,
 		},
+		// Email edge cases: email detection previously used strings.Contains(h, "@")
+		// which matched invalid inputs like "user@", "@example.com", and display-name
+		// forms. Using mail.ParseAddress with a bare-address guard rejects these correctly.
+		{"trailing at sign → DNS", []string{"user@"}, []string{"user@"}, nil, nil, nil},
+		{"leading at sign → DNS", []string{"@example.com"}, []string{"@example.com"}, nil, nil, nil},
+		{"display name form → DNS", []string{"\"John\" <john@example.com>"}, []string{"\"John\" <john@example.com>"}, nil, nil, nil},
+		{"angle bracket form → DNS", []string{"<john@example.com>"}, []string{"<john@example.com>"}, nil, nil, nil},
+		{"double at → DNS", []string{"foo@bar@baz.com"}, []string{"foo@bar@baz.com"}, nil, nil, nil},
+		{"at only → DNS", []string{"@"}, []string{"@"}, nil, nil, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -168,49 +177,6 @@ func TestClassifyHosts(t *testing.T) {
 			for i, got := range emails {
 				if i < len(tt.wantEmails) && got != tt.wantEmails[i] {
 					t.Errorf("email[%d]=%q, want %q", i, got, tt.wantEmails[i])
-				}
-			}
-		})
-	}
-}
-
-func TestClassifyHosts_EmailEdgeCases(t *testing.T) {
-	// WHY: email detection previously used strings.Contains(h, "@") which matched
-	// invalid inputs like "user@", "@example.com", and display-name forms.
-	// Using mail.ParseAddress with a bare-address guard rejects these correctly.
-	t.Parallel()
-	tests := []struct {
-		name     string
-		host     string
-		wantDNS  bool
-		wantMail bool
-	}{
-		{"valid bare email", "admin@example.com", false, true},
-		{"trailing at sign", "user@", true, false},
-		{"leading at sign", "@example.com", true, false},
-		{"display name form", "\"John\" <john@example.com>", true, false},
-		{"angle bracket form", "<john@example.com>", true, false},
-		{"double at", "foo@bar@baz.com", true, false},
-		{"at only", "@", true, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			dns, _, _, emails := ClassifyHosts([]string{tt.host})
-			if tt.wantMail {
-				if len(emails) != 1 {
-					t.Errorf("expected 1 email, got %d (dns=%v)", len(emails), dns)
-				}
-				if len(dns) != 0 {
-					t.Errorf("expected 0 DNS, got %d: %v", len(dns), dns)
-				}
-			}
-			if tt.wantDNS {
-				if len(dns) != 1 {
-					t.Errorf("expected 1 DNS, got %d (emails=%v)", len(dns), emails)
-				}
-				if len(emails) != 0 {
-					t.Errorf("expected 0 emails, got %d: %v", len(emails), emails)
 				}
 			}
 		})
@@ -272,7 +238,10 @@ func TestGenerateCSRFromTemplate(t *testing.T) {
 	// and empty host list. Each case exercises a distinct code path in host
 	// classification and CN auto-fill logic.
 	t.Parallel()
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	tests := []struct {
 		name        string
@@ -413,7 +382,10 @@ func TestGenerateCSRFromCSR_CopiesFieldsAndRotatesKey(t *testing.T) {
 	// and SAN fields while using the new key; dropped fields would change the
 	// cert's identity on renewal, and reusing the source key defeats key rotation.
 	t.Parallel()
-	srcKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	srcKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	leaf, _ := generateLeafWithSANs(t)
 	srcCSRPEM, _, err := GenerateCSR(leaf, srcKey)
 	if err != nil {
@@ -425,7 +397,10 @@ func TestGenerateCSRFromCSR_CopiesFieldsAndRotatesKey(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	newKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	newKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	newCSRPEM, err := GenerateCSRFromCSR(srcCSR, newKey)
 	if err != nil {
 		t.Fatal(err)
