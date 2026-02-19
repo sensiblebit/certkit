@@ -622,7 +622,12 @@ func TestMemStore_BundleNames(t *testing.T) {
 	ca := newRSACA(t)
 	leafWithKey := newRSALeaf(t, ca, "bn.example.com", []string{"bn.example.com"})
 	leafNoKey := newECDSALeaf(t, ca, "nokey.example.com", []string{"nokey.example.com"})
-	leafNoName := newRSALeaf(t, ca, "noname.example.com", []string{"noname.example.com"})
+	// Use newEd25519Leaf (serial 400) to avoid certID collision with
+	// leafWithKey (newRSALeaf, serial 100, same CA). Both share the same
+	// CA's SubjectKeyId as AKI; using the same serial would produce an
+	// identical certID, causing HandleCertificate to silently drop the
+	// duplicate and voiding this test scenario.
+	leafNoName := newEd25519Leaf(t, ca, "noname.example.com", []string{"noname.example.com"})
 
 	// Cert+key with bundle name
 	if err := store.HandleCertificate(leafWithKey.cert, "test.pem"); err != nil {
