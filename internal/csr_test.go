@@ -258,36 +258,48 @@ func TestGenerateCSRFiles_Stdout(t *testing.T) {
 	}
 }
 
-func TestGenerateCSRFiles_NoInputError(t *testing.T) {
-	// WHY: Calling GenerateCSRFiles with no input source must produce a clear "exactly one" error; prevents silent empty CSR generation.
+func TestGenerateCSRFiles_InputSourceValidation(t *testing.T) {
+	// WHY: GenerateCSRFiles requires exactly one input source (template, cert,
+	// or CSR). Both zero and multiple sources must produce a clear error.
+	// Consolidated per T-12: same assertion pattern.
 	t.Parallel()
-	_, err := GenerateCSRFiles(CSROptions{
-		Algorithm: "ecdsa",
-		Curve:     "P-256",
-		OutPath:   t.TempDir(),
-	})
-	if err == nil {
-		t.Error("expected error when no input source specified")
-	}
-	if !strings.Contains(err.Error(), "exactly one") {
-		t.Errorf("error should mention exactly one source, got: %v", err)
-	}
-}
 
-func TestGenerateCSRFiles_MultipleInputError(t *testing.T) {
-	// WHY: Specifying multiple input sources (template + cert) is ambiguous; must produce an error to prevent unexpected behavior.
-	t.Parallel()
-	_, err := GenerateCSRFiles(CSROptions{
-		TemplatePath: "a.json",
-		CertPath:     "b.pem",
-		Algorithm:    "ecdsa",
-		Curve:        "P-256",
-		OutPath:      t.TempDir(),
-	})
-	if err == nil {
-		t.Error("expected error when multiple input sources specified")
+	tests := []struct {
+		name    string
+		opts    CSROptions
+		wantSub string
+	}{
+		{
+			name: "no input source",
+			opts: CSROptions{
+				Algorithm: "ecdsa",
+				Curve:     "P-256",
+			},
+			wantSub: "exactly one",
+		},
+		{
+			name: "multiple input sources",
+			opts: CSROptions{
+				TemplatePath: "a.json",
+				CertPath:     "b.pem",
+				Algorithm:    "ecdsa",
+				Curve:        "P-256",
+			},
+			wantSub: "exactly one",
+		},
 	}
-	if !strings.Contains(err.Error(), "exactly one of") {
-		t.Errorf("unexpected error: %v", err)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			tt.opts.OutPath = t.TempDir()
+			_, err := GenerateCSRFiles(tt.opts)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tt.wantSub) {
+				t.Errorf("error should contain %q, got: %v", tt.wantSub, err)
+			}
+		})
 	}
 }

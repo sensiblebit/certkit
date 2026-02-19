@@ -85,11 +85,10 @@ func TestProcessData_PEMPrivateKey(t *testing.T) {
 	}
 }
 
-func TestProcessData_PEMEncryptedKey_CorrectPassword(t *testing.T) {
-	// WHY: Encrypted PEM keys with the correct password must be decrypted and
-	// stored with key material matching the original. One key type (RSA/PKCS#1)
-	// suffices — the format-specific parsing paths are tested in
-	// certkit_test.go:TestParsePEMPrivateKeyWithPasswords_Encrypted (T-13).
+func TestProcessData_PEMEncryptedKey_Passwords(t *testing.T) {
+	// WHY: Encrypted PEM keys must be decrypted with the correct password and
+	// silently skipped with the wrong password. Consolidated per T-12: same
+	// setup, different password scenarios.
 	t.Parallel()
 
 	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -103,67 +102,51 @@ func TestProcessData_PEMEncryptedKey_CorrectPassword(t *testing.T) {
 	}
 	encPEM := pem.EncodeToMemory(encBlock)
 
-	store := NewMemStore()
-	if err := ProcessData(ProcessInput{
-		Data:      encPEM,
-		Path:      "encrypted.pem",
-		Passwords: []string{"testpass"},
-		Handler:   store,
-	}); err != nil {
-		t.Fatalf("ProcessData: %v", err)
+	tests := []struct {
+		name     string
+		password string
+		wantKeys int
+	}{
+		{"correct_password", "testpass", 1},
+		{"wrong_password", "wrongpass", 0},
 	}
 
-	if len(store.AllKeys()) != 1 {
-		t.Fatalf("expected 1 key, got %d", len(store.AllKeys()))
-	}
-	for _, rec := range store.AllKeys() {
-		if rec.KeyType != "RSA" {
-			t.Errorf("KeyType = %q, want RSA", rec.KeyType)
-		}
-		if !keysEqual(t, rsaKey, rec.Key) {
-			t.Error("stored key does not Equal original after decryption")
-		}
-		// Verify the stored PEM is normalized to unencrypted PKCS#8
-		block, _ := pem.Decode(rec.PEM)
-		if block == nil {
-			t.Fatal("stored PEM is not decodeable")
-		}
-		if block.Type != "PRIVATE KEY" {
-			t.Errorf("stored PEM type = %q, want %q (normalized PKCS#8)", block.Type, "PRIVATE KEY")
-		}
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			store := NewMemStore()
+			if err := ProcessData(ProcessInput{
+				Data:      encPEM,
+				Path:      "encrypted.pem",
+				Passwords: []string{tt.password},
+				Handler:   store,
+			}); err != nil {
+				t.Fatalf("ProcessData: %v", err)
+			}
 
-func TestProcessData_PEMEncryptedKey_WrongPassword(t *testing.T) {
-	// WHY: Encrypted PEM keys with the wrong password must be silently skipped.
-	t.Parallel()
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-	block := &pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(key),
-	}
-	//nolint:staticcheck // testing legacy encrypted PEM
-	encBlock, err := x509.EncryptPEMBlock(rand.Reader, block.Type, block.Bytes, []byte("secret"), x509.PEMCipherAES256)
-	if err != nil {
-		t.Fatalf("encrypt PEM: %v", err)
-	}
-	encPEM := pem.EncodeToMemory(encBlock)
+			if len(store.AllKeys()) != tt.wantKeys {
+				t.Fatalf("expected %d keys, got %d", tt.wantKeys, len(store.AllKeys()))
+			}
 
-	store := NewMemStore()
-	if err := ProcessData(ProcessInput{
-		Data:      encPEM,
-		Path:      "encrypted.pem",
-		Passwords: []string{"wrongpass"},
-		Handler:   store,
-	}); err != nil {
-		t.Fatalf("ProcessData should not error: %v", err)
-	}
-
-	if len(store.AllKeys()) != 0 {
-		t.Errorf("expected 0 keys with wrong password, got %d", len(store.AllKeys()))
+			if tt.wantKeys == 1 {
+				for _, rec := range store.AllKeys() {
+					if rec.KeyType != "RSA" {
+						t.Errorf("KeyType = %q, want RSA", rec.KeyType)
+					}
+					if !keysEqual(t, rsaKey, rec.Key) {
+						t.Error("stored key does not Equal original after decryption")
+					}
+					// Verify the stored PEM is normalized to unencrypted PKCS#8
+					block, _ := pem.Decode(rec.PEM)
+					if block == nil {
+						t.Fatal("stored PEM is not decodeable")
+					}
+					if block.Type != "PRIVATE KEY" {
+						t.Errorf("stored PEM type = %q, want %q (normalized PKCS#8)", block.Type, "PRIVATE KEY")
+					}
+				}
+			}
+		})
 	}
 }
 
@@ -910,77 +893,12 @@ func TestProcessData_DER_KeyFormats(t *testing.T) {
 	}
 }
 
-func TestProcessData_OpenSSH_EncryptedPasswords(t *testing.T) {
-	// WHY: Encrypted OpenSSH keys must be decryptable with the correct password
-	// (producing normalized PKCS#8 storage) and silently skipped with the wrong
-	// password. Consolidated per T-12: same key setup, different password scenarios.
-	t.Parallel()
-
-	_, priv, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sshBlock, err := ssh.MarshalPrivateKeyWithPassphrase(priv, "", []byte("testpass"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	sshPEM := pem.EncodeToMemory(sshBlock)
-
-	tests := []struct {
-		name     string
-		password string
-		wantKeys int
-	}{
-		{"correct_password", "testpass", 1},
-		{"wrong_password", "wrongpass", 0},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			store := NewMemStore()
-			if err := ProcessData(ProcessInput{
-				Data:      sshPEM,
-				Path:      "encrypted.openssh",
-				Passwords: []string{tt.password},
-				Handler:   store,
-			}); err != nil {
-				t.Fatalf("ProcessData: %v", err)
-			}
-
-			if len(store.AllKeys()) != tt.wantKeys {
-				t.Fatalf("expected %d keys, got %d", tt.wantKeys, len(store.AllKeys()))
-			}
-
-			if tt.wantKeys == 1 {
-				for _, rec := range store.AllKeys() {
-					if rec.KeyType != "Ed25519" {
-						t.Errorf("KeyType = %q, want Ed25519", rec.KeyType)
-					}
-					edKey, ok := rec.Key.(ed25519.PrivateKey)
-					if !ok {
-						t.Fatalf("stored key type = %T, want ed25519.PrivateKey (value)", rec.Key)
-					}
-					if !priv.Equal(edKey) {
-						t.Error("stored key does not Equal original encrypted OpenSSH Ed25519 key")
-					}
-					block, _ := pem.Decode(rec.PEM)
-					if block == nil {
-						t.Fatal("stored PEM is not parseable")
-					}
-					if block.Type != "PRIVATE KEY" {
-						t.Errorf("stored PEM type = %q, want PRIVATE KEY (PKCS#8)", block.Type)
-					}
-				}
-			}
-		})
-	}
-}
-
 func TestProcessData_PEMMixedValidAndMalformedKeys(t *testing.T) {
-	// WHY: A PEM file containing both valid and malformed private keys must
-	// ingest the valid keys and skip the malformed ones without error. This
-	// tests the resilience of processPEMPrivateKeys to partial failures.
+	// WHY: A PEM file containing valid, malformed, and encrypted-but-undecryptable
+	// private keys must ingest the valid keys and skip the rest without error.
+	// Tests resilience of processPEMPrivateKeys to partial failures including
+	// garbage PKCS#8 blocks and ENCRYPTED PRIVATE KEY blocks (PKCS#8 v2, which
+	// certkit cannot decrypt). Consolidated per T-14.
 	t.Parallel()
 
 	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -1000,6 +918,10 @@ func TestProcessData_PEMMixedValidAndMalformedKeys(t *testing.T) {
 		Type:  "PRIVATE KEY",
 		Bytes: []byte("garbage-not-pkcs8"),
 	})
+	encryptedPKCS8 := pem.EncodeToMemory(&pem.Block{
+		Type:  "ENCRYPTED PRIVATE KEY",
+		Bytes: []byte("opaque-encrypted-pkcs8-data"),
+	})
 	ecDER, err := x509.MarshalECPrivateKey(ecKey)
 	if err != nil {
 		t.Fatal(err)
@@ -1009,9 +931,8 @@ func TestProcessData_PEMMixedValidAndMalformedKeys(t *testing.T) {
 		Bytes: ecDER,
 	})
 
-	// Interleave: valid RSA, malformed, valid ECDSA
-	combined := append(validRSAPEM, malformedPEM...)
-	combined = append(combined, validECPEM...)
+	// Interleave: valid RSA, malformed PKCS#8, encrypted PKCS#8, valid ECDSA
+	combined := slices.Concat(validRSAPEM, malformedPEM, encryptedPKCS8, validECPEM)
 
 	store := NewMemStore()
 	if err := ProcessData(ProcessInput{
@@ -1023,7 +944,7 @@ func TestProcessData_PEMMixedValidAndMalformedKeys(t *testing.T) {
 	}
 
 	if len(store.AllKeys()) != 2 {
-		t.Fatalf("expected 2 valid keys ingested, got %d", len(store.AllKeys()))
+		t.Fatalf("expected 2 valid keys ingested (malformed + encrypted skipped), got %d", len(store.AllKeys()))
 	}
 
 	var gotRSA, gotECDSA bool
@@ -1140,47 +1061,6 @@ func TestProcessData_PEMMixedEncrypted_PartialPasswordMatch(t *testing.T) {
 	}
 	if !gotECDSA {
 		t.Error("expected ecKey (encrypted with pass3) to be ingested")
-	}
-}
-
-func TestProcessData_PEMEncryptedPKCS8Block_SilentlySkipped(t *testing.T) {
-	// WHY: Modern tools (openssl genpkey -aes256) produce "ENCRYPTED PRIVATE KEY"
-	// PEM blocks (PKCS#8 v2 encrypted). processPEMPrivateKeys matches these via
-	// strings.Contains(block.Type, "PRIVATE KEY") but ParsePEMPrivateKeyWithPasswords
-	// cannot decrypt them. The block must be silently skipped without preventing
-	// other valid keys in the same file from being extracted.
-	t.Parallel()
-
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "mixed-enc.example.com", []string{"mixed-enc.example.com"})
-
-	// Simulate: ENCRYPTED PRIVATE KEY block (unreadable) followed by valid key
-	encryptedBlock := pem.EncodeToMemory(&pem.Block{
-		Type:  "ENCRYPTED PRIVATE KEY",
-		Bytes: []byte("opaque-encrypted-pkcs8-data"),
-	})
-	combined := slices.Concat(encryptedBlock, leaf.keyPEM)
-
-	store := NewMemStore()
-	if err := ProcessData(ProcessInput{
-		Data:    combined,
-		Path:    "mixed-encrypted.pem",
-		Handler: store,
-	}); err != nil {
-		t.Fatalf("ProcessData: %v", err)
-	}
-
-	keys := store.AllKeys()
-	if len(keys) != 1 {
-		t.Fatalf("expected 1 key (valid RSA, encrypted block skipped), got %d", len(keys))
-	}
-	for _, rec := range keys {
-		if rec.KeyType != "RSA" {
-			t.Errorf("KeyType = %q, want RSA", rec.KeyType)
-		}
-		if !keysEqual(t, leaf.key, rec.Key) {
-			t.Error("extracted RSA key does not Equal original")
-		}
 	}
 }
 
