@@ -5,7 +5,7 @@
     "test:watch": "vitest"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260217.0",
+    "@cloudflare/workers-types": "^4.20260218.0",
     "jsdom": "^26.0.0",
     "vitest": "^3.0.0"
   }
