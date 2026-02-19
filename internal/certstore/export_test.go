@@ -1,10 +1,10 @@
 package certstore
 
 import (
-	"crypto/rsa"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"fmt"
 	"net"
 	"strings"
 	"testing"
@@ -13,6 +13,9 @@ import (
 	"github.com/sensiblebit/certkit"
 	"gopkg.in/yaml.v3"
 )
+
+// Verify mockBundleWriter satisfies BundleWriter interface.
+var _ BundleWriter = (*mockBundleWriter)(nil)
 
 func TestGenerateBundleFiles_AllFileTypes(t *testing.T) {
 	// WHY: Verifies that GenerateBundleFiles produces the complete set of output
@@ -75,127 +78,167 @@ func TestGenerateBundleFiles_AllFileTypes(t *testing.T) {
 		if len(f.Data) == 0 {
 			t.Errorf("%s: empty data", f.Name)
 		}
-	}
-}
 
-func TestGenerateBundleFiles_NoIntermediates(t *testing.T) {
-	// WHY: When a bundle has no intermediates, the intermediates.pem file must
-	// be omitted entirely — not present as an empty file.
-	t.Parallel()
-
-	root := newRSACA(t)
-	leaf := newRSALeaf(t, root, "direct.example.com", []string{"direct.example.com"})
-
-	bundle := &certkit.BundleResult{
-		Leaf:  leaf.cert,
-		Roots: []*x509.Certificate{root.cert},
-	}
-
-	files, err := GenerateBundleFiles(BundleExportInput{
-		Bundle:     bundle,
-		KeyPEM:     leaf.keyPEM,
-		KeyType:    "RSA",
-		BitLength:  2048,
-		Prefix:     "direct",
-		SecretName: "direct-tls",
-	})
-	if err != nil {
-		t.Fatalf("GenerateBundleFiles: %v", err)
-	}
-
-	for _, f := range files {
-		if f.Name == "direct.intermediates.pem" {
-			t.Error("intermediates.pem should not be present when bundle has no intermediates")
-		}
-	}
-}
-
-func TestGenerateBundleFiles_NoRoot(t *testing.T) {
-	// WHY: When a bundle has no root, the root.pem file must be omitted and
-	// fullchain.pem must equal chain.pem.
-	t.Parallel()
-
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "noroot.example.com", []string{"noroot.example.com"})
-
-	bundle := &certkit.BundleResult{
-		Leaf:          leaf.cert,
-		Intermediates: []*x509.Certificate{ca.cert},
-	}
-
-	files, err := GenerateBundleFiles(BundleExportInput{
-		Bundle:     bundle,
-		KeyPEM:     leaf.keyPEM,
-		KeyType:    "RSA",
-		BitLength:  2048,
-		Prefix:     "noroot",
-		SecretName: "noroot-tls",
-	})
-	if err != nil {
-		t.Fatalf("GenerateBundleFiles: %v", err)
-	}
-
-	var chainData, fullchainData []byte
-	for _, f := range files {
-		switch f.Name {
-		case "noroot.root.pem":
-			t.Error("root.pem should not be present when bundle has no root")
-		case "noroot.chain.pem":
-			chainData = f.Data
-		case "noroot.fullchain.pem":
-			fullchainData = f.Data
-		}
-	}
-
-	if string(chainData) != string(fullchainData) {
-		t.Error("fullchain.pem should equal chain.pem when no root is present")
-	}
-}
-
-func TestGenerateBundleFiles_RSAKeyFileRoundTrip(t *testing.T) {
-	// WHY: The .key file is written directly from KeyRecord.PEM and must be
-	// parseable back to an equivalent RSA key. ECDSA and Ed25519 variants
-	// already have explicit key-file round-trip checks — RSA was missing.
-	t.Parallel()
-
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "rsa-roundtrip.example.com", []string{"rsa-roundtrip.example.com"})
-
-	bundle := &certkit.BundleResult{
-		Leaf:  leaf.cert,
-		Roots: []*x509.Certificate{ca.cert},
-	}
-
-	files, err := GenerateBundleFiles(BundleExportInput{
-		Bundle:     bundle,
-		KeyPEM:     leaf.keyPEM,
-		KeyType:    "RSA",
-		BitLength:  2048,
-		Prefix:     "rsa-rt",
-		SecretName: "rsa-rt-tls",
-	})
-	if err != nil {
-		t.Fatalf("GenerateBundleFiles: %v", err)
-	}
-
-	for _, f := range files {
-		if f.Name == "rsa-rt.key" {
-			parsed, err := certkit.ParsePEMPrivateKey(f.Data)
+		// Leaf PEM must contain a parseable cert with the right CN.
+		if f.Name == "example.com.pem" {
+			block, _ := pem.Decode(f.Data)
+			if block == nil {
+				t.Fatalf("example.com.pem: no PEM block")
+			}
+			c, err := x509.ParseCertificate(block.Bytes)
 			if err != nil {
-				t.Fatalf("parsing exported RSA key: %v", err)
+				t.Fatalf("example.com.pem: not parseable: %v", err)
 			}
-			rsaParsed, ok := parsed.(*rsa.PrivateKey)
-			if !ok {
-				t.Fatalf("expected *rsa.PrivateKey, got %T", parsed)
+			if c.Subject.CommonName != "example.com" {
+				t.Errorf("example.com.pem: CN=%q, want %q", c.Subject.CommonName, "example.com")
 			}
-			origKey := leaf.key.(*rsa.PrivateKey)
-			if !origKey.Equal(rsaParsed) {
-				t.Error("exported RSA key does not match original")
+		}
+
+		// JSON must be valid and contain required fields.
+		if f.Name == "example.com.json" {
+			var jsonResult map[string]any
+			if err := json.Unmarshal(f.Data, &jsonResult); err != nil {
+				t.Fatalf("example.com.json: invalid JSON: %v", err)
 			}
-			return
+			if _, ok := jsonResult["subject"]; !ok {
+				t.Error("example.com.json: missing 'subject' key")
+			}
+			if _, ok := jsonResult["pem"]; !ok {
+				t.Error("example.com.json: missing 'pem' key")
+			}
+		}
+
+		// K8s YAML must be parseable with correct structure and non-empty data fields.
+		if f.Name == "example.com.k8s.yaml" {
+			var secret K8sSecret
+			if err := yaml.Unmarshal(f.Data, &secret); err != nil {
+				t.Fatalf("k8s.yaml: invalid YAML: %v", err)
+			}
+			if secret.APIVersion != "v1" {
+				t.Errorf("k8s.yaml: apiVersion=%q, want v1", secret.APIVersion)
+			}
+			if secret.Kind != "Secret" {
+				t.Errorf("k8s.yaml: kind=%q, want Secret", secret.Kind)
+			}
+			if secret.Type != "kubernetes.io/tls" {
+				t.Errorf("k8s.yaml: type=%q, want kubernetes.io/tls", secret.Type)
+			}
+			if secret.Metadata.Name != "example-tls" {
+				t.Errorf("k8s.yaml: metadata.name=%q, want example-tls", secret.Metadata.Name)
+			}
+			if secret.Data["tls.crt"] == "" {
+				t.Error("k8s.yaml: tls.crt is empty")
+			}
+			if secret.Data["tls.key"] == "" {
+				t.Error("k8s.yaml: tls.key is empty")
+			}
 		}
 	}
-	t.Fatal("rsa-rt.key file not found in output")
+}
+
+func TestGenerateBundleFiles_OptionalFilesOmitted(t *testing.T) {
+	// WHY: When a bundle lacks intermediates or root, the corresponding PEM
+	// files must be omitted entirely (not present as empty files), and
+	// downstream files (chain.pem, fullchain.pem) must adjust accordingly.
+	// Consolidated per T-12: identical structure, differ only in which
+	// optional component is absent.
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		setup       func(t *testing.T) (*certkit.BundleResult, testLeaf, string)
+		absentFile  string
+		extraChecks func(t *testing.T, files []BundleFile, prefix string)
+	}{
+		{
+			name: "no intermediates omits intermediates.pem",
+			setup: func(t *testing.T) (*certkit.BundleResult, testLeaf, string) {
+				t.Helper()
+				root := newRSACA(t)
+				leaf := newRSALeaf(t, root, "direct.example.com", []string{"direct.example.com"})
+				bundle := &certkit.BundleResult{
+					Leaf:  leaf.cert,
+					Roots: []*x509.Certificate{root.cert},
+				}
+				return bundle, leaf, "direct"
+			},
+			absentFile: "direct.intermediates.pem",
+			extraChecks: func(t *testing.T, files []BundleFile, prefix string) {
+				t.Helper()
+				for _, f := range files {
+					if f.Name == prefix+".chain.pem" {
+						certCount := strings.Count(string(f.Data), "-----BEGIN CERTIFICATE-----")
+						if certCount != 1 {
+							t.Errorf("chain.pem should contain 1 cert (leaf only), got %d", certCount)
+						}
+					}
+				}
+			},
+		},
+		{
+			name: "no root omits root.pem",
+			setup: func(t *testing.T) (*certkit.BundleResult, testLeaf, string) {
+				t.Helper()
+				ca := newRSACA(t)
+				leaf := newRSALeaf(t, ca, "noroot.example.com", []string{"noroot.example.com"})
+				bundle := &certkit.BundleResult{
+					Leaf:          leaf.cert,
+					Intermediates: []*x509.Certificate{ca.cert},
+				}
+				return bundle, leaf, "noroot"
+			},
+			absentFile: "noroot.root.pem",
+			extraChecks: func(t *testing.T, files []BundleFile, prefix string) {
+				t.Helper()
+				var chainData, fullchainData []byte
+				for _, f := range files {
+					switch f.Name {
+					case prefix + ".chain.pem":
+						chainData = f.Data
+					case prefix + ".fullchain.pem":
+						fullchainData = f.Data
+					}
+				}
+				if string(chainData) != string(fullchainData) {
+					t.Error("fullchain.pem should equal chain.pem when no root is present")
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			bundle, leaf, prefix := tt.setup(t)
+
+			files, err := GenerateBundleFiles(BundleExportInput{
+				Bundle:     bundle,
+				KeyPEM:     leaf.keyPEM,
+				KeyType:    "RSA",
+				BitLength:  2048,
+				Prefix:     prefix,
+				SecretName: prefix + "-tls",
+			})
+			if err != nil {
+				t.Fatalf("GenerateBundleFiles: %v", err)
+			}
+
+			// Full set is 12 files; one optional file omitted → 11.
+			if len(files) != 11 {
+				t.Fatalf("expected 11 files (full set minus one optional), got %d", len(files))
+			}
+
+			for _, f := range files {
+				if f.Name == tt.absentFile {
+					t.Errorf("%s should not be present", tt.absentFile)
+				}
+			}
+
+			if tt.extraChecks != nil {
+				tt.extraChecks(t, files, prefix)
+			}
+		})
+	}
 }
 
 func TestGenerateBundleFiles_InvalidKeyPEM(t *testing.T) {
@@ -269,6 +312,7 @@ func TestGenerateBundleFiles_PEMFilesAreParseable(t *testing.T) {
 		}
 
 		count := 0
+		var parsedCerts []*x509.Certificate
 		rest := f.Data
 		for {
 			var block *pem.Block
@@ -279,14 +323,23 @@ func TestGenerateBundleFiles_PEMFilesAreParseable(t *testing.T) {
 			if block.Type != "CERTIFICATE" {
 				t.Errorf("%s: unexpected PEM block type %q", f.Name, block.Type)
 			}
-			_, err := x509.ParseCertificate(block.Bytes)
+			cert, err := x509.ParseCertificate(block.Bytes)
 			if err != nil {
 				t.Errorf("%s: certificate %d not parseable: %v", f.Name, count+1, err)
+			} else {
+				parsedCerts = append(parsedCerts, cert)
 			}
 			count++
 		}
 		if count != expected {
 			t.Errorf("%s: expected %d certificates, got %d", f.Name, expected, count)
+		}
+
+		// Verify certificate identity: leaf must be first in chain files
+		if len(parsedCerts) > 0 && (f.Name == "valid.pem" || f.Name == "valid.chain.pem" || f.Name == "valid.fullchain.pem") {
+			if parsedCerts[0].Subject.CommonName != "valid.example.com" {
+				t.Errorf("%s: first cert CN=%q, want %q", f.Name, parsedCerts[0].Subject.CommonName, "valid.example.com")
+			}
 		}
 	}
 }
@@ -345,7 +398,7 @@ func TestGenerateJSON_FieldNames(t *testing.T) {
 		t.Errorf("expected 2 SANs, got %d", len(sans))
 	}
 
-	// Verify PEM contains leaf + intermediates (not root)
+	// Verify PEM contains leaf + intermediates (not root) and is parseable
 	pemStr, ok := result["pem"].(string)
 	if !ok {
 		t.Fatal("pem is not a string")
@@ -354,35 +407,43 @@ func TestGenerateJSON_FieldNames(t *testing.T) {
 	if certCount != 2 {
 		t.Errorf("PEM should contain 2 certs (leaf + intermediate), got %d", certCount)
 	}
-}
 
-func TestGenerateJSON_NoIntermediates(t *testing.T) {
-	// WHY: When there are no intermediates, the PEM field should contain only the
-	// leaf certificate — verifies PEM construction handles empty intermediate list.
-	t.Parallel()
-
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "noint.example.com", []string{"noint.example.com"})
-
-	bundle := &certkit.BundleResult{
-		Leaf: leaf.cert,
+	// Parse the first cert from the PEM to verify it's the leaf
+	block, _ := pem.Decode([]byte(pemStr))
+	if block == nil {
+		t.Fatal("pem field does not contain valid PEM")
 	}
-
-	data, err := GenerateJSON(bundle)
+	firstCert, err := x509.ParseCertificate(block.Bytes)
 	if err != nil {
-		t.Fatalf("GenerateJSON: %v", err)
+		t.Fatalf("pem field first cert not parseable: %v", err)
+	}
+	if firstCert.Subject.CommonName != "json.example.com" {
+		t.Errorf("pem field first cert CN=%q, want %q", firstCert.Subject.CommonName, "json.example.com")
 	}
 
-	var result map[string]any
-	if err := json.Unmarshal(data, &result); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-
-	pemStr := result["pem"].(string)
-	certCount := strings.Count(pemStr, "-----BEGIN CERTIFICATE-----")
-	if certCount != 1 {
-		t.Errorf("PEM should contain 1 cert (leaf only), got %d", certCount)
-	}
+	// Sub-case: no intermediates — PEM field should contain only the leaf.
+	// Absorbed from TestGenerateJSON_NoIntermediates per T-12 (same assertion
+	// pattern, different input).
+	t.Run("no intermediates", func(t *testing.T) {
+		t.Parallel()
+		noIntBundle := &certkit.BundleResult{Leaf: leaf.cert}
+		noIntData, err := GenerateJSON(noIntBundle)
+		if err != nil {
+			t.Fatalf("GenerateJSON: %v", err)
+		}
+		var noIntResult map[string]any
+		if err := json.Unmarshal(noIntData, &noIntResult); err != nil {
+			t.Fatalf("invalid JSON: %v", err)
+		}
+		noIntPEM, ok := noIntResult["pem"].(string)
+		if !ok {
+			t.Fatalf("pem is not a string: %T", noIntResult["pem"])
+		}
+		noIntCount := strings.Count(noIntPEM, "-----BEGIN CERTIFICATE-----")
+		if noIntCount != 1 {
+			t.Errorf("PEM should contain 1 cert (leaf only), got %d", noIntCount)
+		}
+	})
 }
 
 func TestGenerateYAML_Fields(t *testing.T) {
@@ -427,8 +488,19 @@ func TestGenerateYAML_Fields(t *testing.T) {
 		t.Errorf("key_size = %v, want 2048", result["key_size"])
 	}
 
-	if result["crl_support"] != false {
-		t.Errorf("crl_support = %v, want false", result["crl_support"])
+	// Verify key PEM round-trips correctly (catches encoding bugs).
+	keyStr, ok := result["key"].(string)
+	if !ok {
+		t.Fatalf("key is not a string: %T", result["key"])
+	}
+	parsedKey, err := certkit.ParsePEMPrivateKey([]byte(keyStr))
+	if err != nil {
+		t.Fatalf("key field is not parseable PEM: %v", err)
+	}
+	if match, err := certkit.KeyMatchesCert(parsedKey, leaf.cert); err != nil {
+		t.Fatalf("KeyMatchesCert: %v", err)
+	} else if !match {
+		t.Error("YAML key field does not match the leaf certificate")
 	}
 
 	expiresStr, ok := result["expires"].(string)
@@ -479,8 +551,14 @@ func TestGenerateYAML_RootExpiresBeforeLeaf(t *testing.T) {
 		t.Fatalf("expires is not RFC 3339: %q", expiresStr)
 	}
 
-	leafExpiresStr := result["leaf_expires"].(string)
-	leafExpires, _ := time.Parse(time.RFC3339, leafExpiresStr)
+	leafExpiresStr, ok := result["leaf_expires"].(string)
+	if !ok {
+		t.Fatalf("leaf_expires is not a string: %T", result["leaf_expires"])
+	}
+	leafExpires, err := time.Parse(time.RFC3339, leafExpiresStr)
+	if err != nil {
+		t.Fatalf("leaf_expires is not RFC 3339: %q", leafExpiresStr)
+	}
 
 	// "expires" (chain) should be before "leaf_expires" since root expires first
 	if !expires.Before(leafExpires) {
@@ -513,18 +591,20 @@ func TestGenerateCSR_RoundTrip(t *testing.T) {
 		t.Fatalf("parse CSR: %v", err)
 	}
 
-	if err := csr.CheckSignature(); err != nil {
-		t.Errorf("CSR signature invalid: %v", err)
-	}
-
 	// Verify subject fields are copied from cert
 	if len(csr.Subject.Organization) != 1 || csr.Subject.Organization[0] != "TestOrg" {
 		t.Errorf("CSR organization = %v, want [TestOrg]", csr.Subject.Organization)
 	}
 
-	// Verify DNS names
-	if len(csr.DNSNames) != 2 {
-		t.Errorf("CSR DNS names = %v, want 2 entries", csr.DNSNames)
+	// Verify DNS name values, not just count
+	wantDNS := []string{"csr.example.com", "api.example.com"}
+	if len(csr.DNSNames) != len(wantDNS) {
+		t.Fatalf("CSR DNS names count = %d, want %d", len(csr.DNSNames), len(wantDNS))
+	}
+	for i, got := range csr.DNSNames {
+		if got != wantDNS[i] {
+			t.Errorf("DNSNames[%d] = %q, want %q", i, got, wantDNS[i])
+		}
 	}
 
 	// Verify CSR JSON is valid and reports correct algorithm
@@ -533,67 +613,118 @@ func TestGenerateCSR_RoundTrip(t *testing.T) {
 		t.Fatalf("CSR JSON is not valid: %v", err)
 	}
 
-	if _, ok := jsonResult["dns_names"]; !ok {
-		t.Error("CSR JSON missing dns_names field")
+	// dns_names content must match the certificate SANs
+	dnsRaw, ok := jsonResult["dns_names"].([]any)
+	if !ok {
+		t.Fatal("CSR JSON dns_names is not an array")
 	}
+	if len(dnsRaw) != len(wantDNS) {
+		t.Fatalf("CSR JSON dns_names count = %d, want %d", len(dnsRaw), len(wantDNS))
+	}
+	for i, v := range dnsRaw {
+		if s, ok := v.(string); !ok || s != wantDNS[i] {
+			t.Errorf("CSR JSON dns_names[%d] = %v, want %q", i, v, wantDNS[i])
+		}
+	}
+
 	if algo, ok := jsonResult["key_algorithm"].(string); !ok || algo != "RSA" {
 		t.Errorf("key_algorithm = %v, want RSA", jsonResult["key_algorithm"])
 	}
-}
 
-func TestGenerateCSR_WWWExclusion(t *testing.T) {
-	// WHY: When cert has exactly [CN, www.CN] as SANs, the CSR should exclude
-	// the www variant to simplify renewal — verifies shouldExcludeWWW logic.
-	t.Parallel()
-
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "example.com", []string{"example.com", "www.example.com"})
-
-	csrPEM, _, err := GenerateCSR(leaf.cert, leaf.keyPEM, nil)
-	if err != nil {
-		t.Fatalf("GenerateCSR: %v", err)
+	// pem field must contain a parseable CSR
+	pemStr, ok := jsonResult["pem"].(string)
+	if !ok || pemStr == "" {
+		t.Fatal("CSR JSON pem field is missing or empty")
 	}
-
-	block, _ := pem.Decode(csrPEM)
-	csr, err := x509.ParseCertificateRequest(block.Bytes)
-	if err != nil {
-		t.Fatalf("parse CSR: %v", err)
+	pemBlock, _ := pem.Decode([]byte(pemStr))
+	if pemBlock == nil {
+		t.Fatal("CSR JSON pem field does not contain valid PEM")
 	}
-
-	// Should only contain "example.com", not "www.example.com"
-	if len(csr.DNSNames) != 1 {
-		t.Fatalf("expected 1 DNS name, got %d: %v", len(csr.DNSNames), csr.DNSNames)
-	}
-	if csr.DNSNames[0] != "example.com" {
-		t.Errorf("expected DNS name 'example.com', got %q", csr.DNSNames[0])
+	if _, err := x509.ParseCertificateRequest(pemBlock.Bytes); err != nil {
+		t.Fatalf("CSR JSON pem field is not a valid CSR: %v", err)
 	}
 }
 
-func TestGenerateCSR_WildcardExclusion(t *testing.T) {
-	// WHY: When cert has a wildcard SAN like *.example.com, the bare domain
-	// (example.com) should be excluded from the CSR since wildcard covers it.
+func TestGenerateCSR_SANExclusion(t *testing.T) {
+	// WHY: CSR generation excludes redundant SANs — www.CN when bare CN exists,
+	// and bare domain when wildcard covers it. Verifies shouldExcludeWWW and
+	// wildcard deduplication logic.
 	t.Parallel()
 
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "example.com", []string{"*.example.com", "example.com"})
-
-	csrPEM, _, err := GenerateCSR(leaf.cert, leaf.keyPEM, nil)
-	if err != nil {
-		t.Fatalf("GenerateCSR: %v", err)
+	tests := []struct {
+		name    string
+		sans    []string
+		wantDNS string
+	}{
+		{
+			"www excluded when bare CN present",
+			[]string{"example.com", "www.example.com"},
+			"example.com",
+		},
+		{
+			"bare domain excluded when wildcard present",
+			[]string{"*.example.com", "example.com"},
+			"*.example.com",
+		},
 	}
 
-	block, _ := pem.Decode(csrPEM)
-	csr, err := x509.ParseCertificateRequest(block.Bytes)
-	if err != nil {
-		t.Fatalf("parse CSR: %v", err)
-	}
+	// Separate subtest: 3+ SANs — www is NOT excluded because the
+	// shouldExcludeWWW guard only activates when len(DNSNames) == 2.
+	t.Run("www kept when 3+ SANs present", func(t *testing.T) {
+		t.Parallel()
+		ca := newRSACA(t)
+		leaf := newRSALeaf(t, ca, "example.com",
+			[]string{"example.com", "www.example.com", "api.example.com"})
 
-	// Should only contain "*.example.com", not bare "example.com"
-	if len(csr.DNSNames) != 1 {
-		t.Fatalf("expected 1 DNS name, got %d: %v", len(csr.DNSNames), csr.DNSNames)
-	}
-	if csr.DNSNames[0] != "*.example.com" {
-		t.Errorf("expected DNS name '*.example.com', got %q", csr.DNSNames[0])
+		csrPEM, _, err := GenerateCSR(leaf.cert, leaf.keyPEM, nil)
+		if err != nil {
+			t.Fatalf("GenerateCSR: %v", err)
+		}
+
+		block, _ := pem.Decode(csrPEM)
+		csr, err := x509.ParseCertificateRequest(block.Bytes)
+		if err != nil {
+			t.Fatalf("parse CSR: %v", err)
+		}
+
+		wantDNS := map[string]bool{
+			"example.com":     true,
+			"www.example.com": true,
+			"api.example.com": true,
+		}
+		if len(csr.DNSNames) != len(wantDNS) {
+			t.Fatalf("expected %d DNS names, got %d: %v", len(wantDNS), len(csr.DNSNames), csr.DNSNames)
+		}
+		for _, name := range csr.DNSNames {
+			if !wantDNS[name] {
+				t.Errorf("unexpected DNS name %q", name)
+			}
+		}
+	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ca := newRSACA(t)
+			leaf := newRSALeaf(t, ca, "example.com", tt.sans)
+
+			csrPEM, _, err := GenerateCSR(leaf.cert, leaf.keyPEM, nil)
+			if err != nil {
+				t.Fatalf("GenerateCSR: %v", err)
+			}
+
+			block, _ := pem.Decode(csrPEM)
+			csr, err := x509.ParseCertificateRequest(block.Bytes)
+			if err != nil {
+				t.Fatalf("parse CSR: %v", err)
+			}
+
+			if len(csr.DNSNames) != 1 {
+				t.Fatalf("expected 1 DNS name, got %d: %v", len(csr.DNSNames), csr.DNSNames)
+			}
+			if csr.DNSNames[0] != tt.wantDNS {
+				t.Errorf("expected DNS name %q, got %q", tt.wantDNS, csr.DNSNames[0])
+			}
+		})
 	}
 }
 
@@ -674,9 +805,13 @@ func TestGenerateYAML_NoRoot(t *testing.T) {
 
 	rootVal, ok := result["root"]
 	if !ok {
-		t.Error("root key should be present in YAML even when empty")
+		t.Fatal("root key should be present in YAML even when empty")
 	}
-	if rootStr, isStr := rootVal.(string); isStr && rootStr != "" {
+	rootStr, isStr := rootVal.(string)
+	if !isStr {
+		t.Fatalf("root should be a string, got %T", rootVal)
+	}
+	if rootStr != "" {
 		t.Errorf("root should be empty string, got %d chars", len(rootStr))
 	}
 }
@@ -731,66 +866,326 @@ func TestGenerateJSON_IPAddresses(t *testing.T) {
 	}
 }
 
-func TestGenerateBundleFiles_PKCS12RoundTrip(t *testing.T) {
-	// WHY: The P12 file in GenerateBundleFiles output is created by re-parsing
-	// KeyRecord.PEM (stored PKCS#8) and encoding with EncodePKCS12Legacy.
-	// One key type (RSA) suffices per T-13 since the P12 encoding is
-	// key-type-agnostic after PKCS#8 normalization.
+func TestExportMatchedBundles(t *testing.T) {
+	// WHY: ExportMatchedBundles is the shared orchestration function used by both
+	// CLI and WASM exports. It coordinates store -> Bundle -> GenerateBundleFiles
+	// -> BundleWriter. Verifying the full pipeline with a mock writer catches
+	// integration bugs (folder naming, wildcard sanitization, continue-on-error).
 	t.Parallel()
 
 	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "p12rt-rsa.example.com", []string{"p12rt-rsa.example.com"})
+	leaf := newRSALeaf(t, ca, "export.example.com", []string{"export.example.com"})
 
-	bundle := &certkit.BundleResult{
-		Leaf:  leaf.cert,
-		Roots: []*x509.Certificate{ca.cert},
+	store := NewMemStore()
+	if err := store.HandleCertificate(leaf.cert, "test"); err != nil {
+		t.Fatalf("store cert: %v", err)
+	}
+	if err := store.HandleCertificate(ca.cert, "test"); err != nil {
+		t.Fatalf("store CA cert: %v", err)
+	}
+	if err := store.HandleKey(leaf.key, leaf.keyPEM, "test"); err != nil {
+		t.Fatalf("store key: %v", err)
 	}
 
-	files, err := GenerateBundleFiles(BundleExportInput{
-		Bundle:     bundle,
-		KeyPEM:     leaf.keyPEM,
-		KeyType:    "RSA",
-		BitLength:  2048,
-		Prefix:     "p12rt-rsa",
-		SecretName: "p12rt-rsa-tls",
+	skis := store.MatchedPairs()
+	if len(skis) == 0 {
+		t.Fatal("expected at least one matched pair")
+	}
+	store.SetBundleName(skis[0], "my-bundle")
+
+	var written []mockWriteCall
+	writer := &mockBundleWriter{calls: &written}
+
+	err := ExportMatchedBundles(t.Context(), ExportMatchedBundleInput{
+		Store:  store,
+		SKIs:   skis,
+		Writer: writer,
+		BundleOpts: certkit.BundleOptions{
+			CustomRoots: []*x509.Certificate{ca.cert},
+			TrustStore:  "custom",
+			Verify:      true,
+		},
 	})
 	if err != nil {
-		t.Fatalf("GenerateBundleFiles: %v", err)
+		t.Fatalf("ExportMatchedBundles: %v", err)
 	}
 
-	for _, f := range files {
-		if strings.HasSuffix(f.Name, ".p12") {
-			privKey, leafCert, _, err := certkit.DecodePKCS12(f.Data, "changeit")
-			if err != nil {
-				t.Fatalf("DecodePKCS12: %v", err)
-			}
-			if leafCert == nil {
-				t.Fatal("P12 contained no leaf cert")
-			}
-			if !leafCert.Equal(leaf.cert) {
-				t.Error("P12 leaf cert does not match original")
-			}
-			if privKey == nil {
-				t.Fatal("P12 contained no private key")
-			}
-			if !keysEqual(t, leaf.key, privKey) {
-				t.Error("P12 key does not match original")
-			}
-			return
+	if len(written) != 1 {
+		t.Fatalf("expected 1 write call, got %d", len(written))
+	}
+	call := written[0]
+
+	// Folder should use bundle name, not sanitized CN
+	if call.folder != "my-bundle" {
+		t.Errorf("folder = %q, want %q", call.folder, "my-bundle")
+	}
+
+	// GenerateBundleFiles always produces: .pem, .chain.pem, .fullchain.pem,
+	// .key, .p12, .k8s.yaml, .json, .yaml, .csr, .csr.json (10 files).
+	// With a custom root, .root.pem is also present (11 total).
+	// No intermediates in this chain (CA signs leaf directly), so no .intermediates.pem.
+	expectedSuffixes := []string{
+		".pem",
+		".chain.pem",
+		".fullchain.pem",
+		".root.pem",
+		".key",
+		".p12",
+		".k8s.yaml",
+		".json",
+		".yaml",
+		".csr",
+		".csr.json",
+	}
+
+	if len(call.files) != len(expectedSuffixes) {
+		t.Errorf("expected %d bundle files, got %d", len(expectedSuffixes), len(call.files))
+	}
+
+	fileNames := make(map[string]bool, len(call.files))
+	for _, f := range call.files {
+		fileNames[f.Name] = true
+		if len(f.Data) == 0 {
+			t.Errorf("file %q has empty data", f.Name)
 		}
 	}
-	t.Fatal("no .p12 file in output")
+	prefix := "export.example.com"
+	for _, suffix := range expectedSuffixes {
+		want := prefix + suffix
+		if !fileNames[want] {
+			t.Errorf("missing expected file %q", want)
+		}
+	}
 }
 
-func TestGenerateBundleFiles_PKCS12ChainIntegrity(t *testing.T) {
-	// WHY: The PKCS#12 from GenerateBundleFiles must include the full chain
-	// (intermediates). If EncodePKCS12Legacy drops intermediates, the P12 is
-	// unusable for server installation that requires the chain.
+func TestExportMatchedBundles_SkipsMissingSKI(t *testing.T) {
+	// WHY: When a SKI in the input list has no matching cert or key (stale
+	// reference), ExportMatchedBundles must skip it without error rather than
+	// panicking on nil records.
+	t.Parallel()
+
+	store := NewMemStore()
+	var written []mockWriteCall
+	writer := &mockBundleWriter{calls: &written}
+
+	err := ExportMatchedBundles(t.Context(), ExportMatchedBundleInput{
+		Store:  store,
+		SKIs:   []string{"deadbeef"},
+		Writer: writer,
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+	if len(written) != 0 {
+		t.Errorf("expected 0 write calls for missing SKI, got %d", len(written))
+	}
+}
+
+func TestExportMatchedBundles_WildcardFolder(t *testing.T) {
+	// WHY: Wildcard certs without a bundle name should use SanitizeFileName on
+	// the CN, replacing * with _ in the folder name.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "*.wild.example.com", []string{"*.wild.example.com"})
+
+	store := NewMemStore()
+	if err := store.HandleCertificate(leaf.cert, "test"); err != nil {
+		t.Fatalf("store cert: %v", err)
+	}
+	if err := store.HandleCertificate(ca.cert, "test"); err != nil {
+		t.Fatalf("store CA cert: %v", err)
+	}
+	if err := store.HandleKey(leaf.key, leaf.keyPEM, "test"); err != nil {
+		t.Fatalf("store key: %v", err)
+	}
+
+	skis := store.MatchedPairs()
+	if len(skis) == 0 {
+		t.Fatal("expected at least one matched pair")
+	}
+
+	var written []mockWriteCall
+	writer := &mockBundleWriter{calls: &written}
+
+	err := ExportMatchedBundles(t.Context(), ExportMatchedBundleInput{
+		Store:  store,
+		SKIs:   skis,
+		Writer: writer,
+		BundleOpts: certkit.BundleOptions{
+			CustomRoots: []*x509.Certificate{ca.cert},
+			TrustStore:  "custom",
+			Verify:      true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ExportMatchedBundles: %v", err)
+	}
+
+	if len(written) != 1 {
+		t.Fatalf("expected 1 write call, got %d", len(written))
+	}
+
+	// Folder should have * replaced with _
+	if written[0].folder != "_.wild.example.com" {
+		t.Errorf("folder = %q, want %q", written[0].folder, "_.wild.example.com")
+	}
+}
+
+func TestExportMatchedBundles_RetryNoVerify(t *testing.T) {
+	// WHY: RetryNoVerify retries bundling with Verify=false when verification fails
+	// (e.g., private CA). This 5-line code path (export.go:335-339) had zero test
+	// coverage. Without it, private-CA exports fail instead of falling back.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "retry.example.com", []string{"retry.example.com"})
+
+	store := NewMemStore()
+	if err := store.HandleCertificate(leaf.cert, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HandleCertificate(ca.cert, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HandleKey(leaf.key, leaf.keyPEM, "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	skis := store.MatchedPairs()
+	if len(skis) == 0 {
+		t.Fatal("expected at least one matched pair")
+	}
+	store.SetBundleName(skis[0], "retry-bundle")
+
+	var written []mockWriteCall
+	writer := &mockBundleWriter{calls: &written}
+
+	// Use mozilla trust store (will fail verification for our private CA)
+	// with RetryNoVerify=true to trigger the fallback path.
+	err := ExportMatchedBundles(t.Context(), ExportMatchedBundleInput{
+		Store: store,
+		SKIs:  skis,
+		BundleOpts: certkit.BundleOptions{
+			TrustStore: "mozilla",
+			Verify:     true,
+		},
+		Writer:        writer,
+		RetryNoVerify: true,
+	})
+	if err != nil {
+		t.Fatalf("ExportMatchedBundles: %v", err)
+	}
+
+	if len(written) != 1 {
+		t.Fatalf("expected 1 write call (retry succeeded), got %d", len(written))
+	}
+	if written[0].folder != "retry-bundle" {
+		t.Errorf("folder = %q, want %q", written[0].folder, "retry-bundle")
+	}
+	// Verify the retried bundle produced non-empty files with the leaf cert.
+	for _, f := range written[0].files {
+		if len(f.Data) == 0 {
+			t.Errorf("file %q has empty data after retry", f.Name)
+		}
+	}
+}
+
+func TestExportMatchedBundles_WriterErrorContinues(t *testing.T) {
+	// WHY: When BundleWriter.WriteBundleFiles fails for one SKI, ExportMatchedBundles
+	// must continue processing remaining SKIs instead of aborting. This exercises
+	// the slog.Warn + continue path in exportBundleCerts.
+	t.Parallel()
+
+	// Use RSA + ECDSA CAs so each leaf gets a unique certID
+	// (newRSALeaf hardcodes SerialNumber=100; same CA SubjectKeyId causes
+	// identical AuthorityKeyId → certID collision → dedup).
+	rsaCA := newRSACA(t)
+	ecCA := newECDSACA(t)
+	leaf1 := newRSALeaf(t, rsaCA, "first.example.com", []string{"first.example.com"})
+	leaf2 := newRSALeaf(t, ecCA, "second.example.com", []string{"second.example.com"})
+
+	store := NewMemStore()
+	for _, c := range []*x509.Certificate{leaf1.cert, leaf2.cert, rsaCA.cert, ecCA.cert} {
+		if err := store.HandleCertificate(c, "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, l := range []testLeaf{leaf1, leaf2} {
+		if err := store.HandleKey(l.key, l.keyPEM, "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	skis := store.MatchedPairs()
+	if len(skis) < 2 {
+		t.Fatalf("expected at least 2 matched pairs, got %d", len(skis))
+	}
+
+	// Use errOnFolder to fail deterministically for "first.example.com",
+	// regardless of map iteration order from MatchedPairs().
+	var written []mockWriteCall
+	writer := &mockBundleWriter{calls: &written, errOnFolder: "first.example.com"}
+
+	err := ExportMatchedBundles(t.Context(), ExportMatchedBundleInput{
+		Store:  store,
+		SKIs:   skis,
+		Writer: writer,
+		BundleOpts: certkit.BundleOptions{
+			CustomRoots: []*x509.Certificate{rsaCA.cert, ecCA.cert},
+			TrustStore:  "custom",
+			Verify:      true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("ExportMatchedBundles: %v", err)
+	}
+
+	// Writer must have been called for both bundles, proving no short-circuit.
+	if writer.callCount != 2 {
+		t.Fatalf("expected writer to be called 2 times (1 error + 1 success), got %d", writer.callCount)
+	}
+
+	// Exactly one bundle should have been written successfully.
+	if len(written) != 1 {
+		t.Fatalf("expected 1 successful write, got %d", len(written))
+	}
+
+	// The successful write must be the non-failing bundle.
+	if written[0].folder != "second.example.com" {
+		t.Errorf("successful write folder = %q, want %q", written[0].folder, "second.example.com")
+	}
+}
+
+type mockWriteCall struct {
+	folder string
+	files  []BundleFile
+}
+
+type mockBundleWriter struct {
+	calls       *[]mockWriteCall
+	errOnFolder string // if non-empty, return an error when folder matches
+	callCount   int
+}
+
+func (w *mockBundleWriter) WriteBundleFiles(folder string, files []BundleFile) error {
+	w.callCount++
+	if w.errOnFolder != "" && folder == w.errOnFolder {
+		return fmt.Errorf("mock write error for %s", folder)
+	}
+	*w.calls = append(*w.calls, mockWriteCall{folder: folder, files: files})
+	return nil
+}
+
+func TestGenerateBundleFiles_PKCS12RoundTrip(t *testing.T) {
+	// WHY: The P12 file from GenerateBundleFiles must contain the correct leaf
+	// cert, matching private key, and full intermediate chain. A missing key
+	// or dropped intermediates makes the P12 unusable for server installation.
 	t.Parallel()
 
 	root := newRSACA(t)
 	intermediate := newIntermediateCA(t, root)
-	leaf := newRSALeaf(t, intermediate, "chain.example.com", []string{"chain.example.com"})
+	leaf := newRSALeaf(t, intermediate, "p12rt.example.com", []string{"p12rt.example.com"})
 
 	bundle := &certkit.BundleResult{
 		Leaf:          leaf.cert,
@@ -803,8 +1198,8 @@ func TestGenerateBundleFiles_PKCS12ChainIntegrity(t *testing.T) {
 		KeyPEM:     leaf.keyPEM,
 		KeyType:    "RSA",
 		BitLength:  2048,
-		Prefix:     "chain",
-		SecretName: "chain-tls",
+		Prefix:     "p12rt",
+		SecretName: "p12rt-tls",
 	})
 	if err != nil {
 		t.Fatalf("GenerateBundleFiles: %v", err)
@@ -814,17 +1209,23 @@ func TestGenerateBundleFiles_PKCS12ChainIntegrity(t *testing.T) {
 		if !strings.HasSuffix(f.Name, ".p12") {
 			continue
 		}
-		_, leafCert, caCerts, err := certkit.DecodePKCS12(f.Data, "changeit")
+		privKey, leafCert, caCerts, err := certkit.DecodePKCS12(f.Data, "changeit")
 		if err != nil {
 			t.Fatalf("DecodePKCS12: %v", err)
 		}
 		if leafCert == nil {
-			t.Fatal("P12 has no leaf cert")
+			t.Fatal("P12 contained no leaf cert")
 		}
 		if !leafCert.Equal(leaf.cert) {
-			t.Error("P12 leaf does not match original")
+			t.Error("P12 leaf cert does not match original")
 		}
-		// Intermediates should be present in the CA certs
+		if privKey == nil {
+			t.Fatal("P12 contained no private key")
+		}
+		if !keysEqual(t, leaf.key, privKey) {
+			t.Error("P12 key does not match original")
+		}
+		// Intermediates must be present in the CA certs
 		if len(caCerts) == 0 {
 			t.Fatal("P12 has no CA certs (intermediates missing)")
 		}

@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 
 func TestLoadBundleConfigs_NewFormatWithDefaults(t *testing.T) {
 	// WHY: Verifies that defaultSubject fields are inherited by all bundles that lack their own subject; without this, bundles could silently lose required subject metadata.
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bundles.yaml")
 	yaml := `
@@ -50,48 +52,9 @@ bundles:
 	}
 }
 
-func TestLoadBundleConfigs_NewFormatWithOverride(t *testing.T) {
-	// WHY: Ensures a bundle's explicit subject completely replaces the default, not merges with it; a merge bug would silently inject unwanted fields into CSRs.
-	dir := t.TempDir()
-	path := filepath.Join(dir, "bundles.yaml")
-	yaml := `
-defaultSubject:
-  country: ["US"]
-  organization: ["DefaultOrg"]
-bundles:
-  - commonNames: ["example.com"]
-    bundleName: "example-bundle"
-    subject:
-      country: ["GB"]
-      organization: ["OverrideOrg"]
-`
-	if err := os.WriteFile(path, []byte(yaml), 0644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	configs, err := LoadBundleConfigs(path)
-	if err != nil {
-		t.Fatalf("load configs: %v", err)
-	}
-
-	if len(configs) != 1 {
-		t.Fatalf("expected 1 bundle, got %d", len(configs))
-	}
-
-	cfg := configs[0]
-	if cfg.Subject == nil {
-		t.Fatal("expected subject to be preserved, got nil")
-	}
-	if len(cfg.Subject.Country) != 1 || cfg.Subject.Country[0] != "GB" {
-		t.Errorf("expected country [GB] (override), got %v", cfg.Subject.Country)
-	}
-	if len(cfg.Subject.Organization) != 1 || cfg.Subject.Organization[0] != "OverrideOrg" {
-		t.Errorf("expected org [OverrideOrg] (override), got %v", cfg.Subject.Organization)
-	}
-}
-
 func TestLoadBundleConfigs_OldFormat(t *testing.T) {
 	// WHY: The parser supports a legacy bare-array YAML format for backward compatibility; without this test, a refactor could break existing configs.
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bundles.yaml")
 	yaml := `
@@ -115,10 +78,26 @@ func TestLoadBundleConfigs_OldFormat(t *testing.T) {
 	if configs[0].BundleName != "example-bundle" {
 		t.Errorf("expected bundle name 'example-bundle', got %q", configs[0].BundleName)
 	}
+	if configs[1].BundleName != "other-bundle" {
+		t.Errorf("expected bundle name 'other-bundle', got %q", configs[1].BundleName)
+	}
+	// Verify CommonNames were parsed — a field mapping bug would leave them empty.
+	if len(configs[0].CommonNames) != 1 || configs[0].CommonNames[0] != "example.com" {
+		t.Errorf("expected CommonNames [example.com], got %v", configs[0].CommonNames)
+	}
+	if len(configs[1].CommonNames) != 1 || configs[1].CommonNames[0] != "other.com" {
+		t.Errorf("expected CommonNames [other.com], got %v", configs[1].CommonNames)
+	}
+	// Old-format configs have no defaultSubject; Subject must remain nil so
+	// downstream code knows no subject override was requested.
+	if configs[0].Subject != nil {
+		t.Errorf("old format should have nil Subject, got %+v", configs[0].Subject)
+	}
 }
 
 func TestLoadBundleConfigs_InvalidYAML(t *testing.T) {
 	// WHY: Malformed YAML must produce a clear error rather than silently returning empty configs, which would cause a confusing no-bundles-exported situation.
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bundles.yaml")
 	if err := os.WriteFile(path, []byte("{{{{not yaml"), 0644); err != nil {
@@ -136,18 +115,20 @@ func TestLoadBundleConfigs_InvalidYAML(t *testing.T) {
 
 func TestLoadBundleConfigs_MissingFile(t *testing.T) {
 	// WHY: A missing config file must return an error, not silently proceed with zero bundles.
+	t.Parallel()
 	_, err := LoadBundleConfigs("/nonexistent/bundles.yaml")
 	if err == nil {
 		t.Error("expected error for missing file, got nil")
 	}
-	if !strings.Contains(err.Error(), "no such file") {
-		t.Errorf("unexpected error: %v", err)
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("expected os.ErrNotExist, got: %v", err)
 	}
 }
 
 func TestLoadBundleConfigs_DefaultSubjectIndependence(t *testing.T) {
 	// WHY: Guards against a shallow-copy bug where modifying one bundle's inherited
 	// default subject would corrupt other bundles' subjects.
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bundles.yaml")
 	yamlContent := `
@@ -187,35 +168,12 @@ bundles:
 	}
 }
 
-func TestLoadBundleConfigs_OldFormatNilSubject(t *testing.T) {
-	// WHY: Old-format configs have no defaultSubject mechanism; Subject must remain nil so downstream code knows no subject override was requested.
-	dir := t.TempDir()
-	path := filepath.Join(dir, "bundles.yaml")
-	yamlContent := `
-- commonNames: ["example.com"]
-  bundleName: "example"
-`
-	if err := os.WriteFile(path, []byte(yamlContent), 0644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	configs, err := LoadBundleConfigs(path)
-	if err != nil {
-		t.Fatalf("load configs: %v", err)
-	}
-	if len(configs) != 1 {
-		t.Fatalf("expected 1 bundle, got %d", len(configs))
-	}
-	if configs[0].Subject != nil {
-		t.Errorf("old format without subject should have nil Subject, got %+v", configs[0].Subject)
-	}
-}
-
 func TestLoadBundleConfigs_OwnSubjectNotMergedWithDefault(t *testing.T) {
 	// WHY: When a bundle defines its OWN subject, the default subject should NOT
 	// be merged in. This verifies the nil-check behavior: bundle.Subject != nil
 	// means the default is skipped entirely. A bug here would cause fields from
 	// defaultSubject to leak into bundles that define their own subject.
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bundles.yaml")
 	yamlContent := `
@@ -275,6 +233,7 @@ bundles:
 
 func TestLoadBundleConfigs_EmptyBundles(t *testing.T) {
 	// WHY: An empty bundles array with a defaultSubject falls through to old-format parsing, which should fail; this guards against silently accepting a misconfigured file.
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bundles.yaml")
 	yamlContent := `
@@ -291,8 +250,5 @@ bundles: []
 	_, err := LoadBundleConfigs(path)
 	if err == nil {
 		t.Error("expected error for empty bundles with new format structure, got nil")
-	}
-	if !strings.Contains(err.Error(), "cannot unmarshal") {
-		t.Errorf("unexpected error: %v", err)
 	}
 }

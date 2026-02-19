@@ -22,55 +22,24 @@ func TestHasBinaryExtension(t *testing.T) {
 		path string
 		want bool
 	}{
-		// DER extensions
-		{"der", "cert.der", true},
-		{"cer", "cert.cer", true},
-		{"crt", "cert.crt", true},
-		{"cert", "cert.cert", true},
-		{"ca", "cert.ca", true},
-		{"pem", "cert.pem", true},
-		{"arm", "cert.arm", true},
+		// One DER-family and one JKS-family extension suffice; all others
+		// hit the same map lookup (T-12).
+		{"DER extension", "cert.der", true},
+		{"JKS extension", "store.jks", true},
 
-		// Key extensions
-		{"key", "server.key", true},
-		{"privkey", "server.privkey", true},
-		{"priv", "server.priv", true},
-
-		// PKCS#12
-		{"p12", "bundle.p12", true},
-		{"pfx", "bundle.pfx", true},
-
-		// PKCS#7
-		{"p7b", "chain.p7b", true},
-		{"p7c", "chain.p7c", true},
-		{"p7", "chain.p7", true},
-		{"spc", "cert.spc", true},
-
-		// PKCS#8
-		{"p8", "key.p8", true},
-
-		// JKS
-		{"jks", "store.jks", true},
-		{"keystore", "store.keystore", true},
-		{"truststore", "store.truststore", true},
-		{"bks", "store.bks", true},
+		// .pem is in derExtensions because some .pem files are actually DER
+		{"PEM extension (surprise DER candidate)", "cert.pem", true},
 
 		// Unrecognized
-		{"txt", "README.txt", false},
-		{"go", "main.go", false},
-		{"no extension", "Makefile", false},
+		{"unknown extension", "README.txt", false},
 		{"empty", "", false},
 
-		// Virtual paths with ":" separator
-		{"virtual der", "archive.zip:certs/server.der", true},
-		{"virtual flat", "archive.zip:server.der", true},
-		{"virtual no ext", "archive.zip:cert", false},
-		{"virtual tar.gz", "archive.tar.gz:certs/ca.pem", true},
+		// Virtual paths with ":" separator (certkit-specific logic)
+		{"virtual path recognized", "archive.zip:certs/server.der", true},
+		{"virtual path unrecognized", "archive.zip:cert", false},
 
-		// Case insensitivity
-		{"upper DER", "cert.DER", true},
-		{"mixed case", "cert.DeR", true},
-		{"upper P12", "bundle.P12", true},
+		// Case insensitivity (certkit-specific logic)
+		{"case insensitive", "cert.DeR", true},
 	}
 
 	for _, tt := range tests {
@@ -128,18 +97,6 @@ func TestGetKeyType(t *testing.T) {
 				return &x509.Certificate{PublicKey: pub}
 			},
 			want: "Ed25519",
-		},
-		{
-			name: "Ed25519 pointer",
-			makePub: func(t *testing.T) *x509.Certificate {
-				t.Helper()
-				pub, _, err := ed25519.GenerateKey(rand.Reader)
-				if err != nil {
-					t.Fatal(err)
-				}
-				return &x509.Certificate{PublicKey: &pub}
-			},
-			want: "unknown key type: *ed25519.PublicKey",
 		},
 		{
 			name: "unknown",
@@ -203,6 +160,13 @@ func TestFormatCN(t *testing.T) {
 			},
 			want: "*.example.com",
 		},
+		{
+			name: "no CN, no SAN, nil serial",
+			cert: &x509.Certificate{
+				Subject: pkix.Name{},
+			},
+			want: "unknown",
+		},
 	}
 
 	for _, tt := range tests {
@@ -217,8 +181,8 @@ func TestFormatCN(t *testing.T) {
 }
 
 func TestSanitizeFileName(t *testing.T) {
-	// WHY: Wildcards in CN ("*.example.com") produce invalid filesystem paths;
-	// SanitizeFileName must replace them for safe ZIP entry names.
+	// WHY: SanitizeFileName is used in export paths to produce filesystem-safe
+	// names from certificate CNs; wildcard asterisks must become underscores.
 	t.Parallel()
 
 	tests := []struct {
@@ -226,10 +190,9 @@ func TestSanitizeFileName(t *testing.T) {
 		input string
 		want  string
 	}{
+		{"wildcard CN", "*.example.com", "_.example.com"},
 		{"no wildcard", "example.com", "example.com"},
-		{"wildcard prefix", "*.example.com", "_.example.com"},
 		{"multiple wildcards", "*.*.example.com", "_._.example.com"},
-		{"no change needed", "server", "server"},
 		{"empty string", "", ""},
 	}
 

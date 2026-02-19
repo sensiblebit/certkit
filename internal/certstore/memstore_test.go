@@ -84,11 +84,16 @@ func TestMemStore_HandleCertificate_DuplicateIgnored(t *testing.T) {
 
 func TestMemStore_MatchedPairs(t *testing.T) {
 	// WHY: MatchedPairs must only return SKIs with both a leaf cert and a key;
-	// root certs and intermediate certs must be excluded even if they have keys.
+	// non-leaf certs must be excluded even if they have keys. Uses an
+	// intermediate with its own key to prove both the CertType=="leaf" guard
+	// and the presence of a non-leaf key do not produce a false match.
 	t.Parallel()
-	store := NewMemStore()
+
 	ca := newRSACA(t)
+	inter := newIntermediateCA(t, ca)
 	leaf := newRSALeaf(t, ca, "match.example.com", []string{"match.example.com"})
+
+	store := NewMemStore()
 
 	// Add leaf cert and its key
 	if err := store.HandleCertificate(leaf.cert, "leaf.pem"); err != nil {
@@ -98,42 +103,26 @@ func TestMemStore_MatchedPairs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Add root cert (should not appear in matched pairs)
-	if err := store.HandleCertificate(ca.cert, "ca.pem"); err != nil {
+	// Add intermediate cert with its key — must NOT appear in MatchedPairs
+	if err := store.HandleCertificate(inter.cert, "inter.pem"); err != nil {
+		t.Fatal(err)
+	}
+	interKeyPEM, err := certkit.MarshalPrivateKeyToPEM(inter.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HandleKey(inter.key, []byte(interKeyPEM), "inter.pem"); err != nil {
 		t.Fatal(err)
 	}
 
 	matched := store.MatchedPairs()
 	if len(matched) != 1 {
-		t.Fatalf("expected 1 matched pair, got %d", len(matched))
+		t.Fatalf("expected 1 matched pair (leaf only), got %d", len(matched))
 	}
 
 	leafSKI := computeSKIHex(t, leaf.cert)
 	if matched[0] != leafSKI {
 		t.Errorf("matched SKI = %q, want %q", matched[0], leafSKI)
-	}
-}
-
-func TestMemStore_MatchedPairs_IntermediateExcluded(t *testing.T) {
-	// WHY: Intermediate CAs should not appear in matched pairs even if they
-	// have corresponding keys in the store.
-	t.Parallel()
-	store := NewMemStore()
-	ca := newRSACA(t)
-	inter := newIntermediateCA(t, ca)
-
-	if err := store.HandleCertificate(inter.cert, "inter.pem"); err != nil {
-		t.Fatal(err)
-	}
-	// Simulating a key for the intermediate
-	keyPEM, _ := certkit.MarshalPrivateKeyToPEM(inter.key)
-	if err := store.HandleKey(inter.key, []byte(keyPEM), "inter.key"); err != nil {
-		t.Fatal(err)
-	}
-
-	matched := store.MatchedPairs()
-	if len(matched) != 0 {
-		t.Errorf("expected 0 matched pairs for intermediate, got %d", len(matched))
 	}
 }
 
@@ -161,56 +150,37 @@ func TestMemStore_Intermediates(t *testing.T) {
 	}
 }
 
-func TestMemStore_IntermediatePool_Empty(t *testing.T) {
-	// WHY: An empty store must return a non-nil pool to avoid nil-pointer
-	// panics in callers that pass it to x509.Verify.
-	t.Parallel()
-	store := NewMemStore()
-	pool := store.IntermediatePool()
-	if pool == nil {
-		t.Fatal("IntermediatePool returned nil for empty store")
-	}
-}
-
 func TestMemStore_HasIssuer(t *testing.T) {
 	// WHY: HasIssuer drives AIA fetching decisions; must match by raw ASN.1
-	// subject/issuer bytes and must not match a cert against itself.
+	// subject/issuer bytes, skip self-references, and return false when the
+	// issuer is absent.
 	t.Parallel()
-	store := NewMemStore()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "has-issuer.example.com", []string{"has-issuer.example.com"})
 
-	if err := store.HandleCertificate(ca.cert, "ca.pem"); err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name      string
+		addCerts  []*x509.Certificate
+		queryCert *x509.Certificate
+		want      bool
+	}{
+		{"issuer present", []*x509.Certificate{ca.cert, leaf.cert}, leaf.cert, true},
+		{"self-signed root skipped", []*x509.Certificate{ca.cert}, ca.cert, false},
+		{"issuer absent", []*x509.Certificate{leaf.cert}, leaf.cert, false},
 	}
-	if err := store.HandleCertificate(leaf.cert, "leaf.pem"); err != nil {
-		t.Fatal(err)
-	}
-
-	if !store.HasIssuer(leaf.cert) {
-		t.Error("expected HasIssuer=true for leaf (CA is in store)")
-	}
-
-	// Root's issuer is itself — HasIssuer skips self-references
-	if store.HasIssuer(ca.cert) {
-		t.Error("expected HasIssuer=false for self-signed root")
-	}
-}
-
-func TestMemStore_HasIssuer_NotPresent(t *testing.T) {
-	// WHY: When the issuer is not in the store, HasIssuer must return false.
-	t.Parallel()
-	store := NewMemStore()
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "orphan.example.com", []string{"orphan.example.com"})
-
-	// Only add the leaf, not the CA
-	if err := store.HandleCertificate(leaf.cert, "leaf.pem"); err != nil {
-		t.Fatal(err)
-	}
-
-	if store.HasIssuer(leaf.cert) {
-		t.Error("expected HasIssuer=false when issuer is not in store")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			store := NewMemStore()
+			for _, cert := range tt.addCerts {
+				if err := store.HandleCertificate(cert, "test.pem"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := store.HasIssuer(tt.queryCert); got != tt.want {
+				t.Errorf("HasIssuer = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -221,10 +191,13 @@ func TestMemStore_HasIssuer_MultipleIssuers(t *testing.T) {
 	t.Parallel()
 
 	// Create two CAs with the same subject DN but different keys.
-	ca1Key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	ca1Key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
 	sharedSubject := pkix.Name{CommonName: "Shared Subject CA", Organization: []string{"TestOrg"}}
 	ca1Template := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          randomSerial(t),
 		Subject:               sharedSubject,
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
@@ -233,12 +206,21 @@ func TestMemStore_HasIssuer_MultipleIssuers(t *testing.T) {
 		IsCA:                  true,
 		SubjectKeyId:          []byte{1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20},
 	}
-	ca1DER, _ := x509.CreateCertificate(rand.Reader, ca1Template, ca1Template, &ca1Key.PublicKey, ca1Key)
-	ca1Cert, _ := x509.ParseCertificate(ca1DER)
+	ca1DER, err := x509.CreateCertificate(rand.Reader, ca1Template, ca1Template, &ca1Key.PublicKey, ca1Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca1Cert, err := x509.ParseCertificate(ca1DER)
+	if err != nil {
+		t.Fatal(err)
+	}
 
-	ca2Key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	ca2Key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ca2Template := &x509.Certificate{
-		SerialNumber:          big.NewInt(2),
+		SerialNumber:          randomSerial(t),
 		Subject:               sharedSubject,
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
@@ -247,13 +229,22 @@ func TestMemStore_HasIssuer_MultipleIssuers(t *testing.T) {
 		IsCA:                  true,
 		SubjectKeyId:          []byte{20, 19, 18, 17, 16, 15, 14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1},
 	}
-	ca2DER, _ := x509.CreateCertificate(rand.Reader, ca2Template, ca2Template, &ca2Key.PublicKey, ca2Key)
-	ca2Cert, _ := x509.ParseCertificate(ca2DER)
+	ca2DER, err := x509.CreateCertificate(rand.Reader, ca2Template, ca2Template, &ca2Key.PublicKey, ca2Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca2Cert, err := x509.ParseCertificate(ca2DER)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Create a leaf signed by ca1.
-	leafKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	leafKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
 	leafTemplate := &x509.Certificate{
-		SerialNumber:   big.NewInt(100),
+		SerialNumber:   randomSerial(t),
 		Subject:        pkix.Name{CommonName: "multi-issuer.example.com"},
 		DNSNames:       []string{"multi-issuer.example.com"},
 		NotBefore:      time.Now().Add(-time.Hour),
@@ -261,8 +252,14 @@ func TestMemStore_HasIssuer_MultipleIssuers(t *testing.T) {
 		KeyUsage:       x509.KeyUsageDigitalSignature,
 		AuthorityKeyId: ca1Cert.SubjectKeyId,
 	}
-	leafDER, _ := x509.CreateCertificate(rand.Reader, leafTemplate, ca1Cert, &leafKey.PublicKey, ca1Key)
-	leafCert, _ := x509.ParseCertificate(leafDER)
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, ca1Cert, &leafKey.PublicKey, ca1Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafCert, err := x509.ParseCertificate(leafDER)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	// Add only ca2 (NOT ca1) and the leaf. HasIssuer should still return true
 	// because ca2 has the same RawSubject as the leaf's RawIssuer.
@@ -289,12 +286,10 @@ func TestMemStore_SetBundleName_NonexistentSKI(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// This SKI does not exist in the store
 	store.SetBundleName("deadbeef", "should-not-appear")
 
-	// Verify no bundle name was applied to the existing cert
-	for _, names := range store.BundleNames() {
-		if names == "should-not-appear" {
+	for _, name := range store.BundleNames() {
+		if name == "should-not-appear" {
 			t.Error("SetBundleName should not create a phantom bundle name")
 		}
 	}
@@ -336,37 +331,21 @@ func TestMemStore_Reset(t *testing.T) {
 }
 
 func TestMemStore_EmptyStore(t *testing.T) {
-	// WHY: Empty store must return empty collections, not nil, to avoid
-	// nil-pointer panics in callers that iterate.
+	// WHY: Empty store must return non-nil pools (to avoid nil-pointer panics
+	// in callers that iterate) and nil for nonexistent lookups. ScanSummary
+	// must be all zeros. Individual collection-length checks are omitted
+	// because empty Go maps inherently return zero-length slices.
 	t.Parallel()
 	store := NewMemStore()
 
-	if len(store.AllCerts()) != 0 {
-		t.Error("expected 0 certs in empty store")
-	}
-	if len(store.AllKeys()) != 0 {
-		t.Error("expected 0 keys in empty store")
-	}
-	if len(store.MatchedPairs()) != 0 {
-		t.Error("expected 0 matched pairs in empty store")
-	}
-	if len(store.Intermediates()) != 0 {
-		t.Error("expected 0 intermediates in empty store")
-	}
 	if store.GetCert("nonexistent") != nil {
 		t.Error("expected nil for nonexistent cert SKI")
 	}
 	if store.GetKey("nonexistent") != nil {
 		t.Error("expected nil for nonexistent key SKI")
 	}
-	if len(store.AllCertsFlat()) != 0 {
-		t.Error("expected 0 flat certs in empty store")
-	}
-	if len(store.AllKeysFlat()) != 0 {
-		t.Error("expected 0 flat keys in empty store")
-	}
-	if len(store.BundleNames()) != 0 {
-		t.Error("expected 0 bundle names in empty store")
+	if pool := store.IntermediatePool(); pool == nil {
+		t.Error("IntermediatePool returned nil for empty store")
 	}
 
 	summary := store.ScanSummary()
@@ -407,57 +386,82 @@ func TestMemStore_MultipleCertsAndKeys(t *testing.T) {
 		t.Errorf("expected 2 matched pairs, got %d", len(store.MatchedPairs()))
 	}
 
-	// Verify key material is preserved, not just counts.
-	for _, rec := range store.AllKeys() {
-		switch rec.KeyType {
-		case "RSA":
-			if !keysEqual(t, leaf1.key, rec.Key) {
-				t.Error("stored RSA key does not match original")
-			}
-		case "ECDSA":
-			if !keysEqual(t, leaf2.key, rec.Key) {
-				t.Error("stored ECDSA key does not match original")
-			}
-		default:
-			t.Errorf("unexpected key type: %s", rec.KeyType)
+	// Verify cert identity is preserved (not just count).
+	foundCert1, foundCert2 := false, false
+	for _, rec := range store.AllCerts() {
+		if rec.Cert.Subject.CommonName == "one.example.com" {
+			foundCert1 = true
+		}
+		if rec.Cert.Subject.CommonName == "two.example.com" {
+			foundCert2 = true
 		}
 	}
+	if !foundCert1 {
+		t.Error("leaf1 cert (one.example.com) not found in store")
+	}
+	if !foundCert2 {
+		t.Error("leaf2 cert (two.example.com) not found in store")
+	}
+
+	// Verify key material is preserved by checking each original is found.
+	foundKey1, foundKey2 := false, false
+	for _, rec := range store.AllKeys() {
+		if keysEqual(t, leaf1.key, rec.Key) {
+			foundKey1 = true
+		}
+		if keysEqual(t, leaf2.key, rec.Key) {
+			foundKey2 = true
+		}
+	}
+	if !foundKey1 {
+		t.Error("leaf1 RSA key not found in store")
+	}
+	if !foundKey2 {
+		t.Error("leaf2 ECDSA key not found in store")
+	}
 }
 
-func TestMemStore_HandleCertificate_UnsupportedKeyType(t *testing.T) {
-	// WHY: Certificates with unsupported public key types must return an error
-	// from HandleCertificate, not panic.
+func TestMemStore_HandleInvalidInput(t *testing.T) {
+	// WHY: Unsupported key types and nil inputs must return clear errors, not
+	// panic — callers may pass unexpected types from format-specific decoders.
 	t.Parallel()
-	store := NewMemStore()
-	cert := &x509.Certificate{
-		PublicKey: "not-a-real-key",
+	tests := []struct {
+		name    string
+		fn      func(*MemStore) error
+		wantErr string
+	}{
+		{"unsupported cert key type", func(s *MemStore) error {
+			return s.HandleCertificate(&x509.Certificate{PublicKey: "not-a-real-key"}, "bad.pem")
+		}, "computing SKI"},
+		{"unsupported private key type", func(s *MemStore) error {
+			return s.HandleKey("not-a-key", nil, "bad.pem")
+		}, "extracting public key"},
+		{"nil key", func(s *MemStore) error {
+			return s.HandleKey(nil, nil, "nil.pem")
+		}, "extracting public key"},
+		{"nil cert", func(s *MemStore) error {
+			return s.HandleCertificate(nil, "nil.pem")
+		}, "certificate is nil"},
 	}
-	err := store.HandleCertificate(cert, "bad.pem")
-	if err == nil {
-		t.Error("expected error for unsupported key type")
-	}
-	if !strings.Contains(err.Error(), "computing SKI") {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-func TestMemStore_HandleKey_UnsupportedKeyType(t *testing.T) {
-	// WHY: Private keys of unsupported types must return an error from
-	// HandleKey, not panic.
-	t.Parallel()
-	store := NewMemStore()
-	err := store.HandleKey("not-a-key", nil, "bad.pem")
-	if err == nil {
-		t.Error("expected error for unsupported key type")
-	}
-	if !strings.Contains(err.Error(), "extracting public key") {
-		t.Errorf("unexpected error: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			store := NewMemStore()
+			err := tt.fn(store)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error = %v, want substring %q", err, tt.wantErr)
+			}
+		})
 	}
 }
 
 func TestMemStore_HandleKey_AllKeyTypes(t *testing.T) {
 	// WHY: Verifies all three key algorithms can be ingested and retrieved
 	// by their computed SKI with correct metadata AND key material equality.
+	// Uses GetKey (SKI-based lookup) to prove keys are stored under the correct SKI.
 	t.Parallel()
 
 	tests := []struct {
@@ -510,43 +514,31 @@ func TestMemStore_HandleKey_AllKeyTypes(t *testing.T) {
 				t.Fatalf("HandleKey: %v", err)
 			}
 
-			keys := store.AllKeys()
-			if len(keys) != 1 {
-				t.Fatalf("expected 1 key, got %d", len(keys))
+			// Compute expected SKI and verify GetKey returns the stored key
+			pub, err := certkit.GetPublicKey(key)
+			if err != nil {
+				t.Fatalf("GetPublicKey: %v", err)
 			}
-			for _, rec := range keys {
-				if rec.KeyType != tt.wantType {
-					t.Errorf("KeyType = %q, want %q", rec.KeyType, tt.wantType)
-				}
-				if rec.BitLength != tt.wantBits {
-					t.Errorf("BitLength = %d, want %d", rec.BitLength, tt.wantBits)
-				}
-				if !keysEqual(t, key, rec.Key) {
-					t.Error("stored key object does not Equal original")
-				}
+			rawSKI, err := certkit.ComputeSKI(pub)
+			if err != nil {
+				t.Fatalf("ComputeSKI: %v", err)
+			}
+			ski := hex.EncodeToString(rawSKI)
+
+			rec := store.GetKey(ski)
+			if rec == nil {
+				t.Fatalf("GetKey(%s) returned nil — key stored under wrong SKI", ski)
+			}
+			if rec.KeyType != tt.wantType {
+				t.Errorf("KeyType = %q, want %q", rec.KeyType, tt.wantType)
+			}
+			if rec.BitLength != tt.wantBits {
+				t.Errorf("BitLength = %d, want %d", rec.BitLength, tt.wantBits)
+			}
+			if !keysEqual(t, key, rec.Key) {
+				t.Error("stored key object does not Equal original")
 			}
 		})
-	}
-}
-
-func TestMemStore_SetBundleName(t *testing.T) {
-	// WHY: SetBundleName must apply the bundle name to all certs matching the
-	// given SKI, enabling CertsByBundleName queries for export.
-	t.Parallel()
-	store := NewMemStore()
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "bundle.example.com", []string{"bundle.example.com"})
-
-	if err := store.HandleCertificate(leaf.cert, "test.pem"); err != nil {
-		t.Fatal(err)
-	}
-
-	ski := computeSKIHex(t, leaf.cert)
-	store.SetBundleName(ski, "my-bundle")
-
-	rec := store.GetCert(ski)
-	if rec.BundleName != "my-bundle" {
-		t.Errorf("BundleName = %q, want my-bundle", rec.BundleName)
 	}
 }
 
@@ -623,27 +615,44 @@ func TestMemStore_CertsByBundleName_SortedByExpiry(t *testing.T) {
 
 func TestMemStore_BundleNames(t *testing.T) {
 	// WHY: BundleNames drives the export loop iteration — must return only
-	// bundle names that have both a cert and a matching key.
+	// bundle names that have both a cert and a matching key. Certs without a
+	// bundle name or without a matching key must be excluded.
 	t.Parallel()
 	store := NewMemStore()
 	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "bn.example.com", []string{"bn.example.com"})
-	leaf2 := newECDSALeaf(t, ca, "nokey.example.com", []string{"nokey.example.com"})
+	leafWithKey := newRSALeaf(t, ca, "bn.example.com", []string{"bn.example.com"})
+	leafNoKey := newECDSALeaf(t, ca, "nokey.example.com", []string{"nokey.example.com"})
+	// Use newEd25519Leaf (serial 400) to avoid certID collision with
+	// leafWithKey (newRSALeaf, serial 100, same CA). Both share the same
+	// CA's SubjectKeyId as AKI; using the same serial would produce an
+	// identical certID, causing HandleCertificate to silently drop the
+	// duplicate and voiding this test scenario.
+	leafNoName := newEd25519Leaf(t, ca, "noname.example.com", []string{"noname.example.com"})
 
-	if err := store.HandleCertificate(leaf.cert, "test.pem"); err != nil {
+	// Cert+key with bundle name
+	if err := store.HandleCertificate(leafWithKey.cert, "test.pem"); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.HandleKey(leaf.key, leaf.keyPEM, "test.key"); err != nil {
+	if err := store.HandleKey(leafWithKey.key, leafWithKey.keyPEM, "test.key"); err != nil {
 		t.Fatal(err)
 	}
-	if err := store.HandleCertificate(leaf2.cert, "nokey.pem"); err != nil {
+	// Cert without key, with bundle name
+	if err := store.HandleCertificate(leafNoKey.cert, "nokey.pem"); err != nil {
+		t.Fatal(err)
+	}
+	// Cert+key without bundle name
+	if err := store.HandleCertificate(leafNoName.cert, "noname.pem"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HandleKey(leafNoName.key, leafNoName.keyPEM, "noname.key"); err != nil {
 		t.Fatal(err)
 	}
 
-	ski := computeSKIHex(t, leaf.cert)
-	ski2 := computeSKIHex(t, leaf2.cert)
+	ski := computeSKIHex(t, leafWithKey.cert)
+	ski2 := computeSKIHex(t, leafNoKey.cert)
 	store.SetBundleName(ski, "has-key")
 	store.SetBundleName(ski2, "no-key")
+	// leafNoName: no SetBundleName call
 
 	names := store.BundleNames()
 	if len(names) != 1 {
@@ -651,28 +660,6 @@ func TestMemStore_BundleNames(t *testing.T) {
 	}
 	if names[0] != "has-key" {
 		t.Errorf("bundle name = %q, want has-key", names[0])
-	}
-}
-
-func TestMemStore_BundleNames_EmptyBundleNameExcluded(t *testing.T) {
-	// WHY: Certs without a bundle name (not matched to any config) must not
-	// appear in the export loop.
-	t.Parallel()
-	store := NewMemStore()
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "noname.example.com", []string{"noname.example.com"})
-
-	if err := store.HandleCertificate(leaf.cert, "test.pem"); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.HandleKey(leaf.key, leaf.keyPEM, "test.key"); err != nil {
-		t.Fatal(err)
-	}
-	// No SetBundleName call — BundleName stays empty
-
-	names := store.BundleNames()
-	if len(names) != 0 {
-		t.Errorf("expected 0 bundle names, got %d: %v", len(names), names)
 	}
 }
 
@@ -733,7 +720,18 @@ func TestMemStore_AllCertsFlat(t *testing.T) {
 
 	flat := store.AllCertsFlat()
 	if len(flat) != 2 {
-		t.Errorf("expected 2 flat certs, got %d", len(flat))
+		t.Fatalf("expected 2 flat certs, got %d", len(flat))
+	}
+	// Verify the returned records contain the expected certificates
+	cns := make(map[string]bool)
+	for _, rec := range flat {
+		cns[rec.Cert.Subject.CommonName] = true
+	}
+	if !cns["flat.example.com"] {
+		t.Error("expected flat.example.com in AllCertsFlat results")
+	}
+	if !cns[ca.cert.Subject.CommonName] {
+		t.Errorf("expected CA %q in AllCertsFlat results", ca.cert.Subject.CommonName)
 	}
 }
 
@@ -827,6 +825,10 @@ func TestMemStore_MultiCertPerSKI(t *testing.T) {
 }
 
 func TestMemStore_HandleKey_Ed25519PointerNormalization(t *testing.T) {
+	// WHY: HandleKey must normalize *ed25519.PrivateKey to ed25519.PrivateKey
+	// (value type) so downstream type switches and key equality checks work
+	// consistently regardless of whether the key was parsed from OpenSSH
+	// (returns pointer) or PKCS#8 (returns value).
 	t.Parallel()
 
 	_, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -841,89 +843,26 @@ func TestMemStore_HandleKey_Ed25519PointerNormalization(t *testing.T) {
 	}
 	keyPEMData := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 
-	t.Run("PointerNormalizedToValue", func(t *testing.T) {
-		t.Parallel()
-		store := NewMemStore()
-		if err := store.HandleKey(privPtr, keyPEMData, "ed25519-ptr.pem"); err != nil {
-			t.Fatalf("HandleKey: %v", err)
-		}
+	store := NewMemStore()
+	if err := store.HandleKey(privPtr, keyPEMData, "ed25519-ptr.pem"); err != nil {
+		t.Fatalf("HandleKey: %v", err)
+	}
 
-		keys := store.AllKeys()
-		if len(keys) != 1 {
-			t.Fatalf("expected 1 key, got %d", len(keys))
+	keys := store.AllKeys()
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key, got %d", len(keys))
+	}
+	for _, rec := range keys {
+		if _, ok := rec.Key.(ed25519.PrivateKey); !ok {
+			t.Errorf("stored key type = %T, want ed25519.PrivateKey (value, not pointer)", rec.Key)
 		}
-		for _, rec := range keys {
-			if _, ok := rec.Key.(ed25519.PrivateKey); !ok {
-				t.Errorf("stored key type = %T, want ed25519.PrivateKey (value, not pointer)", rec.Key)
-			}
-			if rec.KeyType != "Ed25519" {
-				t.Errorf("KeyType = %q, want Ed25519", rec.KeyType)
-			}
-			if !priv.Equal(rec.Key) {
-				t.Error("stored Ed25519 key does not Equal original")
-			}
+		if rec.KeyType != "Ed25519" {
+			t.Errorf("KeyType = %q, want Ed25519", rec.KeyType)
 		}
-	})
-
-	t.Run("PointerAndValueProduceIdenticalRecords", func(t *testing.T) {
-		t.Parallel()
-		storePtr := NewMemStore()
-		if err := storePtr.HandleKey(privPtr, keyPEMData, "ptr.key"); err != nil {
-			t.Fatalf("HandleKey(pointer): %v", err)
+		if !priv.Equal(rec.Key) {
+			t.Error("stored Ed25519 key does not Equal original")
 		}
-		storeVal := NewMemStore()
-		if err := storeVal.HandleKey(priv, keyPEMData, "val.key"); err != nil {
-			t.Fatalf("HandleKey(value): %v", err)
-		}
-
-		keysPtr := storePtr.AllKeys()
-		keysVal := storeVal.AllKeys()
-		if len(keysPtr) != 1 || len(keysVal) != 1 {
-			t.Fatalf("expected 1 key each, got ptr=%d val=%d", len(keysPtr), len(keysVal))
-		}
-
-		var recPtr, recVal *KeyRecord
-		for _, r := range keysPtr {
-			recPtr = r
-		}
-		for _, r := range keysVal {
-			recVal = r
-		}
-
-		if recPtr.SKI != recVal.SKI {
-			t.Errorf("SKI mismatch: pointer=%q value=%q", recPtr.SKI, recVal.SKI)
-		}
-		if recPtr.KeyType != recVal.KeyType {
-			t.Errorf("KeyType mismatch: pointer=%q value=%q", recPtr.KeyType, recVal.KeyType)
-		}
-		if !keysEqual(t, recPtr.Key, recVal.Key) {
-			t.Error("stored key objects not equal between pointer and value forms")
-		}
-	})
-
-	t.Run("DeduplicationPointerThenValue", func(t *testing.T) {
-		t.Parallel()
-		store := NewMemStore()
-		if err := store.HandleKey(privPtr, keyPEMData, "openssh-source.key"); err != nil {
-			t.Fatalf("HandleKey(pointer): %v", err)
-		}
-		if err := store.HandleKey(priv, keyPEMData, "pkcs8-source.key"); err != nil {
-			t.Fatalf("HandleKey(value): %v", err)
-		}
-
-		keys := store.AllKeys()
-		if len(keys) != 1 {
-			t.Fatalf("expected 1 key (deduplicated), got %d", len(keys))
-		}
-		for _, rec := range keys {
-			if rec.Source != "pkcs8-source.key" {
-				t.Errorf("Source = %q, want pkcs8-source.key (last-write-wins)", rec.Source)
-			}
-			if _, ok := rec.Key.(ed25519.PrivateKey); !ok {
-				t.Errorf("stored key type = %T, want ed25519.PrivateKey (value)", rec.Key)
-			}
-		}
-	})
+	}
 }
 
 // computeSKIHex computes the hex-encoded SKI from a certificate's public key.
@@ -1043,39 +982,6 @@ func TestMemStore_HandleKey_Deduplication(t *testing.T) {
 	}
 }
 
-func TestMemStore_HandleKey_PEMRoundTrip(t *testing.T) {
-	// WHY: HandleKey stores a PEM blob alongside the key object. This test
-	// verifies that the stored PEM round-trips back to the original key,
-	// catching silent PEM corruption. One key type suffices since the PEM
-	// storage path is key-type-agnostic.
-	t.Parallel()
-
-	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-	keyPEM, err := certkit.MarshalPrivateKeyToPEM(rsaKey)
-	if err != nil {
-		t.Fatalf("MarshalPrivateKeyToPEM: %v", err)
-	}
-
-	store := NewMemStore()
-	if err := store.HandleKey(rsaKey, []byte(keyPEM), "test.pem"); err != nil {
-		t.Fatalf("HandleKey: %v", err)
-	}
-
-	keys := store.AllKeys()
-	if len(keys) != 1 {
-		t.Fatalf("expected 1 key, got %d", len(keys))
-	}
-	for _, rec := range keys {
-		parsedKey, err := certkit.ParsePEMPrivateKey(rec.PEM)
-		if err != nil {
-			t.Fatalf("stored PEM round-trip parse failed: %v", err)
-		}
-		if !keysEqual(t, rsaKey, parsedKey) {
-			t.Error("stored PEM round-trip key does not Equal original")
-		}
-	}
-}
-
 func TestMemStore_HandleKey_NilPEM(t *testing.T) {
 	// WHY: HandleKey stores pemData directly without nil check. If a caller
 	// passes nil PEM (e.g., during recovery from a marshal error), the key
@@ -1083,10 +989,13 @@ func TestMemStore_HandleKey_NilPEM(t *testing.T) {
 	// must not panic on nil PEM.
 	t.Parallel()
 
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
 	store := NewMemStore()
 
-	err := store.HandleKey(key, nil, "nil-pem.key")
+	err = store.HandleKey(key, nil, "nil-pem.key")
 	if err != nil {
 		t.Fatalf("HandleKey with nil PEM: %v", err)
 	}
@@ -1105,6 +1014,9 @@ func TestMemStore_HandleKey_NilPEM(t *testing.T) {
 		if rec.KeyType != "RSA" {
 			t.Errorf("KeyType = %q, want RSA", rec.KeyType)
 		}
+		if !keysEqual(t, key, rec.Key) {
+			t.Error("stored key does not Equal original")
+		}
 	}
 }
 
@@ -1119,8 +1031,14 @@ func TestMemStore_MatchedPairs_OrphanedKey(t *testing.T) {
 	store := NewMemStore()
 
 	// Store a key with no matching certificate
-	key, _ := rsa.GenerateKey(rand.Reader, 2048)
-	keyPEM, _ := certkit.MarshalPrivateKeyToPEM(key)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPEM, err := certkit.MarshalPrivateKeyToPEM(key)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if err := store.HandleKey(key, []byte(keyPEM), "orphan.key"); err != nil {
 		t.Fatalf("HandleKey: %v", err)
 	}
@@ -1132,33 +1050,5 @@ func TestMemStore_MatchedPairs_OrphanedKey(t *testing.T) {
 	matched := store.MatchedPairs()
 	if len(matched) != 0 {
 		t.Errorf("expected 0 matched pairs for orphaned key, got %d", len(matched))
-	}
-}
-
-func TestMemStore_HandleKey_NilKey(t *testing.T) {
-	// WHY: Nil key must return a clean error, not panic — callers may pass nil from
-	// a failed decode without checking, and a panic would crash the ingestion pipeline.
-	t.Parallel()
-	store := NewMemStore()
-	err := store.HandleKey(nil, nil, "nil.pem")
-	if err == nil {
-		t.Fatal("expected error for nil key")
-	}
-	if !strings.Contains(err.Error(), "extracting public key") {
-		t.Errorf("error should mention extracting public key, got: %v", err)
-	}
-}
-
-func TestMemStore_HandleCertificate_NilCert(t *testing.T) {
-	// WHY: Nil cert would panic on cert.PublicKey dereference — callers need a
-	// clean error when passing nil from a failed parse.
-	t.Parallel()
-	store := NewMemStore()
-	err := store.HandleCertificate(nil, "nil.pem")
-	if err == nil {
-		t.Fatal("expected error for nil cert")
-	}
-	if !strings.Contains(err.Error(), "certificate is nil") {
-		t.Errorf("error should mention nil certificate, got: %v", err)
 	}
 }

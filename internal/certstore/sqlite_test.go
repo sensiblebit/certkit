@@ -88,6 +88,7 @@ func TestSaveToSQLite_RoundTrip(t *testing.T) {
 }
 
 func TestSaveToSQLite_ExistingFileErrors(t *testing.T) {
+	// WHY: VACUUM INTO does not overwrite; saving to an existing file must error to prevent silent data loss.
 	t.Parallel()
 
 	store := NewMemStore()
@@ -107,6 +108,7 @@ func TestSaveToSQLite_ExistingFileErrors(t *testing.T) {
 }
 
 func TestLoadFromSQLite_NonexistentFile(t *testing.T) {
+	// WHY: Nonexistent path must produce an error, not silently return an empty store.
 	t.Parallel()
 
 	store := NewMemStore()
@@ -120,6 +122,7 @@ func TestLoadFromSQLite_NonexistentFile(t *testing.T) {
 }
 
 func TestLoadFromSQLite_EmptyDB(t *testing.T) {
+	// WHY: An empty database must produce empty collections, not phantom data or errors.
 	t.Parallel()
 
 	emptyStore := NewMemStore()
@@ -144,6 +147,7 @@ func TestLoadFromSQLite_EmptyDB(t *testing.T) {
 }
 
 func TestLoadFromSQLite_MergesWithExisting(t *testing.T) {
+	// WHY: LoadFromSQLite must merge into the store, not replace its existing contents.
 	t.Parallel()
 
 	caA := newRSACA(t)

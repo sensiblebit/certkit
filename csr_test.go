@@ -7,7 +7,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
-	"math/big"
 	"strings"
 	"testing"
 	"time"
@@ -16,17 +15,27 @@ import (
 func TestGenerateCSR_DoesNotCopyEmailAddresses(t *testing.T) {
 	// WHY: GenerateCSR intentionally does NOT copy EmailAddresses from the source
 	// cert (unlike GenerateCSRFromCSR which does). This documents that design choice.
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	t.Parallel()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	template := &x509.Certificate{
-		SerialNumber:   big.NewInt(1),
+		SerialNumber:   randomSerial(t),
 		Subject:        pkix.Name{CommonName: "email-test.example.com"},
 		DNSNames:       []string{"email-test.example.com"},
 		EmailAddresses: []string{"admin@example.com", "security@example.com"},
 		NotBefore:      time.Now().Add(-1 * time.Hour),
 		NotAfter:       time.Now().Add(24 * time.Hour),
 	}
-	certBytes, _ := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	cert, _ := x509.ParseCertificate(certBytes)
+	certBytes, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(certBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	csrPEM, _, err := GenerateCSR(cert, key)
 	if err != nil {
@@ -51,100 +60,9 @@ func TestGenerateCSR_DoesNotCopyEmailAddresses(t *testing.T) {
 	}
 }
 
-func TestGenerateCSR_withKey(t *testing.T) {
-	// WHY: Verifies that GenerateCSR copies Subject, DNS SANs, IP SANs, and URIs
-	// from the source certificate to the CSR template.
-	leaf, key := generateLeafWithSANs(t)
-
-	csrPEM, keyPEM, err := GenerateCSR(leaf, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if keyPEM != "" {
-		t.Error("expected empty keyPEM when private key is provided")
-	}
-
-	block, _ := pem.Decode([]byte(csrPEM))
-	if block == nil || block.Type != "CERTIFICATE REQUEST" {
-		t.Fatal("failed to decode CSR PEM")
-	}
-	csr, err := x509.ParseCertificateRequest(block.Bytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := csr.CheckSignature(); err != nil {
-		t.Fatalf("CSR signature invalid: %v", err)
-	}
-
-	if csr.Subject.CommonName != leaf.Subject.CommonName {
-		t.Errorf("CN=%q, want %q", csr.Subject.CommonName, leaf.Subject.CommonName)
-	}
-	if len(csr.Subject.Organization) != 1 || csr.Subject.Organization[0] != "Test Org" {
-		t.Errorf("Organization=%v, want [Test Org]", csr.Subject.Organization)
-	}
-	if len(csr.DNSNames) != 2 {
-		t.Errorf("DNSNames count=%d, want 2", len(csr.DNSNames))
-	}
-	if len(csr.IPAddresses) != 2 {
-		t.Errorf("IPAddresses count=%d, want 2", len(csr.IPAddresses))
-	}
-	if len(csr.URIs) != 1 || csr.URIs[0].String() != "spiffe://example.com/workload" {
-		t.Errorf("URIs=%v, want [spiffe://example.com/workload]", csr.URIs)
-	}
-}
-
-func TestGenerateCSR_autoGenerate(t *testing.T) {
-	// WHY: When no key is provided, GenerateCSR must auto-generate an ECDSA P-256 key and return it; callers depend on this for key+CSR generation in one step.
-	leaf, _ := generateLeafWithSANs(t)
-
-	csrPEM, keyPEM, err := GenerateCSR(leaf, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if keyPEM == "" {
-		t.Fatal("expected non-empty keyPEM for auto-generated key")
-	}
-
-	keyBlock, _ := pem.Decode([]byte(keyPEM))
-	if keyBlock == nil || keyBlock.Type != "PRIVATE KEY" {
-		t.Fatal("failed to decode key PEM or wrong block type")
-	}
-	parsedKey, err := x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ecKey, ok := parsedKey.(*ecdsa.PrivateKey)
-	if !ok {
-		t.Fatalf("expected *ecdsa.PrivateKey, got %T", parsedKey)
-	}
-	if ecKey.Curve != elliptic.P256() {
-		t.Errorf("expected P-256 curve, got %v", ecKey.Curve.Params().Name)
-	}
-
-	block, _ := pem.Decode([]byte(csrPEM))
-	if block == nil {
-		t.Fatal("failed to decode CSR PEM")
-	}
-	csr, err := x509.ParseCertificateRequest(block.Bytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := csr.CheckSignature(); err != nil {
-		t.Fatalf("CSR signature invalid: %v", err)
-	}
-
-	if csr.Subject.CommonName != leaf.Subject.CommonName {
-		t.Errorf("CN=%q, want %q", csr.Subject.CommonName, leaf.Subject.CommonName)
-	}
-	if len(csr.DNSNames) != 2 {
-		t.Errorf("DNSNames count=%d, want 2", len(csr.DNSNames))
-	}
-}
-
 func TestGenerateCSR_nonSignerKey(t *testing.T) {
 	// WHY: Keys that do not implement crypto.Signer must be rejected with a clear error, not panic during CSR signing.
+	t.Parallel()
 	leaf, _ := generateLeafWithSANs(t)
 	_, _, err := GenerateCSR(leaf, struct{}{})
 	if err == nil {
@@ -159,6 +77,7 @@ func TestGenerateCSR_nonSignerKey(t *testing.T) {
 
 func TestClassifyHosts(t *testing.T) {
 	// WHY: ClassifyHosts routes host strings to DNS, IP, URI, or email SANs; misclassification puts values in the wrong X.509 extension.
+	t.Parallel()
 	tests := []struct {
 		name       string
 		hosts      []string
@@ -198,9 +117,27 @@ func TestClassifyHosts(t *testing.T) {
 			nil,
 			nil, nil, nil, nil,
 		},
+		{
+			// WHY: url.Parse("example.com/path") produces an empty Scheme and Host, so
+			// ClassifyHosts must fall through to DNS classification instead of URI.
+			// A bug here would put bare hostnames with paths into the URI SAN extension.
+			"URL without scheme",
+			[]string{"example.com/path"},
+			[]string{"example.com/path"}, nil, nil, nil,
+		},
+		// Email edge cases: email detection previously used strings.Contains(h, "@")
+		// which matched invalid inputs like "user@", "@example.com", and display-name
+		// forms. Using mail.ParseAddress with a bare-address guard rejects these correctly.
+		{"trailing at sign → DNS", []string{"user@"}, []string{"user@"}, nil, nil, nil},
+		{"leading at sign → DNS", []string{"@example.com"}, []string{"@example.com"}, nil, nil, nil},
+		{"display name form → DNS", []string{"\"John\" <john@example.com>"}, []string{"\"John\" <john@example.com>"}, nil, nil, nil},
+		{"angle bracket form → DNS", []string{"<john@example.com>"}, []string{"<john@example.com>"}, nil, nil, nil},
+		{"double at → DNS", []string{"foo@bar@baz.com"}, []string{"foo@bar@baz.com"}, nil, nil, nil},
+		{"at only → DNS", []string{"@"}, []string{"@"}, nil, nil, nil},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			dns, ips, uris, emails := ClassifyHosts(tt.hosts)
 
 			// Verify DNS names
@@ -246,74 +183,11 @@ func TestClassifyHosts(t *testing.T) {
 	}
 }
 
-func TestClassifyHosts_URLWithoutScheme(t *testing.T) {
-	// WHY: url.Parse("example.com/path") produces an empty Scheme and Host, so
-	// ClassifyHosts must fall through to DNS classification instead of URI.
-	// A bug here would put bare hostnames with paths into the URI SAN extension.
-	dns, ips, uris, emails := ClassifyHosts([]string{"example.com/path"})
-
-	if len(uris) != 0 {
-		t.Errorf("expected 0 URIs for schemeless URL, got %d: %v", len(uris), uris)
-	}
-	if len(ips) != 0 {
-		t.Errorf("expected 0 IPs, got %d", len(ips))
-	}
-	if len(emails) != 0 {
-		t.Errorf("expected 0 emails, got %d", len(emails))
-	}
-	if len(dns) != 1 {
-		t.Fatalf("expected 1 DNS name, got %d", len(dns))
-	}
-	if dns[0] != "example.com/path" {
-		t.Errorf("DNS[0]=%q, want %q", dns[0], "example.com/path")
-	}
-}
-
-func TestClassifyHosts_EmailEdgeCases(t *testing.T) {
-	// WHY: email detection previously used strings.Contains(h, "@") which matched
-	// invalid inputs like "user@", "@example.com", and display-name forms.
-	// Using mail.ParseAddress with a bare-address guard rejects these correctly.
-	tests := []struct {
-		name     string
-		host     string
-		wantDNS  bool
-		wantMail bool
-	}{
-		{"valid bare email", "admin@example.com", false, true},
-		{"trailing at sign", "user@", true, false},
-		{"leading at sign", "@example.com", true, false},
-		{"display name form", "\"John\" <john@example.com>", true, false},
-		{"angle bracket form", "<john@example.com>", true, false},
-		{"double at", "foo@bar@baz.com", true, false},
-		{"at only", "@", true, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			dns, _, _, emails := ClassifyHosts([]string{tt.host})
-			if tt.wantMail {
-				if len(emails) != 1 {
-					t.Errorf("expected 1 email, got %d (dns=%v)", len(emails), dns)
-				}
-				if len(dns) != 0 {
-					t.Errorf("expected 0 DNS, got %d: %v", len(dns), dns)
-				}
-			}
-			if tt.wantDNS {
-				if len(dns) != 1 {
-					t.Errorf("expected 1 DNS, got %d (emails=%v)", len(dns), emails)
-				}
-				if len(emails) != 0 {
-					t.Errorf("expected 0 emails, got %d: %v", len(emails), emails)
-				}
-			}
-		})
-	}
-}
-
 // --- ParseCSRTemplate tests ---
 
 func TestParseCSRTemplate_Valid(t *testing.T) {
 	// WHY: CSR templates drive programmatic CSR generation; subject and host fields must parse correctly from JSON or the generated CSR will be wrong.
+	t.Parallel()
 	data := []byte(`{
 		"subject": {
 			"common_name": "example.com",
@@ -333,12 +207,19 @@ func TestParseCSRTemplate_Valid(t *testing.T) {
 		t.Errorf("Org=%v", tmpl.Subject.Organization)
 	}
 	if len(tmpl.Hosts) != 2 {
-		t.Errorf("Hosts count=%d, want 2", len(tmpl.Hosts))
+		t.Fatalf("Hosts count=%d, want 2", len(tmpl.Hosts))
+	}
+	if tmpl.Hosts[0] != "example.com" {
+		t.Errorf("Hosts[0]=%q, want example.com", tmpl.Hosts[0])
+	}
+	if tmpl.Hosts[1] != "10.0.0.1" {
+		t.Errorf("Hosts[1]=%q, want 10.0.0.1", tmpl.Hosts[1])
 	}
 }
 
 func TestParseCSRTemplate_Invalid(t *testing.T) {
 	// WHY: Invalid JSON must produce a "parsing CSR template" error, not a generic unmarshal message; users need to know which file is broken.
+	t.Parallel()
 	_, err := ParseCSRTemplate([]byte("not json"))
 	if err == nil {
 		t.Error("expected error for invalid JSON")
@@ -350,146 +231,161 @@ func TestParseCSRTemplate_Invalid(t *testing.T) {
 
 // --- GenerateCSRFromTemplate tests ---
 
-func TestGenerateCSRFromTemplate_Basic(t *testing.T) {
-	// WHY: Template-based CSR generation must correctly map subject, DNS names, and IPs into the CSR; this is the primary programmatic CSR creation path.
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	tmpl := &CSRTemplate{
-		Subject: CSRSubject{
-			CommonName:   "test.example.com",
-			Organization: []string{"Test Org"},
-			Country:      []string{"US"},
+func TestGenerateCSRFromTemplate(t *testing.T) {
+	// WHY: Template-based CSR generation must correctly map subject fields,
+	// DNS names, IPs, URIs, and emails into the CSR. Covers: basic subject+hosts,
+	// auto-CN from first DNS name, empty CN with IP-only hosts, mixed SAN types,
+	// and empty host list. Each case exercises a distinct code path in host
+	// classification and CN auto-fill logic.
+	t.Parallel()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name        string
+		tmpl        *CSRTemplate
+		wantCN      string
+		wantOrg     []string
+		wantCountry []string
+		wantDNS     []string
+		wantIPStrs  []string
+		wantURIStrs []string
+		wantEmails  []string
+	}{
+		{
+			name: "subject with DNS and IP hosts",
+			tmpl: &CSRTemplate{
+				Subject: CSRSubject{
+					CommonName:   "test.example.com",
+					Organization: []string{"Test Org"},
+					Country:      []string{"US"},
+				},
+				Hosts: []string{"test.example.com", "www.test.example.com", "10.0.0.1"},
+			},
+			wantCN:      "test.example.com",
+			wantOrg:     []string{"Test Org"},
+			wantCountry: []string{"US"},
+			wantDNS:     []string{"test.example.com", "www.test.example.com"},
+			wantIPStrs:  []string{"10.0.0.1"},
 		},
-		Hosts: []string{"test.example.com", "www.test.example.com", "10.0.0.1"},
+		{
+			name: "auto-CN from first DNS host",
+			tmpl: &CSRTemplate{
+				Subject: CSRSubject{},
+				Hosts:   []string{"auto.example.com", "www.auto.example.com"},
+			},
+			wantCN:  "auto.example.com",
+			wantDNS: []string{"auto.example.com", "www.auto.example.com"},
+		},
+		{
+			name: "empty CN with IP-only hosts",
+			tmpl: &CSRTemplate{
+				Subject: CSRSubject{},
+				Hosts:   []string{"10.0.0.1", "192.168.1.1"},
+			},
+			wantCN:     "",
+			wantIPStrs: []string{"10.0.0.1", "192.168.1.1"},
+		},
+		{
+			name: "mixed DNS, URI, and email hosts",
+			tmpl: &CSRTemplate{
+				Subject: CSRSubject{CommonName: "test.example.com"},
+				Hosts:   []string{"test.example.com", "spiffe://example.com/workload", "admin@example.com"},
+			},
+			wantCN:      "test.example.com",
+			wantDNS:     []string{"test.example.com"},
+			wantURIStrs: []string{"spiffe://example.com/workload"},
+			wantEmails:  []string{"admin@example.com"},
+		},
+		{
+			name: "empty host list",
+			tmpl: &CSRTemplate{
+				Subject: CSRSubject{CommonName: "no-sans.example.com"},
+				Hosts:   []string{},
+			},
+			wantCN: "no-sans.example.com",
+		},
 	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			csrPEM, err := GenerateCSRFromTemplate(tt.tmpl, key)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	csrPEM, err := GenerateCSRFromTemplate(tmpl, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	block, _ := pem.Decode([]byte(csrPEM))
-	if block == nil || block.Type != "CERTIFICATE REQUEST" {
-		t.Fatal("failed to decode CSR PEM")
-	}
-	csr, err := x509.ParseCertificateRequest(block.Bytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := csr.CheckSignature(); err != nil {
-		t.Fatalf("CSR signature invalid: %v", err)
-	}
-	if csr.Subject.CommonName != "test.example.com" {
-		t.Errorf("CN=%q, want test.example.com", csr.Subject.CommonName)
-	}
-	if len(csr.DNSNames) != 2 {
-		t.Errorf("DNSNames count=%d, want 2", len(csr.DNSNames))
-	}
-	if len(csr.IPAddresses) != 1 {
-		t.Errorf("IPAddresses count=%d, want 1", len(csr.IPAddresses))
-	}
-}
-
-func TestGenerateCSRFromTemplate_AutoCN(t *testing.T) {
-	// WHY: When CN is empty, the first DNS host should be used as CN; without this auto-fill, CAs may reject the CSR for missing CN.
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	tmpl := &CSRTemplate{
-		Subject: CSRSubject{},
-		Hosts:   []string{"auto.example.com", "www.auto.example.com"},
-	}
-
-	csrPEM, err := GenerateCSRFromTemplate(tmpl, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	block, _ := pem.Decode([]byte(csrPEM))
-	csr, err := x509.ParseCertificateRequest(block.Bytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if csr.Subject.CommonName != "auto.example.com" {
-		t.Errorf("auto-CN=%q, want auto.example.com", csr.Subject.CommonName)
-	}
-}
-
-func TestGenerateCSRFromTemplate_EmptyCNWithIPOnly(t *testing.T) {
-	// WHY: When CommonName is empty and only IP hosts are provided (no DNS names),
-	// the CN auto-fill logic (which uses the first DNS name) must leave CN empty.
-	// A bug here would panic on an empty dnsNames slice or set CN to an IP string.
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	tmpl := &CSRTemplate{
-		Subject: CSRSubject{},
-		Hosts:   []string{"10.0.0.1", "192.168.1.1"},
-	}
-
-	csrPEM, err := GenerateCSRFromTemplate(tmpl, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	block, _ := pem.Decode([]byte(csrPEM))
-	if block == nil {
-		t.Fatal("failed to decode CSR PEM")
-	}
-	csr, err := x509.ParseCertificateRequest(block.Bytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := csr.CheckSignature(); err != nil {
-		t.Fatalf("CSR signature invalid: %v", err)
-	}
-
-	// CN should remain empty since there are no DNS names to auto-fill from
-	if csr.Subject.CommonName != "" {
-		t.Errorf("expected empty CN when only IPs provided, got %q", csr.Subject.CommonName)
-	}
-
-	// DNS names should be empty
-	if len(csr.DNSNames) != 0 {
-		t.Errorf("expected 0 DNS names, got %d: %v", len(csr.DNSNames), csr.DNSNames)
-	}
-
-	// IPs should be present
-	if len(csr.IPAddresses) != 2 {
-		t.Errorf("expected 2 IP addresses, got %d", len(csr.IPAddresses))
-	}
-}
-
-func TestGenerateCSRFromTemplate_WithEmailAndURI(t *testing.T) {
-	// WHY: Templates with mixed host types (DNS, URI, email) must classify each correctly; wrong classification puts values in the wrong SAN extension.
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	tmpl := &CSRTemplate{
-		Subject: CSRSubject{CommonName: "test.example.com"},
-		Hosts:   []string{"test.example.com", "spiffe://example.com/workload", "admin@example.com"},
-	}
-
-	csrPEM, err := GenerateCSRFromTemplate(tmpl, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	block, _ := pem.Decode([]byte(csrPEM))
-	csr, err := x509.ParseCertificateRequest(block.Bytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(csr.DNSNames) != 1 {
-		t.Errorf("DNSNames count=%d, want 1", len(csr.DNSNames))
-	}
-	if len(csr.URIs) != 1 {
-		t.Errorf("URIs count=%d, want 1", len(csr.URIs))
-	}
-	if len(csr.EmailAddresses) != 1 {
-		t.Errorf("EmailAddresses count=%d, want 1", len(csr.EmailAddresses))
+			csr, err := ParsePEMCertificateRequest([]byte(csrPEM))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if csr.Subject.CommonName != tt.wantCN {
+				t.Errorf("CN=%q, want %q", csr.Subject.CommonName, tt.wantCN)
+			}
+			if len(csr.Subject.Organization) != len(tt.wantOrg) {
+				t.Errorf("Organization count=%d, want %d", len(csr.Subject.Organization), len(tt.wantOrg))
+			}
+			for i, got := range csr.Subject.Organization {
+				if i < len(tt.wantOrg) && got != tt.wantOrg[i] {
+					t.Errorf("Organization[%d]=%q, want %q", i, got, tt.wantOrg[i])
+				}
+			}
+			if len(csr.Subject.Country) != len(tt.wantCountry) {
+				t.Errorf("Country count=%d, want %d", len(csr.Subject.Country), len(tt.wantCountry))
+			}
+			for i, got := range csr.Subject.Country {
+				if i < len(tt.wantCountry) && got != tt.wantCountry[i] {
+					t.Errorf("Country[%d]=%q, want %q", i, got, tt.wantCountry[i])
+				}
+			}
+			if len(csr.DNSNames) != len(tt.wantDNS) {
+				t.Errorf("DNSNames count=%d, want %d", len(csr.DNSNames), len(tt.wantDNS))
+			}
+			for i, got := range csr.DNSNames {
+				if i < len(tt.wantDNS) && got != tt.wantDNS[i] {
+					t.Errorf("DNSNames[%d]=%q, want %q", i, got, tt.wantDNS[i])
+				}
+			}
+			if len(csr.IPAddresses) != len(tt.wantIPStrs) {
+				t.Errorf("IPAddresses count=%d, want %d", len(csr.IPAddresses), len(tt.wantIPStrs))
+			}
+			for i, got := range csr.IPAddresses {
+				if i < len(tt.wantIPStrs) && got.String() != tt.wantIPStrs[i] {
+					t.Errorf("IPAddresses[%d]=%q, want %q", i, got.String(), tt.wantIPStrs[i])
+				}
+			}
+			if len(csr.URIs) != len(tt.wantURIStrs) {
+				t.Errorf("URIs count=%d, want %d", len(csr.URIs), len(tt.wantURIStrs))
+			}
+			for i, got := range csr.URIs {
+				if i < len(tt.wantURIStrs) && got.String() != tt.wantURIStrs[i] {
+					t.Errorf("URIs[%d]=%q, want %q", i, got.String(), tt.wantURIStrs[i])
+				}
+			}
+			if len(csr.EmailAddresses) != len(tt.wantEmails) {
+				t.Errorf("EmailAddresses count=%d, want %d", len(csr.EmailAddresses), len(tt.wantEmails))
+			}
+			for i, got := range csr.EmailAddresses {
+				if i < len(tt.wantEmails) && got != tt.wantEmails[i] {
+					t.Errorf("EmailAddresses[%d]=%q, want %q", i, got, tt.wantEmails[i])
+				}
+			}
+		})
 	}
 }
 
 // --- GenerateCSRFromCSR tests ---
 
-func TestGenerateCSRFromCSR_CopiesFields(t *testing.T) {
-	// WHY: Regenerating a CSR from an existing one must preserve all subject and SAN fields; dropped fields would change the cert's identity on renewal.
-	// Create source CSR
-	srcKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+func TestGenerateCSRFromCSR_CopiesFieldsAndRotatesKey(t *testing.T) {
+	// WHY: Regenerating a CSR from an existing one must preserve all subject
+	// and SAN fields while using the new key; dropped fields would change the
+	// cert's identity on renewal, and reusing the source key defeats key rotation.
+	t.Parallel()
+	srcKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	leaf, _ := generateLeafWithSANs(t)
 	srcCSRPEM, _, err := GenerateCSR(leaf, srcKey)
 	if err != nil {
@@ -501,8 +397,10 @@ func TestGenerateCSRFromCSR_CopiesFields(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Generate new CSR from source with different key
-	newKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	newKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
 	newCSRPEM, err := GenerateCSRFromCSR(srcCSR, newKey)
 	if err != nil {
 		t.Fatal(err)
@@ -513,41 +411,35 @@ func TestGenerateCSRFromCSR_CopiesFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := newCSR.CheckSignature(); err != nil {
-		t.Fatalf("new CSR signature invalid: %v", err)
-	}
 	if newCSR.Subject.CommonName != srcCSR.Subject.CommonName {
 		t.Errorf("CN=%q, want %q", newCSR.Subject.CommonName, srcCSR.Subject.CommonName)
 	}
 	if len(newCSR.DNSNames) != len(srcCSR.DNSNames) {
-		t.Errorf("DNSNames count=%d, want %d", len(newCSR.DNSNames), len(srcCSR.DNSNames))
+		t.Fatalf("DNSNames count=%d, want %d", len(newCSR.DNSNames), len(srcCSR.DNSNames))
+	}
+	for i, dns := range newCSR.DNSNames {
+		if dns != srcCSR.DNSNames[i] {
+			t.Errorf("DNSNames[%d]=%q, want %q", i, dns, srcCSR.DNSNames[i])
+		}
 	}
 	if len(newCSR.IPAddresses) != len(srcCSR.IPAddresses) {
-		t.Errorf("IPAddresses count=%d, want %d", len(newCSR.IPAddresses), len(srcCSR.IPAddresses))
+		t.Fatalf("IPAddresses count=%d, want %d", len(newCSR.IPAddresses), len(srcCSR.IPAddresses))
 	}
-}
-
-func TestGenerateCSRFromCSR_DifferentKey(t *testing.T) {
-	// WHY: The new CSR must use the new key's public key, not the source's; reusing the source's key would defeat the purpose of key rotation.
-	// The new CSR should be signed by a different key than the source
-	srcKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	leaf, _ := generateLeafWithSANs(t)
-	srcCSRPEM, _, _ := GenerateCSR(leaf, srcKey)
-	block, _ := pem.Decode([]byte(srcCSRPEM))
-	srcCSR, _ := x509.ParseCertificateRequest(block.Bytes)
-
-	newKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	newCSRPEM, err := GenerateCSRFromCSR(srcCSR, newKey)
-	if err != nil {
-		t.Fatal(err)
+	for i, ip := range newCSR.IPAddresses {
+		if !ip.Equal(srcCSR.IPAddresses[i]) {
+			t.Errorf("IPAddresses[%d]=%v, want %v", i, ip, srcCSR.IPAddresses[i])
+		}
 	}
 
-	block, _ = pem.Decode([]byte(newCSRPEM))
-	newCSR, _ := x509.ParseCertificateRequest(block.Bytes)
-
-	// Public keys should differ
-	srcPub := srcCSR.PublicKey.(*ecdsa.PublicKey)
-	newPub := newCSR.PublicKey.(*ecdsa.PublicKey)
+	// Public keys must differ — new CSR uses the rotated key
+	srcPub, ok := srcCSR.PublicKey.(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatalf("expected source *ecdsa.PublicKey, got %T", srcCSR.PublicKey)
+	}
+	newPub, ok := newCSR.PublicKey.(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatalf("expected new *ecdsa.PublicKey, got %T", newCSR.PublicKey)
+	}
 	if srcPub.Equal(newPub) {
 		t.Error("new CSR should have a different public key than source")
 	}
@@ -555,6 +447,7 @@ func TestGenerateCSRFromCSR_DifferentKey(t *testing.T) {
 
 func TestGenerateCSRFromCSR_PreservesEmailAddresses(t *testing.T) {
 	// WHY: Email SAN addresses must survive CSR-to-CSR regeneration; dropping them would break S/MIME or client-auth cert renewals.
+	t.Parallel()
 	// Create a source CSR with email addresses via GenerateCSRFromTemplate
 	srcKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -595,11 +488,6 @@ func TestGenerateCSRFromCSR_PreservesEmailAddresses(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Verify new CSR signature
-	if err := newCSR.CheckSignature(); err != nil {
-		t.Fatalf("new CSR signature invalid: %v", err)
-	}
-
 	// Verify email addresses are preserved
 	if len(newCSR.EmailAddresses) != 2 {
 		t.Fatalf("new CSR EmailAddresses count=%d, want 2", len(newCSR.EmailAddresses))
@@ -631,78 +519,96 @@ func TestGenerateCSR_ParsePEMRoundTrip(t *testing.T) {
 	// WHY: Per T-6, the CSR encode/decode path needs a round-trip test that
 	// generates a CSR via GenerateCSR and parses it back via ParsePEMCertificateRequest,
 	// then verifies all subject fields and SANs survive the cycle intact.
+	// Covers both the auto-key path (key=nil) and provided-key path (keyPEM="").
 	t.Parallel()
-	leaf, _ := generateLeafWithSANs(t)
+	leaf, existingKey := generateLeafWithSANs(t)
 
-	csrPEM, keyPEM, err := GenerateCSR(leaf, nil)
-	if err != nil {
-		t.Fatalf("GenerateCSR: %v", err)
-	}
-	if csrPEM == "" {
-		t.Fatal("CSR PEM is empty")
-	}
-	if keyPEM == "" {
-		t.Fatal("auto-generated key PEM is empty")
-	}
+	// Subtest: auto-generated key
+	t.Run("auto key", func(t *testing.T) {
+		t.Parallel()
+		csrPEM, keyPEM, err := GenerateCSR(leaf, nil)
+		if err != nil {
+			t.Fatalf("GenerateCSR: %v", err)
+		}
+		if csrPEM == "" {
+			t.Fatal("CSR PEM is empty")
+		}
+		if keyPEM == "" {
+			t.Fatal("auto-generated key PEM is empty")
+		}
 
-	// Parse via the public API
+		// Verify auto-generated key is parseable ECDSA (certkit's default).
+		// Exact curve check removed (T-9: tautological — csr.go hardcodes P-256).
+		keyBlock, _ := pem.Decode([]byte(keyPEM))
+		if keyBlock == nil || keyBlock.Type != "PRIVATE KEY" {
+			t.Fatal("failed to decode key PEM or wrong block type")
+		}
+		parsedKey, err := x509.ParsePKCS8PrivateKey(keyBlock.Bytes)
+		if err != nil {
+			t.Fatalf("parsing auto-generated key: %v", err)
+		}
+		if _, ok := parsedKey.(*ecdsa.PrivateKey); !ok {
+			t.Fatalf("expected auto-generated *ecdsa.PrivateKey, got %T", parsedKey)
+		}
+
+		verifyCSRFields(t, csrPEM, leaf)
+	})
+
+	// Subtest: provided key (keyPEM must be empty)
+	t.Run("provided key", func(t *testing.T) {
+		t.Parallel()
+		csrPEM, keyPEM, err := GenerateCSR(leaf, existingKey)
+		if err != nil {
+			t.Fatalf("GenerateCSR: %v", err)
+		}
+		if keyPEM != "" {
+			t.Error("expected empty keyPEM when private key is provided")
+		}
+
+		verifyCSRFields(t, csrPEM, leaf)
+	})
+}
+
+// verifyCSRFields parses a CSR PEM and checks that all subject and SAN fields
+// match the source certificate. Used by TestGenerateCSR_ParsePEMRoundTrip.
+func verifyCSRFields(t *testing.T, csrPEM string, leaf *x509.Certificate) {
+	t.Helper()
+
 	csr, err := ParsePEMCertificateRequest([]byte(csrPEM))
 	if err != nil {
 		t.Fatalf("ParsePEMCertificateRequest: %v", err)
 	}
-
-	// Verify signature
 	if err := VerifyCSR(csr); err != nil {
 		t.Fatalf("CSR signature invalid: %v", err)
 	}
-
-	// Verify subject fields survived
 	if csr.Subject.CommonName != leaf.Subject.CommonName {
 		t.Errorf("CN = %q, want %q", csr.Subject.CommonName, leaf.Subject.CommonName)
 	}
-
-	// Verify DNS names survived (may not be exact due to deduplication logic)
-	if len(csr.DNSNames) == 0 {
-		t.Error("CSR should have at least one DNS name")
+	if len(csr.Subject.Organization) != len(leaf.Subject.Organization) {
+		t.Errorf("Organization = %v, want %v", csr.Subject.Organization, leaf.Subject.Organization)
 	}
-
-	// Verify IP addresses survived
-	if len(leaf.IPAddresses) > 0 && len(csr.IPAddresses) != len(leaf.IPAddresses) {
-		t.Errorf("IP addresses count = %d, want %d", len(csr.IPAddresses), len(leaf.IPAddresses))
+	if len(csr.DNSNames) != len(leaf.DNSNames) {
+		t.Fatalf("DNSNames count = %d, want %d", len(csr.DNSNames), len(leaf.DNSNames))
 	}
-}
-
-func TestGenerateCSRFromTemplate_EmptyHosts(t *testing.T) {
-	// WHY: A template with no hosts should produce a valid CSR with no SANs —
-	// verifies the function handles empty host lists gracefully.
-	t.Parallel()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
+	for i, got := range csr.DNSNames {
+		if got != leaf.DNSNames[i] {
+			t.Errorf("DNSNames[%d] = %q, want %q", i, got, leaf.DNSNames[i])
+		}
 	}
-
-	tmpl := &CSRTemplate{
-		Subject: CSRSubject{
-			CommonName:   "no-sans.example.com",
-			Organization: []string{"Test Org"},
-		},
-		Hosts: []string{},
+	if len(csr.IPAddresses) != len(leaf.IPAddresses) {
+		t.Fatalf("IP addresses count = %d, want %d", len(csr.IPAddresses), len(leaf.IPAddresses))
 	}
-
-	csrPEM, err := GenerateCSRFromTemplate(tmpl, key)
-	if err != nil {
-		t.Fatalf("GenerateCSRFromTemplate: %v", err)
+	for i, got := range csr.IPAddresses {
+		if !got.Equal(leaf.IPAddresses[i]) {
+			t.Errorf("IPAddresses[%d] = %v, want %v", i, got, leaf.IPAddresses[i])
+		}
 	}
-
-	csr, err := ParsePEMCertificateRequest([]byte(csrPEM))
-	if err != nil {
-		t.Fatalf("parse CSR: %v", err)
+	if len(csr.URIs) != len(leaf.URIs) {
+		t.Errorf("URIs count = %d, want %d", len(csr.URIs), len(leaf.URIs))
 	}
-
-	if len(csr.DNSNames) != 0 {
-		t.Errorf("expected 0 DNS names, got %d: %v", len(csr.DNSNames), csr.DNSNames)
-	}
-	if len(csr.IPAddresses) != 0 {
-		t.Errorf("expected 0 IP addresses, got %d", len(csr.IPAddresses))
+	for i, got := range csr.URIs {
+		if got.String() != leaf.URIs[i].String() {
+			t.Errorf("URIs[%d] = %q, want %q", i, got, leaf.URIs[i])
+		}
 	}
 }

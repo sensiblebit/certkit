@@ -22,6 +22,18 @@ import (
 	"github.com/sensiblebit/certkit/internal/certstore"
 )
 
+// randomSerial generates a random certificate serial number.
+// Using random serials prevents certID collisions when multiple leaves
+// are created from the same CA within a single test.
+func randomSerial(t *testing.T) *big.Int {
+	t.Helper()
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		t.Fatalf("generate random serial: %v", err)
+	}
+	return serial
+}
+
 // testCA holds a CA certificate and its private key for signing leaf certs.
 type testCA struct {
 	cert    *x509.Certificate
@@ -48,7 +60,7 @@ func newRSACA(t *testing.T) testCA {
 	}
 
 	tmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "Test RSA Root CA", Organization: []string{"TestOrg"}},
 		NotBefore:             time.Now().Add(-1 * time.Hour),
 		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
@@ -82,7 +94,7 @@ func newECDSACA(t *testing.T) testCA {
 	}
 
 	tmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(2),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "Test ECDSA Root CA", Organization: []string{"TestOrg"}},
 		NotBefore:             time.Now().Add(-1 * time.Hour),
 		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
@@ -116,7 +128,7 @@ func newRSALeaf(t *testing.T, ca testCA, cn string, sans []string, ips []net.IP)
 	}
 
 	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(100),
+		SerialNumber: randomSerial(t),
 		Subject: pkix.Name{
 			CommonName:   cn,
 			Organization: []string{"TestOrg"},
@@ -165,7 +177,7 @@ func newECDSALeaf(t *testing.T, ca testCA, cn string, sans []string) testLeaf {
 	}
 
 	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(200),
+		SerialNumber: randomSerial(t),
 		Subject: pkix.Name{
 			CommonName:   cn,
 			Organization: []string{"TestOrg"},
@@ -194,7 +206,10 @@ func newECDSALeaf(t *testing.T, ca testCA, cn string, sans []string) testLeaf {
 	}
 
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-	ecBytes, _ := x509.MarshalECPrivateKey(key)
+	ecBytes, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal ECDSA leaf key: %v", err)
+	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: ecBytes})
 
 	return testLeaf{cert: cert, certPEM: certPEM, certDER: certDER, key: key, keyPEM: keyPEM}
@@ -209,7 +224,7 @@ func newExpiredLeaf(t *testing.T, ca testCA) testLeaf {
 	}
 
 	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(999),
+		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "expired.example.com"},
 		DNSNames:     []string{"expired.example.com"},
 		NotBefore:    time.Now().Add(-2 * 365 * 24 * time.Hour),

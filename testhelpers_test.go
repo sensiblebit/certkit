@@ -1,20 +1,30 @@
 package certkit
 
 import (
-	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
-	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"net"
 	"net/url"
 	"testing"
 	"time"
 )
+
+// randomSerial returns a random 128-bit serial number for test certificates.
+func randomSerial(t *testing.T) *big.Int {
+	t.Helper()
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		t.Fatalf("generate random serial: %v", err)
+	}
+	return serial
+}
 
 // generateTestPKI creates a self-signed CA, intermediate, and leaf cert for testing.
 func generateTestPKI(t *testing.T) (caPEM, intermediatePEM, leafPEM string) {
@@ -32,7 +42,7 @@ func generateTestPKIWithKey(t *testing.T) (caPEM, intermediatePEM, leafPEM, leaf
 		t.Fatal(err)
 	}
 	caTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "Test CA"},
 		NotBefore:             time.Now().Add(-1 * time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
@@ -46,13 +56,16 @@ func generateTestPKIWithKey(t *testing.T) (caPEM, intermediatePEM, leafPEM, leaf
 	}
 	caPEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: caBytes}))
 
-	caCert, _ := x509.ParseCertificate(caBytes)
+	caCert, err := x509.ParseCertificate(caBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 	intKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
 	intTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(2),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "Test Intermediate"},
 		NotBefore:             time.Now().Add(-1 * time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
@@ -66,13 +79,16 @@ func generateTestPKIWithKey(t *testing.T) (caPEM, intermediatePEM, leafPEM, leaf
 	}
 	intermediatePEM = string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: intBytes}))
 
-	intCert, _ := x509.ParseCertificate(intBytes)
+	intCert, err := x509.ParseCertificate(intBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
 	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
 	leafTemplate := &x509.Certificate{
-		SerialNumber: big.NewInt(3),
+		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "test.example.com"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
@@ -94,6 +110,131 @@ func generateTestPKIWithKey(t *testing.T) (caPEM, intermediatePEM, leafPEM, leaf
 	return caPEM, intermediatePEM, leafPEM, leafKeyPEM
 }
 
+// buildChain creates a certificate chain of the specified depth using ECDSA P-256 keys.
+// depth=2 produces root->leaf, depth=3 produces root->intermediate->leaf, and so on.
+// The root is always self-signed with CN "Chain Root CA". Intermediates are named
+// "Intermediate CA 1", "Intermediate CA 2", etc. The leaf has CN "chain-leaf.example.com".
+func buildChain(t *testing.T, depth int) (root *x509.Certificate, intermediates []*x509.Certificate, leaf *x509.Certificate) {
+	t.Helper()
+	if depth < 2 {
+		t.Fatalf("buildChain: depth must be >= 2, got %d", depth)
+	}
+
+	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootTemplate := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "Chain Root CA"},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	rootDER, err := x509.CreateCertificate(rand.Reader, rootTemplate, rootTemplate, &rootKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err = x509.ParseCertificate(rootDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Build intermediate chain (depth-2 intermediates)
+	parentCert := root
+	parentKey := rootKey
+	for i := range depth - 2 {
+		intKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		intTemplate := &x509.Certificate{
+			SerialNumber:          randomSerial(t),
+			Subject:               pkix.Name{CommonName: fmt.Sprintf("Intermediate CA %d", i+1)},
+			NotBefore:             time.Now().Add(-1 * time.Hour),
+			NotAfter:              time.Now().Add(24 * time.Hour),
+			IsCA:                  true,
+			BasicConstraintsValid: true,
+			KeyUsage:              x509.KeyUsageCertSign,
+		}
+		intDER, err := x509.CreateCertificate(rand.Reader, intTemplate, parentCert, &intKey.PublicKey, parentKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		intCert, err := x509.ParseCertificate(intDER)
+		if err != nil {
+			t.Fatal(err)
+		}
+		intermediates = append(intermediates, intCert)
+		parentCert = intCert
+		parentKey = intKey
+	}
+
+	// Build leaf
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafTemplate := &x509.Certificate{
+		SerialNumber: randomSerial(t),
+		Subject:      pkix.Name{CommonName: "chain-leaf.example.com"},
+		NotBefore:    time.Now().Add(-1 * time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, parentCert, &leafKey.PublicKey, parentKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err = x509.ParseCertificate(leafDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	return root, intermediates, leaf
+}
+
+// buildEmptyPKCS7DER constructs a valid PKCS#7 SignedData envelope with zero certificates
+// using encoding/asn1 for correct DER encoding. Used to test the "no certificates" error path.
+func buildEmptyPKCS7DER() ([]byte, error) {
+	oidSignedData := asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 2}
+	oidData := asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 7, 1}
+
+	type contentInfo struct {
+		ContentType asn1.ObjectIdentifier
+	}
+	type signedData struct {
+		Version          int
+		DigestAlgorithms asn1.RawValue
+		ContentInfo      contentInfo
+		SignerInfos      asn1.RawValue
+	}
+
+	sd := signedData{
+		Version:          1,
+		DigestAlgorithms: asn1.RawValue{Tag: 17, Class: asn1.ClassUniversal, IsCompound: true, Bytes: []byte{}}, // empty SET
+		ContentInfo:      contentInfo{ContentType: oidData},
+		SignerInfos:      asn1.RawValue{Tag: 17, Class: asn1.ClassUniversal, IsCompound: true, Bytes: []byte{}}, // empty SET
+	}
+	sdBytes, err := asn1.Marshal(sd)
+	if err != nil {
+		return nil, err
+	}
+
+	type outerContentInfo struct {
+		ContentType asn1.ObjectIdentifier
+		Content     asn1.RawValue `asn1:"explicit,tag:0"`
+	}
+	outer := outerContentInfo{
+		ContentType: oidSignedData,
+		Content:     asn1.RawValue{FullBytes: sdBytes},
+	}
+	return asn1.Marshal(outer)
+}
+
 // generateLeafWithSANs creates a self-signed leaf certificate with Subject, DNS SANs,
 // IP SANs, and URI SANs for CSR generation tests.
 func generateLeafWithSANs(t *testing.T) (*x509.Certificate, *ecdsa.PrivateKey) {
@@ -102,9 +243,12 @@ func generateLeafWithSANs(t *testing.T) (*x509.Certificate, *ecdsa.PrivateKey) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	uri, _ := url.Parse("spiffe://example.com/workload")
+	uri, err := url.Parse("spiffe://example.com/workload")
+	if err != nil {
+		t.Fatal(err)
+	}
 	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
+		SerialNumber: randomSerial(t),
 		Subject: pkix.Name{
 			CommonName:   "test.example.com",
 			Organization: []string{"Test Org"},
@@ -127,68 +271,4 @@ func generateLeafWithSANs(t *testing.T) (*x509.Certificate, *ecdsa.PrivateKey) {
 		t.Fatal(err)
 	}
 	return cert, key
-}
-
-// badSSLChain holds the results of a TLS handshake with a badssl.com endpoint.
-type badSSLChain struct {
-	leaf          *x509.Certificate
-	intermediates []*x509.Certificate
-	allCerts      []*x509.Certificate
-}
-
-// fetchBadSSLChain connects to a badssl.com host via TLS (with InsecureSkipVerify
-// since many endpoints have intentionally invalid certificates) and returns
-// the peer certificates from the handshake. Skips the test on connection failure.
-func fetchBadSSLChain(t *testing.T, host string) badSSLChain {
-	t.Helper()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-
-	dialer := &tls.Dialer{
-		NetDialer: &net.Dialer{Timeout: 10 * time.Second},
-		Config: &tls.Config{
-			InsecureSkipVerify: true, //nolint:gosec // required for intentionally broken TLS endpoints
-			ServerName:         host,
-		},
-	}
-
-	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, "443"))
-	if err != nil {
-		t.Skipf("cannot connect to %s: %v", host, err)
-	}
-	defer func() { _ = conn.Close() }()
-
-	tlsConn := conn.(*tls.Conn)
-	certs := tlsConn.ConnectionState().PeerCertificates
-	if len(certs) == 0 {
-		t.Skipf("no certificates returned by %s", host)
-	}
-
-	result := badSSLChain{
-		leaf:     certs[0],
-		allCerts: certs,
-	}
-	if len(certs) > 1 {
-		result.intermediates = certs[1:]
-	}
-	return result
-}
-
-// skipIfBadSSLUnavailable is a sentinel check for table-driven tests. It
-// attempts a quick TLS connection to badssl.com and skips if unreachable.
-func skipIfBadSSLUnavailable(t *testing.T) {
-	t.Helper()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	dialer := &tls.Dialer{
-		NetDialer: &net.Dialer{Timeout: 5 * time.Second},
-		Config:    &tls.Config{},
-	}
-	conn, err := dialer.DialContext(ctx, "tcp", "badssl.com:443")
-	if err != nil {
-		t.Skipf("badssl.com unavailable: %v", err)
-	}
-	_ = conn.Close()
 }

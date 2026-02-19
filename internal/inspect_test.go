@@ -1,49 +1,82 @@
 package internal
 
 import (
+	"crypto"
+	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"net"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sensiblebit/certkit"
 )
 
-func TestInspectFile_Certificate(t *testing.T) {
-	// WHY: Core inspect path for PEM certificates; verifies subject, SHA-256 fingerprint, and type are correctly extracted and match independent computation.
+func assertColonHex(t *testing.T, label, value string, wantBytes int) {
+	t.Helper()
+	wantLen := wantBytes*3 - 1 // 2 hex + 1 colon per byte, minus trailing colon
+	if len(value) != wantLen {
+		t.Fatalf("%s length = %d, want %d (colon-hex for %d bytes), got %q", label, len(value), wantLen, wantBytes, value)
+	}
+	parts := strings.Split(value, ":")
+	if len(parts) != wantBytes {
+		t.Fatalf("%s colon-hex has %d octets, want %d", label, len(parts), wantBytes)
+	}
+	for i, p := range parts {
+		if len(p) != 2 {
+			t.Errorf("%s octet[%d] = %q, want 2 hex chars", label, i, p)
+		}
+	}
+}
+
+func TestInspectFile_CertificateFormats_PEM_DER(t *testing.T) {
+	// WHY: PEM and DER are two encodings for the same data; verifies InspectFile
+	// extracts correct subject, type, and colon-hex fingerprints from both.
+	// Consolidated per T-12 — assertion logic is identical across encodings.
+	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "inspect.example.com", []string{"inspect.example.com"}, nil)
 
-	dir := t.TempDir()
-	certFile := filepath.Join(dir, "cert.pem")
-	if err := os.WriteFile(certFile, leaf.certPEM, 0644); err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name     string
+		filename string
+		data     []byte
+	}{
+		{"PEM", "cert.pem", leaf.certPEM},
+		{"DER", "cert.der", leaf.certDER},
 	}
 
-	results, err := InspectFile(certFile, []string{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(results) == 0 {
-		t.Fatal("expected at least one result")
-	}
-	if results[0].Type != "certificate" {
-		t.Errorf("expected type=certificate, got %s", results[0].Type)
-	}
-	if !strings.Contains(results[0].Subject, "inspect.example.com") {
-		t.Errorf("subject should contain CN, got %s", results[0].Subject)
-	}
-	if results[0].SHA256 == "" {
-		t.Fatal("expected SHA-256 fingerprint")
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			certFile := filepath.Join(dir, tt.filename)
+			if err := os.WriteFile(certFile, tt.data, 0644); err != nil {
+				t.Fatal(err)
+			}
 
-	// Verify SHA-256 matches what we'd compute independently
-	expectedSHA256 := certkit.CertFingerprintColonSHA256(leaf.cert)
-	if results[0].SHA256 != expectedSHA256 {
-		t.Errorf("SHA256 = %q, want %q", results[0].SHA256, expectedSHA256)
+			results, err := InspectFile(certFile, []string{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(results) == 0 {
+				t.Fatal("expected at least one result")
+			}
+			if results[0].Type != "certificate" {
+				t.Errorf("expected type=certificate, got %s", results[0].Type)
+			}
+			if !strings.Contains(results[0].Subject, "inspect.example.com") {
+				t.Errorf("subject should contain CN, got %s", results[0].Subject)
+			}
+			// SHA-256 colon-hex: 32 bytes = 64 hex chars + 31 colons = 95 chars.
+			assertColonHex(t, "SHA-256", results[0].SHA256, 32)
+			// SHA-1 colon-hex: 20 bytes = 40 hex chars + 19 colons = 59 chars.
+			assertColonHex(t, "SHA-1", results[0].SHA1, 20)
+		})
 	}
 }
 
@@ -52,9 +85,11 @@ func TestInspectFile_PrivateKey(t *testing.T) {
 	// private key file. One key type (RSA) suffices because the inspect
 	// logic delegates to certkit.KeyAlgorithmName/certkit.KeyBitLength
 	// which are tested across all algorithms in the root package.
+	t.Parallel()
 	dir := t.TempDir()
+	keyPEM := rsaKeyPEM(t)
 	keyFile := filepath.Join(dir, "key.pem")
-	if err := os.WriteFile(keyFile, rsaKeyPEM(t), 0600); err != nil {
+	if err := os.WriteFile(keyFile, keyPEM, 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -79,103 +114,140 @@ func TestInspectFile_PrivateKey(t *testing.T) {
 	if keyResult.KeySize != "2048" {
 		t.Errorf("key size = %s, want 2048", keyResult.KeySize)
 	}
-	if keyResult.SKI == "" {
-		t.Error("expected SKI to be populated")
+	assertColonHex(t, "SKI", keyResult.SKI, 20)
+
+	// Verify SKI matches what we'd compute independently from the key PEM.
+	parsedKey, err := certkit.ParsePEMPrivateKey(keyPEM)
+	if err != nil {
+		t.Fatalf("parsing key PEM: %v", err)
+	}
+	wantSKI, err := certkit.ComputeSKI(parsedKey.(crypto.Signer).Public())
+	if err != nil {
+		t.Fatalf("computing SKI: %v", err)
+	}
+	if keyResult.SKI != certkit.ColonHex(wantSKI) {
+		t.Errorf("SKI = %s, want %s (computed from same key)", keyResult.SKI, certkit.ColonHex(wantSKI))
 	}
 }
 
 func TestInspectFile_NotFound(t *testing.T) {
-	// WHY: A nonexistent file path must return an error, not panic or return empty results.
+	// WHY: A nonexistent file path must return an error wrapping os.ErrNotExist,
+	// not panic or return empty results.
+	t.Parallel()
 	_, err := InspectFile("/nonexistent/path", []string{})
 	if err == nil {
 		t.Error("expected error for nonexistent file")
 	}
-	if !strings.Contains(err.Error(), "reading") {
-		t.Errorf("unexpected error: %v", err)
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("expected os.ErrNotExist, got: %v", err)
 	}
 }
 
-func TestInspectFile_PKCS12(t *testing.T) {
-	// WHY: PKCS#12 files contain certs and keys; verifies InspectFile extracts and reports both object types with correct leaf CN.
+func TestInspectFile_ContainerFormats(t *testing.T) {
+	// WHY: Container formats (PKCS#12, JKS, PKCS#7) embed certs (and
+	// optionally keys) in binary structures; verifies InspectFile extracts
+	// the correct object types with correct leaf CN for each format.
+	// Consolidated per T-12 — assertion logic is identical across formats.
+	t.Parallel()
 	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "p12.example.com", []string{"p12.example.com"}, nil)
-	p12 := newPKCS12Bundle(t, leaf, ca, "changeit")
 
-	dir := t.TempDir()
-	p12File := filepath.Join(dir, "bundle.p12")
-	if err := os.WriteFile(p12File, p12, 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	results, err := InspectFile(p12File, []string{"changeit"})
-	if err != nil {
-		t.Fatalf("InspectFile failed: %v", err)
-	}
-
-	var certs, keys int
-	for _, r := range results {
-		switch r.Type {
-		case "certificate":
-			certs++
-		case "private_key":
-			keys++
-		}
-	}
-	if certs < 1 {
-		t.Errorf("expected at least 1 certificate, got %d", certs)
-	}
-	if keys != 1 {
-		t.Errorf("expected 1 private key, got %d", keys)
-	}
-
-	// Verify leaf CN is present
-	found := false
-	for _, r := range results {
-		if r.Type == "certificate" && strings.Contains(r.Subject, "p12.example.com") {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("expected to find leaf certificate with CN=p12.example.com")
-	}
-}
-
-func TestInspectFile_JKS(t *testing.T) {
-	// WHY: JKS is a Java-specific format; verifies InspectFile can decode it and report both certificate and key entries.
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "jks.example.com", []string{"jks.example.com"}, nil)
-	jks := newJKSBundle(t, leaf, ca, "changeit")
-
-	dir := t.TempDir()
-	jksFile := filepath.Join(dir, "keystore.jks")
-	if err := os.WriteFile(jksFile, jks, 0644); err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name      string
+		cn        string
+		filename  string
+		wantCerts int // exact expected count
+		wantKeys  int // exact expected key count
+		passwords []string
+		makeData  func(t *testing.T, leaf testLeaf, ca testCA) []byte
+	}{
+		{
+			name:      "PKCS#12",
+			cn:        "p12.example.com",
+			filename:  "bundle.p12",
+			wantCerts: 2, // leaf + CA
+			wantKeys:  1,
+			passwords: []string{"changeit"},
+			makeData: func(t *testing.T, leaf testLeaf, ca testCA) []byte {
+				return newPKCS12Bundle(t, leaf, ca, "changeit")
+			},
+		},
+		{
+			name:      "JKS",
+			cn:        "jks.example.com",
+			filename:  "keystore.jks",
+			wantCerts: 2, // leaf + CA in chain
+			wantKeys:  1,
+			passwords: []string{"changeit"},
+			makeData: func(t *testing.T, leaf testLeaf, ca testCA) []byte {
+				return newJKSBundle(t, leaf, ca, "changeit")
+			},
+		},
+		{
+			name:      "PKCS#7",
+			cn:        "p7.example.com",
+			filename:  "bundle.p7c",
+			wantCerts: 2, // leaf + CA
+			wantKeys:  0, // PKCS#7 carries no keys
+			makeData: func(t *testing.T, leaf testLeaf, ca testCA) []byte {
+				p7, err := certkit.EncodePKCS7([]*x509.Certificate{leaf.cert, ca.cert})
+				if err != nil {
+					t.Fatalf("EncodePKCS7: %v", err)
+				}
+				return p7
+			},
+		},
 	}
 
-	results, err := InspectFile(jksFile, []string{"changeit"})
-	if err != nil {
-		t.Fatalf("InspectFile failed: %v", err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			leaf := newRSALeaf(t, ca, tt.cn, []string{tt.cn}, nil)
+			data := tt.makeData(t, leaf, ca)
 
-	var certs, keys int
-	for _, r := range results {
-		switch r.Type {
-		case "certificate":
-			certs++
-		case "private_key":
-			keys++
-		}
-	}
-	if certs < 1 {
-		t.Errorf("expected at least 1 certificate, got %d", certs)
-	}
-	if keys != 1 {
-		t.Errorf("expected 1 private key, got %d", keys)
+			dir := t.TempDir()
+			path := filepath.Join(dir, tt.filename)
+			if err := os.WriteFile(path, data, 0644); err != nil {
+				t.Fatal(err)
+			}
+
+			results, err := InspectFile(path, tt.passwords)
+			if err != nil {
+				t.Fatalf("InspectFile failed: %v", err)
+			}
+
+			var certs, keys int
+			for _, r := range results {
+				switch r.Type {
+				case "certificate":
+					certs++
+				case "private_key":
+					keys++
+				}
+			}
+			if certs != tt.wantCerts {
+				t.Errorf("expected %d certificates, got %d", tt.wantCerts, certs)
+			}
+			if keys != tt.wantKeys {
+				t.Errorf("expected %d private keys, got %d", tt.wantKeys, keys)
+			}
+
+			// Verify leaf CN is present
+			found := false
+			for _, r := range results {
+				if r.Type == "certificate" && strings.Contains(r.Subject, tt.cn) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("expected to find leaf certificate with CN=%s", tt.cn)
+			}
+		})
 	}
 }
 
 func TestInspectFile_CSR(t *testing.T) {
 	// WHY: CSR inspection is a distinct code path from cert/key; verifies subject and DNS names are extracted from a dynamically generated CSR.
+	t.Parallel()
 	dir := t.TempDir()
 
 	// Generate a key and CSR using GenerateKeyFiles
@@ -222,6 +294,7 @@ func TestInspectFile_CSR(t *testing.T) {
 
 func TestInspectFile_CertWithIPSANs(t *testing.T) {
 	// WHY: IP SANs must appear alongside DNS SANs in inspect output; without this, users would not see IP addresses when diagnosing certificate issues.
+	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "ip.example.com", []string{"ip.example.com"}, []net.IP{net.ParseIP("10.0.0.1"), net.ParseIP("192.168.1.1")})
 
@@ -259,6 +332,7 @@ func TestInspectFile_CertWithIPSANs(t *testing.T) {
 func TestInspectFile_MultiplePEMObjects(t *testing.T) {
 	// WHY: A single PEM file can contain certs and keys in any order; this verifies
 	// InspectFile finds all objects regardless of ordering.
+	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "multi-pem.example.com", []string{"multi-pem.example.com"}, nil)
 
@@ -303,6 +377,7 @@ func TestInspectFile_MultiplePEMObjects(t *testing.T) {
 
 func TestInspectFile_GarbageData(t *testing.T) {
 	// WHY: Garbage data must produce a descriptive "no certificates, keys, or CSRs found" error, not a cryptic parsing failure or panic.
+	t.Parallel()
 	dir := t.TempDir()
 	garbageFile := filepath.Join(dir, "garbage.bin")
 	garbage := make([]byte, 512)
@@ -324,6 +399,7 @@ func TestInspectFile_GarbageData(t *testing.T) {
 
 func TestFormatInspectResults_UnsupportedFormat(t *testing.T) {
 	// WHY: Only "text" and "json" formats are supported; an unsupported format must return an error, not silently produce empty output.
+	t.Parallel()
 	results := []InspectResult{
 		{Type: "certificate", Subject: "CN=test"},
 	}
@@ -337,46 +413,13 @@ func TestFormatInspectResults_UnsupportedFormat(t *testing.T) {
 	}
 }
 
-func TestInspectFile_DERCertificate(t *testing.T) {
-	// WHY: DER certificates lack PEM headers; verifies the DER detection fallback in InspectFile produces correct subject, fingerprints, key algorithm, and size.
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "der-inspect.example.com", []string{"der-inspect.example.com"}, nil)
-
-	dir := t.TempDir()
-	derFile := filepath.Join(dir, "cert.der")
-	if err := os.WriteFile(derFile, leaf.certDER, 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	results, err := InspectFile(derFile, []string{})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(results) == 0 {
-		t.Fatal("expected at least one result")
-	}
-	if results[0].Type != "certificate" {
-		t.Errorf("expected type=certificate, got %s", results[0].Type)
-	}
-	if !strings.Contains(results[0].Subject, "der-inspect.example.com") {
-		t.Errorf("subject should contain CN, got %s", results[0].Subject)
-	}
-	if results[0].SHA256 == "" {
-		t.Error("expected SHA-256 fingerprint to be populated")
-	}
-	if results[0].SHA1 == "" {
-		t.Error("expected SHA-1 fingerprint to be populated")
-	}
-	if results[0].KeyAlgo != "RSA" {
-		t.Errorf("expected key algorithm RSA, got %s", results[0].KeyAlgo)
-	}
-	if results[0].KeySize != "2048" {
-		t.Errorf("expected key size 2048, got %s", results[0].KeySize)
-	}
-}
-
 func TestFormatInspectResults_JSON_ValidJSON(t *testing.T) {
-	// WHY: JSON format is the machine-readable contract for inspect output; verifies valid JSON with trailing newline, and round-trip fidelity for all fields.
+	// WHY: JSON format is the machine-readable contract for inspect output.
+	// Verifies valid JSON with trailing newline, correct element count, type
+	// discrimination, and that certkit-owned struct tags produce the expected
+	// field names and values. A missing or misspelled json:"..." tag is a
+	// certkit bug that this test must catch.
+	t.Parallel()
 	results := []InspectResult{
 		{
 			Type:    "certificate",
@@ -402,12 +445,10 @@ func TestFormatInspectResults_JSON_ValidJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Verify output ends with newline (JSON output convention)
 	if !strings.HasSuffix(output, "\n") {
 		t.Error("JSON output should end with newline")
 	}
 
-	// Unmarshal back and verify round-trip fidelity
 	var parsed []InspectResult
 	if err := json.Unmarshal([]byte(output), &parsed); err != nil {
 		t.Fatalf("JSON output is not valid JSON: %v", err)
@@ -417,38 +458,44 @@ func TestFormatInspectResults_JSON_ValidJSON(t *testing.T) {
 		t.Fatalf("expected 2 results, got %d", len(parsed))
 	}
 
-	// Verify first result (certificate)
-	if parsed[0].Type != "certificate" {
-		t.Errorf("parsed[0].Type = %q, want %q", parsed[0].Type, "certificate")
+	// Verify certificate entry fields survive JSON round-trip (catches misspelled struct tags)
+	cert := parsed[0]
+	if cert.Type != "certificate" {
+		t.Errorf("parsed[0].Type = %q, want %q", cert.Type, "certificate")
 	}
-	if parsed[0].Subject != "CN=json-test.example.com,O=TestOrg" {
-		t.Errorf("parsed[0].Subject = %q, want %q", parsed[0].Subject, "CN=json-test.example.com,O=TestOrg")
+	if cert.Subject != "CN=json-test.example.com,O=TestOrg" {
+		t.Errorf("parsed[0].Subject = %q, want %q", cert.Subject, "CN=json-test.example.com,O=TestOrg")
 	}
-	if parsed[0].SHA256 != "AA:BB:CC:DD" {
-		t.Errorf("parsed[0].SHA256 = %q, want %q", parsed[0].SHA256, "AA:BB:CC:DD")
+	if cert.Issuer != "CN=Test CA" {
+		t.Errorf("parsed[0].Issuer = %q, want %q", cert.Issuer, "CN=Test CA")
 	}
-	if len(parsed[0].SANs) != 2 {
-		t.Fatalf("parsed[0].SANs count = %d, want 2", len(parsed[0].SANs))
+	if cert.SHA256 != "AA:BB:CC:DD" {
+		t.Errorf("parsed[0].SHA256 = %q, want %q", cert.SHA256, "AA:BB:CC:DD")
 	}
-	if parsed[0].SANs[0] != "json-test.example.com" {
-		t.Errorf("parsed[0].SANs[0] = %q, want %q", parsed[0].SANs[0], "json-test.example.com")
+	if cert.KeyAlgo != "RSA" {
+		t.Errorf("parsed[0].KeyAlgo = %q, want %q", cert.KeyAlgo, "RSA")
 	}
-	if parsed[0].SKI != "aabbccdd" {
-		t.Errorf("parsed[0].SKI = %q, want %q", parsed[0].SKI, "aabbccdd")
+	if len(cert.SANs) != 2 || cert.SANs[0] != "json-test.example.com" {
+		t.Errorf("parsed[0].SANs = %v, want [json-test.example.com www.json-test.example.com]", cert.SANs)
 	}
 
-	// Verify second result (private_key)
-	if parsed[1].Type != "private_key" {
-		t.Errorf("parsed[1].Type = %q, want %q", parsed[1].Type, "private_key")
+	// Verify private key entry
+	key := parsed[1]
+	if key.Type != "private_key" {
+		t.Errorf("parsed[1].Type = %q, want %q", key.Type, "private_key")
 	}
-	if parsed[1].KeyType != "RSA" {
-		t.Errorf("parsed[1].KeyType = %q, want %q", parsed[1].KeyType, "RSA")
+	if key.KeyType != "RSA" {
+		t.Errorf("parsed[1].KeyType = %q, want %q", key.KeyType, "RSA")
+	}
+	if key.SKI != "eeff0011" {
+		t.Errorf("parsed[1].SKI = %q, want %q", key.SKI, "eeff0011")
 	}
 }
 
 func TestInspectFile_ExpiredCert(t *testing.T) {
 	// WHY: InspectFile is a diagnostic tool — it must always show expired
 	// certificates, unlike ProcessFile which filters them by default.
+	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newExpiredLeaf(t, ca)
 
@@ -471,80 +518,83 @@ func TestInspectFile_ExpiredCert(t *testing.T) {
 	if !strings.Contains(results[0].Subject, "expired") {
 		t.Errorf("subject should contain 'expired', got %s", results[0].Subject)
 	}
+	// Verify the certificate is actually expired by parsing NotAfter
+	notAfter, err := time.Parse(time.RFC3339, results[0].NotAfter)
+	if err != nil {
+		t.Fatalf("NotAfter should be RFC 3339, got %q: %v", results[0].NotAfter, err)
+	}
+	if !notAfter.Before(time.Now()) {
+		t.Errorf("expired cert NotAfter = %v, expected to be in the past", notAfter)
+	}
 }
 
 func TestFormatInspectResults_Text(t *testing.T) {
-	// WHY: Text format is the default human-readable output; verifies that both certificate and private key sections are rendered with appropriate headers.
-	results := []InspectResult{
-		{Type: "certificate", Subject: "CN=test", SHA256: "AA:BB", KeyAlgo: "RSA", KeySize: "2048"},
-		{Type: "private_key", KeyType: "RSA", KeySize: "2048"},
-	}
-	output, err := FormatInspectResults(results, "text")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(output, "Certificate:") {
-		t.Error("text should contain Certificate header")
-	}
-	if !strings.Contains(output, "Private Key:") {
-		t.Error("text should contain Private Key header")
-	}
-}
-
-func TestFormatInspectResults_TextCSR(t *testing.T) {
-	// WHY: The CSR text rendering branch has its own formatting logic distinct from certificates and keys; without a dedicated test, regressions in CSR fields (Subject, Key, Signature, DNS Names) would go undetected.
+	// WHY: Text format is the default human-readable output; each result type
+	// (certificate, key, CSR) has its own rendering branch with distinct headers
+	// and fields. Covers cert+key headers, CSR fields, and conditional DNS Names.
 	t.Parallel()
-	results := []InspectResult{
+
+	tests := []struct {
+		name           string
+		results        []InspectResult
+		mustContain    []string
+		mustNotContain []string
+	}{
 		{
-			Type:        "csr",
-			CSRSubject:  "CN=example.com,O=Test Corp",
-			KeyAlgo:     "ECDSA",
-			KeySize:     "P-256",
-			SigAlg:      "SHA256-RSA",
-			CSRDNSNames: []string{"example.com", "www.example.com"},
+			name: "certificate and key",
+			results: []InspectResult{
+				{Type: "certificate", Subject: "CN=test", SHA256: "AA:BB", KeyAlgo: "RSA", KeySize: "2048"},
+				{Type: "private_key", KeyType: "RSA", KeySize: "2048"},
+			},
+			mustContain: []string{"Certificate:", "CN=test", "RSA 2048", "AA:BB", "Private Key:"},
+		},
+		{
+			name: "CSR with DNS names",
+			results: []InspectResult{
+				{
+					Type:        "csr",
+					CSRSubject:  "CN=example.com,O=Test Corp",
+					KeyAlgo:     "ECDSA",
+					KeySize:     "P-256",
+					SigAlg:      "SHA256-RSA",
+					CSRDNSNames: []string{"example.com", "www.example.com"},
+				},
+			},
+			mustContain: []string{
+				"Certificate Signing Request:",
+				"CN=example.com,O=Test Corp",
+				"ECDSA P-256",
+				"SHA256-RSA",
+				"example.com, www.example.com",
+			},
+		},
+		{
+			name: "CSR without DNS names",
+			results: []InspectResult{
+				{Type: "csr", CSRSubject: "CN=test", KeyAlgo: "RSA", KeySize: "2048", SigAlg: "SHA256-RSA"},
+			},
+			mustContain:    []string{"Certificate Signing Request:"},
+			mustNotContain: []string{"DNS Names:"},
 		},
 	}
-	output, err := FormatInspectResults(results, "text")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(output, "Certificate Signing Request:") {
-		t.Error("text should contain CSR header")
-	}
-	if !strings.Contains(output, "CN=example.com,O=Test Corp") {
-		t.Error("text should contain CSR subject")
-	}
-	if !strings.Contains(output, "ECDSA P-256") {
-		t.Error("text should contain key algorithm and size")
-	}
-	if !strings.Contains(output, "SHA256-RSA") {
-		t.Error("text should contain signature algorithm")
-	}
-	if !strings.Contains(output, "example.com, www.example.com") {
-		t.Error("text should contain DNS names")
-	}
-}
 
-func TestFormatInspectResults_TextCSRNoDNSNames(t *testing.T) {
-	// WHY: CSR DNS Names line is conditional; verifies it is omitted when no DNS names are present, preventing blank or "DNS Names:" lines in output.
-	t.Parallel()
-	results := []InspectResult{
-		{
-			Type:       "csr",
-			CSRSubject: "CN=test",
-			KeyAlgo:    "RSA",
-			KeySize:    "2048",
-			SigAlg:     "SHA256-RSA",
-		},
-	}
-	output, err := FormatInspectResults(results, "text")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(output, "Certificate Signing Request:") {
-		t.Error("text should contain CSR header")
-	}
-	if strings.Contains(output, "DNS Names:") {
-		t.Error("text should not contain DNS Names line when none are present")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			output, err := FormatInspectResults(tt.results, "text")
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, s := range tt.mustContain {
+				if !strings.Contains(output, s) {
+					t.Errorf("output should contain %q", s)
+				}
+			}
+			for _, s := range tt.mustNotContain {
+				if strings.Contains(output, s) {
+					t.Errorf("output should not contain %q", s)
+				}
+			}
+		})
 	}
 }

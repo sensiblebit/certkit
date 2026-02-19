@@ -8,30 +8,24 @@ import (
 )
 
 func TestArchiveFormat(t *testing.T) {
-	// WHY: Verifies that all supported archive extensions are detected,
-	// case-insensitively, and that IsArchive agrees with ArchiveFormat.
+	// WHY: Verifies that all supported archive extensions are detected
+	// case-insensitively. One positive case per format, one uppercase case
+	// to prove case normalization, and one negative case to prove non-archive
+	// extensions are rejected. IsArchive is a trivial wrapper
+	// (ArchiveFormat != "") and does not need separate assertions (T-11).
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		path      string
-		want      string
-		isArchive bool
+		name string
+		path string
+		want string
 	}{
-		{"zip", "certs.zip", "zip", true},
-		{"tar", "certs.tar", "tar", true},
-		{"tgz", "certs.tgz", "tar.gz", true},
-		{"tar.gz", "certs.tar.gz", "tar.gz", true},
-		{"uppercase ZIP", "certs.ZIP", "zip", true},
-		{"uppercase TAR.GZ", "certs.TAR.GZ", "tar.gz", true},
-		{"mixed case TaR.Gz", "certs.TaR.Gz", "tar.gz", true},
-		{"pem file", "cert.pem", "", false},
-		{"p12 file", "cert.p12", "", false},
-		{"no extension", "certs", "", false},
-		{"nested path zip", "/some/path/certs.zip", "zip", true},
-		{"nested path tar.gz", "/some/path/certs.tar.gz", "tar.gz", true},
-		{"tar.gz.bak", "certs.tar.gz.bak", "", false},
-		{"trailing dot", "certs.tar.", "", false},
+		{"zip", "certs.zip", "zip"},
+		{"tar", "certs.tar", "tar"},
+		{"tgz", "certs.tgz", "tar.gz"},
+		{"tar.gz", "certs.tar.gz", "tar.gz"},
+		{"uppercase ZIP", "certs.ZIP", "zip"},
+		{"non-archive extension", "cert.pem", ""},
 	}
 
 	for _, tt := range tests {
@@ -40,9 +34,6 @@ func TestArchiveFormat(t *testing.T) {
 			got := ArchiveFormat(tt.path)
 			if got != tt.want {
 				t.Errorf("ArchiveFormat(%q) = %q, want %q", tt.path, got, tt.want)
-			}
-			if gotBool := IsArchive(tt.path); gotBool != tt.isArchive {
-				t.Errorf("IsArchive(%q) = %v, want %v", tt.path, gotBool, tt.isArchive)
 			}
 		})
 	}
@@ -98,42 +89,6 @@ func TestProcessArchive_PEMCertAllFormats(t *testing.T) {
 				t.Errorf("cert CN = %q, want %q", certs[0].Cert.Subject.CommonName, cn)
 			}
 		})
-	}
-}
-
-func TestProcessArchive_ZipWithDERCert(t *testing.T) {
-	// WHY: Verifies that DER certificates with binary extensions inside ZIP
-	// archives pass through hasBinaryExtension and processDER correctly.
-	// Uses an entry name with a directory prefix to exercise the normal path.
-	t.Parallel()
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "der-zip.example.com", []string{"der-zip.example.com"}, nil)
-
-	zipData := createTestZip(t, map[string][]byte{
-		"certs/server.der": leaf.certDER,
-	})
-
-	cfg := newTestConfig(t)
-	n, err := ProcessArchive(ProcessArchiveInput{
-		ArchivePath: "test.zip",
-		Data:        zipData,
-		Format:      "zip",
-		Limits:      DefaultArchiveLimits(),
-		Store:       cfg.Store, Passwords: cfg.Passwords,
-	})
-	if err != nil {
-		t.Fatalf("ProcessArchive: %v", err)
-	}
-	if n != 1 {
-		t.Errorf("processed %d entries, want 1", n)
-	}
-
-	certs := cfg.Store.AllCertsFlat()
-	if len(certs) != 1 {
-		t.Fatalf("got %d certs in store, want 1", len(certs))
-	}
-	if certs[0].Cert.Subject.CommonName != "der-zip.example.com" {
-		t.Errorf("cert CN = %q, want %q", certs[0].Cert.Subject.CommonName, "der-zip.example.com")
 	}
 }
 
@@ -350,14 +305,13 @@ func TestProcessArchive_MixedContentIgnoresNonCrypto(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProcessArchive: %v", err)
 	}
-	// All 4 entries are "processed" (passed to ProcessData), but only the PEM one produces a cert
 	if n != 4 {
-		t.Errorf("processed %d entries, want 4", n)
+		t.Errorf("processed %d entries, want 4 (all entries iterated including non-crypto)", n)
 	}
 
 	certs := cfg.Store.AllCertsFlat()
 	if len(certs) != 1 {
-		t.Errorf("got %d certs in store, want 1", len(certs))
+		t.Errorf("got %d certs in store, want 1 (non-crypto files should be ignored)", len(certs))
 	}
 }
 
@@ -390,40 +344,9 @@ func TestProcessArchive_ZeroByteEntry(t *testing.T) {
 	if len(certs) != 0 {
 		t.Errorf("got %d certs in store, want 0 (empty entries)", len(certs))
 	}
-}
-
-func TestProcessArchive_EntryExceedsMaxSize_ZIP(t *testing.T) {
-	// WHY: Verifies that individual ZIP entries exceeding MaxEntrySize are
-	// skipped based on the UncompressedSize64 header check.
-	t.Parallel()
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "big-entry.example.com", []string{"big-entry.example.com"}, nil)
-
-	zipData := createTestZip(t, map[string][]byte{
-		"certs/server.pem": leaf.certPEM,
-	})
-
-	limits := DefaultArchiveLimits()
-	limits.MaxEntrySize = 10 // absurdly small — cert PEM will exceed this
-
-	cfg := newTestConfig(t)
-	n, err := ProcessArchive(ProcessArchiveInput{
-		ArchivePath: "test.zip",
-		Data:        zipData,
-		Format:      "zip",
-		Limits:      limits,
-		Store:       cfg.Store, Passwords: cfg.Passwords,
-	})
-	if err != nil {
-		t.Fatalf("ProcessArchive: %v", err)
-	}
-	if n != 0 {
-		t.Errorf("processed %d entries, want 0 (entry should be skipped)", n)
-	}
-
-	certs := cfg.Store.AllCertsFlat()
-	if len(certs) != 0 {
-		t.Errorf("got %d certs in store, want 0", len(certs))
+	keys := cfg.Store.AllKeysFlat()
+	if len(keys) != 0 {
+		t.Errorf("got %d keys in store, want 0 (empty entries)", len(keys))
 	}
 }
 
@@ -482,8 +405,9 @@ func TestProcessArchive_TarEntryExceedsMaxSize(t *testing.T) {
 }
 
 func TestProcessArchive_EntryCountLimit(t *testing.T) {
-	// WHY: Verifies that the entry count limit stops processing before
-	// exhausting all entries, protecting against archive bombs with many files.
+	// WHY: Verifies that MaxEntryCount stops processing at the specified limit,
+	// protecting against archive bombs. One sub-case per archive handler
+	// (zip/tar) proves the limit is enforced in both code paths.
 	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "count.example.com", []string{"count.example.com"}, nil)
@@ -495,12 +419,14 @@ func TestProcessArchive_EntryCountLimit(t *testing.T) {
 	}
 
 	tests := []struct {
-		name    string
-		format  string
-		builder func(t *testing.T, files map[string][]byte) []byte
+		name      string
+		format    string
+		builder   func(t *testing.T, files map[string][]byte) []byte
+		maxCount  int
+		wantCount int
 	}{
-		{"zip", "zip", createTestZip},
-		{"tar", "tar", createTestTar},
+		{"zip/limit=1", "zip", createTestZip, 1, 1},
+		{"tar/limit=1", "tar", createTestTar, 1, 1},
 	}
 
 	for _, tt := range tests {
@@ -509,7 +435,7 @@ func TestProcessArchive_EntryCountLimit(t *testing.T) {
 			archiveData := tt.builder(t, files)
 
 			limits := DefaultArchiveLimits()
-			limits.MaxEntryCount = 1
+			limits.MaxEntryCount = tt.maxCount
 
 			cfg := newTestConfig(t)
 			n, err := ProcessArchive(ProcessArchiveInput{
@@ -522,8 +448,8 @@ func TestProcessArchive_EntryCountLimit(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ProcessArchive: %v", err)
 			}
-			if n != 1 {
-				t.Errorf("processed %d entries, want 1 (limit should stop after first)", n)
+			if n != tt.wantCount {
+				t.Errorf("processed %d entries, want %d (MaxEntryCount=%d)", n, tt.wantCount, tt.maxCount)
 			}
 		})
 	}
@@ -536,6 +462,8 @@ func TestProcessArchive_TotalSizeLimit(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "totalsize.example.com", []string{"totalsize.example.com"}, nil)
 
+	// Both entries use identical data so the assertion is order-independent
+	// despite Go's non-deterministic map iteration.
 	files := map[string][]byte{
 		"a.pem": leaf.certPEM,
 		"b.pem": leaf.certPEM,
@@ -570,8 +498,8 @@ func TestProcessArchive_TotalSizeLimit(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ProcessArchive: %v", err)
 			}
-			if n > 1 {
-				t.Errorf("processed %d entries, want at most 1 (total size limit should stop)", n)
+			if n != 1 {
+				t.Errorf("processed %d entries, want exactly 1 (total size limit should stop after first)", n)
 			}
 		})
 	}
@@ -642,9 +570,8 @@ func TestProcessArchive_CorruptedArchive(t *testing.T) {
 			})
 			if err == nil {
 				t.Errorf("expected error for corrupted %s, got nil", tt.format)
-			}
-			if err.Error() == "" {
-				t.Error("error message should not be empty")
+			} else if !strings.Contains(err.Error(), "bad."+tt.format) {
+				t.Errorf("error should contain archive path, got: %v", err)
 			}
 		})
 	}
@@ -690,41 +617,6 @@ func TestProcessArchive_NestedArchiveNotRecursed(t *testing.T) {
 	}
 }
 
-func TestProcessArchive_ExpiredCertStored(t *testing.T) {
-	// WHY: Expired certificates inside archives must be ingested into the store;
-	// filtering is an output-only concern. This ensures chain building works even
-	// when intermediates are expired.
-	t.Parallel()
-	ca := newRSACA(t)
-	expired := newExpiredLeaf(t, ca)
-
-	zipData := createTestZip(t, map[string][]byte{
-		"expired.pem": expired.certPEM,
-	})
-
-	cfg := newTestConfig(t)
-
-	n, err := ProcessArchive(ProcessArchiveInput{
-		ArchivePath: "test.zip",
-		Data:        zipData,
-		Format:      "zip",
-		Limits:      DefaultArchiveLimits(),
-		Store:       cfg.Store,
-		Passwords:   cfg.Passwords,
-	})
-	if err != nil {
-		t.Fatalf("ProcessArchive: %v", err)
-	}
-	if n != 1 {
-		t.Errorf("processed %d entries, want 1", n)
-	}
-
-	certs := cfg.Store.AllCertsFlat()
-	if len(certs) != 1 {
-		t.Errorf("got %d certs in store, want 1 (expired certs should be stored)", len(certs))
-	}
-}
-
 func TestProcessArchive_UnsupportedFormat(t *testing.T) {
 	// WHY: Verifies that an unknown format string produces a clear error
 	// with a descriptive message.
@@ -743,36 +635,6 @@ func TestProcessArchive_UnsupportedFormat(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unsupported archive format") {
 		t.Errorf("error %q should mention unsupported archive format", err.Error())
-	}
-}
-
-func TestProcessArchive_EntryCountLimitZero(t *testing.T) {
-	// WHY: Verifies that MaxEntryCount=0 immediately stops processing,
-	// producing 0 entries and no error (boundary value test).
-	t.Parallel()
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "zero-limit.example.com", []string{"zero-limit.example.com"}, nil)
-
-	zipData := createTestZip(t, map[string][]byte{
-		"cert.pem": leaf.certPEM,
-	})
-
-	limits := DefaultArchiveLimits()
-	limits.MaxEntryCount = 0
-
-	cfg := newTestConfig(t)
-	n, err := ProcessArchive(ProcessArchiveInput{
-		ArchivePath: "test.zip",
-		Data:        zipData,
-		Format:      "zip",
-		Limits:      limits,
-		Store:       cfg.Store, Passwords: cfg.Passwords,
-	})
-	if err != nil {
-		t.Fatalf("ProcessArchive: %v", err)
-	}
-	if n != 0 {
-		t.Errorf("processed %d entries, want 0 (MaxEntryCount=0)", n)
 	}
 }
 

@@ -19,6 +19,18 @@ import (
 	"github.com/sensiblebit/certkit"
 )
 
+// randomSerial generates a random certificate serial number.
+// Using random serials prevents certID collisions when multiple leaves
+// are created from the same CA within a single test.
+func randomSerial(t *testing.T) *big.Int {
+	t.Helper()
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		t.Fatalf("generate random serial: %v", err)
+	}
+	return serial
+}
+
 // testCA holds a CA certificate and its private key for signing leaf certs.
 type testCA struct {
 	cert    *x509.Certificate
@@ -45,7 +57,7 @@ func newRSACA(t *testing.T) testCA {
 	}
 
 	tmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "Test RSA Root CA", Organization: []string{"TestOrg"}},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
@@ -76,7 +88,7 @@ func newECDSACA(t *testing.T) testCA {
 	}
 
 	tmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(2),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "Test ECDSA Root CA", Organization: []string{"TestOrg"}},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
@@ -107,7 +119,7 @@ func newRSALeaf(t *testing.T, ca testCA, cn string, sans []string) testLeaf {
 	}
 
 	tmpl := &x509.Certificate{
-		SerialNumber:   big.NewInt(100),
+		SerialNumber:   randomSerial(t),
 		Subject:        pkix.Name{CommonName: cn, Organization: []string{"TestOrg"}},
 		DNSNames:       sans,
 		NotBefore:      time.Now().Add(-time.Hour),
@@ -143,7 +155,7 @@ func newECDSALeaf(t *testing.T, ca testCA, cn string, sans []string) testLeaf {
 	}
 
 	tmpl := &x509.Certificate{
-		SerialNumber:   big.NewInt(200),
+		SerialNumber:   randomSerial(t),
 		Subject:        pkix.Name{CommonName: cn, Organization: []string{"TestOrg"}},
 		DNSNames:       sans,
 		NotBefore:      time.Now().Add(-time.Hour),
@@ -163,7 +175,10 @@ func newECDSALeaf(t *testing.T, ca testCA, cn string, sans []string) testLeaf {
 	}
 
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-	ecBytes, _ := x509.MarshalECPrivateKey(key)
+	ecBytes, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal ECDSA leaf key: %v", err)
+	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: ecBytes})
 	return testLeaf{cert: cert, certPEM: certPEM, certDER: certDER, key: key, keyPEM: keyPEM}
 }
@@ -177,7 +192,7 @@ func newExpiredLeaf(t *testing.T, ca testCA) testLeaf {
 	}
 
 	tmpl := &x509.Certificate{
-		SerialNumber:   big.NewInt(999),
+		SerialNumber:   randomSerial(t),
 		Subject:        pkix.Name{CommonName: "expired.example.com"},
 		DNSNames:       []string{"expired.example.com"},
 		NotBefore:      time.Now().Add(-2 * 365 * 24 * time.Hour),
@@ -212,7 +227,7 @@ func newIntermediateCA(t *testing.T, root testCA) testCA {
 	}
 
 	tmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(50),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "Test Intermediate CA", Organization: []string{"TestOrg"}},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(5 * 365 * 24 * time.Hour),
@@ -281,7 +296,7 @@ func newEd25519Leaf(t *testing.T, ca testCA, cn string, sans []string) testLeaf 
 	}
 
 	tmpl := &x509.Certificate{
-		SerialNumber:   big.NewInt(400),
+		SerialNumber:   randomSerial(t),
 		Subject:        pkix.Name{CommonName: cn, Organization: []string{"TestOrg"}},
 		DNSNames:       sans,
 		NotBefore:      time.Now().Add(-time.Hour),
@@ -301,40 +316,12 @@ func newEd25519Leaf(t *testing.T, ca testCA, cn string, sans []string) testLeaf 
 	}
 
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-	keyDER, _ := x509.MarshalPKCS8PrivateKey(key)
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal Ed25519 leaf key: %v", err)
+	}
 	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
 	return testLeaf{cert: cert, certPEM: certPEM, certDER: certDER, key: key, keyPEM: keyPEM}
-}
-
-// newEd25519CA generates a self-signed Ed25519 root CA for testing.
-func newEd25519CA(t *testing.T) testCA {
-	t.Helper()
-	_, key, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		t.Fatalf("generate Ed25519 CA key: %v", err)
-	}
-
-	tmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(3),
-		Subject:               pkix.Name{CommonName: "Test Ed25519 Root CA", Organization: []string{"TestOrg"}},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-		SubjectKeyId:          []byte{30, 29, 28, 27, 26, 25, 24, 23, 22, 21, 20, 19, 18, 17, 16, 15, 14, 13, 12, 11},
-	}
-
-	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, key.Public(), key)
-	if err != nil {
-		t.Fatalf("create Ed25519 CA cert: %v", err)
-	}
-	cert, err := x509.ParseCertificate(certDER)
-	if err != nil {
-		t.Fatalf("parse Ed25519 CA cert: %v", err)
-	}
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
-	return testCA{cert: cert, certPEM: certPEM, certDER: certDER, key: key}
 }
 
 // newRSALeafWithIPSANs generates an RSA leaf certificate with both DNS and IP SANs.
@@ -346,7 +333,7 @@ func newRSALeafWithIPSANs(t *testing.T, ca testCA, cn string, dnsNames []string,
 	}
 
 	tmpl := &x509.Certificate{
-		SerialNumber:   big.NewInt(300),
+		SerialNumber:   randomSerial(t),
 		Subject:        pkix.Name{CommonName: cn, Organization: []string{"TestOrg"}},
 		DNSNames:       dnsNames,
 		IPAddresses:    ips,
@@ -372,33 +359,6 @@ func newRSALeafWithIPSANs(t *testing.T, ca testCA, cn string, dnsNames []string,
 		Bytes: x509.MarshalPKCS1PrivateKey(key),
 	})
 	return testLeaf{cert: cert, certPEM: certPEM, certDER: certDER, key: key, keyPEM: keyPEM}
-}
-
-// rsaKeyPEM returns PEM-encoded RSA private key bytes.
-func rsaKeyPEM(t *testing.T) []byte {
-	t.Helper()
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatalf("generate RSA key: %v", err)
-	}
-	return pem.EncodeToMemory(&pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(key),
-	})
-}
-
-// ecdsaKeyPEM returns PEM-encoded ECDSA private key bytes.
-func ecdsaKeyPEM(t *testing.T) []byte {
-	t.Helper()
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("generate ECDSA key: %v", err)
-	}
-	ecBytes, err := x509.MarshalECPrivateKey(key)
-	if err != nil {
-		t.Fatalf("marshal ECDSA key: %v", err)
-	}
-	return pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: ecBytes})
 }
 
 // keysEqual compares two private keys by extracting their public keys and using

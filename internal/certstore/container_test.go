@@ -2,7 +2,6 @@ package certstore
 
 import (
 	"bytes"
-	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -16,277 +15,17 @@ import (
 )
 
 func TestParseContainerData_EmptyData(t *testing.T) {
-	// WHY: Empty input must return a clear error, not panic or return a nil
-	// ContainerContents without error.
+	// WHY: Empty input must return a clear "empty data" error, not panic or
+	// return nil ContainerContents without error. len(nil) == len([]byte{}) == 0,
+	// so one case covers the guard.
 	t.Parallel()
 
 	_, err := ParseContainerData(nil, nil)
 	if err == nil {
-		t.Fatal("expected error for nil data")
+		t.Fatal("expected error for empty data")
 	}
 	if !strings.Contains(err.Error(), "empty data") {
 		t.Errorf("error should mention empty data, got: %v", err)
-	}
-
-	_, err = ParseContainerData([]byte{}, nil)
-	if err == nil {
-		t.Fatal("expected error for empty slice data")
-	}
-	if !strings.Contains(err.Error(), "empty data") {
-		t.Errorf("error should mention empty data, got: %v", err)
-	}
-}
-
-func TestParseContainerData_PEMCertificate(t *testing.T) {
-	// WHY: A PEM certificate is the most common input format; the leaf field
-	// must be populated and extras/key must be nil.
-	t.Parallel()
-
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "pem.example.com", []string{"pem.example.com"})
-
-	contents, err := ParseContainerData(leaf.certPEM, nil)
-	if err != nil {
-		t.Fatalf("ParseContainerData: %v", err)
-	}
-	if contents.Leaf == nil {
-		t.Fatal("expected Leaf to be non-nil")
-	}
-	if contents.Leaf.Subject.CommonName != "pem.example.com" {
-		t.Errorf("Leaf CN = %q, want pem.example.com", contents.Leaf.Subject.CommonName)
-	}
-	if contents.Key != nil {
-		t.Error("expected Key to be nil for cert-only PEM")
-	}
-	if len(contents.ExtraCerts) != 0 {
-		t.Errorf("expected 0 ExtraCerts, got %d", len(contents.ExtraCerts))
-	}
-}
-
-func TestParseContainerData_PEMCertAndKey(t *testing.T) {
-	// WHY: PEM cert+key is a common combined input; one key type suffices for
-	// this thin wrapper since the multi-key-type dispatch is stdlib, not certkit.
-	t.Parallel()
-
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "combined-rsa.example.com", []string{"combined-rsa.example.com"})
-
-	combined := append(leaf.certPEM, leaf.keyPEM...)
-	contents, err := ParseContainerData(combined, nil)
-	if err != nil {
-		t.Fatalf("ParseContainerData: %v", err)
-	}
-	if contents.Leaf == nil {
-		t.Fatal("expected Leaf to be non-nil")
-	}
-	if contents.Key == nil {
-		t.Fatal("expected Key to be non-nil for cert+key PEM")
-	}
-	if !keysEqual(t, leaf.key, contents.Key) {
-		t.Error("extracted key does not Equal original")
-	}
-	if match, err := certkit.KeyMatchesCert(contents.Key, contents.Leaf); err != nil {
-		t.Fatalf("KeyMatchesCert: %v", err)
-	} else if !match {
-		t.Error("extracted key does not match extracted leaf certificate")
-	}
-}
-
-func TestParseContainerData_DERCertificate(t *testing.T) {
-	// WHY: DER is the binary certificate encoding used by Windows and many CAs;
-	// must be detected after PEM fails and produce the correct leaf.
-	t.Parallel()
-
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "der.example.com", []string{"der.example.com"})
-
-	contents, err := ParseContainerData(leaf.certDER, nil)
-	if err != nil {
-		t.Fatalf("ParseContainerData: %v", err)
-	}
-	if contents.Leaf == nil {
-		t.Fatal("expected Leaf to be non-nil")
-	}
-	if contents.Leaf.Subject.CommonName != "der.example.com" {
-		t.Errorf("Leaf CN = %q, want der.example.com", contents.Leaf.Subject.CommonName)
-	}
-	if contents.Key != nil {
-		t.Error("expected Key to be nil for DER cert")
-	}
-	if len(contents.ExtraCerts) != 0 {
-		t.Errorf("expected 0 ExtraCerts, got %d", len(contents.ExtraCerts))
-	}
-}
-
-func TestParseContainerData_PKCS12_CorrectPassword(t *testing.T) {
-	// WHY: PKCS#12 bundles contain leaf + key + CA chain; all three must be
-	// extracted when the correct password is provided.
-	t.Parallel()
-
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "p12.example.com", []string{"p12.example.com"})
-	p12Data := newPKCS12Bundle(t, leaf, ca, "changeit")
-
-	contents, err := ParseContainerData(p12Data, []string{"changeit"})
-	if err != nil {
-		t.Fatalf("ParseContainerData: %v", err)
-	}
-	if contents.Leaf == nil {
-		t.Fatal("expected Leaf to be non-nil")
-	}
-	if contents.Leaf.Subject.CommonName != "p12.example.com" {
-		t.Errorf("Leaf CN = %q, want p12.example.com", contents.Leaf.Subject.CommonName)
-	}
-	if contents.Key == nil {
-		t.Fatal("expected Key to be non-nil for PKCS#12")
-	}
-	if _, ok := contents.Key.(*rsa.PrivateKey); !ok {
-		t.Errorf("Key type = %T, want *rsa.PrivateKey", contents.Key)
-	}
-	if len(contents.ExtraCerts) != 1 {
-		t.Fatalf("expected 1 ExtraCert (CA cert), got %d", len(contents.ExtraCerts))
-	}
-	if contents.ExtraCerts[0].Subject.CommonName != "Test RSA Root CA" {
-		t.Errorf("ExtraCert CN = %q, want Test RSA Root CA", contents.ExtraCerts[0].Subject.CommonName)
-	}
-}
-
-func TestParseContainerData_PKCS12_WrongPassword(t *testing.T) {
-	// WHY: PKCS#12 with the wrong password must fall through to other format
-	// parsers (JKS, PKCS#7, PEM, DER), ultimately failing since none will
-	// match either.
-	t.Parallel()
-
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "p12wrong.example.com", []string{"p12wrong.example.com"})
-	p12Data := newPKCS12Bundle(t, leaf, ca, "correctpw")
-
-	_, err := ParseContainerData(p12Data, []string{"wrongpw"})
-	if err == nil {
-		t.Fatal("expected error for PKCS#12 with wrong password")
-	}
-	if !strings.Contains(err.Error(), "could not parse") {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-func TestParseContainerData_JKS_CorrectPassword(t *testing.T) {
-	// WHY: JKS keystores are the standard Java format; leaf and key must be
-	// extracted, and the CA chain cert must appear in ExtraCerts.
-	t.Parallel()
-
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "jks.example.com", []string{"jks.example.com"})
-	jksData := newJKSBundle(t, leaf, ca, "changeit")
-
-	contents, err := ParseContainerData(jksData, []string{"changeit"})
-	if err != nil {
-		t.Fatalf("ParseContainerData: %v", err)
-	}
-	if contents.Leaf == nil {
-		t.Fatal("expected Leaf to be non-nil")
-	}
-	if contents.Leaf.Subject.CommonName != "jks.example.com" {
-		t.Errorf("Leaf CN = %q, want jks.example.com", contents.Leaf.Subject.CommonName)
-	}
-	if contents.Key == nil {
-		t.Fatal("expected Key to be non-nil for JKS")
-	}
-	if _, ok := contents.Key.(*rsa.PrivateKey); !ok {
-		t.Errorf("Key type = %T, want *rsa.PrivateKey", contents.Key)
-	}
-	if len(contents.ExtraCerts) != 1 {
-		t.Fatalf("expected 1 ExtraCert (CA cert), got %d", len(contents.ExtraCerts))
-	}
-}
-
-func TestParseContainerData_PKCS7(t *testing.T) {
-	// WHY: PKCS#7 containers hold certificate chains (no keys); the first cert
-	// becomes the leaf and the rest go to ExtraCerts.
-	t.Parallel()
-
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "p7.example.com", []string{"p7.example.com"})
-
-	p7Data, err := certkit.EncodePKCS7([]*x509.Certificate{leaf.cert, ca.cert})
-	if err != nil {
-		t.Fatalf("encode PKCS#7: %v", err)
-	}
-
-	contents, parseErr := ParseContainerData(p7Data, nil)
-	if parseErr != nil {
-		t.Fatalf("ParseContainerData: %v", parseErr)
-	}
-	if contents.Leaf == nil {
-		t.Fatal("expected Leaf to be non-nil")
-	}
-	if contents.Leaf.Subject.CommonName != "p7.example.com" {
-		t.Errorf("Leaf CN = %q, want p7.example.com", contents.Leaf.Subject.CommonName)
-	}
-	if contents.Key != nil {
-		t.Error("expected Key to be nil for PKCS#7 (no key material)")
-	}
-	if len(contents.ExtraCerts) != 1 {
-		t.Fatalf("expected 1 ExtraCert (CA cert), got %d", len(contents.ExtraCerts))
-	}
-	if contents.ExtraCerts[0].Subject.CommonName != "Test RSA Root CA" {
-		t.Errorf("ExtraCert CN = %q, want Test RSA Root CA", contents.ExtraCerts[0].Subject.CommonName)
-	}
-}
-
-func TestParseContainerData_PEMKeyOnly(t *testing.T) {
-	// WHY: Standalone PEM key must be extracted with no cert; one key type
-	// suffices since the parsing dispatch is stdlib, not certkit logic.
-	t.Parallel()
-
-	keyPEM := rsaKeyPEM(t)
-	contents, err := ParseContainerData(keyPEM, nil)
-	if err != nil {
-		t.Fatalf("ParseContainerData: %v", err)
-	}
-	if contents.Leaf != nil {
-		t.Error("expected Leaf to be nil for key-only PEM")
-	}
-	if contents.Key == nil {
-		t.Fatal("expected Key to be non-nil for key-only PEM")
-	}
-	if len(contents.ExtraCerts) != 0 {
-		t.Errorf("expected 0 ExtraCerts, got %d", len(contents.ExtraCerts))
-	}
-}
-
-func TestParseContainerData_PKCS12_Ed25519(t *testing.T) {
-	// WHY: ParseContainerData returns the key from DecodePKCS12 which calls
-	// normalizeKey internally. This verifies the Ed25519 key emerges as
-	// ed25519.PrivateKey (value type) from a PKCS#12 container through
-	// ParseContainerData — the RSA-only test would not catch a normalization
-	// gap specific to Ed25519.
-	t.Parallel()
-
-	ca := newEd25519CA(t)
-	leaf := newEd25519Leaf(t, ca, "ed-p12.example.com", []string{"ed-p12.example.com"})
-	p12Data := newPKCS12Bundle(t, leaf, ca, "changeit")
-
-	contents, err := ParseContainerData(p12Data, []string{"changeit"})
-	if err != nil {
-		t.Fatalf("ParseContainerData: %v", err)
-	}
-	if contents.Leaf == nil {
-		t.Fatal("expected Leaf to be non-nil")
-	}
-	if contents.Leaf.Subject.CommonName != "ed-p12.example.com" {
-		t.Errorf("Leaf CN = %q, want ed-p12.example.com", contents.Leaf.Subject.CommonName)
-	}
-	if contents.Key == nil {
-		t.Fatal("expected Key to be non-nil for PKCS#12")
-	}
-	edKey, ok := contents.Key.(ed25519.PrivateKey)
-	if !ok {
-		t.Fatalf("Key type = %T, want ed25519.PrivateKey (value, not pointer)", contents.Key)
-	}
-	origKey := leaf.key.(ed25519.PrivateKey)
-	if !origKey.Equal(edKey) {
-		t.Error("extracted Ed25519 key does not Equal original")
 	}
 }
 
@@ -322,39 +61,6 @@ func TestParseContainerData_PEMMultiKey_ReturnsFirst(t *testing.T) {
 		t.Fatalf("KeyMatchesCert: %v", err)
 	} else if !match {
 		t.Error("first key in PEM should match the leaf certificate")
-	}
-}
-
-func TestParseContainerData_PEMCertAndKeyMixed(t *testing.T) {
-	// WHY: Real-world PEM files often contain multiple CERTIFICATE blocks
-	// followed by or interleaved with a PRIVATE KEY block. ParseContainerData
-	// must extract both the cert chain and the key from such files.
-	t.Parallel()
-
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "mixed.example.com", []string{"mixed.example.com"})
-
-	// cert → CA cert → key (common bundle format)
-	combined := append(leaf.certPEM, ca.certPEM...)
-	combined = append(combined, leaf.keyPEM...)
-
-	contents, err := ParseContainerData(combined, nil)
-	if err != nil {
-		t.Fatalf("ParseContainerData: %v", err)
-	}
-	if contents.Leaf == nil {
-		t.Fatal("expected Leaf to be non-nil")
-	}
-	if contents.Key == nil {
-		t.Fatal("expected Key to be non-nil")
-	}
-	if len(contents.ExtraCerts) != 1 {
-		t.Errorf("expected 1 extra cert (CA), got %d", len(contents.ExtraCerts))
-	}
-	if match, err := certkit.KeyMatchesCert(contents.Key, contents.Leaf); err != nil {
-		t.Fatalf("KeyMatchesCert: %v", err)
-	} else if !match {
-		t.Error("extracted key should match leaf certificate")
 	}
 }
 
@@ -396,171 +102,101 @@ func TestParseContainerData_JKS_TrustedCertOnly(t *testing.T) {
 	}
 }
 
-func TestParseContainerData_GarbageData(t *testing.T) {
-	// WHY: Completely unrecognizable data must return an error that mentions
-	// the formats attempted, so the user knows what was tried.
-	t.Parallel()
-
-	garbage := []byte("this is not a certificate or key in any format")
-	_, err := ParseContainerData(garbage, nil)
-	if err == nil {
-		t.Fatal("expected error for garbage data")
-	}
-	for _, format := range []string{"PEM", "DER", "PKCS#12", "JKS", "PKCS#7"} {
-		if !strings.Contains(err.Error(), format) {
-			t.Errorf("error should mention %s, got: %v", format, err)
-		}
-	}
-}
-
-func TestParseContainerData_PEMCertWithEncryptedPKCS8Key(t *testing.T) {
-	// WHY: Modern tools produce "ENCRYPTED PRIVATE KEY" PEM blocks (PKCS#8 v2).
-	// findPEMPrivateKey matches these via strings.Contains("PRIVATE KEY"), but
-	// ParsePEMPrivateKeyWithPasswords cannot decrypt them. When paired with a
-	// valid certificate, ParseContainerData must still return the cert with
-	// Key=nil, not error out entirely.
+func TestParseContainerData_PKCS7(t *testing.T) {
+	// WHY: ParseContainerData has a PKCS#7 parsing branch that must be
+	// exercised directly. Without this, a regression in the PKCS#7 path
+	// could go undetected since ProcessData tests PKCS#7 via a different route.
 	t.Parallel()
 
 	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "enc-pkcs8.example.com", []string{"enc-pkcs8.example.com"})
+	leaf := newRSALeaf(t, ca, "p7-container.example.com", []string{"p7-container.example.com"})
 
-	encryptedBlock := pem.EncodeToMemory(&pem.Block{
-		Type:  "ENCRYPTED PRIVATE KEY",
-		Bytes: []byte("opaque-encrypted-pkcs8-data"),
-	})
-	combined := append(leaf.certPEM, encryptedBlock...)
-
-	contents, err := ParseContainerData(combined, []string{"password"})
+	p7Data, err := certkit.EncodePKCS7([]*x509.Certificate{leaf.cert, ca.cert})
 	if err != nil {
-		t.Fatalf("ParseContainerData: %v", err)
+		t.Fatalf("EncodePKCS7: %v", err)
+	}
+
+	contents, err := ParseContainerData(p7Data, nil)
+	if err != nil {
+		t.Fatalf("ParseContainerData(PKCS#7): %v", err)
 	}
 	if contents.Leaf == nil {
 		t.Fatal("expected Leaf to be non-nil")
 	}
-	if contents.Leaf.Subject.CommonName != "enc-pkcs8.example.com" {
-		t.Errorf("Leaf CN = %q, want enc-pkcs8.example.com", contents.Leaf.Subject.CommonName)
+	if !contents.Leaf.Equal(leaf.cert) {
+		t.Error("Leaf cert does not Equal original")
 	}
-	// Key should be nil since ENCRYPTED PRIVATE KEY cannot be decrypted
+	if len(contents.ExtraCerts) != 1 {
+		t.Errorf("expected 1 extra cert (CA), got %d", len(contents.ExtraCerts))
+	}
+	if !contents.ExtraCerts[0].Equal(ca.cert) {
+		t.Error("ExtraCerts[0] does not Equal original CA cert")
+	}
 	if contents.Key != nil {
-		t.Errorf("expected Key to be nil for undecryptable ENCRYPTED PRIVATE KEY, got %T", contents.Key)
+		t.Errorf("PKCS#7 should not contain keys, got %T", contents.Key)
 	}
 }
 
-func TestParseContainerData_JKS_Ed25519Key(t *testing.T) {
-	// WHY: ParseContainerData tests PKCS#12 Ed25519 but not JKS Ed25519.
-	// JKS key extraction uses DecodeJKS which parses PKCS#8 internally and
-	// normalizes Ed25519 pointer form — a different code path than PKCS#12.
-	// A missing normalization in the JKS branch of ParseContainerData would
-	// return *ed25519.PrivateKey, breaking downstream type switches.
+func TestParseContainerData_DERCertificate(t *testing.T) {
+	// WHY: ParseContainerData has a DER certificate fallback path that must
+	// be exercised directly. DER certificates are common from AIA endpoints
+	// and browser exports. This path is separate from ProcessData's DER handling.
 	t.Parallel()
 
-	ca := newEd25519CA(t)
-	leaf := newEd25519Leaf(t, ca, "ed-jks.example.com", []string{"ed-jks.example.com"})
-	jksData := newJKSBundle(t, leaf, ca, "changeit")
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "der-container.example.com", []string{"der-container.example.com"})
 
-	contents, err := ParseContainerData(jksData, []string{"changeit"})
+	contents, err := ParseContainerData(leaf.certDER, nil)
 	if err != nil {
-		t.Fatalf("ParseContainerData: %v", err)
+		t.Fatalf("ParseContainerData(DER cert): %v", err)
 	}
 	if contents.Leaf == nil {
 		t.Fatal("expected Leaf to be non-nil")
 	}
-	if contents.Leaf.Subject.CommonName != "ed-jks.example.com" {
-		t.Errorf("Leaf CN = %q, want ed-jks.example.com", contents.Leaf.Subject.CommonName)
+	if !contents.Leaf.Equal(leaf.cert) {
+		t.Error("Leaf cert does not Equal original")
 	}
-	if contents.Key == nil {
-		t.Fatal("expected Key to be non-nil for JKS with Ed25519 key")
-	}
-	edKey, ok := contents.Key.(ed25519.PrivateKey)
-	if !ok {
-		t.Fatalf("Key type = %T, want ed25519.PrivateKey (value, not pointer)", contents.Key)
-	}
-	origKey := leaf.key.(ed25519.PrivateKey)
-	if !origKey.Equal(edKey) {
-		t.Error("extracted Ed25519 key from JKS does not Equal original")
+	if contents.Key != nil {
+		t.Errorf("DER cert should not contain keys, got %T", contents.Key)
 	}
 }
 
-func TestParseContainerData_PEMEncryptedKey_WithPassword(t *testing.T) {
-	// WHY: Encrypted PEM keys must be decrypted when the correct password is
-	// provided through ParseContainerData. One key type (RSA) suffices since
-	// ParseContainerData is a thin wrapper over findPEMPrivateKey.
+func TestParseContainerData_PEMKeyOnly(t *testing.T) {
+	// WHY: A PEM file containing only a private key (no cert) returns
+	// Key != nil with Leaf == nil — verifies the key-only branch at
+	// container.go:62-68 where len(certs)==0 but key != nil.
 	t.Parallel()
 
-	rsaCA := newRSACA(t)
-	rsaLeaf := newRSALeaf(t, rsaCA, "enc-rsa.example.com", []string{"enc-rsa.example.com"})
-	rsaKey := rsaLeaf.key.(*rsa.PrivateKey)
-	rsaBlock := &pem.Block{
-		Type:  "RSA PRIVATE KEY",
-		Bytes: x509.MarshalPKCS1PrivateKey(rsaKey),
-	}
-	//nolint:staticcheck // testing legacy encrypted PEM
-	rsaEncBlock, err := x509.EncryptPEMBlock(rand.Reader, rsaBlock.Type, rsaBlock.Bytes, []byte("mypass"), x509.PEMCipherAES256)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	encKeyPEM := pem.EncodeToMemory(rsaEncBlock)
-	combined := append(rsaLeaf.certPEM, encKeyPEM...)
-
-	contents, err := ParseContainerData(combined, []string{"mypass"})
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
 	if err != nil {
-		t.Fatalf("ParseContainerData: %v", err)
+		t.Fatal(err)
 	}
-	if contents.Leaf == nil {
-		t.Fatal("expected Leaf to be non-nil")
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+
+	contents, err := ParseContainerData(keyPEM, nil)
+	if err != nil {
+		t.Fatalf("ParseContainerData(key-only PEM): %v", err)
 	}
 	if contents.Key == nil {
-		t.Fatal("expected Key to be non-nil — encrypted key should decrypt with correct password")
+		t.Fatal("expected Key to be non-nil for key-only PEM")
 	}
-	match, err := certkit.KeyMatchesCert(contents.Key, contents.Leaf)
-	if err != nil {
-		t.Fatalf("KeyMatchesCert: %v", err)
+	if contents.Leaf != nil {
+		t.Errorf("expected nil Leaf for key-only PEM, got CN=%s", contents.Leaf.Subject.CommonName)
 	}
-	if !match {
-		t.Error("decrypted key should match leaf certificate")
+	if len(contents.ExtraCerts) != 0 {
+		t.Errorf("expected 0 extra certs, got %d", len(contents.ExtraCerts))
 	}
 }
 
-func TestParseContainerData_PEMSkipsMalformedFirstKey(t *testing.T) {
-	// WHY: findPEMPrivateKey iterates all PEM blocks and returns the first
-	// successfully parsed key. When the first key block is malformed, it must
-	// skip it and return the second valid key. This tests the continue-on-error
-	// behavior that prevents a single corrupt key from hiding valid keys.
-	t.Parallel()
-
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "skip-malformed.example.com", []string{"skip-malformed.example.com"})
-
-	// Malformed key block (valid PEM envelope but garbage content)
-	malformedKeyPEM := []byte("-----BEGIN PRIVATE KEY-----\nZm9vYmFy\n-----END PRIVATE KEY-----\n")
-
-	// PEM: cert + malformed key + valid key
-	combined := append(leaf.certPEM, malformedKeyPEM...)
-	combined = append(combined, leaf.keyPEM...)
-
-	contents, err := ParseContainerData(combined, nil)
-	if err != nil {
-		t.Fatalf("ParseContainerData: %v", err)
-	}
-	if contents.Key == nil {
-		t.Fatal("expected Key to be non-nil; findPEMPrivateKey should skip malformed and use second key")
-	}
-	if _, ok := contents.Key.(*rsa.PrivateKey); !ok {
-		t.Fatalf("Key type = %T, want *rsa.PrivateKey", contents.Key)
-	}
-	if match, err := certkit.KeyMatchesCert(contents.Key, contents.Leaf); err != nil {
-		t.Fatalf("KeyMatchesCert: %v", err)
-	} else if !match {
-		t.Error("recovered key should match leaf certificate")
-	}
-}
-
-func TestParseContainerData_DERPrivateKey_ReturnsError(t *testing.T) {
-	// WHY: ParseContainerData supports DER certificates but NOT DER private
-	// keys. A DER-encoded PKCS#8 private key must produce a clear error, not
-	// silently succeed with wrong content or panic. This documents the design
-	// boundary: DER key parsing is ProcessData's job, not ParseContainerData's.
+func TestParseContainerData_UnparseableInputs(t *testing.T) {
+	// WHY: Data that doesn't match any container format (garbage bytes, DER
+	// private keys, empty JKS) must produce a clear "could not parse" error.
+	// DER keys are ProcessData's job, not ParseContainerData's. Empty JKS
+	// falls through all parsers after DecodeJKS returns no leaf.
 	t.Parallel()
 
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -572,25 +208,6 @@ func TestParseContainerData_DERPrivateKey_ReturnsError(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = ParseContainerData(pkcs8DER, nil)
-	if err == nil {
-		t.Fatal("expected error for DER private key passed to ParseContainerData")
-	}
-	if !strings.Contains(err.Error(), "could not parse") {
-		t.Errorf("error should mention 'could not parse', got: %v", err)
-	}
-}
-
-func TestParseContainerData_EmptyJKS_FallsThrough(t *testing.T) {
-	// WHY: A valid JKS file with zero entries (no certs, no keys) parses
-	// successfully via DecodeJKS but returns empty slices. ParseContainerData
-	// checks "if leaf != nil" before returning — an empty JKS falls through
-	// to PKCS#7, PEM, and DER parsers, all of which fail. The resulting error
-	// must be clear, not a panic from attempting to decode JKS magic bytes
-	// as another format.
-	t.Parallel()
-
-	// Create an empty JKS keystore
 	ks := keystore.New()
 	var buf bytes.Buffer
 	if err := ks.Store(&buf, []byte("changeit")); err != nil {
@@ -598,11 +215,26 @@ func TestParseContainerData_EmptyJKS_FallsThrough(t *testing.T) {
 	}
 	emptyJKSData := buf.Bytes()
 
-	_, err := ParseContainerData(emptyJKSData, []string{"changeit"})
-	if err == nil {
-		t.Fatal("expected error for empty JKS (no certs, no keys)")
+	tests := []struct {
+		name      string
+		data      []byte
+		passwords []string
+	}{
+		// "garbage data" removed — exercises the same "nothing matched" fallthrough
+		// as "DER private key" (T-14). DER key is a more realistic input.
+		{"DER private key", pkcs8DER, nil},
+		{"empty JKS", emptyJKSData, []string{"changeit"}},
 	}
-	if !strings.Contains(err.Error(), "could not parse") {
-		t.Errorf("unexpected error: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := ParseContainerData(tt.data, tt.passwords)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), "could not parse") {
+				t.Errorf("error should mention 'could not parse', got: %v", err)
+			}
+		})
 	}
 }

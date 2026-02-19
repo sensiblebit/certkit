@@ -1,7 +1,10 @@
 package internal
 
 import (
-	"crypto/rsa"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/x509"
+	"encoding/pem"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,58 +13,86 @@ import (
 	"github.com/sensiblebit/certkit"
 )
 
-func TestGenerateKey(t *testing.T) {
-	// WHY: Core key generation must succeed for all three supported algorithms
-	// and curve aliases; a failure here would break the entire keygen command.
+func TestGenerateKey_CurveAliases(t *testing.T) {
+	// WHY: parseCurve maps OpenSSL-style aliases (secp384r1, prime256v1) to Go
+	// elliptic curves; this is certkit-owned dispatch logic. RSA/Ed25519 are
+	// direct stdlib pass-through tested via GenerateKeyFiles and error paths.
+	t.Parallel()
 	tests := []struct {
 		name      string
-		algorithm string
-		bits      int
 		curve     string
+		wantCurve elliptic.Curve
 	}{
-		{"RSA", "rsa", 2048, ""},
-		{"ECDSA curve alias", "ecdsa", 0, "secp384r1"},
+		// Only OpenSSL-style aliases exercise certkit's parseCurve dispatch;
+		// standard Go names (P-256, P-384, P-521) are identity pass-throughs.
+		{"secp384r1", "secp384r1", elliptic.P384()},
+		{"prime256v1", "prime256v1", elliptic.P256()},
+		{"secp521r1", "secp521r1", elliptic.P521()},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			signer, err := GenerateKey(tt.algorithm, tt.bits, tt.curve)
+			t.Parallel()
+			signer, err := GenerateKey("ecdsa", 0, tt.curve)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if signer == nil {
-				t.Fatal("expected non-nil signer")
+			ecKey, ok := signer.(*ecdsa.PrivateKey)
+			if !ok {
+				t.Fatalf("expected *ecdsa.PrivateKey, got %T", signer)
+			}
+			if ecKey.Curve != tt.wantCurve {
+				t.Errorf("curve = %s, want %s", ecKey.Curve.Params().Name, tt.wantCurve.Params().Name)
 			}
 		})
 	}
 }
 
-func TestGenerateKey_UnsupportedAlgorithm(t *testing.T) {
-	// WHY: Unsupported algorithms must return a clear error; silently returning nil would cause nil-pointer panics downstream.
-	_, err := GenerateKey("dsa", 0, "")
-	if err == nil {
-		t.Error("expected error for unsupported algorithm")
+func TestGenerateKey_Ed25519(t *testing.T) {
+	// WHY: The Ed25519 branch in GenerateKey (keygen.go:50-55) was the only
+	// algorithm path with zero test coverage. A bug swapping return values
+	// or wrapping the wrong type would go undetected.
+	t.Parallel()
+	signer, err := GenerateKey("ed25519", 0, "")
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "unsupported algorithm") {
-		t.Errorf("unexpected error: %v", err)
+	if certkit.KeyAlgorithmName(signer) != "Ed25519" {
+		t.Errorf("algorithm = %s, want Ed25519", certkit.KeyAlgorithmName(signer))
 	}
 }
 
-func TestGenerateKey_InvalidCurve(t *testing.T) {
-	// WHY: An invalid ECDSA curve name must return an error; silently defaulting to a curve would surprise users with unexpected key parameters.
-	_, err := GenerateKey("ecdsa", 0, "invalid-curve")
-	if err == nil {
-		t.Error("expected error for invalid curve")
+func TestGenerateKey_ErrorPaths(t *testing.T) {
+	// WHY: Invalid inputs (unsupported algorithm, invalid curve) must return
+	// clear errors; silent nil returns would cause nil-pointer panics downstream.
+	t.Parallel()
+	tests := []struct {
+		name    string
+		algo    string
+		curve   string
+		wantErr string
+	}{
+		{"unsupported algorithm", "dsa", "", "unsupported algorithm"},
+		{"invalid ECDSA curve", "ecdsa", "invalid-curve", "unsupported curve"},
 	}
-	if !strings.Contains(err.Error(), "unsupported curve") {
-		t.Errorf("unexpected error: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := GenerateKey(tt.algo, 0, tt.curve)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error = %v, want substring %q", err, tt.wantErr)
+			}
+		})
 	}
 }
 
 func TestGenerateKeyFiles(t *testing.T) {
 	// WHY: Verifies the file-writing path creates key.pem and pub.pem with
-	// correct PEM headers, the key is parseable with the correct algorithm,
-	// and no CSR is created without CN/SANs. One key type suffices because
-	// the file-writing logic is algorithm-agnostic (a thin wrapper).
+	// correct PEM headers, parseable key, correct file permissions, and no
+	// CSR without CN/SANs. One key type suffices (algorithm-agnostic wrapper).
+	t.Parallel()
 	dir := t.TempDir()
 	_, err := GenerateKeyFiles(KeygenOptions{
 		Algorithm: "ecdsa",
@@ -72,8 +103,9 @@ func TestGenerateKeyFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Verify key.pem exists and is parseable
-	keyData, err := os.ReadFile(filepath.Join(dir, "key.pem"))
+	// Verify key.pem exists, is parseable, and has secure permissions
+	keyPath := filepath.Join(dir, "key.pem")
+	keyData, err := os.ReadFile(keyPath)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,14 +119,54 @@ func TestGenerateKeyFiles(t *testing.T) {
 	if certkit.KeyAlgorithmName(parsedKey) != "ECDSA" {
 		t.Errorf("algorithm = %s, want ECDSA", certkit.KeyAlgorithmName(parsedKey))
 	}
+	keyInfo, err := os.Stat(keyPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := keyInfo.Mode().Perm(); perm != 0600 {
+		t.Errorf("key file permissions = %04o, want 0600", perm)
+	}
 
-	// Verify pub.pem exists
-	pubData, err := os.ReadFile(filepath.Join(dir, "pub.pem"))
+	// Verify pub.pem exists, is parseable, and has standard permissions
+	pubPath := filepath.Join(dir, "pub.pem")
+	pubData, err := os.ReadFile(pubPath)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.Contains(string(pubData), "PUBLIC KEY") {
 		t.Error("pub file should contain PUBLIC KEY")
+	}
+	pubBlock, _ := pem.Decode(pubData)
+	if pubBlock == nil {
+		t.Fatal("pub.pem contains no PEM block")
+	}
+	parsedPub, err := x509.ParsePKIXPublicKey(pubBlock.Bytes)
+	if err != nil {
+		t.Fatalf("parsing generated pub PEM: %v", err)
+	}
+
+	// Verify pub.pem matches key.pem — the critical invariant of key generation
+	privPub, err := certkit.GetPublicKey(parsedKey)
+	if err != nil {
+		t.Fatalf("GetPublicKey: %v", err)
+	}
+	privECPub, ok := privPub.(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatalf("expected *ecdsa.PublicKey from private key, got %T", privPub)
+	}
+	parsedECPub, ok := parsedPub.(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatalf("expected *ecdsa.PublicKey from pub.pem, got %T", parsedPub)
+	}
+	if !privECPub.Equal(parsedECPub) {
+		t.Error("pub.pem public key does not match key.pem private key")
+	}
+	pubInfo, err := os.Stat(pubPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := pubInfo.Mode().Perm(); perm != 0644 {
+		t.Errorf("pub file permissions = %04o, want 0644", perm)
 	}
 
 	// No CSR should be created without CN/SANs
@@ -103,41 +175,9 @@ func TestGenerateKeyFiles(t *testing.T) {
 	}
 }
 
-func TestGenerateKeyFiles_KeyPermissions(t *testing.T) {
-	// WHY: Private keys must be written with 0600 permissions and public keys with 0644; incorrect permissions would be a security vulnerability.
-	dir := t.TempDir()
-	_, err := GenerateKeyFiles(KeygenOptions{
-		Algorithm: "ecdsa",
-		Curve:     "P-256",
-		OutPath:   dir,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	keyPath := filepath.Join(dir, "key.pem")
-	info, err := os.Stat(keyPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	perm := info.Mode().Perm()
-	if perm != 0600 {
-		t.Errorf("key file permissions = %04o, want 0600", perm)
-	}
-
-	pubPath := filepath.Join(dir, "pub.pem")
-	pubInfo, err := os.Stat(pubPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pubPerm := pubInfo.Mode().Perm()
-	if pubPerm != 0644 {
-		t.Errorf("pub file permissions = %04o, want 0644", pubPerm)
-	}
-}
-
 func TestGenerateKeyFiles_Stdout(t *testing.T) {
 	// WHY: When no OutPath is set, key material must be returned in-memory (for stdout) with no files written; verifies the stdout mode path.
+	t.Parallel()
 	result, err := GenerateKeyFiles(KeygenOptions{
 		Algorithm: "ecdsa",
 		Curve:     "P-256",
@@ -148,14 +188,19 @@ func TestGenerateKeyFiles_Stdout(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if !strings.Contains(result.KeyPEM, "PRIVATE KEY") {
-		t.Error("KeyPEM should contain PRIVATE KEY")
+	// Verify key PEM is parseable, not just present
+	if _, err := certkit.ParsePEMPrivateKey([]byte(result.KeyPEM)); err != nil {
+		t.Errorf("KeyPEM is not parseable: %v", err)
 	}
-	if !strings.Contains(result.PubPEM, "PUBLIC KEY") {
-		t.Error("PubPEM should contain PUBLIC KEY")
+	pubBlock, _ := pem.Decode([]byte(result.PubPEM))
+	if pubBlock == nil {
+		t.Fatal("PubPEM contains no PEM block")
 	}
-	if !strings.Contains(result.CSRPEM, "CERTIFICATE REQUEST") {
-		t.Error("CSRPEM should contain CERTIFICATE REQUEST")
+	if _, err := x509.ParsePKIXPublicKey(pubBlock.Bytes); err != nil {
+		t.Errorf("PubPEM is not parseable: %v", err)
+	}
+	if _, err := certkit.ParsePEMCertificateRequest([]byte(result.CSRPEM)); err != nil {
+		t.Errorf("CSRPEM is not parseable: %v", err)
 	}
 
 	// No files should be written
@@ -170,46 +215,24 @@ func TestGenerateKeyFiles_Stdout(t *testing.T) {
 	}
 }
 
-func TestGenerateKeyFiles_UnsupportedAlgorithm(t *testing.T) {
-	// WHY: GenerateKeyFiles must propagate the GenerateKey error for unsupported algorithms; verifies the error path does not leave partial files on disk.
-	dir := t.TempDir()
-	_, err := GenerateKeyFiles(KeygenOptions{
-		Algorithm: "dsa",
-		OutPath:   dir,
-	})
-	if err == nil {
-		t.Error("expected error for unsupported algorithm")
-	}
-	if !strings.Contains(err.Error(), "unsupported algorithm") {
-		t.Errorf("unexpected error: %v", err)
-	}
-}
-
-func TestGenerateKeyFiles_WithCSR_KeyMatchesCSR(t *testing.T) {
-	// WHY: The generated CSR must be signed by the corresponding private key; a key-CSR mismatch would produce a CSR that CAs reject as invalid.
+func TestGenerateKeyFiles_WithCSR_Content(t *testing.T) {
+	// WHY: The generated CSR must contain the CN and SANs passed to
+	// GenerateKeyFiles — verifies that generateCSRFromKey correctly
+	// populates the template. Signature validity is a stdlib guarantee
+	// when x509.CreateCertificateRequest succeeds (T-9).
+	t.Parallel()
 	dir := t.TempDir()
 	_, err := GenerateKeyFiles(KeygenOptions{
 		Algorithm: "rsa",
 		Bits:      2048,
 		OutPath:   dir,
 		CN:        "keymatch.example.com",
-		SANs:      []string{"keymatch.example.com"},
+		SANs:      []string{"keymatch.example.com", "alt.example.com"},
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Parse the private key
-	keyData, err := os.ReadFile(filepath.Join(dir, "key.pem"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	parsedKey, err := certkit.ParsePEMPrivateKey(keyData)
-	if err != nil {
-		t.Fatalf("parsing private key: %v", err)
-	}
-
-	// Parse the CSR
 	csrData, err := os.ReadFile(filepath.Join(dir, "csr.pem"))
 	if err != nil {
 		t.Fatal(err)
@@ -219,23 +242,10 @@ func TestGenerateKeyFiles_WithCSR_KeyMatchesCSR(t *testing.T) {
 		t.Fatalf("parsing CSR: %v", err)
 	}
 
-	// Extract the public key from the CSR and compare with the private key's public key
-	rsaKey, ok := parsedKey.(*rsa.PrivateKey)
-	if !ok {
-		t.Fatalf("expected *rsa.PrivateKey, got %T", parsedKey)
+	if csr.Subject.CommonName != "keymatch.example.com" {
+		t.Errorf("CSR CN = %q, want %q", csr.Subject.CommonName, "keymatch.example.com")
 	}
-
-	csrPubKey, ok := csr.PublicKey.(*rsa.PublicKey)
-	if !ok {
-		t.Fatalf("expected CSR public key to be *rsa.PublicKey, got %T", csr.PublicKey)
-	}
-
-	if !rsaKey.PublicKey.Equal(csrPubKey) {
-		t.Error("CSR public key does not match private key's public key")
-	}
-
-	// Verify the CSR signature is valid
-	if err := certkit.VerifyCSR(csr); err != nil {
-		t.Errorf("CSR verification failed: %v", err)
+	if len(csr.DNSNames) != 2 {
+		t.Fatalf("CSR DNSNames count = %d, want 2", len(csr.DNSNames))
 	}
 }

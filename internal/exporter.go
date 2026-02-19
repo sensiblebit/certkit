@@ -13,39 +13,6 @@ import (
 	"github.com/sensiblebit/certkit/internal/certstore"
 )
 
-// writeBundleFiles generates and writes all bundle output files for a single
-// cert-key pair to the filesystem.
-func writeBundleFiles(outDir, bundleFolder string, certRec *certstore.CertRecord, keyRec *certstore.KeyRecord, bundle *certkit.BundleResult, bundleConfig *BundleConfig) error {
-	prefix := certstore.SanitizeFileName(certstore.FormatCN(certRec.Cert))
-
-	var csrSubject *certstore.CSRSubjectOverride
-	if bundleConfig != nil && bundleConfig.Subject != nil {
-		csrSubject = &certstore.CSRSubjectOverride{
-			Country:            bundleConfig.Subject.Country,
-			Province:           bundleConfig.Subject.Province,
-			Locality:           bundleConfig.Subject.Locality,
-			Organization:       bundleConfig.Subject.Organization,
-			OrganizationalUnit: bundleConfig.Subject.OrganizationalUnit,
-		}
-	}
-
-	files, err := certstore.GenerateBundleFiles(certstore.BundleExportInput{
-		Bundle:     bundle,
-		KeyPEM:     keyRec.PEM,
-		KeyType:    keyRec.KeyType,
-		BitLength:  keyRec.BitLength,
-		Prefix:     prefix,
-		SecretName: strings.TrimPrefix(prefix, "_."),
-		CSRSubject: csrSubject,
-	})
-	if err != nil {
-		return err
-	}
-
-	fw := &filesystemWriter{outDir: outDir}
-	return fw.WriteBundleFiles(bundleFolder, files)
-}
-
 // filesystemWriter writes bundle files to the local filesystem under outDir.
 type filesystemWriter struct {
 	outDir string
