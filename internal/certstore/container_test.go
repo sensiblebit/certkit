@@ -101,6 +101,62 @@ func TestParseContainerData_JKS_TrustedCertOnly(t *testing.T) {
 	}
 }
 
+func TestParseContainerData_PKCS7(t *testing.T) {
+	// WHY: ParseContainerData has a PKCS#7 parsing branch that must be
+	// exercised directly. Without this, a regression in the PKCS#7 path
+	// could go undetected since ProcessData tests PKCS#7 via a different route.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "p7-container.example.com", []string{"p7-container.example.com"})
+
+	p7Data, err := certkit.EncodePKCS7([]*x509.Certificate{leaf.cert, ca.cert})
+	if err != nil {
+		t.Fatalf("EncodePKCS7: %v", err)
+	}
+
+	contents, err := ParseContainerData(p7Data, nil)
+	if err != nil {
+		t.Fatalf("ParseContainerData(PKCS#7): %v", err)
+	}
+	if contents.Leaf == nil {
+		t.Fatal("expected Leaf to be non-nil")
+	}
+	if contents.Leaf.Subject.CommonName != "p7-container.example.com" {
+		t.Errorf("Leaf CN = %q, want p7-container.example.com", contents.Leaf.Subject.CommonName)
+	}
+	if len(contents.ExtraCerts) != 1 {
+		t.Errorf("expected 1 extra cert (CA), got %d", len(contents.ExtraCerts))
+	}
+	if contents.Key != nil {
+		t.Errorf("PKCS#7 should not contain keys, got %T", contents.Key)
+	}
+}
+
+func TestParseContainerData_DERCertificate(t *testing.T) {
+	// WHY: ParseContainerData has a DER certificate fallback path that must
+	// be exercised directly. DER certificates are common from AIA endpoints
+	// and browser exports. This path is separate from ProcessData's DER handling.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "der-container.example.com", []string{"der-container.example.com"})
+
+	contents, err := ParseContainerData(leaf.certDER, nil)
+	if err != nil {
+		t.Fatalf("ParseContainerData(DER cert): %v", err)
+	}
+	if contents.Leaf == nil {
+		t.Fatal("expected Leaf to be non-nil")
+	}
+	if contents.Leaf.Subject.CommonName != "der-container.example.com" {
+		t.Errorf("Leaf CN = %q, want der-container.example.com", contents.Leaf.Subject.CommonName)
+	}
+	if contents.Key != nil {
+		t.Errorf("DER cert should not contain keys, got %T", contents.Key)
+	}
+}
+
 func TestParseContainerData_UnparseableInputs(t *testing.T) {
 	// WHY: Data that doesn't match any container format (garbage bytes, DER
 	// private keys, empty JKS) must produce a clear "could not parse" error.

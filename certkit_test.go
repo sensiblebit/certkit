@@ -13,7 +13,6 @@ import (
 	"encoding/asn1"
 	"encoding/pem"
 	"fmt"
-	"math/big"
 	"slices"
 	"strings"
 	"testing"
@@ -72,7 +71,7 @@ func TestParsePEMCertificates_mixedBlockTypes(t *testing.T) {
 	}
 
 	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
+		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "mixed-test"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
@@ -152,7 +151,7 @@ func TestCertSKI_vs_Embedded(t *testing.T) {
 	sha1Hash := sha1.Sum(spki.PublicKey.Bytes)
 
 	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
+		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "test"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
@@ -476,7 +475,7 @@ func TestGetCertificateType(t *testing.T) {
 		t.Fatal(err)
 	}
 	caTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "Root CA"},
 		NotBefore:             time.Now().Add(-1 * time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
@@ -498,7 +497,7 @@ func TestGetCertificateType(t *testing.T) {
 		t.Fatal(err)
 	}
 	intTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(2),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "Intermediate CA"},
 		NotBefore:             time.Now().Add(-1 * time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
@@ -516,7 +515,7 @@ func TestGetCertificateType(t *testing.T) {
 	}
 
 	leafTemplate := &x509.Certificate{
-		SerialNumber: big.NewInt(3),
+		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "leaf.example.com"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
@@ -585,7 +584,7 @@ func TestKeyMatchesCert(t *testing.T) {
 	makeCert := func(t *testing.T, pub any, signer any) *x509.Certificate {
 		t.Helper()
 		tmpl := &x509.Certificate{
-			SerialNumber: big.NewInt(1),
+			SerialNumber: randomSerial(t),
 			Subject:      pkix.Name{CommonName: "keymatch-test"},
 			NotBefore:    time.Now().Add(-1 * time.Hour),
 			NotAfter:     time.Now().Add(24 * time.Hour),
@@ -653,7 +652,7 @@ func TestCertExpiresWithin(t *testing.T) {
 	makeCert := func(t *testing.T, notAfter time.Duration) *x509.Certificate {
 		t.Helper()
 		tmpl := &x509.Certificate{
-			SerialNumber: big.NewInt(1),
+			SerialNumber: randomSerial(t),
 			Subject:      pkix.Name{CommonName: "expiry-test"},
 			NotBefore:    time.Now().Add(-48 * time.Hour),
 			NotAfter:     time.Now().Add(notAfter),
@@ -927,7 +926,7 @@ func TestCrossFormatRoundTrip(t *testing.T) {
 	}
 
 	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
+		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "cross-format-test"},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
@@ -1148,6 +1147,192 @@ func TestIsPEM(t *testing.T) {
 				t.Errorf("IsPEM(%q) = %v, want %v", tt.data, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestColonHex_EdgeCases(t *testing.T) {
+	// WHY: ColonHex is used by CertSKI, CertSKIEmbedded, CertAKIEmbedded,
+	// and fingerprint functions. Edge cases (empty, single byte) must not
+	// panic or produce malformed output.
+	t.Parallel()
+	tests := []struct {
+		name  string
+		input []byte
+		want  string
+	}{
+		{"empty", []byte{}, ""},
+		{"single byte", []byte{0xab}, "ab"},
+		{"two bytes", []byte{0xab, 0xcd}, "ab:cd"},
+		{"three bytes", []byte{0x01, 0x02, 0x03}, "01:02:03"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := ColonHex(tt.input); got != tt.want {
+				t.Errorf("ColonHex(%x) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCertFingerprints(t *testing.T) {
+	// WHY: Fingerprint functions are used for cert identification in CLI output
+	// and JSON. Each produces a different format (hex vs colon-separated, SHA-256
+	// vs SHA-1). Verifies wiring, output length, and format consistency.
+	t.Parallel()
+
+	_, _, leafPEM := generateTestPKI(t)
+	cert, err := ParsePEMCertificate([]byte(leafPEM))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("SHA256 hex", func(t *testing.T) {
+		t.Parallel()
+		fp := CertFingerprint(cert)
+		// SHA-256 = 32 bytes = 64 hex chars
+		if len(fp) != 64 {
+			t.Errorf("CertFingerprint length = %d, want 64", len(fp))
+		}
+		if strings.ContainsAny(fp, "ABCDEF:") {
+			t.Errorf("CertFingerprint should be lowercase hex without colons, got %q", fp)
+		}
+	})
+
+	t.Run("SHA1 hex", func(t *testing.T) {
+		t.Parallel()
+		fp := CertFingerprintSHA1(cert)
+		// SHA-1 = 20 bytes = 40 hex chars
+		if len(fp) != 40 {
+			t.Errorf("CertFingerprintSHA1 length = %d, want 40", len(fp))
+		}
+	})
+
+	t.Run("SHA256 colon", func(t *testing.T) {
+		t.Parallel()
+		fp := CertFingerprintColonSHA256(cert)
+		// 32 hex pairs + 31 colons = 95 chars
+		if len(fp) != 95 {
+			t.Errorf("CertFingerprintColonSHA256 length = %d, want 95", len(fp))
+		}
+		if fp != strings.ToUpper(fp) {
+			t.Errorf("CertFingerprintColonSHA256 should be uppercase, got %q", fp)
+		}
+		if !strings.Contains(fp, ":") {
+			t.Error("CertFingerprintColonSHA256 should contain colons")
+		}
+	})
+
+	t.Run("SHA1 colon", func(t *testing.T) {
+		t.Parallel()
+		fp := CertFingerprintColonSHA1(cert)
+		// 20 hex pairs + 19 colons = 59 chars
+		if len(fp) != 59 {
+			t.Errorf("CertFingerprintColonSHA1 length = %d, want 59", len(fp))
+		}
+		if fp != strings.ToUpper(fp) {
+			t.Errorf("CertFingerprintColonSHA1 should be uppercase, got %q", fp)
+		}
+	})
+
+	t.Run("SHA256 and SHA1 differ", func(t *testing.T) {
+		t.Parallel()
+		sha256fp := CertFingerprint(cert)
+		sha1fp := CertFingerprintSHA1(cert)
+		if sha256fp == sha1fp {
+			t.Error("SHA-256 and SHA-1 fingerprints should differ")
+		}
+	})
+}
+
+func TestComputeSKILegacy(t *testing.T) {
+	// WHY: ComputeSKILegacy uses SHA-1 (RFC 5280) for AKI cross-matching
+	// with legacy certificates. It must produce 20-byte output and differ
+	// from ComputeSKI (which uses truncated SHA-256 per RFC 7093).
+	t.Parallel()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	legacy, err := ComputeSKILegacy(&key.PublicKey)
+	if err != nil {
+		t.Fatalf("ComputeSKILegacy: %v", err)
+	}
+	if len(legacy) != 20 {
+		t.Errorf("ComputeSKILegacy length = %d, want 20", len(legacy))
+	}
+
+	modern, err := ComputeSKI(&key.PublicKey)
+	if err != nil {
+		t.Fatalf("ComputeSKI: %v", err)
+	}
+	if len(modern) != 20 {
+		t.Errorf("ComputeSKI length = %d, want 20", len(modern))
+	}
+
+	if string(legacy) == string(modern) {
+		t.Error("ComputeSKILegacy (SHA-1) and ComputeSKI (SHA-256) should differ for the same key")
+	}
+}
+
+func TestGenerateRSAKey(t *testing.T) {
+	// WHY: GenerateRSAKey is the exported key generation API for RSA.
+	// Verifies the wrapper produces a usable key and rejects invalid bit sizes.
+	t.Parallel()
+
+	t.Run("valid 2048-bit", func(t *testing.T) {
+		t.Parallel()
+		key, err := GenerateRSAKey(2048)
+		if err != nil {
+			t.Fatalf("GenerateRSAKey(2048): %v", err)
+		}
+		if key == nil {
+			t.Fatal("expected non-nil key")
+		}
+	})
+
+	t.Run("invalid 0-bit", func(t *testing.T) {
+		t.Parallel()
+		_, err := GenerateRSAKey(0)
+		if err == nil {
+			t.Error("expected error for 0-bit RSA key")
+		}
+	})
+}
+
+func TestMarshalPrivateKeyToPEM_UnsupportedType(t *testing.T) {
+	// WHY: Unsupported key types must produce a clear error, not panic.
+	t.Parallel()
+	_, err := MarshalPrivateKeyToPEM(struct{}{})
+	if err == nil {
+		t.Error("expected error for unsupported key type")
+	}
+	if !strings.Contains(err.Error(), "marshaling private key") {
+		t.Errorf("error should mention marshaling, got: %v", err)
+	}
+}
+
+func TestMarshalPublicKeyToPEM_UnsupportedType(t *testing.T) {
+	// WHY: Unsupported public key types must produce a clear error, not panic.
+	t.Parallel()
+	_, err := MarshalPublicKeyToPEM(struct{}{})
+	if err == nil {
+		t.Error("expected error for unsupported public key type")
+	}
+	if !strings.Contains(err.Error(), "marshaling public key") {
+		t.Errorf("error should mention marshaling, got: %v", err)
+	}
+}
+
+func TestComputeSKI_UnsupportedType(t *testing.T) {
+	// WHY: Unsupported public key types must produce a clear error, not panic.
+	// Happy path is covered by TestCertSKI_vs_Embedded.
+	t.Parallel()
+	_, err := ComputeSKI(struct{}{})
+	if err == nil {
+		t.Error("expected error for unsupported public key type")
 	}
 }
 

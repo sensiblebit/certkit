@@ -8,7 +8,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"fmt"
-	"math/big"
 	"strings"
 	"testing"
 	"time"
@@ -28,7 +27,7 @@ func TestResolveAIA_FetchesMissingIssuer(t *testing.T) {
 		t.Fatal(err)
 	}
 	caTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "AIA Test CA"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
@@ -50,7 +49,7 @@ func TestResolveAIA_FetchesMissingIssuer(t *testing.T) {
 		t.Fatal(err)
 	}
 	leafTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(2),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "aia-leaf.example.com"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
@@ -117,7 +116,7 @@ func TestResolveAIA_SkipsResolvedAndRoots(t *testing.T) {
 				t.Fatal(err)
 			}
 			leafTmpl := &x509.Certificate{
-				SerialNumber:          big.NewInt(100),
+				SerialNumber:          randomSerial(t),
 				Subject:               pkix.Name{CommonName: "has-issuer.example.com"},
 				DNSNames:              []string{"has-issuer.example.com"},
 				NotBefore:             time.Now().Add(-time.Hour),
@@ -148,7 +147,7 @@ func TestResolveAIA_SkipsResolvedAndRoots(t *testing.T) {
 				t.Fatal(err)
 			}
 			caTmpl := &x509.Certificate{
-				SerialNumber:          big.NewInt(1),
+				SerialNumber:          randomSerial(t),
 				Subject:               pkix.Name{CommonName: "Root With AIA"},
 				NotBefore:             time.Now().Add(-time.Hour),
 				NotAfter:              time.Now().Add(24 * time.Hour),
@@ -226,7 +225,7 @@ func TestResolveAIA_FailureProducesWarning(t *testing.T) {
 				t.Fatal(err)
 			}
 			caTmpl := &x509.Certificate{
-				SerialNumber:          big.NewInt(1),
+				SerialNumber:          randomSerial(t),
 				Subject:               pkix.Name{CommonName: "Failure CA"},
 				NotBefore:             time.Now().Add(-time.Hour),
 				NotAfter:              time.Now().Add(24 * time.Hour),
@@ -248,7 +247,7 @@ func TestResolveAIA_FailureProducesWarning(t *testing.T) {
 				t.Fatal(err)
 			}
 			leafTmpl := &x509.Certificate{
-				SerialNumber:          big.NewInt(2),
+				SerialNumber:          randomSerial(t),
 				Subject:               pkix.Name{CommonName: "aia-fail.example.com"},
 				NotBefore:             time.Now().Add(-time.Hour),
 				NotAfter:              time.Now().Add(24 * time.Hour),
@@ -293,7 +292,7 @@ func TestResolveAIA_DeduplicatesURLs(t *testing.T) {
 		t.Fatal(err)
 	}
 	caTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "Shared AIA CA"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
@@ -311,14 +310,14 @@ func TestResolveAIA_DeduplicatesURLs(t *testing.T) {
 	}
 
 	// Two leaves with the same AIA URL
-	for _, serial := range []int64{2, 3} {
+	for i := range 2 {
 		leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 		if err != nil {
 			t.Fatal(err)
 		}
 		leafTmpl := &x509.Certificate{
-			SerialNumber:          big.NewInt(serial),
-			Subject:               pkix.Name{CommonName: fmt.Sprintf("leaf%d.example.com", serial)},
+			SerialNumber:          randomSerial(t),
+			Subject:               pkix.Name{CommonName: fmt.Sprintf("leaf%d.example.com", i)},
 			NotBefore:             time.Now().Add(-time.Hour),
 			NotAfter:              time.Now().Add(24 * time.Hour),
 			IssuingCertificateURL: []string{"http://example.com/shared-ca.cer"},
@@ -366,7 +365,7 @@ func TestResolveAIA_MaxDepthDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	rootTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "Depth Root CA"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
@@ -388,7 +387,7 @@ func TestResolveAIA_MaxDepthDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	intTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(2),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "Depth Intermediate CA"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
@@ -411,7 +410,7 @@ func TestResolveAIA_MaxDepthDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 	leafTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(3),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "depth-test.example.com"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
@@ -461,6 +460,109 @@ func TestResolveAIA_MaxDepthDefault(t *testing.T) {
 	}
 }
 
+func TestResolveAIA_MaxDepthLimitsResolution(t *testing.T) {
+	// WHY: MaxDepth=1 must limit AIA resolution to a single iteration.
+	// With a 3-cert chain (leaf → intermediate → root), MaxDepth=1 should
+	// fetch the intermediate but NOT recurse to fetch the root.
+	// Without this, a regression that ignores MaxDepth would go undetected.
+	t.Parallel()
+	store := NewMemStore()
+
+	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootTmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "MaxDepth Root CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	rootDER, err := x509.CreateCertificate(rand.Reader, rootTmpl, rootTmpl, &rootKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootCert, err := x509.ParseCertificate(rootDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	intKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intTmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "MaxDepth Intermediate CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		IssuingCertificateURL: []string{"http://example.com/root.cer"},
+	}
+	intDER, err := x509.CreateCertificate(rand.Reader, intTmpl, rootCert, &intKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intCert, err := x509.ParseCertificate(intDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafTmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "maxdepth-leaf.example.com"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IssuingCertificateURL: []string{"http://example.com/intermediate.cer"},
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, intCert, &leafKey.PublicKey, intKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafCert, err := x509.ParseCertificate(leafDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.HandleCertificate(leafCert, "leaf.pem"); err != nil {
+		t.Fatal(err)
+	}
+
+	fetchCount := 0
+	fetcher := func(_ context.Context, url string) ([]byte, error) {
+		fetchCount++
+		if strings.Contains(url, "intermediate") {
+			return intDER, nil
+		}
+		return rootDER, nil
+	}
+
+	ResolveAIA(context.Background(), ResolveAIAInput{
+		Store:    store,
+		Fetch:    fetcher,
+		MaxDepth: 1,
+	})
+
+	// MaxDepth=1: only one iteration, so only the intermediate is fetched.
+	// The root (which requires a second iteration) should NOT be fetched.
+	if fetchCount != 1 {
+		t.Errorf("expected 1 fetch with MaxDepth=1, got %d", fetchCount)
+	}
+	allCerts := store.AllCertsFlat()
+	if len(allCerts) != 2 {
+		t.Errorf("expected 2 certs in store (leaf + intermediate), got %d", len(allCerts))
+	}
+}
+
 func TestResolveAIA_PKCS7Response(t *testing.T) {
 	// WHY: AIA endpoints commonly serve .p7c (PKCS#7) files, especially
 	// DISA and FPKI. The fetcher must parse PKCS#7 and ingest all
@@ -473,7 +575,7 @@ func TestResolveAIA_PKCS7Response(t *testing.T) {
 		t.Fatal(err)
 	}
 	rootTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "P7C Root CA"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
@@ -495,7 +597,7 @@ func TestResolveAIA_PKCS7Response(t *testing.T) {
 		t.Fatal(err)
 	}
 	interTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(2),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "P7C Intermediate CA"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
@@ -517,7 +619,7 @@ func TestResolveAIA_PKCS7Response(t *testing.T) {
 		t.Fatal(err)
 	}
 	leafTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(3),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "p7c-leaf.example.com"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
@@ -582,7 +684,7 @@ func TestResolveAIA_CancelledContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	caTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "AIA Cancel CA"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
@@ -604,7 +706,7 @@ func TestResolveAIA_CancelledContext(t *testing.T) {
 		t.Fatal(err)
 	}
 	leafTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(2),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "cancel.example.com"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),

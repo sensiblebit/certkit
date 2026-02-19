@@ -8,7 +8,6 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
-	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
@@ -67,7 +66,7 @@ func TestGenerateCSRFiles_Sources(t *testing.T) {
 					t.Fatal(err)
 				}
 				tmpl := &x509.Certificate{
-					SerialNumber: big.NewInt(1),
+					SerialNumber: randomSerial(t),
 					Subject:      pkix.Name{CommonName: "cert-template.example.com"},
 					DNSNames:     []string{"cert-template.example.com"},
 					NotBefore:    time.Now().Add(-1 * time.Hour),

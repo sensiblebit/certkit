@@ -10,7 +10,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
-	"math/big"
 	"slices"
 	"testing"
 	"time"
@@ -699,7 +698,7 @@ func TestProcessData_EndToEnd_IngestExportRoundTrip(t *testing.T) {
 
 			// Create a self-signed leaf cert using the key
 			tmpl := &x509.Certificate{
-				SerialNumber: big.NewInt(1),
+				SerialNumber: randomSerial(t),
 				Subject:      pkix.Name{CommonName: "e2e-" + tt.name + ".example.com"},
 				DNSNames:     []string{"e2e-" + tt.name + ".example.com"},
 				NotBefore:    time.Now().Add(-time.Hour),

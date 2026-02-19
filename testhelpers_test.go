@@ -16,6 +16,16 @@ import (
 	"time"
 )
 
+// randomSerial returns a random 128-bit serial number for test certificates.
+func randomSerial(t *testing.T) *big.Int {
+	t.Helper()
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		t.Fatalf("generate random serial: %v", err)
+	}
+	return serial
+}
+
 // generateTestPKI creates a self-signed CA, intermediate, and leaf cert for testing.
 func generateTestPKI(t *testing.T) (caPEM, intermediatePEM, leafPEM string) {
 	t.Helper()
@@ -32,7 +42,7 @@ func generateTestPKIWithKey(t *testing.T) (caPEM, intermediatePEM, leafPEM, leaf
 		t.Fatal(err)
 	}
 	caTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "Test CA"},
 		NotBefore:             time.Now().Add(-1 * time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
@@ -55,7 +65,7 @@ func generateTestPKIWithKey(t *testing.T) (caPEM, intermediatePEM, leafPEM, leaf
 		t.Fatal(err)
 	}
 	intTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(2),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "Test Intermediate"},
 		NotBefore:             time.Now().Add(-1 * time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
@@ -78,7 +88,7 @@ func generateTestPKIWithKey(t *testing.T) (caPEM, intermediatePEM, leafPEM, leaf
 		t.Fatal(err)
 	}
 	leafTemplate := &x509.Certificate{
-		SerialNumber: big.NewInt(3),
+		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "test.example.com"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
@@ -115,7 +125,7 @@ func buildChain(t *testing.T, depth int) (root *x509.Certificate, intermediates 
 		t.Fatal(err)
 	}
 	rootTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "Chain Root CA"},
 		NotBefore:             time.Now().Add(-1 * time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
@@ -141,7 +151,7 @@ func buildChain(t *testing.T, depth int) (root *x509.Certificate, intermediates 
 			t.Fatal(err)
 		}
 		intTemplate := &x509.Certificate{
-			SerialNumber:          big.NewInt(int64(i + 2)),
+			SerialNumber:          randomSerial(t),
 			Subject:               pkix.Name{CommonName: fmt.Sprintf("Intermediate CA %d", i+1)},
 			NotBefore:             time.Now().Add(-1 * time.Hour),
 			NotAfter:              time.Now().Add(24 * time.Hour),
@@ -168,7 +178,7 @@ func buildChain(t *testing.T, depth int) (root *x509.Certificate, intermediates 
 		t.Fatal(err)
 	}
 	leafTemplate := &x509.Certificate{
-		SerialNumber: big.NewInt(int64(depth)),
+		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "chain-leaf.example.com"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
@@ -238,7 +248,7 @@ func generateLeafWithSANs(t *testing.T) (*x509.Certificate, *ecdsa.PrivateKey) {
 		t.Fatal(err)
 	}
 	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
+		SerialNumber: randomSerial(t),
 		Subject: pkix.Name{
 			CommonName:   "test.example.com",
 			Organization: []string{"Test Org"},

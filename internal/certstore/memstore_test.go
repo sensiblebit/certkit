@@ -197,7 +197,7 @@ func TestMemStore_HasIssuer_MultipleIssuers(t *testing.T) {
 	}
 	sharedSubject := pkix.Name{CommonName: "Shared Subject CA", Organization: []string{"TestOrg"}}
 	ca1Template := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          randomSerial(t),
 		Subject:               sharedSubject,
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
@@ -220,7 +220,7 @@ func TestMemStore_HasIssuer_MultipleIssuers(t *testing.T) {
 		t.Fatal(err)
 	}
 	ca2Template := &x509.Certificate{
-		SerialNumber:          big.NewInt(2),
+		SerialNumber:          randomSerial(t),
 		Subject:               sharedSubject,
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
@@ -244,7 +244,7 @@ func TestMemStore_HasIssuer_MultipleIssuers(t *testing.T) {
 		t.Fatal(err)
 	}
 	leafTemplate := &x509.Certificate{
-		SerialNumber:   big.NewInt(100),
+		SerialNumber:   randomSerial(t),
 		Subject:        pkix.Name{CommonName: "multi-issuer.example.com"},
 		DNSNames:       []string{"multi-issuer.example.com"},
 		NotBefore:      time.Now().Add(-time.Hour),

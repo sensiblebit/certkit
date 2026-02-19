@@ -7,7 +7,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
-	"math/big"
 	"strings"
 	"testing"
 	"time"
@@ -22,7 +21,7 @@ func TestGenerateCSR_DoesNotCopyEmailAddresses(t *testing.T) {
 		t.Fatal(err)
 	}
 	template := &x509.Certificate{
-		SerialNumber:   big.NewInt(1),
+		SerialNumber:   randomSerial(t),
 		Subject:        pkix.Name{CommonName: "email-test.example.com"},
 		DNSNames:       []string{"email-test.example.com"},
 		EmailAddresses: []string{"admin@example.com", "security@example.com"},
@@ -279,6 +278,8 @@ func TestGenerateCSRFromTemplate(t *testing.T) {
 		name        string
 		tmpl        *CSRTemplate
 		wantCN      string
+		wantOrg     []string
+		wantCountry []string
 		wantDNS     []string
 		wantIPStrs  []string
 		wantURIStrs []string
@@ -294,9 +295,11 @@ func TestGenerateCSRFromTemplate(t *testing.T) {
 				},
 				Hosts: []string{"test.example.com", "www.test.example.com", "10.0.0.1"},
 			},
-			wantCN:     "test.example.com",
-			wantDNS:    []string{"test.example.com", "www.test.example.com"},
-			wantIPStrs: []string{"10.0.0.1"},
+			wantCN:      "test.example.com",
+			wantOrg:     []string{"Test Org"},
+			wantCountry: []string{"US"},
+			wantDNS:     []string{"test.example.com", "www.test.example.com"},
+			wantIPStrs:  []string{"10.0.0.1"},
 		},
 		{
 			name: "auto-CN from first DNS host",
@@ -350,6 +353,22 @@ func TestGenerateCSRFromTemplate(t *testing.T) {
 			}
 			if csr.Subject.CommonName != tt.wantCN {
 				t.Errorf("CN=%q, want %q", csr.Subject.CommonName, tt.wantCN)
+			}
+			if len(csr.Subject.Organization) != len(tt.wantOrg) {
+				t.Errorf("Organization count=%d, want %d", len(csr.Subject.Organization), len(tt.wantOrg))
+			}
+			for i, got := range csr.Subject.Organization {
+				if i < len(tt.wantOrg) && got != tt.wantOrg[i] {
+					t.Errorf("Organization[%d]=%q, want %q", i, got, tt.wantOrg[i])
+				}
+			}
+			if len(csr.Subject.Country) != len(tt.wantCountry) {
+				t.Errorf("Country count=%d, want %d", len(csr.Subject.Country), len(tt.wantCountry))
+			}
+			for i, got := range csr.Subject.Country {
+				if i < len(tt.wantCountry) && got != tt.wantCountry[i] {
+					t.Errorf("Country[%d]=%q, want %q", i, got, tt.wantCountry[i])
+				}
 			}
 			if len(csr.DNSNames) != len(tt.wantDNS) {
 				t.Errorf("DNSNames count=%d, want %d", len(csr.DNSNames), len(tt.wantDNS))

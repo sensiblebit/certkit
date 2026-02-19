@@ -7,7 +7,6 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"math/big"
 	"strings"
 	"testing"
 	"time"
@@ -21,7 +20,7 @@ func TestEncodeContainers_InvalidInput(t *testing.T) {
 
 	validKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
+		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "test"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
@@ -72,7 +71,7 @@ func TestEncodePKCS12_RoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
+		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "RSA-p12-test"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
@@ -109,7 +108,7 @@ func TestDecodePKCS12_wrongPassword(t *testing.T) {
 	t.Parallel()
 	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
+		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "wrong-pass-test"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
@@ -214,7 +213,7 @@ func TestEncodePKCS12Legacy_WithCAChain(t *testing.T) {
 		t.Fatal(err)
 	}
 	caTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "Legacy Chain CA"},
 		NotBefore:             time.Now().Add(-1 * time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
@@ -236,7 +235,7 @@ func TestEncodePKCS12Legacy_WithCAChain(t *testing.T) {
 		t.Fatal(err)
 	}
 	leafTemplate := &x509.Certificate{
-		SerialNumber: big.NewInt(2),
+		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "legacy-chain-leaf.example.com"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),

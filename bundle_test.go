@@ -8,7 +8,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
-	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -101,7 +100,7 @@ func TestBundle_unknownTrustStore(t *testing.T) {
 		t.Fatal(err)
 	}
 	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
+		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "test"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
@@ -137,7 +136,7 @@ func TestBundle_verifyFalsePassthrough(t *testing.T) {
 		t.Fatal(err)
 	}
 	caTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "NoVerify CA"},
 		NotBefore:             time.Now().Add(-1 * time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
@@ -159,7 +158,7 @@ func TestBundle_verifyFalsePassthrough(t *testing.T) {
 		t.Fatal(err)
 	}
 	leafTemplate := &x509.Certificate{
-		SerialNumber: big.NewInt(2),
+		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "noverify-leaf"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
@@ -263,7 +262,7 @@ func TestFetchAIACertificates_maxDepthZero(t *testing.T) {
 		t.Fatal(err)
 	}
 	template := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "depth-zero"},
 		NotBefore:             time.Now().Add(-1 * time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
@@ -295,7 +294,7 @@ func TestDetectAndSwapLeaf_ReversedChain(t *testing.T) {
 		t.Fatal(err)
 	}
 	caTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "Swap CA"},
 		NotBefore:             time.Now().Add(-1 * time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
@@ -317,7 +316,7 @@ func TestDetectAndSwapLeaf_ReversedChain(t *testing.T) {
 		t.Fatal(err)
 	}
 	leafTemplate := &x509.Certificate{
-		SerialNumber: big.NewInt(2),
+		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "swap-leaf.example.com"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
@@ -373,7 +372,7 @@ func TestBundle_SHA1Warning(t *testing.T) {
 		t.Fatal(err)
 	}
 	caTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "SHA1-Test CA"},
 		NotBefore:             time.Now().Add(-1 * time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
@@ -395,7 +394,7 @@ func TestBundle_SHA1Warning(t *testing.T) {
 		t.Fatal(err)
 	}
 	leafTemplate := &x509.Certificate{
-		SerialNumber: big.NewInt(2),
+		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "sha1-leaf.example.com"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
@@ -479,7 +478,7 @@ func TestBundle_ExpiryWarnings(t *testing.T) {
 				t.Fatal(err)
 			}
 			template := &x509.Certificate{
-				SerialNumber:          big.NewInt(1),
+				SerialNumber:          randomSerial(t),
 				Subject:               pkix.Name{CommonName: "expiry-test"},
 				NotBefore:             time.Now().Add(-1 * time.Hour),
 				NotAfter:              time.Now().Add(tt.notAfter),
@@ -535,7 +534,7 @@ func TestFetchAIACertificates_duplicateURLs(t *testing.T) {
 		t.Fatal(err)
 	}
 	issuerTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "Issuer CA"},
 		NotBefore:             time.Now().Add(-1 * time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
@@ -560,7 +559,7 @@ func TestFetchAIACertificates_duplicateURLs(t *testing.T) {
 		t.Fatal(err)
 	}
 	leafTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(2),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "dup-aia-leaf"},
 		NotBefore:             time.Now().Add(-1 * time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
@@ -597,7 +596,7 @@ func TestBundle_ExcludeRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	caTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "ExcludeRoot CA"},
 		NotBefore:             time.Now().Add(-1 * time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
@@ -619,7 +618,7 @@ func TestBundle_ExcludeRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	leafTemplate := &x509.Certificate{
-		SerialNumber: big.NewInt(2),
+		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "exclude-root-leaf.example.com"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
@@ -659,7 +658,7 @@ func TestBundle_SelfSignedRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	template := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "Self-Signed Root"},
 		NotBefore:             time.Now().Add(-1 * time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
@@ -703,7 +702,7 @@ func TestBundle_CustomTrustStoreNilRoots(t *testing.T) {
 		t.Fatal(err)
 	}
 	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
+		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "nil-roots-test"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
@@ -759,7 +758,7 @@ func TestIsIssuedByMozillaRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	fakeCA := &x509.Certificate{
-		SerialNumber:          big.NewInt(998),
+		SerialNumber:          randomSerial(t),
 		RawSubject:            mozRoot.RawSubject, // exact DER bytes
 		NotBefore:             time.Now().Add(-1 * time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
@@ -781,7 +780,7 @@ func TestIsIssuedByMozillaRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 	issuedByMozilla := &x509.Certificate{
-		SerialNumber: big.NewInt(999),
+		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "issued-by-mozilla-root"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
@@ -797,7 +796,7 @@ func TestIsIssuedByMozillaRoot(t *testing.T) {
 
 	// Build a private CA cert (unknown issuer)
 	privateTemplate := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
+		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "private-ca-leaf"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),

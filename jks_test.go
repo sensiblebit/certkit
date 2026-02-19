@@ -9,7 +9,6 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"fmt"
-	"math/big"
 	"strings"
 	"testing"
 	"time"
@@ -25,7 +24,7 @@ func buildJKSTrustedCert(t *testing.T, password string) []byte {
 		t.Fatalf("generate key: %v", err)
 	}
 	tmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "jks-trusted.example.com"},
 		NotBefore:             time.Now().Add(-1 * time.Hour),
 		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
@@ -63,7 +62,7 @@ func buildJKSPrivateKey(t *testing.T, password string) []byte {
 		t.Fatalf("generate CA key: %v", err)
 	}
 	caTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "JKS Test CA"},
 		NotBefore:             time.Now().Add(-1 * time.Hour),
 		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
@@ -82,7 +81,7 @@ func buildJKSPrivateKey(t *testing.T, password string) []byte {
 	}
 	caCert, _ := x509.ParseCertificate(caDER)
 	leafTmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(100),
+		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "jks-leaf.example.com"},
 		DNSNames:     []string{"jks-leaf.example.com"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
@@ -211,7 +210,7 @@ func TestDecodeJKS_DifferentKeyPassword(t *testing.T) {
 		t.Fatalf("generate CA key: %v", err)
 	}
 	caTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "KeyPass CA"},
 		NotBefore:             time.Now().Add(-1 * time.Hour),
 		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
@@ -230,7 +229,7 @@ func TestDecodeJKS_DifferentKeyPassword(t *testing.T) {
 		t.Fatalf("generate leaf key: %v", err)
 	}
 	leafTmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(100),
+		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "keypass-leaf.example.com"},
 		DNSNames:     []string{"keypass-leaf.example.com"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
@@ -312,7 +311,7 @@ func TestDecodeJKS_CorruptedKeyData(t *testing.T) {
 		t.Fatal(err)
 	}
 	caTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "Corrupt Key Test CA"},
 		NotBefore:             time.Now().Add(-1 * time.Hour),
 		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
@@ -332,7 +331,7 @@ func TestDecodeJKS_CorruptedKeyData(t *testing.T) {
 	}
 	caCert, _ := x509.ParseCertificate(caDER)
 	leafTmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(100),
+		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "corrupt-key-leaf.example.com"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
@@ -448,7 +447,7 @@ func TestDecodeJKS_CorruptedCertDER_PrivateKeyChain(t *testing.T) {
 
 	// Create a valid leaf cert for the chain
 	tmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
+		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "valid-leaf"},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
@@ -505,29 +504,44 @@ func TestDecodeJKS_MultiplePrivateKeyEntries(t *testing.T) {
 	password := "changeit"
 
 	// Create two separate key+cert pairs
-	key1, _ := rsa.GenerateKey(rand.Reader, 2048)
+	key1, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate RSA key: %v", err)
+	}
 	tmpl1 := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
+		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "server-key"},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 	}
-	certDER1, _ := x509.CreateCertificate(rand.Reader, tmpl1, tmpl1, &key1.PublicKey, key1)
+	certDER1, err := x509.CreateCertificate(rand.Reader, tmpl1, tmpl1, &key1.PublicKey, key1)
+	if err != nil {
+		t.Fatalf("create server cert: %v", err)
+	}
 
-	key2, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	key2, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate ECDSA key: %v", err)
+	}
 	tmpl2 := &x509.Certificate{
-		SerialNumber: big.NewInt(2),
+		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "client-key"},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 	}
-	certDER2, _ := x509.CreateCertificate(rand.Reader, tmpl2, tmpl2, &key2.PublicKey, key2)
+	certDER2, err := x509.CreateCertificate(rand.Reader, tmpl2, tmpl2, &key2.PublicKey, key2)
+	if err != nil {
+		t.Fatalf("create client cert: %v", err)
+	}
 
 	// Build JKS with two private key entries
 	ks := keystore.New()
-	pkcs8Key1, _ := x509.MarshalPKCS8PrivateKey(key1)
+	pkcs8Key1, err := x509.MarshalPKCS8PrivateKey(key1)
+	if err != nil {
+		t.Fatalf("marshal server key: %v", err)
+	}
 	if err := ks.SetPrivateKeyEntry("server", keystore.PrivateKeyEntry{
 		CreationTime:     time.Now(),
 		PrivateKey:       pkcs8Key1,
@@ -536,7 +550,10 @@ func TestDecodeJKS_MultiplePrivateKeyEntries(t *testing.T) {
 		t.Fatalf("set server key entry: %v", err)
 	}
 
-	pkcs8Key2, _ := x509.MarshalPKCS8PrivateKey(key2)
+	pkcs8Key2, err := x509.MarshalPKCS8PrivateKey(key2)
+	if err != nil {
+		t.Fatalf("marshal client key: %v", err)
+	}
 	if err := ks.SetPrivateKeyEntry("client", keystore.PrivateKeyEntry{
 		CreationTime:     time.Now(),
 		PrivateKey:       pkcs8Key2,
@@ -648,7 +665,7 @@ func TestEncodeJKS_RoundTripWithCAChain(t *testing.T) {
 		t.Fatal(err)
 	}
 	caTmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "JKS RT CA"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
@@ -667,7 +684,7 @@ func TestEncodeJKS_RoundTripWithCAChain(t *testing.T) {
 		t.Fatal(err)
 	}
 	leafTmpl := &x509.Certificate{
-		SerialNumber: big.NewInt(2),
+		SerialNumber: randomSerial(t),
 		Subject:      pkix.Name{CommonName: "jks-rt-leaf.example.com"},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(365 * 24 * time.Hour),

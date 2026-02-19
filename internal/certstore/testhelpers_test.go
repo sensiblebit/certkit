@@ -19,6 +19,18 @@ import (
 	"github.com/sensiblebit/certkit"
 )
 
+// randomSerial generates a random certificate serial number.
+// Using random serials prevents certID collisions when multiple leaves
+// are created from the same CA within a single test.
+func randomSerial(t *testing.T) *big.Int {
+	t.Helper()
+	serial, err := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	if err != nil {
+		t.Fatalf("generate random serial: %v", err)
+	}
+	return serial
+}
+
 // testCA holds a CA certificate and its private key for signing leaf certs.
 type testCA struct {
 	cert    *x509.Certificate
@@ -45,7 +57,7 @@ func newRSACA(t *testing.T) testCA {
 	}
 
 	tmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "Test RSA Root CA", Organization: []string{"TestOrg"}},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
@@ -76,7 +88,7 @@ func newECDSACA(t *testing.T) testCA {
 	}
 
 	tmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(2),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "Test ECDSA Root CA", Organization: []string{"TestOrg"}},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
@@ -107,7 +119,7 @@ func newRSALeaf(t *testing.T, ca testCA, cn string, sans []string) testLeaf {
 	}
 
 	tmpl := &x509.Certificate{
-		SerialNumber:   big.NewInt(100),
+		SerialNumber:   randomSerial(t),
 		Subject:        pkix.Name{CommonName: cn, Organization: []string{"TestOrg"}},
 		DNSNames:       sans,
 		NotBefore:      time.Now().Add(-time.Hour),
@@ -143,7 +155,7 @@ func newECDSALeaf(t *testing.T, ca testCA, cn string, sans []string) testLeaf {
 	}
 
 	tmpl := &x509.Certificate{
-		SerialNumber:   big.NewInt(200),
+		SerialNumber:   randomSerial(t),
 		Subject:        pkix.Name{CommonName: cn, Organization: []string{"TestOrg"}},
 		DNSNames:       sans,
 		NotBefore:      time.Now().Add(-time.Hour),
@@ -180,7 +192,7 @@ func newExpiredLeaf(t *testing.T, ca testCA) testLeaf {
 	}
 
 	tmpl := &x509.Certificate{
-		SerialNumber:   big.NewInt(999),
+		SerialNumber:   randomSerial(t),
 		Subject:        pkix.Name{CommonName: "expired.example.com"},
 		DNSNames:       []string{"expired.example.com"},
 		NotBefore:      time.Now().Add(-2 * 365 * 24 * time.Hour),
@@ -215,7 +227,7 @@ func newIntermediateCA(t *testing.T, root testCA) testCA {
 	}
 
 	tmpl := &x509.Certificate{
-		SerialNumber:          big.NewInt(50),
+		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "Test Intermediate CA", Organization: []string{"TestOrg"}},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(5 * 365 * 24 * time.Hour),
@@ -284,7 +296,7 @@ func newEd25519Leaf(t *testing.T, ca testCA, cn string, sans []string) testLeaf 
 	}
 
 	tmpl := &x509.Certificate{
-		SerialNumber:   big.NewInt(400),
+		SerialNumber:   randomSerial(t),
 		Subject:        pkix.Name{CommonName: cn, Organization: []string{"TestOrg"}},
 		DNSNames:       sans,
 		NotBefore:      time.Now().Add(-time.Hour),
@@ -321,7 +333,7 @@ func newRSALeafWithIPSANs(t *testing.T, ca testCA, cn string, dnsNames []string,
 	}
 
 	tmpl := &x509.Certificate{
-		SerialNumber:   big.NewInt(300),
+		SerialNumber:   randomSerial(t),
 		Subject:        pkix.Name{CommonName: cn, Organization: []string{"TestOrg"}},
 		DNSNames:       dnsNames,
 		IPAddresses:    ips,
