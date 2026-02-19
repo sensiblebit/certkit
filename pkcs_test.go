@@ -118,12 +118,15 @@ func TestDecodePKCS12_wrongPassword(t *testing.T) {
 	cert, _ := x509.ParseCertificate(certBytes)
 
 	pfxData, _ := EncodePKCS12(key, cert, nil, "correct")
-	_, _, _, err := DecodePKCS12(pfxData, "wrong")
+	gotKey, gotCert, gotCAs, err := DecodePKCS12(pfxData, "wrong")
 	if err == nil {
-		t.Error("expected error for wrong password")
+		t.Fatal("expected error for wrong password")
 	}
 	if !strings.Contains(err.Error(), "decoding PKCS#12") {
 		t.Errorf("unexpected error: %v", err)
+	}
+	if gotKey != nil || gotCert != nil || gotCAs != nil {
+		t.Error("wrong password should return nil key, cert, and CAs")
 	}
 }
 

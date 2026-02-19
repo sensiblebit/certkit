@@ -287,8 +287,6 @@ func TestFetchAIACertificates_maxDepthZero(t *testing.T) {
 	}
 }
 
-// --- Bundle warning tests ---
-
 func TestDetectAndSwapLeaf_ReversedChain(t *testing.T) {
 	// WHY: Users sometimes pass certs in reversed order (CA first); the swap heuristic must detect this and reorder to produce a valid chain.
 	t.Parallel()

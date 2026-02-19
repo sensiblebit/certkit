@@ -201,9 +201,6 @@ func TestCertSKI_errorReturnsEmpty(t *testing.T) {
 	}
 }
 
-// TestParsePEMPrivateKey_AllFormats proves ParsePEMPrivateKey correctly
-// identifies and parses private keys across all supported PEM encodings:
-// SEC1 (EC), PKCS#8 (EC, RSA, Ed25519), and PKCS#1 (RSA).
 func TestParsePEMPrivateKey_AllFormats(t *testing.T) {
 	// WHY: Keys arrive in many PEM encodings (SEC1, PKCS#1, PKCS#8); failing to parse any format silently drops keys during scan ingestion.
 	t.Parallel()
@@ -399,9 +396,6 @@ func TestParsePEMPrivateKeyWithPasswords_Encrypted(t *testing.T) {
 		})
 	}
 }
-
-// TestParsePEMPrivateKey_unsupportedBlockType is consolidated into
-// TestParsePEMPrivateKey_ErrorPaths (T-14).
 
 func TestParsePEMCertificateRequest_errors(t *testing.T) {
 	// WHY: Each CSR parse failure mode (no PEM, wrong block type, corrupt DER) needs a distinct error message for user diagnostics.
