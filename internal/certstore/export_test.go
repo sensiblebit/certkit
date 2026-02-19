@@ -78,6 +78,32 @@ func TestGenerateBundleFiles_AllFileTypes(t *testing.T) {
 		if len(f.Data) == 0 {
 			t.Errorf("%s: empty data", f.Name)
 		}
+
+		// K8s YAML must be parseable with correct structure and non-empty data fields.
+		if f.Name == "example.com.k8s.yaml" {
+			var secret K8sSecret
+			if err := yaml.Unmarshal(f.Data, &secret); err != nil {
+				t.Fatalf("k8s.yaml: invalid YAML: %v", err)
+			}
+			if secret.APIVersion != "v1" {
+				t.Errorf("k8s.yaml: apiVersion=%q, want v1", secret.APIVersion)
+			}
+			if secret.Kind != "Secret" {
+				t.Errorf("k8s.yaml: kind=%q, want Secret", secret.Kind)
+			}
+			if secret.Type != "kubernetes.io/tls" {
+				t.Errorf("k8s.yaml: type=%q, want kubernetes.io/tls", secret.Type)
+			}
+			if secret.Metadata.Name != "example-tls" {
+				t.Errorf("k8s.yaml: metadata.name=%q, want example-tls", secret.Metadata.Name)
+			}
+			if secret.Data["tls.crt"] == "" {
+				t.Error("k8s.yaml: tls.crt is empty")
+			}
+			if secret.Data["tls.key"] == "" {
+				t.Error("k8s.yaml: tls.key is empty")
+			}
+		}
 	}
 }
 

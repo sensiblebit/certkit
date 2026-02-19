@@ -413,6 +413,14 @@ func TestVerifyCert_ChainOnlyNoKeyMatch(t *testing.T) {
 		t.Errorf("expected chain to be valid, got error: %s", result.ChainErr)
 	}
 	if len(result.Chain) == 0 {
-		t.Error("expected chain display to be populated")
+		t.Fatal("expected chain display to be populated")
+	}
+	// Verify chain content — not just length. Leaf should be first, root last.
+	if !strings.Contains(result.Chain[0].Subject, "chain-only.example.com") {
+		t.Errorf("first chain entry should be the leaf, got subject %q", result.Chain[0].Subject)
+	}
+	lastEntry := result.Chain[len(result.Chain)-1]
+	if !lastEntry.IsRoot {
+		t.Error("last chain entry should be marked as root")
 	}
 }

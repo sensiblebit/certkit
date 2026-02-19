@@ -305,9 +305,9 @@ func TestProcessArchive_MixedContentIgnoresNonCrypto(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProcessArchive: %v", err)
 	}
-	// n counts entries iterated (impl detail); the behavioral check is what
-	// the store ingested — only the PEM cert should survive.
-	_ = n
+	if n != 4 {
+		t.Errorf("processed %d entries, want 4 (all entries iterated including non-crypto)", n)
+	}
 
 	certs := cfg.Store.AllCertsFlat()
 	if len(certs) != 1 {
@@ -605,6 +605,8 @@ func TestProcessArchive_CorruptedArchive(t *testing.T) {
 			})
 			if err == nil {
 				t.Errorf("expected error for corrupted %s, got nil", tt.format)
+			} else if !strings.Contains(err.Error(), "bad."+tt.format) {
+				t.Errorf("error should contain archive path, got: %v", err)
 			}
 		})
 	}

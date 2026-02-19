@@ -81,6 +81,13 @@ func TestLoadBundleConfigs_OldFormat(t *testing.T) {
 	if configs[1].BundleName != "other-bundle" {
 		t.Errorf("expected bundle name 'other-bundle', got %q", configs[1].BundleName)
 	}
+	// Verify CommonNames were parsed — a field mapping bug would leave them empty.
+	if len(configs[0].CommonNames) != 1 || configs[0].CommonNames[0] != "example.com" {
+		t.Errorf("expected CommonNames [example.com], got %v", configs[0].CommonNames)
+	}
+	if len(configs[1].CommonNames) != 1 || configs[1].CommonNames[0] != "other.com" {
+		t.Errorf("expected CommonNames [other.com], got %v", configs[1].CommonNames)
+	}
 	// Old-format configs have no defaultSubject; Subject must remain nil so
 	// downstream code knows no subject override was requested.
 	if configs[0].Subject != nil {
