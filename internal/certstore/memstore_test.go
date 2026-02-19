@@ -1014,6 +1014,9 @@ func TestMemStore_HandleKey_NilPEM(t *testing.T) {
 		if rec.KeyType != "RSA" {
 			t.Errorf("KeyType = %q, want RSA", rec.KeyType)
 		}
+		if !keysEqual(t, key, rec.Key) {
+			t.Error("stored key does not Equal original")
+		}
 	}
 }
 

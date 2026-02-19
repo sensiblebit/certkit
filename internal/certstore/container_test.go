@@ -122,11 +122,14 @@ func TestParseContainerData_PKCS7(t *testing.T) {
 	if contents.Leaf == nil {
 		t.Fatal("expected Leaf to be non-nil")
 	}
-	if contents.Leaf.Subject.CommonName != "p7-container.example.com" {
-		t.Errorf("Leaf CN = %q, want p7-container.example.com", contents.Leaf.Subject.CommonName)
+	if !contents.Leaf.Equal(leaf.cert) {
+		t.Error("Leaf cert does not Equal original")
 	}
 	if len(contents.ExtraCerts) != 1 {
 		t.Errorf("expected 1 extra cert (CA), got %d", len(contents.ExtraCerts))
+	}
+	if !contents.ExtraCerts[0].Equal(ca.cert) {
+		t.Error("ExtraCerts[0] does not Equal original CA cert")
 	}
 	if contents.Key != nil {
 		t.Errorf("PKCS#7 should not contain keys, got %T", contents.Key)
@@ -149,8 +152,8 @@ func TestParseContainerData_DERCertificate(t *testing.T) {
 	if contents.Leaf == nil {
 		t.Fatal("expected Leaf to be non-nil")
 	}
-	if contents.Leaf.Subject.CommonName != "der-container.example.com" {
-		t.Errorf("Leaf CN = %q, want der-container.example.com", contents.Leaf.Subject.CommonName)
+	if !contents.Leaf.Equal(leaf.cert) {
+		t.Error("Leaf cert does not Equal original")
 	}
 	if contents.Key != nil {
 		t.Errorf("DER cert should not contain keys, got %T", contents.Key)

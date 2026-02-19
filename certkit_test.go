@@ -1229,8 +1229,9 @@ func TestCertFingerprints(t *testing.T) {
 
 func TestComputeSKILegacy(t *testing.T) {
 	// WHY: ComputeSKILegacy uses SHA-1 (RFC 5280) for AKI cross-matching
-	// with legacy certificates. Verifies the function succeeds and returns
-	// non-empty output. ComputeSKI is separately tested via TestCertSKI_vs_Embedded.
+	// with legacy certificates. Verifies the returned bytes match an
+	// independently computed SHA-1 hash of the public key bit string,
+	// and that the result differs from ComputeSKI (truncated SHA-256).
 	t.Parallel()
 
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -1242,8 +1243,34 @@ func TestComputeSKILegacy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ComputeSKILegacy: %v", err)
 	}
-	if len(ski) == 0 {
-		t.Error("ComputeSKILegacy returned empty SKI")
+	if len(ski) != 20 {
+		t.Fatalf("ComputeSKILegacy returned %d bytes, want 20 (SHA-1)", len(ski))
+	}
+
+	// Independently compute SHA-1 of the public key bit string for comparison.
+	var spki struct {
+		Algorithm asn1.RawValue
+		PublicKey asn1.BitString
+	}
+	pubDER, err := x509.MarshalPKIXPublicKey(&key.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := asn1.Unmarshal(pubDER, &spki); err != nil {
+		t.Fatal(err)
+	}
+	expected := sha1.Sum(spki.PublicKey.Bytes)
+	if !slices.Equal(ski, expected[:]) {
+		t.Errorf("ComputeSKILegacy = %x, want SHA-1(%x...) = %x", ski, spki.PublicKey.Bytes[:8], expected)
+	}
+
+	// Must differ from ComputeSKI (truncated SHA-256).
+	modernSKI, err := ComputeSKI(&key.PublicKey)
+	if err != nil {
+		t.Fatalf("ComputeSKI: %v", err)
+	}
+	if slices.Equal(ski, modernSKI) {
+		t.Error("ComputeSKILegacy should differ from ComputeSKI (SHA-1 vs truncated SHA-256)")
 	}
 }
 
@@ -1278,6 +1305,9 @@ func TestComputeSKI_UnsupportedType(t *testing.T) {
 	_, err := ComputeSKI(struct{}{})
 	if err == nil {
 		t.Error("expected error for unsupported public key type")
+	}
+	if !strings.Contains(err.Error(), "unsupported public key type") {
+		t.Errorf("error should mention unsupported public key type, got: %v", err)
 	}
 }
 

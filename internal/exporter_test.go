@@ -143,6 +143,11 @@ func TestExportBundles_EmptyBundleNameSkipped(t *testing.T) {
 		t.Fatalf("store key: %v", err)
 	}
 
+	// Precondition: store has the cert (guards against silent HandleCertificate failure)
+	if len(store.AllCertsFlat()) != 1 {
+		t.Fatalf("precondition: expected 1 cert in store, got %d", len(store.AllCertsFlat()))
+	}
+
 	outDir := t.TempDir()
 	err := ExportBundles(context.Background(), nil, outDir, store, true, false)
 	if err != nil {

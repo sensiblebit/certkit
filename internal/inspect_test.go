@@ -130,9 +130,10 @@ func TestInspectFile_NotFound(t *testing.T) {
 }
 
 func TestInspectFile_ContainerFormats(t *testing.T) {
-	// WHY: Container formats (PKCS#12, JKS) embed certs and keys in binary
-	// structures; verifies InspectFile extracts both object types with correct
-	// leaf CN for each format. Consolidated per T-12.
+	// WHY: Container formats (PKCS#12, JKS, PKCS#7) embed certs (and
+	// optionally keys) in binary structures; verifies InspectFile extracts
+	// the correct object types with correct leaf CN for each format.
+	// Consolidated per T-12 — assertion logic is identical across formats.
 	t.Parallel()
 	ca := newRSACA(t)
 
@@ -141,6 +142,8 @@ func TestInspectFile_ContainerFormats(t *testing.T) {
 		cn        string
 		filename  string
 		wantCerts int // exact expected count
+		wantKeys  int // exact expected key count
+		passwords []string
 		makeData  func(t *testing.T, leaf testLeaf, ca testCA) []byte
 	}{
 		{
@@ -148,6 +151,8 @@ func TestInspectFile_ContainerFormats(t *testing.T) {
 			cn:        "p12.example.com",
 			filename:  "bundle.p12",
 			wantCerts: 2, // leaf + CA
+			wantKeys:  1,
+			passwords: []string{"changeit"},
 			makeData: func(t *testing.T, leaf testLeaf, ca testCA) []byte {
 				return newPKCS12Bundle(t, leaf, ca, "changeit")
 			},
@@ -157,8 +162,24 @@ func TestInspectFile_ContainerFormats(t *testing.T) {
 			cn:        "jks.example.com",
 			filename:  "keystore.jks",
 			wantCerts: 2, // leaf + CA in chain
+			wantKeys:  1,
+			passwords: []string{"changeit"},
 			makeData: func(t *testing.T, leaf testLeaf, ca testCA) []byte {
 				return newJKSBundle(t, leaf, ca, "changeit")
+			},
+		},
+		{
+			name:      "PKCS#7",
+			cn:        "p7.example.com",
+			filename:  "bundle.p7c",
+			wantCerts: 2, // leaf + CA
+			wantKeys:  0, // PKCS#7 carries no keys
+			makeData: func(t *testing.T, leaf testLeaf, ca testCA) []byte {
+				p7, err := certkit.EncodePKCS7([]*x509.Certificate{leaf.cert, ca.cert})
+				if err != nil {
+					t.Fatalf("EncodePKCS7: %v", err)
+				}
+				return p7
 			},
 		},
 	}
@@ -175,7 +196,7 @@ func TestInspectFile_ContainerFormats(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			results, err := InspectFile(path, []string{"changeit"})
+			results, err := InspectFile(path, tt.passwords)
 			if err != nil {
 				t.Fatalf("InspectFile failed: %v", err)
 			}
@@ -192,8 +213,8 @@ func TestInspectFile_ContainerFormats(t *testing.T) {
 			if certs != tt.wantCerts {
 				t.Errorf("expected %d certificates, got %d", tt.wantCerts, certs)
 			}
-			if keys != 1 {
-				t.Errorf("expected 1 private key, got %d", keys)
+			if keys != tt.wantKeys {
+				t.Errorf("expected %d private keys, got %d", tt.wantKeys, keys)
 			}
 
 			// Verify leaf CN is present
@@ -207,49 +228,6 @@ func TestInspectFile_ContainerFormats(t *testing.T) {
 				t.Errorf("expected to find leaf certificate with CN=%s", tt.cn)
 			}
 		})
-	}
-}
-
-func TestInspectFile_PKCS7(t *testing.T) {
-	// WHY: inspectDERData has a PKCS#7 branch that extracts certs from SignedData
-	// containers. Without this test, a broken PKCS#7 decode path would silently
-	// return "no objects found" for .p7c files.
-	t.Parallel()
-
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "p7.example.com", []string{"p7.example.com"}, nil)
-
-	p7Data, err := certkit.EncodePKCS7([]*x509.Certificate{leaf.cert, ca.cert})
-	if err != nil {
-		t.Fatalf("EncodePKCS7: %v", err)
-	}
-
-	dir := t.TempDir()
-	path := filepath.Join(dir, "bundle.p7c")
-	if err := os.WriteFile(path, p7Data, 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	results, err := InspectFile(path, nil)
-	if err != nil {
-		t.Fatalf("InspectFile: %v", err)
-	}
-
-	var certs int
-	var foundLeaf bool
-	for _, r := range results {
-		if r.Type == "certificate" {
-			certs++
-			if strings.Contains(r.Subject, "p7.example.com") {
-				foundLeaf = true
-			}
-		}
-	}
-	if certs != 2 {
-		t.Errorf("expected 2 certificates from PKCS#7, got %d", certs)
-	}
-	if !foundLeaf {
-		t.Error("expected to find leaf certificate with CN=p7.example.com")
 	}
 }
 

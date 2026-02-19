@@ -433,6 +433,21 @@ func TestGenerateYAML_Fields(t *testing.T) {
 		t.Errorf("key_size = %v, want 2048", result["key_size"])
 	}
 
+	// Verify key PEM round-trips correctly (catches encoding bugs).
+	keyStr, ok := result["key"].(string)
+	if !ok {
+		t.Fatalf("key is not a string: %T", result["key"])
+	}
+	parsedKey, err := certkit.ParsePEMPrivateKey([]byte(keyStr))
+	if err != nil {
+		t.Fatalf("key field is not parseable PEM: %v", err)
+	}
+	if match, err := certkit.KeyMatchesCert(parsedKey, leaf.cert); err != nil {
+		t.Fatalf("KeyMatchesCert: %v", err)
+	} else if !match {
+		t.Error("YAML key field does not match the leaf certificate")
+	}
+
 	expiresStr, ok := result["expires"].(string)
 	if !ok {
 		t.Fatalf("expires is not a string: %T", result["expires"])
