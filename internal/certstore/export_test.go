@@ -141,6 +141,13 @@ func TestGenerateBundleFiles_NoIntermediates(t *testing.T) {
 		if f.Name == "direct.intermediates.pem" {
 			t.Error("intermediates.pem should not be present when bundle has no intermediates")
 		}
+		// chain.pem must contain only the leaf cert (no intermediates to append)
+		if f.Name == "direct.chain.pem" {
+			certCount := strings.Count(string(f.Data), "-----BEGIN CERTIFICATE-----")
+			if certCount != 1 {
+				t.Errorf("chain.pem should contain 1 cert (leaf only), got %d", certCount)
+			}
+		}
 	}
 }
 
@@ -890,6 +897,9 @@ func TestExportMatchedBundles(t *testing.T) {
 	fileNames := make(map[string]bool, len(call.files))
 	for _, f := range call.files {
 		fileNames[f.Name] = true
+		if len(f.Data) == 0 {
+			t.Errorf("file %q has empty data", f.Name)
+		}
 	}
 	prefix := "export.example.com"
 	for _, suffix := range expectedSuffixes {
@@ -1024,6 +1034,12 @@ func TestExportMatchedBundles_RetryNoVerify(t *testing.T) {
 	}
 	if written[0].folder != "retry-bundle" {
 		t.Errorf("folder = %q, want %q", written[0].folder, "retry-bundle")
+	}
+	// Verify the retried bundle produced non-empty files with the leaf cert.
+	for _, f := range written[0].files {
+		if len(f.Data) == 0 {
+			t.Errorf("file %q has empty data after retry", f.Name)
+		}
 	}
 }
 

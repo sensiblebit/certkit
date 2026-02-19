@@ -95,7 +95,8 @@ func GetKeyType(cert *x509.Certificate) string {
 }
 
 // FormatCN returns the common name of the certificate for display. Falls back
-// to the first DNS SAN, then to "serial:<hex>" if no CN or SAN is present.
+// to the first DNS SAN, then to "serial:<hex>", then to "unknown" if SerialNumber
+// is also nil.
 func FormatCN(cert *x509.Certificate) string {
 	if cert.Subject.CommonName != "" {
 		return cert.Subject.CommonName
@@ -103,7 +104,10 @@ func FormatCN(cert *x509.Certificate) string {
 	if len(cert.DNSNames) > 0 {
 		return cert.DNSNames[0]
 	}
-	return fmt.Sprintf("serial:%s", cert.SerialNumber.String())
+	if cert.SerialNumber != nil {
+		return fmt.Sprintf("serial:%s", cert.SerialNumber.String())
+	}
+	return "unknown"
 }
 
 // SanitizeFileName replaces wildcards and other unsafe characters for file

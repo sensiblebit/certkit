@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/pem"
 	"strings"
 	"testing"
 	"time"
@@ -157,6 +158,37 @@ func TestParseContainerData_DERCertificate(t *testing.T) {
 	}
 	if contents.Key != nil {
 		t.Errorf("DER cert should not contain keys, got %T", contents.Key)
+	}
+}
+
+func TestParseContainerData_PEMKeyOnly(t *testing.T) {
+	// WHY: A PEM file containing only a private key (no cert) returns
+	// Key != nil with Leaf == nil — verifies the key-only branch at
+	// container.go:62-68 where len(certs)==0 but key != nil.
+	t.Parallel()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: keyDER})
+
+	contents, err := ParseContainerData(keyPEM, nil)
+	if err != nil {
+		t.Fatalf("ParseContainerData(key-only PEM): %v", err)
+	}
+	if contents.Key == nil {
+		t.Fatal("expected Key to be non-nil for key-only PEM")
+	}
+	if contents.Leaf != nil {
+		t.Errorf("expected nil Leaf for key-only PEM, got CN=%s", contents.Leaf.Subject.CommonName)
+	}
+	if len(contents.ExtraCerts) != 0 {
+		t.Errorf("expected 0 extra certs, got %d", len(contents.ExtraCerts))
 	}
 }
 

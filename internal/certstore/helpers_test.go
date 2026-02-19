@@ -160,6 +160,13 @@ func TestFormatCN(t *testing.T) {
 			},
 			want: "*.example.com",
 		},
+		{
+			name: "no CN, no SAN, nil serial",
+			cert: &x509.Certificate{
+				Subject: pkix.Name{},
+			},
+			want: "unknown",
+		},
 	}
 
 	for _, tt := range tests {

@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"crypto"
 	"crypto/x509"
 	"encoding/json"
 	"errors"
@@ -114,6 +115,19 @@ func TestInspectFile_PrivateKey(t *testing.T) {
 		t.Errorf("key size = %s, want 2048", keyResult.KeySize)
 	}
 	assertColonHex(t, "SKI", keyResult.SKI, 20)
+
+	// Verify SKI matches what we'd compute independently from the key PEM.
+	parsedKey, err := certkit.ParsePEMPrivateKey(keyPEM)
+	if err != nil {
+		t.Fatalf("parsing key PEM: %v", err)
+	}
+	wantSKI, err := certkit.ComputeSKI(parsedKey.(crypto.Signer).Public())
+	if err != nil {
+		t.Fatalf("computing SKI: %v", err)
+	}
+	if keyResult.SKI != certkit.ColonHex(wantSKI) {
+		t.Errorf("SKI = %s, want %s (computed from same key)", keyResult.SKI, certkit.ColonHex(wantSKI))
+	}
 }
 
 func TestInspectFile_NotFound(t *testing.T) {
@@ -532,7 +546,7 @@ func TestFormatInspectResults_Text(t *testing.T) {
 				{Type: "certificate", Subject: "CN=test", SHA256: "AA:BB", KeyAlgo: "RSA", KeySize: "2048"},
 				{Type: "private_key", KeyType: "RSA", KeySize: "2048"},
 			},
-			mustContain: []string{"Certificate:", "Private Key:"},
+			mustContain: []string{"Certificate:", "CN=test", "RSA 2048", "AA:BB", "Private Key:"},
 		},
 		{
 			name: "CSR with DNS names",

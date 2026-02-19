@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fix `FormatCN` panic when certificate has no CN, no DNS SANs, and nil SerialNumber — now returns "unknown" ([`e70e8e5`])
+
 ### Removed
 
 - Remove dead `writeBundleFiles` helper and `K8sSecret`/`K8sMetadata` type aliases from internal package (superseded by `BundleWriter` interface) ([`3569926`])
@@ -504,6 +508,7 @@ Initial release.
 [0.1.1]: https://github.com/sensiblebit/certkit/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/sensiblebit/certkit/releases/tag/v0.1.0
 
+[`e70e8e5`]: https://github.com/sensiblebit/certkit/commit/e70e8e5
 [`0fa55af`]: https://github.com/sensiblebit/certkit/commit/0fa55af
 [`b69caef`]: https://github.com/sensiblebit/certkit/commit/b69caef
 [`404e1d7`]: https://github.com/sensiblebit/certkit/commit/404e1d7
