@@ -349,6 +349,14 @@ func TestResolveAIA_DeduplicatesURLs(t *testing.T) {
 	if fetchCount != 1 {
 		t.Errorf("expected 1 fetch (URL deduped), got %d", fetchCount)
 	}
+
+	// Verify the fetched cert is actually in the store — without this,
+	// a fetcher that returned valid DER but HandleCertificate silently
+	// failed would still show fetchCount==1.
+	allCerts := store.AllCertsFlat()
+	if len(allCerts) != 3 {
+		t.Errorf("expected 3 certs in store (2 leaves + 1 fetched CA), got %d", len(allCerts))
+	}
 }
 
 func TestResolveAIA_MaxDepthDefault(t *testing.T) {

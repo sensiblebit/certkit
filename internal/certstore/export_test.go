@@ -79,6 +79,35 @@ func TestGenerateBundleFiles_AllFileTypes(t *testing.T) {
 			t.Errorf("%s: empty data", f.Name)
 		}
 
+		// Leaf PEM must contain a parseable cert with the right CN.
+		if f.Name == "example.com.pem" {
+			block, _ := pem.Decode(f.Data)
+			if block == nil {
+				t.Fatalf("example.com.pem: no PEM block")
+			}
+			c, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				t.Fatalf("example.com.pem: not parseable: %v", err)
+			}
+			if c.Subject.CommonName != "example.com" {
+				t.Errorf("example.com.pem: CN=%q, want %q", c.Subject.CommonName, "example.com")
+			}
+		}
+
+		// JSON must be valid and contain required fields.
+		if f.Name == "example.com.json" {
+			var jsonResult map[string]any
+			if err := json.Unmarshal(f.Data, &jsonResult); err != nil {
+				t.Fatalf("example.com.json: invalid JSON: %v", err)
+			}
+			if _, ok := jsonResult["subject"]; !ok {
+				t.Error("example.com.json: missing 'subject' key")
+			}
+			if _, ok := jsonResult["pem"]; !ok {
+				t.Error("example.com.json: missing 'pem' key")
+			}
+		}
+
 		// K8s YAML must be parseable with correct structure and non-empty data fields.
 		if f.Name == "example.com.k8s.yaml" {
 			var secret K8sSecret
@@ -355,7 +384,7 @@ func TestGenerateJSON_FieldNames(t *testing.T) {
 		t.Errorf("expected 2 SANs, got %d", len(sans))
 	}
 
-	// Verify PEM contains leaf + intermediates (not root)
+	// Verify PEM contains leaf + intermediates (not root) and is parseable
 	pemStr, ok := result["pem"].(string)
 	if !ok {
 		t.Fatal("pem is not a string")
@@ -363,6 +392,19 @@ func TestGenerateJSON_FieldNames(t *testing.T) {
 	certCount := strings.Count(pemStr, "-----BEGIN CERTIFICATE-----")
 	if certCount != 2 {
 		t.Errorf("PEM should contain 2 certs (leaf + intermediate), got %d", certCount)
+	}
+
+	// Parse the first cert from the PEM to verify it's the leaf
+	block, _ := pem.Decode([]byte(pemStr))
+	if block == nil {
+		t.Fatal("pem field does not contain valid PEM")
+	}
+	firstCert, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatalf("pem field first cert not parseable: %v", err)
+	}
+	if firstCert.Subject.CommonName != "json.example.com" {
+		t.Errorf("pem field first cert CN=%q, want %q", firstCert.Subject.CommonName, "json.example.com")
 	}
 }
 

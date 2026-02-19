@@ -74,7 +74,7 @@ func TestVerifyCert_ExpiryCheck(t *testing.T) {
 		window     time.Duration
 		wantExpiry bool
 	}{
-		{"within window triggers", leaf.cert, 400 * 24 * time.Hour, true},
+		{"within window triggers", leaf.cert, 366 * 24 * time.Hour, true},
 		{"outside window does not trigger", leaf.cert, 30 * 24 * time.Hour, false},
 	}
 	for _, tt := range tests {
