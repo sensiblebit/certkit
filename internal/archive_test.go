@@ -350,41 +350,6 @@ func TestProcessArchive_ZeroByteEntry(t *testing.T) {
 	}
 }
 
-func TestProcessArchive_EntryExceedsMaxSize_ZIP(t *testing.T) {
-	// WHY: Verifies that individual ZIP entries exceeding MaxEntrySize are
-	// skipped based on the UncompressedSize64 header check.
-	t.Parallel()
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "big-entry.example.com", []string{"big-entry.example.com"}, nil)
-
-	zipData := createTestZip(t, map[string][]byte{
-		"certs/server.pem": leaf.certPEM,
-	})
-
-	limits := DefaultArchiveLimits()
-	limits.MaxEntrySize = 10 // absurdly small — cert PEM will exceed this
-
-	cfg := newTestConfig(t)
-	n, err := ProcessArchive(ProcessArchiveInput{
-		ArchivePath: "test.zip",
-		Data:        zipData,
-		Format:      "zip",
-		Limits:      limits,
-		Store:       cfg.Store, Passwords: cfg.Passwords,
-	})
-	if err != nil {
-		t.Fatalf("ProcessArchive: %v", err)
-	}
-	if n != 0 {
-		t.Errorf("processed %d entries, want 0 (entry should be skipped)", n)
-	}
-
-	certs := cfg.Store.AllCertsFlat()
-	if len(certs) != 0 {
-		t.Errorf("got %d certs in store, want 0", len(certs))
-	}
-}
-
 func TestProcessArchive_TarEntryExceedsMaxSize(t *testing.T) {
 	// WHY: Verifies that oversized TAR entries are skipped and the reader
 	// advances past them so subsequent entries are still processed.

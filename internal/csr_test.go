@@ -241,11 +241,26 @@ func TestGenerateCSRFiles_Stdout(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := certkit.ParsePEMCertificateRequest([]byte(result.CSRPEM)); err != nil {
-		t.Errorf("CSRPEM is not parseable: %v", err)
+	csr, err := certkit.ParsePEMCertificateRequest([]byte(result.CSRPEM))
+	if err != nil {
+		t.Fatalf("CSRPEM is not parseable: %v", err)
 	}
-	if _, err := certkit.ParsePEMPrivateKey([]byte(result.KeyPEM)); err != nil {
-		t.Errorf("KeyPEM is not parseable: %v", err)
+	if csr.Subject.CommonName != "stdout.example.com" {
+		t.Errorf("CSR CN=%q, want %q", csr.Subject.CommonName, "stdout.example.com")
+	}
+
+	key, err := certkit.ParsePEMPrivateKey([]byte(result.KeyPEM))
+	if err != nil {
+		t.Fatalf("KeyPEM is not parseable: %v", err)
+	}
+
+	// Verify CSR was signed by the returned key (not some unrelated key).
+	pub, err := certkit.GetPublicKey(key)
+	if err != nil {
+		t.Fatalf("GetPublicKey: %v", err)
+	}
+	if !csr.PublicKey.(*ecdsa.PublicKey).Equal(pub) {
+		t.Error("CSR public key does not match returned key — CSR was signed by a different key")
 	}
 
 	// No files should be written

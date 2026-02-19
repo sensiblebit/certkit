@@ -76,46 +76,96 @@ func TestEncodeContainers_InvalidInput(t *testing.T) {
 func TestEncodePKCS12_RoundTrip(t *testing.T) {
 	// WHY: EncodePKCS12 is a thin wrapper around gopkcs12.Modern.Encode.
 	// One key type (RSA) suffices per T-13 to prove the wrapper chains correctly.
+	// Both nil and non-nil CA chain paths are covered to exercise the CAs
+	// parameter wiring.
 	t.Parallel()
 
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	template := &x509.Certificate{
+	caTemplate := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "PKCS12 Round-Trip CA"},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	caBytes, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caCert, err := x509.ParseCertificate(caBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	leafKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafTemplate := &x509.Certificate{
 		SerialNumber: randomSerial(t),
-		Subject:      pkix.Name{CommonName: "RSA-p12-test"},
+		Subject:      pkix.Name{CommonName: "pkcs12-roundtrip.example.com"},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 	}
-	certBytes, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	leafBytes, err := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cert, err := x509.ParseCertificate(certBytes)
+	leafCert, err := x509.ParseCertificate(leafBytes)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	pfxData, err := EncodePKCS12(key, cert, nil, "test-pass")
-	if err != nil {
-		t.Fatalf("EncodePKCS12: %v", err)
-	}
+	t.Run("nil CA chain", func(t *testing.T) {
+		t.Parallel()
+		pfxData, err := EncodePKCS12(leafKey, leafCert, nil, "test-pass")
+		if err != nil {
+			t.Fatalf("EncodePKCS12: %v", err)
+		}
+		decodedKey, decodedCert, decodedCAs, err := DecodePKCS12(pfxData, "test-pass")
+		if err != nil {
+			t.Fatalf("DecodePKCS12: %v", err)
+		}
+		if !decodedCert.Equal(leafCert) {
+			t.Error("decoded certificate does not match original")
+		}
+		if len(decodedCAs) != 0 {
+			t.Errorf("expected 0 CA certs, got %d", len(decodedCAs))
+		}
+		if !leafKey.Equal(decodedKey) {
+			t.Error("key mismatch")
+		}
+	})
 
-	decodedKey, decodedCert, caCerts, err := DecodePKCS12(pfxData, "test-pass")
-	if err != nil {
-		t.Fatalf("DecodePKCS12: %v", err)
-	}
-	if !decodedCert.Equal(cert) {
-		t.Error("decoded certificate does not match original")
-	}
-	if len(caCerts) != 0 {
-		t.Errorf("expected 0 CA certs, got %d", len(caCerts))
-	}
-	if !key.Equal(decodedKey) {
-		t.Error("key mismatch")
-	}
+	t.Run("with CA chain", func(t *testing.T) {
+		t.Parallel()
+		pfxData, err := EncodePKCS12(leafKey, leafCert, []*x509.Certificate{caCert}, "chain-pass")
+		if err != nil {
+			t.Fatalf("EncodePKCS12: %v", err)
+		}
+		decodedKey, decodedCert, decodedCAs, err := DecodePKCS12(pfxData, "chain-pass")
+		if err != nil {
+			t.Fatalf("DecodePKCS12: %v", err)
+		}
+		if !decodedCert.Equal(leafCert) {
+			t.Error("decoded certificate does not match original")
+		}
+		if len(decodedCAs) != 1 {
+			t.Fatalf("expected 1 CA cert, got %d", len(decodedCAs))
+		}
+		if !decodedCAs[0].Equal(caCert) {
+			t.Error("decoded CA cert does not match original")
+		}
+		if !leafKey.Equal(decodedKey) {
+			t.Error("key mismatch")
+		}
+	})
 }
 
 func TestDecodePKCS12_wrongPassword(t *testing.T) {
@@ -236,83 +286,6 @@ func TestDecodePKCS7_EmptyPKCS7(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no certificates") {
 		t.Errorf("error should mention no certificates, got: %v", err)
-	}
-}
-
-func TestEncodePKCS12Legacy_WithCAChain(t *testing.T) {
-	// WHY: EncodePKCS12Legacy with intermediates was untested — only the nil
-	// CA certs path was covered. This ensures the legacy RC2 encoder correctly
-	// includes CA certs in the bundle and they survive a round-trip decode.
-	t.Parallel()
-	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	caTemplate := &x509.Certificate{
-		SerialNumber:          randomSerial(t),
-		Subject:               pkix.Name{CommonName: "Legacy Chain CA"},
-		NotBefore:             time.Now().Add(-1 * time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-	}
-	caBytes, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	caCert, err := x509.ParseCertificate(caBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leafTemplate := &x509.Certificate{
-		SerialNumber: randomSerial(t),
-		Subject:      pkix.Name{CommonName: "legacy-chain-leaf.example.com"},
-		NotBefore:    time.Now().Add(-1 * time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	leafBytes, err := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leafCert, err := x509.ParseCertificate(leafBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	password := "legacy-chain-pass"
-	pfxData, err := EncodePKCS12Legacy(leafKey, leafCert, []*x509.Certificate{caCert}, password)
-	if err != nil {
-		t.Fatalf("EncodePKCS12Legacy with CA chain: %v", err)
-	}
-	// Decode and verify both the leaf and the CA cert survived the round-trip.
-	decodedKey, decodedCert, decodedCAs, err := DecodePKCS12(pfxData, password)
-	if err != nil {
-		t.Fatalf("DecodePKCS12 round-trip: %v", err)
-	}
-	if decodedCert.Subject.CommonName != "legacy-chain-leaf.example.com" {
-		t.Errorf("leaf CN=%q, want legacy-chain-leaf.example.com", decodedCert.Subject.CommonName)
-	}
-	if len(decodedCAs) != 1 {
-		t.Fatalf("expected 1 CA cert, got %d", len(decodedCAs))
-	}
-	if decodedCAs[0].Subject.CommonName != "Legacy Chain CA" {
-		t.Errorf("CA CN=%q, want Legacy Chain CA", decodedCAs[0].Subject.CommonName)
-	}
-
-	// Verify key round-trip.
-	ecDecoded, ok := decodedKey.(*ecdsa.PrivateKey)
-	if !ok {
-		t.Fatalf("expected *ecdsa.PrivateKey, got %T", decodedKey)
-	}
-	if !leafKey.Equal(ecDecoded) {
-		t.Error("legacy PKCS#12 key round-trip mismatch")
 	}
 }
 

@@ -359,215 +359,113 @@ func TestResolveAIA_DeduplicatesURLs(t *testing.T) {
 	}
 }
 
-func TestResolveAIA_MaxDepthDefault(t *testing.T) {
-	// WHY: MaxDepth=0 must use the default of 5, not 0 or 1. A 2-level chain
-	// (leaf → intermediate → root) requires depth >= 2; this proves depth=0
-	// allows multi-level resolution. MaxDepth=1 would only fetch the first
-	// intermediate, leaving the chain incomplete.
+func TestResolveAIA_MaxDepth(t *testing.T) {
+	// WHY: MaxDepth controls AIA recursion depth. MaxDepth=0 must default to 5
+	// (allowing full chain resolution), while MaxDepth=1 must limit to a single
+	// iteration (fetching only the immediate issuer). Consolidated per T-12:
+	// identical 3-cert chain setup, only MaxDepth and expected fetch count differ.
 	t.Parallel()
-	store := NewMemStore()
 
-	// Create a 3-cert chain: root → intermediate → leaf, each with AIA URLs.
-	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rootTmpl := &x509.Certificate{
-		SerialNumber:          randomSerial(t),
-		Subject:               pkix.Name{CommonName: "Depth Root CA"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-	}
-	rootDER, err := x509.CreateCertificate(rand.Reader, rootTmpl, rootTmpl, &rootKey.PublicKey, rootKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rootCert, err := x509.ParseCertificate(rootDER)
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name           string
+		maxDepth       int
+		wantFetchCount int
+		wantStoreCount int // leaf + fetched certs
+	}{
+		{"default (0) resolves full chain", 0, 2, 3},
+		{"depth 1 fetches only immediate issuer", 1, 1, 2},
 	}
 
-	intKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	intTmpl := &x509.Certificate{
-		SerialNumber:          randomSerial(t),
-		Subject:               pkix.Name{CommonName: "Depth Intermediate CA"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-		IssuingCertificateURL: []string{"http://example.com/root.cer"},
-	}
-	intDER, err := x509.CreateCertificate(rand.Reader, intTmpl, rootCert, &intKey.PublicKey, rootKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	intCert, err := x509.ParseCertificate(intDER)
-	if err != nil {
-		t.Fatal(err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			store := NewMemStore()
 
-	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leafTmpl := &x509.Certificate{
-		SerialNumber:          randomSerial(t),
-		Subject:               pkix.Name{CommonName: "depth-test.example.com"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IssuingCertificateURL: []string{"http://example.com/intermediate.cer"},
-	}
-	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, intCert, &leafKey.PublicKey, intKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leafCert, err := x509.ParseCertificate(leafDER)
-	if err != nil {
-		t.Fatal(err)
-	}
+			// Create a 3-cert chain: root → intermediate → leaf, each with AIA URLs.
+			rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rootTmpl := &x509.Certificate{
+				SerialNumber:          randomSerial(t),
+				Subject:               pkix.Name{CommonName: "Depth Root CA"},
+				NotBefore:             time.Now().Add(-time.Hour),
+				NotAfter:              time.Now().Add(24 * time.Hour),
+				IsCA:                  true,
+				BasicConstraintsValid: true,
+				KeyUsage:              x509.KeyUsageCertSign,
+			}
+			rootDER, err := x509.CreateCertificate(rand.Reader, rootTmpl, rootTmpl, &rootKey.PublicKey, rootKey)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	if err := store.HandleCertificate(leafCert, "leaf.pem"); err != nil {
-		t.Fatal(err)
-	}
+			intKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			intTmpl := &x509.Certificate{
+				SerialNumber:          randomSerial(t),
+				Subject:               pkix.Name{CommonName: "Depth Intermediate CA"},
+				NotBefore:             time.Now().Add(-time.Hour),
+				NotAfter:              time.Now().Add(24 * time.Hour),
+				IsCA:                  true,
+				BasicConstraintsValid: true,
+				KeyUsage:              x509.KeyUsageCertSign,
+				IssuingCertificateURL: []string{"http://example.com/root.cer"},
+			}
+			intDER, err := x509.CreateCertificate(rand.Reader, intTmpl, rootTmpl, &intKey.PublicKey, rootKey)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	fetchCount := 0
-	fetcher := func(_ context.Context, url string) ([]byte, error) {
-		fetchCount++
-		if strings.Contains(url, "intermediate") {
-			return intDER, nil
-		}
-		return rootDER, nil
-	}
+			leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			leafTmpl := &x509.Certificate{
+				SerialNumber:          randomSerial(t),
+				Subject:               pkix.Name{CommonName: "depth-test.example.com"},
+				NotBefore:             time.Now().Add(-time.Hour),
+				NotAfter:              time.Now().Add(24 * time.Hour),
+				IssuingCertificateURL: []string{"http://example.com/intermediate.cer"},
+			}
+			leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, intTmpl, &leafKey.PublicKey, intKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			leafCert, err := x509.ParseCertificate(leafDER)
+			if err != nil {
+				t.Fatal(err)
+			}
 
-	ResolveAIA(context.Background(), ResolveAIAInput{
-		Store:    store,
-		Fetch:    fetcher,
-		MaxDepth: 0, // should default to 5, allowing both fetches
-	})
+			if err := store.HandleCertificate(leafCert, "leaf.pem"); err != nil {
+				t.Fatal(err)
+			}
 
-	if fetchCount != 2 {
-		t.Errorf("expected 2 fetches (intermediate + root) with default depth, got %d", fetchCount)
-	}
+			fetchCount := 0
+			fetcher := func(_ context.Context, url string) ([]byte, error) {
+				fetchCount++
+				if strings.Contains(url, "intermediate") {
+					return intDER, nil
+				}
+				return rootDER, nil
+			}
 
-	// Verify the fetched certs are actually in the store — without this,
-	// a fetcher that returned valid DER but HandleCertificate silently
-	// failed would still show fetchCount==2.
-	allCerts := store.AllCertsFlat()
-	if len(allCerts) != 3 {
-		t.Errorf("expected 3 certs in store (leaf + intermediate + root), got %d", len(allCerts))
-	}
-	if !store.HasIssuer(leafCert) {
-		t.Error("leaf should have its issuer in the store after AIA resolution")
-	}
-}
+			ResolveAIA(context.Background(), ResolveAIAInput{
+				Store:    store,
+				Fetch:    fetcher,
+				MaxDepth: tt.maxDepth,
+			})
 
-func TestResolveAIA_MaxDepthLimitsResolution(t *testing.T) {
-	// WHY: MaxDepth=1 must limit AIA resolution to a single iteration.
-	// With a 3-cert chain (leaf → intermediate → root), MaxDepth=1 should
-	// fetch the intermediate but NOT recurse to fetch the root.
-	// Without this, a regression that ignores MaxDepth would go undetected.
-	t.Parallel()
-	store := NewMemStore()
-
-	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rootTmpl := &x509.Certificate{
-		SerialNumber:          randomSerial(t),
-		Subject:               pkix.Name{CommonName: "MaxDepth Root CA"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-	}
-	rootDER, err := x509.CreateCertificate(rand.Reader, rootTmpl, rootTmpl, &rootKey.PublicKey, rootKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	rootCert, err := x509.ParseCertificate(rootDER)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	intKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	intTmpl := &x509.Certificate{
-		SerialNumber:          randomSerial(t),
-		Subject:               pkix.Name{CommonName: "MaxDepth Intermediate CA"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign,
-		IssuingCertificateURL: []string{"http://example.com/root.cer"},
-	}
-	intDER, err := x509.CreateCertificate(rand.Reader, intTmpl, rootCert, &intKey.PublicKey, rootKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	intCert, err := x509.ParseCertificate(intDER)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leafTmpl := &x509.Certificate{
-		SerialNumber:          randomSerial(t),
-		Subject:               pkix.Name{CommonName: "maxdepth-leaf.example.com"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IssuingCertificateURL: []string{"http://example.com/intermediate.cer"},
-	}
-	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, intCert, &leafKey.PublicKey, intKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leafCert, err := x509.ParseCertificate(leafDER)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if err := store.HandleCertificate(leafCert, "leaf.pem"); err != nil {
-		t.Fatal(err)
-	}
-
-	fetchCount := 0
-	fetcher := func(_ context.Context, url string) ([]byte, error) {
-		fetchCount++
-		if strings.Contains(url, "intermediate") {
-			return intDER, nil
-		}
-		return rootDER, nil
-	}
-
-	ResolveAIA(context.Background(), ResolveAIAInput{
-		Store:    store,
-		Fetch:    fetcher,
-		MaxDepth: 1,
-	})
-
-	// MaxDepth=1: only one iteration, so only the intermediate is fetched.
-	// The root (which requires a second iteration) should NOT be fetched.
-	if fetchCount != 1 {
-		t.Errorf("expected 1 fetch with MaxDepth=1, got %d", fetchCount)
-	}
-	allCerts := store.AllCertsFlat()
-	if len(allCerts) != 2 {
-		t.Errorf("expected 2 certs in store (leaf + intermediate), got %d", len(allCerts))
+			if fetchCount != tt.wantFetchCount {
+				t.Errorf("expected %d fetch(es), got %d", tt.wantFetchCount, fetchCount)
+			}
+			allCerts := store.AllCertsFlat()
+			if len(allCerts) != tt.wantStoreCount {
+				t.Errorf("expected %d certs in store, got %d", tt.wantStoreCount, len(allCerts))
+			}
+		})
 	}
 }
 

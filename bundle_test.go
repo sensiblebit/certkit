@@ -286,8 +286,10 @@ func TestFetchAIACertificates_maxDepthZero(t *testing.T) {
 	}
 }
 
-func TestDetectAndSwapLeaf_ReversedChain(t *testing.T) {
-	// WHY: Users sometimes pass certs in reversed order (CA first); the swap heuristic must detect this and reorder to produce a valid chain.
+func TestBundle_ReversedChainDetection(t *testing.T) {
+	// WHY: Users sometimes pass certs in reversed order (CA first); the swap
+	// heuristic must detect this and reorder to produce a valid chain.
+	// Tests through the public Bundle API (not the unexported detectAndSwapLeaf).
 	t.Parallel()
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {

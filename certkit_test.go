@@ -1212,7 +1212,14 @@ func TestCertFingerprints(t *testing.T) {
 
 	t.Run("SHA256 colon", func(t *testing.T) {
 		t.Parallel()
-		want := strings.ToUpper(ColonHex(sha256Hash[:]))
+		// Compute expected independently — do NOT use ColonHex here, as that
+		// would make the test tautological if ColonHex has a bug.
+		hexStr := hex.EncodeToString(sha256Hash[:])
+		var parts []string
+		for i := 0; i < len(hexStr); i += 2 {
+			parts = append(parts, strings.ToUpper(hexStr[i:i+2]))
+		}
+		want := strings.Join(parts, ":")
 		if got := CertFingerprintColonSHA256(cert); got != want {
 			t.Errorf("CertFingerprintColonSHA256 = %q, want %q", got, want)
 		}
@@ -1220,7 +1227,13 @@ func TestCertFingerprints(t *testing.T) {
 
 	t.Run("SHA1 colon", func(t *testing.T) {
 		t.Parallel()
-		want := strings.ToUpper(ColonHex(sha1Hash[:]))
+		// Compute expected independently — do NOT use ColonHex here.
+		hexStr := hex.EncodeToString(sha1Hash[:])
+		var parts []string
+		for i := 0; i < len(hexStr); i += 2 {
+			parts = append(parts, strings.ToUpper(hexStr[i:i+2]))
+		}
+		want := strings.Join(parts, ":")
 		if got := CertFingerprintColonSHA1(cert); got != want {
 			t.Errorf("CertFingerprintColonSHA1 = %q, want %q", got, want)
 		}

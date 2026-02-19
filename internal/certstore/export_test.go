@@ -136,94 +136,108 @@ func TestGenerateBundleFiles_AllFileTypes(t *testing.T) {
 	}
 }
 
-func TestGenerateBundleFiles_NoIntermediates(t *testing.T) {
-	// WHY: When a bundle has no intermediates, the intermediates.pem file must
-	// be omitted entirely — not present as an empty file.
+func TestGenerateBundleFiles_OptionalFilesOmitted(t *testing.T) {
+	// WHY: When a bundle lacks intermediates or root, the corresponding PEM
+	// files must be omitted entirely (not present as empty files), and
+	// downstream files (chain.pem, fullchain.pem) must adjust accordingly.
+	// Consolidated per T-12: identical structure, differ only in which
+	// optional component is absent.
 	t.Parallel()
 
-	root := newRSACA(t)
-	leaf := newRSALeaf(t, root, "direct.example.com", []string{"direct.example.com"})
-
-	bundle := &certkit.BundleResult{
-		Leaf:  leaf.cert,
-		Roots: []*x509.Certificate{root.cert},
+	tests := []struct {
+		name        string
+		setup       func(t *testing.T) (*certkit.BundleResult, testLeaf, string)
+		absentFile  string
+		extraChecks func(t *testing.T, files []BundleFile, prefix string)
+	}{
+		{
+			name: "no intermediates omits intermediates.pem",
+			setup: func(t *testing.T) (*certkit.BundleResult, testLeaf, string) {
+				t.Helper()
+				root := newRSACA(t)
+				leaf := newRSALeaf(t, root, "direct.example.com", []string{"direct.example.com"})
+				bundle := &certkit.BundleResult{
+					Leaf:  leaf.cert,
+					Roots: []*x509.Certificate{root.cert},
+				}
+				return bundle, leaf, "direct"
+			},
+			absentFile: "direct.intermediates.pem",
+			extraChecks: func(t *testing.T, files []BundleFile, prefix string) {
+				t.Helper()
+				for _, f := range files {
+					if f.Name == prefix+".chain.pem" {
+						certCount := strings.Count(string(f.Data), "-----BEGIN CERTIFICATE-----")
+						if certCount != 1 {
+							t.Errorf("chain.pem should contain 1 cert (leaf only), got %d", certCount)
+						}
+					}
+				}
+			},
+		},
+		{
+			name: "no root omits root.pem",
+			setup: func(t *testing.T) (*certkit.BundleResult, testLeaf, string) {
+				t.Helper()
+				ca := newRSACA(t)
+				leaf := newRSALeaf(t, ca, "noroot.example.com", []string{"noroot.example.com"})
+				bundle := &certkit.BundleResult{
+					Leaf:          leaf.cert,
+					Intermediates: []*x509.Certificate{ca.cert},
+				}
+				return bundle, leaf, "noroot"
+			},
+			absentFile: "noroot.root.pem",
+			extraChecks: func(t *testing.T, files []BundleFile, prefix string) {
+				t.Helper()
+				var chainData, fullchainData []byte
+				for _, f := range files {
+					switch f.Name {
+					case prefix + ".chain.pem":
+						chainData = f.Data
+					case prefix + ".fullchain.pem":
+						fullchainData = f.Data
+					}
+				}
+				if string(chainData) != string(fullchainData) {
+					t.Error("fullchain.pem should equal chain.pem when no root is present")
+				}
+			},
+		},
 	}
 
-	files, err := GenerateBundleFiles(BundleExportInput{
-		Bundle:     bundle,
-		KeyPEM:     leaf.keyPEM,
-		KeyType:    "RSA",
-		BitLength:  2048,
-		Prefix:     "direct",
-		SecretName: "direct-tls",
-	})
-	if err != nil {
-		t.Fatalf("GenerateBundleFiles: %v", err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			bundle, leaf, prefix := tt.setup(t)
 
-	// Full set is 12 files; no intermediates omits intermediates.pem → 11.
-	if len(files) != 11 {
-		t.Fatalf("expected 11 files (full set minus intermediates.pem), got %d", len(files))
-	}
-
-	for _, f := range files {
-		if f.Name == "direct.intermediates.pem" {
-			t.Error("intermediates.pem should not be present when bundle has no intermediates")
-		}
-		// chain.pem must contain only the leaf cert (no intermediates to append)
-		if f.Name == "direct.chain.pem" {
-			certCount := strings.Count(string(f.Data), "-----BEGIN CERTIFICATE-----")
-			if certCount != 1 {
-				t.Errorf("chain.pem should contain 1 cert (leaf only), got %d", certCount)
+			files, err := GenerateBundleFiles(BundleExportInput{
+				Bundle:     bundle,
+				KeyPEM:     leaf.keyPEM,
+				KeyType:    "RSA",
+				BitLength:  2048,
+				Prefix:     prefix,
+				SecretName: prefix + "-tls",
+			})
+			if err != nil {
+				t.Fatalf("GenerateBundleFiles: %v", err)
 			}
-		}
-	}
-}
 
-func TestGenerateBundleFiles_NoRoot(t *testing.T) {
-	// WHY: When a bundle has no root, the root.pem file must be omitted and
-	// fullchain.pem must equal chain.pem.
-	t.Parallel()
+			// Full set is 12 files; one optional file omitted → 11.
+			if len(files) != 11 {
+				t.Fatalf("expected 11 files (full set minus one optional), got %d", len(files))
+			}
 
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "noroot.example.com", []string{"noroot.example.com"})
+			for _, f := range files {
+				if f.Name == tt.absentFile {
+					t.Errorf("%s should not be present", tt.absentFile)
+				}
+			}
 
-	bundle := &certkit.BundleResult{
-		Leaf:          leaf.cert,
-		Intermediates: []*x509.Certificate{ca.cert},
-	}
-
-	files, err := GenerateBundleFiles(BundleExportInput{
-		Bundle:     bundle,
-		KeyPEM:     leaf.keyPEM,
-		KeyType:    "RSA",
-		BitLength:  2048,
-		Prefix:     "noroot",
-		SecretName: "noroot-tls",
-	})
-	if err != nil {
-		t.Fatalf("GenerateBundleFiles: %v", err)
-	}
-
-	// Full set is 12 files; no root omits root.pem → 11.
-	if len(files) != 11 {
-		t.Fatalf("expected 11 files (full set minus root.pem), got %d", len(files))
-	}
-
-	var chainData, fullchainData []byte
-	for _, f := range files {
-		switch f.Name {
-		case "noroot.root.pem":
-			t.Error("root.pem should not be present when bundle has no root")
-		case "noroot.chain.pem":
-			chainData = f.Data
-		case "noroot.fullchain.pem":
-			fullchainData = f.Data
-		}
-	}
-
-	if string(chainData) != string(fullchainData) {
-		t.Error("fullchain.pem should equal chain.pem when no root is present")
+			if tt.extraChecks != nil {
+				tt.extraChecks(t, files, prefix)
+			}
+		})
 	}
 }
 
@@ -406,38 +420,30 @@ func TestGenerateJSON_FieldNames(t *testing.T) {
 	if firstCert.Subject.CommonName != "json.example.com" {
 		t.Errorf("pem field first cert CN=%q, want %q", firstCert.Subject.CommonName, "json.example.com")
 	}
-}
 
-func TestGenerateJSON_NoIntermediates(t *testing.T) {
-	// WHY: When there are no intermediates, the PEM field should contain only the
-	// leaf certificate — verifies PEM construction handles empty intermediate list.
-	t.Parallel()
-
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "noint.example.com", []string{"noint.example.com"})
-
-	bundle := &certkit.BundleResult{
-		Leaf: leaf.cert,
-	}
-
-	data, err := GenerateJSON(bundle)
-	if err != nil {
-		t.Fatalf("GenerateJSON: %v", err)
-	}
-
-	var result map[string]any
-	if err := json.Unmarshal(data, &result); err != nil {
-		t.Fatalf("invalid JSON: %v", err)
-	}
-
-	pemVal, ok := result["pem"].(string)
-	if !ok {
-		t.Fatalf("pem is not a string: %T", result["pem"])
-	}
-	certCount := strings.Count(pemVal, "-----BEGIN CERTIFICATE-----")
-	if certCount != 1 {
-		t.Errorf("PEM should contain 1 cert (leaf only), got %d", certCount)
-	}
+	// Sub-case: no intermediates — PEM field should contain only the leaf.
+	// Absorbed from TestGenerateJSON_NoIntermediates per T-12 (same assertion
+	// pattern, different input).
+	t.Run("no intermediates", func(t *testing.T) {
+		t.Parallel()
+		noIntBundle := &certkit.BundleResult{Leaf: leaf.cert}
+		noIntData, err := GenerateJSON(noIntBundle)
+		if err != nil {
+			t.Fatalf("GenerateJSON: %v", err)
+		}
+		var noIntResult map[string]any
+		if err := json.Unmarshal(noIntData, &noIntResult); err != nil {
+			t.Fatalf("invalid JSON: %v", err)
+		}
+		noIntPEM, ok := noIntResult["pem"].(string)
+		if !ok {
+			t.Fatalf("pem is not a string: %T", noIntResult["pem"])
+		}
+		noIntCount := strings.Count(noIntPEM, "-----BEGIN CERTIFICATE-----")
+		if noIntCount != 1 {
+			t.Errorf("PEM should contain 1 cert (leaf only), got %d", noIntCount)
+		}
+	})
 }
 
 func TestGenerateYAML_Fields(t *testing.T) {
