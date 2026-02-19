@@ -9,6 +9,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha1"
+	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
@@ -939,9 +940,9 @@ func TestParsePEMPrivateKeyWithPasswords_CorruptNotEncrypted(t *testing.T) {
 
 func TestCertFingerprints(t *testing.T) {
 	// WHY: Fingerprints are used in display output, JSON, and cert matching.
-	// Verifies certkit-specific behavior: correct lengths (SHA-256=64 hex,
-	// SHA-1=40 hex), hex/colon consistency, colon form is uppercase, and the
-	// two algorithms produce different output.
+	// Verifies certkit-specific behavior: correct values (independently
+	// computed from cert.Raw), hex/colon consistency, colon form is uppercase,
+	// and the two algorithms produce different output.
 	t.Parallel()
 	_, _, leafPEM := generateTestPKI(t)
 	cert, _ := ParsePEMCertificate([]byte(leafPEM))
@@ -951,12 +952,16 @@ func TestCertFingerprints(t *testing.T) {
 	sha256Colon := CertFingerprintColonSHA256(cert)
 	sha1Colon := CertFingerprintColonSHA1(cert)
 
-	// Length checks: SHA-256 = 32 bytes = 64 hex chars, SHA-1 = 20 bytes = 40 hex chars
-	if len(sha256Hex) != 64 {
-		t.Errorf("SHA-256 hex fingerprint should be 64 chars, got %d: %q", len(sha256Hex), sha256Hex)
+	// Verify against independently computed reference values from cert.Raw.
+	// This catches bugs like hashing RawTBSCertificate instead of Raw.
+	sha256Sum := sha256.Sum256(cert.Raw)
+	wantSHA256 := fmt.Sprintf("%x", sha256Sum)
+	if sha256Hex != wantSHA256 {
+		t.Errorf("CertFingerprint = %q, want %q (sha256 of cert.Raw)", sha256Hex, wantSHA256)
 	}
-	if len(sha1Hex) != 40 {
-		t.Errorf("SHA-1 hex fingerprint should be 40 chars, got %d: %q", len(sha1Hex), sha1Hex)
+	wantSHA1 := fmt.Sprintf("%x", sha1.Sum(cert.Raw))
+	if sha1Hex != wantSHA1 {
+		t.Errorf("CertFingerprintSHA1 = %q, want %q (sha1 of cert.Raw)", sha1Hex, wantSHA1)
 	}
 
 	// SHA-256 and SHA-1 must differ (different algorithms on same input)
@@ -985,9 +990,9 @@ func TestCertFingerprints(t *testing.T) {
 
 func TestComputeSKILegacy(t *testing.T) {
 	// WHY: ComputeSKILegacy uses SHA-1 vs ComputeSKI's truncated SHA-256.
-	// Verifies the two algorithms produce different values — confusing them
-	// would break cross-matching with legacy certificates. Both must be
-	// 20 bytes (RFC 7093 truncation for modern, SHA-1 output for legacy).
+	// Verifies both produce correct values by cross-checking against
+	// independently computed hashes of the public key BIT STRING bytes.
+	// Confusing them would break cross-matching with legacy certificates.
 	t.Parallel()
 	_, _, leafPEM := generateTestPKI(t)
 	cert, _ := ParsePEMCertificate([]byte(leafPEM))
@@ -1008,8 +1013,24 @@ func TestComputeSKILegacy(t *testing.T) {
 	if len(modern) != 20 {
 		t.Errorf("ComputeSKI should be 20 bytes, got %d", len(modern))
 	}
-	if bytes.Equal(legacy, modern) {
-		t.Error("ComputeSKILegacy should differ from ComputeSKI (SHA-1 vs truncated SHA-256)")
+
+	// Cross-check: independently extract the BIT STRING and hash it.
+	// This catches bugs in extractPublicKeyBitString or marshalPublicKeyDER.
+	var spki struct {
+		Algorithm asn1.RawValue
+		PublicKey asn1.BitString
+	}
+	_, err = asn1.Unmarshal(cert.RawSubjectPublicKeyInfo, &spki)
+	if err != nil {
+		t.Fatalf("independent SPKI parse: %v", err)
+	}
+	wantSHA1 := sha1.Sum(spki.PublicKey.Bytes)
+	if !bytes.Equal(legacy, wantSHA1[:]) {
+		t.Errorf("ComputeSKILegacy mismatch: got %x, want %x (SHA-1 of BIT STRING)", legacy, wantSHA1[:])
+	}
+	wantSHA256 := sha256.Sum256(spki.PublicKey.Bytes)
+	if !bytes.Equal(modern, wantSHA256[:20]) {
+		t.Errorf("ComputeSKI mismatch: got %x, want %x (truncated SHA-256 of BIT STRING)", modern, wantSHA256[:20])
 	}
 }
 
@@ -1085,5 +1106,93 @@ func TestMarshalPublicKeyToPEM_RoundTrip(t *testing.T) {
 	}
 	if !pub.Equal(parsedEd) {
 		t.Error("Ed25519 public key round-trip mismatch")
+	}
+}
+
+func TestIsPEM(t *testing.T) {
+	// WHY: IsPEM routes data to the PEM vs DER parser in the scan pipeline;
+	// misclassification would silently skip valid certificates or keys.
+	t.Parallel()
+	tests := []struct {
+		name string
+		data []byte
+		want bool
+	}{
+		{"valid PEM certificate", []byte("-----BEGIN CERTIFICATE-----\nMIIB...\n-----END CERTIFICATE-----\n"), true},
+		{"valid PEM key", []byte("-----BEGIN PRIVATE KEY-----\ndata\n-----END PRIVATE KEY-----\n"), true},
+		{"DER data", []byte{0x30, 0x82, 0x01, 0x22}, false},
+		{"nil input", nil, false},
+		{"empty input", []byte{}, false},
+		{"plain text", []byte("hello world"), false},
+		{"partial marker", []byte("-----BEGI"), false},
+		{"BEGIN in middle", []byte("some preamble\n-----BEGIN CERTIFICATE-----\n"), true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := IsPEM(tt.data); got != tt.want {
+				t.Errorf("IsPEM(%q) = %v, want %v", tt.data, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestKeyAlgorithmName(t *testing.T) {
+	// WHY: KeyAlgorithmName produces display strings for CLI output and JSON;
+	// wrong names would confuse users and break JSON consumers.
+	t.Parallel()
+
+	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	_, edKey, _ := ed25519.GenerateKey(rand.Reader)
+
+	tests := []struct {
+		name string
+		key  crypto.PrivateKey
+		want string
+	}{
+		{"RSA", rsaKey, "RSA"},
+		{"ECDSA", ecKey, "ECDSA"},
+		{"Ed25519 value", edKey, "Ed25519"},
+		{"Ed25519 pointer", &edKey, "Ed25519"},
+		{"unknown", "not-a-key", "unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := KeyAlgorithmName(tt.key); got != tt.want {
+				t.Errorf("KeyAlgorithmName() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPublicKeyAlgorithmName(t *testing.T) {
+	// WHY: PublicKeyAlgorithmName produces display strings for CLI output and
+	// JSON; verifies all key types return the correct human-readable name.
+	t.Parallel()
+
+	rsaKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+	ecKey, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	edPub, _, _ := ed25519.GenerateKey(rand.Reader)
+
+	tests := []struct {
+		name string
+		key  crypto.PublicKey
+		want string
+	}{
+		{"RSA", &rsaKey.PublicKey, "RSA"},
+		{"ECDSA", &ecKey.PublicKey, "ECDSA"},
+		{"Ed25519 value", edPub, "Ed25519"},
+		{"Ed25519 pointer", &edPub, "Ed25519"},
+		{"unknown", "not-a-key", "unknown"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := PublicKeyAlgorithmName(tt.key); got != tt.want {
+				t.Errorf("PublicKeyAlgorithmName() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

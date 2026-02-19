@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- Remove dead `writeBundleFiles` helper and `K8sSecret`/`K8sMetadata` type aliases from internal package (superseded by `BundleWriter` interface) ([`3569926`])
+
 ## [0.7.7] - 2026-02-17
 
 ### Security
@@ -553,6 +557,7 @@ Initial release.
 [`a62908f`]: https://github.com/sensiblebit/certkit/commit/a62908f
 [`55b5c1e`]: https://github.com/sensiblebit/certkit/commit/55b5c1e
 [`8cf81d9`]: https://github.com/sensiblebit/certkit/commit/8cf81d9
+[`3569926`]: https://github.com/sensiblebit/certkit/commit/3569926
 [#48]: https://github.com/sensiblebit/certkit/pull/48
 [#46]: https://github.com/sensiblebit/certkit/pull/46
 [#45]: https://github.com/sensiblebit/certkit/pull/45

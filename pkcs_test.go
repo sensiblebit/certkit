@@ -40,6 +40,9 @@ func TestEncodeContainers_InvalidInput(t *testing.T) {
 		// as PKCS12, so one PKCS12 case suffices (T-12).
 		{"PKCS12/unsupported_key", "unsupported private key type", func() ([]byte, error) { return EncodePKCS12(struct{}{}, cert, nil, "pass") }},
 		{"JKS/unsupported_key", "unknown key type", func() ([]byte, error) { return EncodeJKS(struct{}{}, cert, nil, "changeit") }},
+		// Nil private key cases — validates error path through normalizeKey(nil).
+		{"PKCS12/nil_key", "unsupported private key type", func() ([]byte, error) { return EncodePKCS12(nil, cert, nil, "pass") }},
+		{"JKS/nil_key", "marshaling private key", func() ([]byte, error) { return EncodeJKS(nil, cert, nil, "changeit") }},
 		// Nil leaf certificate cases — PKCS12Legacy has the same nil-cert
 		// guard as PKCS12, so one PKCS12 case suffices (T-12).
 		{"PKCS12/nil_cert", "leaf certificate cannot be nil", func() ([]byte, error) { return EncodePKCS12(rsaKey, nil, nil, "pass") }},
@@ -272,5 +275,31 @@ func TestEncodePKCS12Legacy_WithCAChain(t *testing.T) {
 	}
 	if !leafKey.Equal(ecDecoded) {
 		t.Error("legacy PKCS#12 key round-trip mismatch")
+	}
+}
+
+func TestDecodePKCS12_GarbageInput(t *testing.T) {
+	// WHY: Completely invalid (non-PKCS#12) data must produce a clear error
+	// with the "decoding PKCS#12" context, not a panic or silent nil return.
+	t.Parallel()
+	_, _, _, err := DecodePKCS12([]byte("this is not pkcs12 data"), "password")
+	if err == nil {
+		t.Fatal("expected error for garbage PKCS#12 input")
+	}
+	if !strings.Contains(err.Error(), "decoding PKCS#12") {
+		t.Errorf("error should wrap with context, got: %v", err)
+	}
+}
+
+func TestDecodePKCS7_GarbageInput(t *testing.T) {
+	// WHY: Completely invalid (non-PKCS#7) data must produce a clear error
+	// with the "parsing PKCS#7" context, not a panic or silent nil return.
+	t.Parallel()
+	_, err := DecodePKCS7([]byte("this is not pkcs7 data"))
+	if err == nil {
+		t.Fatal("expected error for garbage PKCS#7 input")
+	}
+	if !strings.Contains(err.Error(), "parsing PKCS#7") {
+		t.Errorf("error should wrap with context, got: %v", err)
 	}
 }

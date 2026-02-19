@@ -383,6 +383,23 @@ func TestMemStore_MultipleCertsAndKeys(t *testing.T) {
 		t.Errorf("expected 2 matched pairs, got %d", len(store.MatchedPairs()))
 	}
 
+	// Verify cert identity is preserved (not just count).
+	foundCert1, foundCert2 := false, false
+	for _, rec := range store.AllCerts() {
+		if rec.Cert.Subject.CommonName == "one.example.com" {
+			foundCert1 = true
+		}
+		if rec.Cert.Subject.CommonName == "two.example.com" {
+			foundCert2 = true
+		}
+	}
+	if !foundCert1 {
+		t.Error("leaf1 cert (one.example.com) not found in store")
+	}
+	if !foundCert2 {
+		t.Error("leaf2 cert (two.example.com) not found in store")
+	}
+
 	// Verify key material is preserved by checking each original is found.
 	foundKey1, foundKey2 := false, false
 	for _, rec := range store.AllKeys() {

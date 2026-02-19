@@ -28,7 +28,7 @@ Certificate/key processing, in-memory storage, and persistence. Used by both CLI
 CLI business logic and file I/O. Delegates to `internal/certstore/` for processing, storage, and export. No SQLite dependency at this layer.
 
 - `crypto.go` — File ingestion pipeline. `ProcessFile()` and `ProcessData()` delegate to `certstore.ProcessData()` with `MemStore` as the handler. Also handles CSR detection for CLI logging.
-- `exporter.go` — Bundle export. `ExportBundles()` iterates `MemStore` bundle names, finds matching certs/keys, builds chains. `writeBundleFiles()` delegates to `certstore.GenerateBundleFiles()` and writes the results to disk with appropriate permissions.
+- `exporter.go` — Bundle export. `ExportBundles()` iterates `MemStore` bundle names, finds matching certs/keys, builds chains via `certstore.ExportMatchedBundles()`. `filesystemWriter` implements `certstore.BundleWriter` to write results to disk with appropriate permissions (0600 for sensitive files).
 - `bundleconfig.go` — YAML config parsing. Supports `defaultSubject` inheritance.
 - `inspect.go` — Certificate/key/CSR inspection with text and JSON output.
 - `verify.go` — Chain validation, key-cert matching, expiry checking.
@@ -38,7 +38,6 @@ CLI business logic and file I/O. Delegates to `internal/certstore/` for processi
 - `logger.go` — slog setup.
 - `container.go` — Container file loading. `LoadContainerFile()` reads a file and delegates to `certstore.ParseContainerData()` for format detection and extraction.
 - `archive.go` — Archive extraction pipeline. Processes ZIP, TAR, and TAR.GZ archives with zip bomb protection (decompression ratio limits, entry size limits, total size budgets); skips nested archives and processes each entry for certificates.
-- `types.go` — Type aliases: `K8sSecret`/`K8sMetadata` re-export `certstore.K8sSecret`/`certstore.K8sMetadata`.
 
 ## `cmd/certkit/`
 
