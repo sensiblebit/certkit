@@ -5,14 +5,14 @@ import "github.com/spf13/cobra"
 // completionInput holds the parameters for registering a shell completion
 // function on a command flag.
 type completionInput struct {
-	flagName string
-	f        func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective)
+	flagName     string
+	completeFunc func(*cobra.Command, []string, string) ([]string, cobra.ShellCompDirective)
 }
 
 // registerCompletion registers a shell completion function for a flag on a
 // command. It panics if the flag does not exist (programmer error).
 func registerCompletion(cmd *cobra.Command, in completionInput) {
-	if err := cmd.RegisterFlagCompletionFunc(in.flagName, in.f); err != nil {
+	if err := cmd.RegisterFlagCompletionFunc(in.flagName, in.completeFunc); err != nil {
 		panic(err)
 	}
 }
