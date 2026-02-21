@@ -1324,6 +1324,388 @@ func TestComputeSKI_UnsupportedType(t *testing.T) {
 	}
 }
 
+func TestIsMozillaRoot(t *testing.T) {
+	// WHY: IsMozillaRoot must match genuine Mozilla roots by Subject+PublicKey
+	// and reject certs that share the same Subject but use a different key.
+	// This prevents spoofed trust anchors from bypassing chain verification.
+	t.Parallel()
+
+	// Parse the first Mozilla root cert from the embedded bundle.
+	pemData := MozillaRootPEM()
+	block, _ := pem.Decode(pemData)
+	if block == nil {
+		t.Fatal("failed to decode first PEM block from Mozilla bundle")
+	}
+	realRoot, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatalf("parsing Mozilla root certificate: %v", err)
+	}
+
+	t.Run("genuine Mozilla root matches", func(t *testing.T) {
+		t.Parallel()
+		if !IsMozillaRoot(realRoot) {
+			t.Errorf("IsMozillaRoot returned false for genuine Mozilla root %q", realRoot.Subject.CommonName)
+		}
+	})
+
+	t.Run("spoofed subject with different key is rejected", func(t *testing.T) {
+		t.Parallel()
+		spoofKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		spoofTmpl := &x509.Certificate{
+			SerialNumber:          randomSerial(t),
+			Subject:               realRoot.Subject,
+			NotBefore:             time.Now().Add(-time.Hour),
+			NotAfter:              time.Now().Add(24 * time.Hour),
+			IsCA:                  true,
+			BasicConstraintsValid: true,
+			KeyUsage:              x509.KeyUsageCertSign,
+		}
+		spoofDER, err := x509.CreateCertificate(rand.Reader, spoofTmpl, spoofTmpl, &spoofKey.PublicKey, spoofKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		spoofCert, err := x509.ParseCertificate(spoofDER)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if IsMozillaRoot(spoofCert) {
+			t.Error("IsMozillaRoot should reject a cert with matching Subject but different key")
+		}
+	})
+
+	t.Run("unrelated cert returns false", func(t *testing.T) {
+		t.Parallel()
+		caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		caTmpl := &x509.Certificate{
+			SerialNumber:          randomSerial(t),
+			Subject:               pkix.Name{CommonName: "Definitely Not Mozilla"},
+			NotBefore:             time.Now().Add(-time.Hour),
+			NotAfter:              time.Now().Add(24 * time.Hour),
+			IsCA:                  true,
+			BasicConstraintsValid: true,
+		}
+		caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cert, err := x509.ParseCertificate(caDER)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if IsMozillaRoot(cert) {
+			t.Error("IsMozillaRoot should return false for unrelated cert")
+		}
+	})
+}
+
+func TestVerifyChainTrust(t *testing.T) {
+	// WHY: VerifyChainTrust is the shared trust verification function used by
+	// scan summary, inspect, WASM, and --dump-certs. Covers trusted chain,
+	// untrusted self-signed, expired-but-chained (time-shift to NotBefore+1s),
+	// and Mozilla root bypass.
+	t.Parallel()
+
+	// Build a test root → intermediate → leaf chain with wide validity.
+	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootTmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "Trust Test Root"},
+		NotBefore:             time.Now().Add(-5 * 365 * 24 * time.Hour),
+		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	rootDER, err := x509.CreateCertificate(rand.Reader, rootTmpl, rootTmpl, &rootKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootCert, err := x509.ParseCertificate(rootDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	interKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	interTmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "Trust Test Intermediate"},
+		NotBefore:             time.Now().Add(-5 * 365 * 24 * time.Hour),
+		NotAfter:              time.Now().Add(5 * 365 * 24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	interDER, err := x509.CreateCertificate(rand.Reader, interTmpl, rootCert, &interKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	interCert, err := x509.ParseCertificate(interDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	validLeafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validLeafTmpl := &x509.Certificate{
+		SerialNumber: randomSerial(t),
+		Subject:      pkix.Name{CommonName: "valid.example.com"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	validLeafDER, err := x509.CreateCertificate(rand.Reader, validLeafTmpl, interCert, &validLeafKey.PublicKey, interKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validLeaf, err := x509.ParseCertificate(validLeafDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Expired leaf signed by the intermediate — valid 2y ago to yesterday
+	expiredLeafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiredLeafTmpl := &x509.Certificate{
+		SerialNumber: randomSerial(t),
+		Subject:      pkix.Name{CommonName: "expired.example.com"},
+		NotBefore:    time.Now().Add(-2 * 365 * 24 * time.Hour),
+		NotAfter:     time.Now().Add(-24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	expiredLeafDER, err := x509.CreateCertificate(rand.Reader, expiredLeafTmpl, interCert, &expiredLeafKey.PublicKey, interKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiredLeaf, err := x509.ParseCertificate(expiredLeafDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(rootCert)
+	interPool := x509.NewCertPool()
+	interPool.AddCert(interCert)
+
+	// Untrusted self-signed leaf (not in root pool)
+	untrustedKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	untrustedTmpl := &x509.Certificate{
+		SerialNumber: randomSerial(t),
+		Subject:      pkix.Name{CommonName: "untrusted.example.com"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+	}
+	untrustedDER, err := x509.CreateCertificate(rand.Reader, untrustedTmpl, untrustedTmpl, &untrustedKey.PublicKey, untrustedKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	untrustedCert, err := x509.ParseCertificate(untrustedDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Not-yet-valid leaf — NotBefore in the future
+	futureLeafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	futureLeafTmpl := &x509.Certificate{
+		SerialNumber: randomSerial(t),
+		Subject:      pkix.Name{CommonName: "future.example.com"},
+		NotBefore:    time.Now().Add(24 * time.Hour),
+		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	futureLeafDER, err := x509.CreateCertificate(rand.Reader, futureLeafTmpl, interCert, &futureLeafKey.PublicKey, interKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	futureLeaf, err := x509.ParseCertificate(futureLeafDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		cert *x509.Certificate
+		want bool
+	}{
+		{"valid leaf with chain", validLeaf, true},
+		{"expired leaf with chain (time-shift)", expiredLeaf, true},
+		{"self-signed untrusted", untrustedCert, false},
+		{"root cert in pool", rootCert, true},
+		{"not-yet-valid leaf", futureLeaf, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := VerifyChainTrust(VerifyChainTrustInput{Cert: tt.cert, Roots: rootPool, Intermediates: interPool}); got != tt.want {
+				t.Errorf("VerifyChainTrust(%q) = %v, want %v", tt.cert.Subject.CommonName, got, tt.want)
+			}
+		})
+	}
+
+	t.Run("nil roots returns false", func(t *testing.T) {
+		t.Parallel()
+		if VerifyChainTrust(VerifyChainTrustInput{Cert: validLeaf, Roots: nil, Intermediates: interPool}) {
+			t.Error("VerifyChainTrust should return false when roots is nil")
+		}
+	})
+
+	t.Run("nil intermediates pool", func(t *testing.T) {
+		t.Parallel()
+		// Root cert should be trusted even with nil intermediates pool.
+		if !VerifyChainTrust(VerifyChainTrustInput{Cert: rootCert, Roots: rootPool}) {
+			t.Error("root cert in pool should be trusted with nil intermediates")
+		}
+	})
+
+	t.Run("expired intermediate valid at leaf NotBefore", func(t *testing.T) {
+		t.Parallel()
+		// Build a chain where the intermediate was valid when the leaf was
+		// issued (at leaf.NotBefore) but has since expired.
+		expInterKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		expInterTmpl := &x509.Certificate{
+			SerialNumber:          randomSerial(t),
+			Subject:               pkix.Name{CommonName: "Expired Intermediate"},
+			NotBefore:             time.Now().Add(-3 * 365 * 24 * time.Hour),
+			NotAfter:              time.Now().Add(-24 * time.Hour), // expired yesterday
+			IsCA:                  true,
+			BasicConstraintsValid: true,
+			KeyUsage:              x509.KeyUsageCertSign,
+		}
+		expInterDER, err := x509.CreateCertificate(rand.Reader, expInterTmpl, rootCert, &expInterKey.PublicKey, rootKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		expInterCert, err := x509.ParseCertificate(expInterDER)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Leaf issued 2y ago (intermediate was valid then), expired yesterday.
+		leafKey2, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		leafTmpl2 := &x509.Certificate{
+			SerialNumber: randomSerial(t),
+			Subject:      pkix.Name{CommonName: "expired-inter-leaf.example.com"},
+			NotBefore:    time.Now().Add(-2 * 365 * 24 * time.Hour),
+			NotAfter:     time.Now().Add(-24 * time.Hour),
+			KeyUsage:     x509.KeyUsageDigitalSignature,
+		}
+		leafDER2, err := x509.CreateCertificate(rand.Reader, leafTmpl2, expInterCert, &leafKey2.PublicKey, expInterKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		leaf2, err := x509.ParseCertificate(leafDER2)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		expInterPool := x509.NewCertPool()
+		expInterPool.AddCert(expInterCert)
+
+		// Time-shift to leaf.NotBefore+1s — intermediate was valid then.
+		if !VerifyChainTrust(VerifyChainTrustInput{Cert: leaf2, Roots: rootPool, Intermediates: expInterPool}) {
+			t.Error("VerifyChainTrust should trust leaf with expired intermediate that was valid at leaf NotBefore")
+		}
+	})
+
+	// Separate test for Mozilla root bypass — uses a real Mozilla root cert.
+	t.Run("mozilla root bypasses chain verification", func(t *testing.T) {
+		t.Parallel()
+		pemData := MozillaRootPEM()
+		block, _ := pem.Decode(pemData)
+		if block == nil {
+			t.Fatal("no PEM block in Mozilla bundle")
+		}
+		mozRoot, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			t.Fatalf("parsing Mozilla root: %v", err)
+		}
+		// Pass an empty root pool — the cert should still be trusted via IsMozillaRoot.
+		emptyPool := x509.NewCertPool()
+		if !VerifyChainTrust(VerifyChainTrustInput{Cert: mozRoot, Roots: emptyPool, Intermediates: emptyPool}) {
+			t.Errorf("VerifyChainTrust should trust Mozilla root %q even with empty pool", mozRoot.Subject.CommonName)
+		}
+	})
+}
+
+func TestValidateAIAURL(t *testing.T) {
+	// WHY: ValidateAIAURL prevents SSRF by rejecting non-HTTP schemes and
+	// literal private/loopback/link-local IP addresses. Each case covers a
+	// distinct rejection rule or an allowed pattern.
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		url     string
+		wantErr bool
+		errSub  string
+	}{
+		{"valid http", "http://ca.example.com/issuer.cer", false, ""},
+		{"valid https", "https://ca.example.com/issuer.cer", false, ""},
+		{"ftp rejected", "ftp://ca.example.com/issuer.cer", true, "unsupported scheme"},
+		{"file rejected", "file:///etc/passwd", true, "unsupported scheme"},
+		{"empty scheme rejected", "://foo", true, "parsing URL"},
+		{"loopback IPv4", "http://127.0.0.1/ca.cer", true, "loopback"},
+		{"loopback IPv6", "http://[::1]/ca.cer", true, "loopback"},
+		{"link-local IPv4", "http://169.254.1.1/ca.cer", true, "loopback, link-local, or unspecified"},
+		{"unspecified IPv4", "http://0.0.0.0/ca.cer", true, "loopback, link-local, or unspecified"},
+		{"unspecified IPv6", "http://[::]/ca.cer", true, "loopback, link-local, or unspecified"},
+		{"private IPv6 ULA", "http://[fd12::1]/ca.cer", true, "blocked private"},
+		{"private 10.x", "http://10.0.0.1/ca.cer", true, "blocked private"},
+		{"private 172.16.x", "http://172.16.0.1/ca.cer", true, "blocked private"},
+		{"private 192.168.x", "http://192.168.1.1/ca.cer", true, "blocked private"},
+		{"CGN 100.64.x", "http://100.64.0.1/ca.cer", true, "blocked private"},
+		{"public IP allowed", "http://8.8.8.8/ca.cer", false, ""},
+		{"hostname allowed even if resolves to private", "http://internal.company.com/ca.cer", false, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateAIAURL(tt.url)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for %q", tt.url)
+				}
+				if tt.errSub != "" && !strings.Contains(err.Error(), tt.errSub) {
+					t.Errorf("error = %v, want substring %q", err, tt.errSub)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error for %q: %v", tt.url, err)
+				}
+			}
+		})
+	}
+}
+
 func TestAlgorithmName(t *testing.T) {
 	// WHY: KeyAlgorithmName and PublicKeyAlgorithmName produce display strings
 	// for CLI output and JSON; wrong names would confuse users and break JSON

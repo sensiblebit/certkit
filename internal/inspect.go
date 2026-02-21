@@ -26,6 +26,8 @@ type InspectResult struct {
 	NotBefore   string   `json:"not_before,omitempty"`
 	NotAfter    string   `json:"not_after,omitempty"`
 	CertType    string   `json:"cert_type,omitempty"`
+	Expired     *bool    `json:"expired,omitempty"`
+	Trusted     *bool    `json:"trusted,omitempty"`
 	KeyAlgo     string   `json:"key_algorithm,omitempty"`
 	KeySize     string   `json:"key_size,omitempty"`
 	SANs        []string `json:"sans,omitempty"`
@@ -38,6 +40,8 @@ type InspectResult struct {
 	KeyType     string   `json:"key_type,omitempty"`
 	CSRSubject  string   `json:"csr_subject,omitempty"`
 	CSRDNSNames []string `json:"csr_dns_names,omitempty"`
+
+	cert *x509.Certificate // unexported; retained for trust annotation
 }
 
 // InspectFile reads a file and returns inspection results for all objects found.
@@ -171,6 +175,7 @@ func inspectCert(cert *x509.Certificate) InspectResult {
 		SKI:       certkit.CertSKIEmbedded(cert),
 		AKI:       certkit.CertAKIEmbedded(cert),
 		SigAlg:    cert.SignatureAlgorithm.String(),
+		cert:      cert,
 	}
 }
 
@@ -203,6 +208,13 @@ func inspectKey(key any) InspectResult {
 	return r
 }
 
+func boolYesNo(v bool) string {
+	if v {
+		return "yes"
+	}
+	return "no"
+}
+
 func publicKeySize(pub any) string {
 	switch k := pub.(type) {
 	case *rsa.PublicKey:
@@ -227,6 +239,38 @@ func privateKeySize(key any) string {
 	default:
 		return "unknown"
 	}
+}
+
+// AnnotateInspectTrust sets the Expired and Trusted fields on certificate
+// results using Mozilla roots for chain verification. Intermediate certificates
+// found in the results are used to build chains.
+func AnnotateInspectTrust(results []InspectResult) error {
+	mozillaPool, err := certkit.MozillaRootPool()
+	if err != nil {
+		return fmt.Errorf("loading Mozilla root pool: %w", err)
+	}
+
+	// Build intermediate pool from all certs in the results
+	intermediatePool := x509.NewCertPool()
+	for i := range results {
+		if results[i].cert != nil && results[i].CertType == "intermediate" {
+			intermediatePool.AddCert(results[i].cert)
+		}
+	}
+
+	now := time.Now()
+	for i := range results {
+		if results[i].cert == nil {
+			continue
+		}
+		cert := results[i].cert
+		expired := now.After(cert.NotAfter)
+		results[i].Expired = &expired
+
+		trusted := certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{Cert: cert, Roots: mozillaPool, Intermediates: intermediatePool})
+		results[i].Trusted = &trusted
+	}
+	return nil
 }
 
 // FormatInspectResults formats inspection results as text or JSON.
@@ -263,6 +307,12 @@ func formatInspectText(results []InspectResult) string {
 			fmt.Fprintf(&sb, "  Type:        %s\n", r.CertType)
 			fmt.Fprintf(&sb, "  Not Before:  %s\n", r.NotBefore)
 			fmt.Fprintf(&sb, "  Not After:   %s\n", r.NotAfter)
+			if r.Expired != nil {
+				fmt.Fprintf(&sb, "  Expired:     %s\n", boolYesNo(*r.Expired))
+			}
+			if r.Trusted != nil {
+				fmt.Fprintf(&sb, "  Trusted:     %s\n", boolYesNo(*r.Trusted))
+			}
 			fmt.Fprintf(&sb, "  Key:         %s %s\n", r.KeyAlgo, r.KeySize)
 			fmt.Fprintf(&sb, "  Signature:   %s\n", r.SigAlg)
 			fmt.Fprintf(&sb, "  SHA-256:     %s\n", r.SHA256)

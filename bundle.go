@@ -1,6 +1,7 @@
 package certkit
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -8,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -24,7 +26,29 @@ var (
 	mozillaPoolErr      error
 	mozillaSubjectsOnce sync.Once
 	mozillaSubjects     map[string]bool
+	mozillaRootKeysOnce sync.Once
+	mozillaRootKeys     map[string][]byte // RawSubject → marshaled PKIX public key
 )
+
+// privateNetworks contains CIDR ranges for private, reserved, and shared
+// address space. Parsed once at init to avoid repeated net.ParseCIDR calls.
+var privateNetworks []*net.IPNet
+
+func init() {
+	for _, cidr := range []string{
+		"10.0.0.0/8",     // RFC 1918
+		"172.16.0.0/12",  // RFC 1918
+		"192.168.0.0/16", // RFC 1918
+		"100.64.0.0/10",  // RFC 6598 CGN / shared address space
+		"fc00::/7",       // IPv6 ULA
+	} {
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			panic(fmt.Sprintf("invalid CIDR %q: %v", cidr, err))
+		}
+		privateNetworks = append(privateNetworks, network)
+	}
+}
 
 // MozillaRootPEM returns the raw PEM-encoded Mozilla root certificate bundle.
 func MozillaRootPEM() []byte {
@@ -50,6 +74,11 @@ func MozillaRootPool() (*x509.CertPool, error) {
 // MozillaRootSubjects returns a set of raw ASN.1 subject byte strings from all
 // Mozilla root certificates. The result is initialized once and cached for the
 // lifetime of the process.
+//
+// The returned map is shared and must not be modified by callers. We
+// intentionally return the backing map directly rather than a defensive copy
+// because all callers perform read-only lookups, and copying ~150 entries on
+// every call would violate PERF-2 for no practical safety gain.
 func MozillaRootSubjects() map[string]bool {
 	mozillaSubjectsOnce.Do(func() {
 		mozillaSubjects = make(map[string]bool)
@@ -65,6 +94,7 @@ func MozillaRootSubjects() map[string]bool {
 			}
 			cert, err := x509.ParseCertificate(block.Bytes)
 			if err != nil {
+				slog.Debug("skipping unparseable certificate in Mozilla root bundle", "error", err)
 				continue
 			}
 			mozillaSubjects[string(cert.RawSubject)] = true
@@ -73,10 +103,148 @@ func MozillaRootSubjects() map[string]bool {
 	return mozillaSubjects
 }
 
+// mozillaRootPublicKeys returns a map of raw ASN.1 subject byte strings to
+// their corresponding marshaled PKIX public key. Initialized once and cached.
+func mozillaRootPublicKeys() map[string][]byte {
+	mozillaRootKeysOnce.Do(func() {
+		mozillaRootKeys = make(map[string][]byte)
+		pemData := MozillaRootPEM()
+		for {
+			var block *pem.Block
+			block, pemData = pem.Decode(pemData)
+			if block == nil {
+				break
+			}
+			if block.Type != "CERTIFICATE" {
+				continue
+			}
+			cert, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				slog.Debug("skipping unparseable root certificate", "error", err)
+				continue
+			}
+			pubBytes, err := x509.MarshalPKIXPublicKey(cert.PublicKey)
+			if err != nil {
+				slog.Debug("skipping root with unmarshalable public key", "error", err)
+				continue
+			}
+			mozillaRootKeys[string(cert.RawSubject)] = pubBytes
+		}
+	})
+	return mozillaRootKeys
+}
+
+// IsMozillaRoot reports whether the certificate matches a Mozilla root
+// certificate by both Subject (raw ASN.1 bytes) and public key (marshaled
+// PKIX). This identifies self-signed roots and cross-signed variants that
+// share the same key pair. A Subject-only match is insufficient because an
+// attacker could forge the Subject; the public key check ensures the
+// certificate holds the same key as the genuine root.
+//
+// AKI (Authority Key Identifier) is intentionally not checked: cross-signed
+// roots have a different AKI (pointing to the cross-signer) than the
+// self-signed version, and the cross-signer may have been removed from the
+// Mozilla trust store. The public key match is cryptographically sufficient.
+func IsMozillaRoot(cert *x509.Certificate) bool {
+	expectedPub, ok := mozillaRootPublicKeys()[string(cert.RawSubject)]
+	if !ok {
+		return false
+	}
+	actualPub, err := x509.MarshalPKIXPublicKey(cert.PublicKey)
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(expectedPub, actualPub)
+}
+
 // IsIssuedByMozillaRoot reports whether the certificate's issuer matches a
-// Mozilla root certificate's subject (by raw ASN.1 bytes).
+// Mozilla root certificate's subject (by raw ASN.1 bytes). This is used as a
+// performance optimization to skip AIA fetching when the issuer is a well-known
+// root — it is NOT a trust decision. Trust verification requires full chain
+// validation via VerifyChainTrust.
 func IsIssuedByMozillaRoot(cert *x509.Certificate) bool {
 	return MozillaRootSubjects()[string(cert.RawIssuer)]
+}
+
+// ValidateAIAURL checks whether a URL is safe to fetch for AIA certificate
+// resolution. It rejects non-HTTP(S) schemes and literal private/loopback/
+// link-local IP addresses to prevent SSRF.
+//
+// Known limitation: hostnames that resolve to private IPs are intentionally
+// allowed. This means DNS rebinding (a hostname resolving to a public IP at
+// validation time, then to a private IP at connection time) is theoretically
+// possible. We accept this because:
+//
+//  1. certkit is a short-lived CLI process — the window between ValidateAIAURL
+//     and the HTTP request is ~2ms, making rebinding impractical to exploit.
+//  2. Blocking hostnames that resolve to private IPs would break legitimate
+//     internal CAs whose AIA endpoints are on private networks.
+//  3. Adding net.Dialer.Control to check resolved IPs doesn't help: if we
+//     allow private IPs for internal CAs, the check is the same TOCTOU race.
+func ValidateAIAURL(rawURL string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("parsing URL: %w", err)
+	}
+	switch parsed.Scheme {
+	case "http", "https":
+		// allowed
+	default:
+		return fmt.Errorf("unsupported scheme %q (only http and https are allowed)", parsed.Scheme)
+	}
+	host := parsed.Hostname()
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return nil // hostname, not a literal IP — allow (see doc comment)
+	}
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+		return fmt.Errorf("blocked address %s (loopback, link-local, or unspecified)", host)
+	}
+	for _, network := range privateNetworks {
+		if network.Contains(ip) {
+			return fmt.Errorf("blocked private address %s", host)
+		}
+	}
+	return nil
+}
+
+// VerifyChainTrust reports whether the given certificate chains to a trusted
+// root. Cross-signed roots (same Subject and public key as a Mozilla root)
+// are trusted directly. For expired certificates, verification is performed
+// at a time just after the certificate's NotBefore to determine if the chain
+// was ever valid — this is more robust than checking just before NotAfter,
+// because intermediates that expired between issuance and the leaf's expiry
+// will still be valid at NotBefore time.
+//
+// Known limitation: if an intermediate expired before the leaf's NotBefore,
+// the time-shifted verification will still fail because the intermediate is
+// invalid at the leaf's issuance time. This is an uncommon edge case in
+// practice (intermediates outlive the leaves they sign).
+// VerifyChainTrustInput holds parameters for VerifyChainTrust.
+type VerifyChainTrustInput struct {
+	Cert          *x509.Certificate
+	Roots         *x509.CertPool
+	Intermediates *x509.CertPool
+}
+
+func VerifyChainTrust(input VerifyChainTrustInput) bool {
+	if input.Roots == nil {
+		return false
+	}
+	if IsMozillaRoot(input.Cert) {
+		return true
+	}
+	opts := x509.VerifyOptions{
+		Roots:         input.Roots,
+		Intermediates: input.Intermediates,
+		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+	}
+	if time.Now().After(input.Cert.NotAfter) {
+		// Use NotBefore + 1s: the issuing chain was necessarily valid at issuance.
+		opts.CurrentTime = input.Cert.NotBefore.Add(time.Second)
+	}
+	_, err := input.Cert.Verify(opts)
+	return err == nil
 }
 
 // BundleResult holds the resolved chain and metadata.
@@ -164,7 +332,19 @@ func FetchAIACertificates(ctx context.Context, cert *x509.Certificate, timeout t
 	var fetched []*x509.Certificate
 	var warnings []string
 
-	client := &http.Client{Timeout: timeout}
+	const maxRedirects = 3
+	client := &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= maxRedirects {
+				return fmt.Errorf("stopped after %d redirects", maxRedirects)
+			}
+			if err := ValidateAIAURL(req.URL.String()); err != nil {
+				return fmt.Errorf("redirect blocked: %w", err)
+			}
+			return nil
+		},
+	}
 	seen := make(map[string]bool)
 	queue := []*x509.Certificate{cert}
 
@@ -177,6 +357,11 @@ func FetchAIACertificates(ctx context.Context, cert *x509.Certificate, timeout t
 				continue
 			}
 			seen[aiaURL] = true
+
+			if err := ValidateAIAURL(aiaURL); err != nil {
+				warnings = append(warnings, fmt.Sprintf("AIA URL rejected for %s: %v", aiaURL, err))
+				continue
+			}
 
 			certs, err := fetchCertificatesFromURL(ctx, client, aiaURL)
 			if err != nil {

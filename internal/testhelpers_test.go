@@ -256,6 +256,37 @@ func newExpiredLeaf(t *testing.T, ca testCA) testLeaf {
 	return testLeaf{cert: cert, certPEM: certPEM, certDER: certDER, key: key, keyPEM: keyPEM}
 }
 
+// newIntermediateCA generates an intermediate CA signed by the given root CA.
+func newIntermediateCA(t *testing.T, root testCA) testCA {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate intermediate CA key: %v", err)
+	}
+
+	tmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "Test Intermediate CA", Organization: []string{"TestOrg"}},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(5 * 365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		AuthorityKeyId:        root.cert.SubjectKeyId,
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, root.cert, &key.PublicKey, root.key)
+	if err != nil {
+		t.Fatalf("create intermediate CA cert: %v", err)
+	}
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatalf("parse intermediate CA cert: %v", err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	return testCA{cert: cert, certPEM: certPEM, certDER: certDER, key: key}
+}
+
 // newPKCS12Bundle creates a PKCS#12 bundle from a leaf cert and its key.
 func newPKCS12Bundle(t *testing.T, leaf testLeaf, ca testCA, password string) []byte {
 	t.Helper()

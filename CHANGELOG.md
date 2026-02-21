@@ -9,11 +9,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Add shell tab completion for all enum flags (`--format`, `--algorithm`, `--curve`, `--log-level`, `--trust-store`) and directory flags (`--bundle-path`, `--out-path`) ([#56])
+- Add `ValidateAIAURL` to block SSRF via non-HTTP schemes and literal private/loopback IP addresses in AIA URLs ([#56])
+- Add shell tab completion for all enum flags (`--format`, `--algorithm`, `--curve`, `--log-level`, `--trust-store`), directory flags (`--bundle-path`, `--out-path`), and file flags (`--out-file`) ([#56])
+- Add expired and untrusted certificate counts to scan summary (e.g., `Leaves: 6 (2 expired, 1 untrusted)`) ([`b5969b0`])
+- Add AIA resolution to scan summary path — fetch missing intermediates before trust checking ([`b5969b0`])
+- Add expired and trusted status to `inspect` command output for each certificate ([`b5969b0`])
+- Add `VerifyChainTrust` shared function for consistent chain verification across CLI, WASM, inspect, and `--dump-certs` ([#56])
+- Strengthen `IsMozillaRoot` to verify public key in addition to Subject — prevents spoofed trust anchors ([#56])
+
+### Changed
+
+- **Breaking:** `VerifyChainTrust` now takes a `VerifyChainTrustInput` struct instead of positional arguments (CS-5 compliance) ([#57])
+- Use `NotBefore + 1s` instead of `NotAfter - 1s` for expired certificate time-shift in chain verification — more robust when intermediates expired before the leaf ([#56])
 
 ### Fixed
 
+- Fix bare `return err` without context wrapping (ERR-1) in scan command `MozillaRootPool` and `httpAIAFetcher` calls ([#57])
+- Fix silent error swallowing (ERR-5) in `mozillaRootPublicKeys`, `ResolveAIA`, and WASM `json.Marshal` calls — now log with `slog` ([#57])
+- Fix WASM `jsFetchURL` catch callback panic when JS promise rejects with null or non-Error value ([#57])
+- Fix WASM `exportBundlesJS` missing `defer` on `RUnlock` — panic during export would permanently deadlock the store ([#57])
+- Fix SSRF bypass via unspecified addresses (`0.0.0.0`, `::`) in `ValidateAIAURL` ([#57])
+- Fix SSRF bypass via CGN/shared address space (`100.64.0.0/10`) in `ValidateAIAURL` ([#57])
+- Fix `ValidateAIAURL` re-parsing CIDR ranges on every call — now parsed once at init ([#57])
+- Fix missing SSRF validation in `ResolveAIA` — AIA URLs are now validated before fetching, not just in caller-provided callbacks ([#57])
+- Fix `VerifyChainTrust` silently falling back to system roots when `roots` is nil — now returns false ([#57])
+- Fix WASM `jsFetchURL` accepting unbounded response data — now enforces 1MB limit consistent with CLI ([#57])
+- Fix WASM `getState`/`resetStore` deadlocking JS event loop when AIA resolution holds the store lock — now uses `TryRLock`/`TryLock` ([#57])
+- Fix WASM `js.FuncOf` promise executor callbacks leaking in `addFiles`, `exportBundlesJS`, and `jsError` — now released after `Promise.New` ([#57])
+- Fix WASM `jsFetchURL` panic when context is cancelled before JS promise settles — callbacks are no longer released prematurely ([#57])
+- Fix WASM `addFiles` leaking `js.FuncOf` callback on every AIA completion notification ([#57])
+- Fix WASM `jsFetchURL` ignoring context cancellation — now returns `ctx.Err()` when context is done ([#56])
+- Fix `AllKeys()` returning internal map — callers could corrupt store state by modifying the returned map ([#56])
 - Fix `FormatCN` panic when certificate has no CN, no DNS SANs, and nil SerialNumber — now returns "unknown" ([`e70e8e5`])
+- Fix WASM `getState` silently ignoring `MozillaRootPool()` error — now logs error and continues without trust checking ([#56])
+- Fix WASM `globalStore` race condition — add `sync.RWMutex` for concurrent access from goroutines ([#56])
+- Fix `--dump-certs` using inconsistent chain verification (missing `ExtKeyUsageAny`, no `IsMozillaRoot` bypass) ([#56])
+- Fix expired certificates double-counted as both expired and untrusted in scan summary — now only counted as expired ([#56])
+- Fix `certkit inspect` bare `return err` without context wrapping (ERR-1) ([#56])
+- Fix bare `io.ReadAll` return in `httpAIAFetcher` missing error context (ERR-1) ([#57])
+- Fix WASM `addFiles` resolving with empty string when `json.Marshal` fails — now rejects the promise (ERR-5) ([#57])
+- Fix silent `continue` in `MozillaRootSubjects` when certificate parsing fails — now logs with `slog.Debug` (ERR-5) ([#57])
+
+### Tests
+
+- Add `ResolveAIA` SSRF URL rejection test — verifies private/loopback AIA URLs produce warnings without invoking the fetcher ([#57])
+- Add `VerifyChainTrust` edge case tests: nil intermediates pool, expired intermediate valid at leaf's NotBefore ([#57])
+- Add `ScanSummary` nil-pool test — verifies expired counts are computed but untrusted counts are skipped when no root pool is provided ([#57])
+- Strengthen `ValidateAIAURL` empty-scheme assertion to verify specific error message ([#57])
 
 ### Removed
 
@@ -512,6 +554,7 @@ Initial release.
 [0.1.1]: https://github.com/sensiblebit/certkit/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/sensiblebit/certkit/releases/tag/v0.1.0
 
+[`b5969b0`]: https://github.com/sensiblebit/certkit/commit/b5969b0
 [`e70e8e5`]: https://github.com/sensiblebit/certkit/commit/e70e8e5
 [`0fa55af`]: https://github.com/sensiblebit/certkit/commit/0fa55af
 [`b69caef`]: https://github.com/sensiblebit/certkit/commit/b69caef
@@ -567,6 +610,7 @@ Initial release.
 [`55b5c1e`]: https://github.com/sensiblebit/certkit/commit/55b5c1e
 [`8cf81d9`]: https://github.com/sensiblebit/certkit/commit/8cf81d9
 [`3569926`]: https://github.com/sensiblebit/certkit/commit/3569926
+[#57]: https://github.com/sensiblebit/certkit/pull/57
 [#56]: https://github.com/sensiblebit/certkit/pull/56
 [#48]: https://github.com/sensiblebit/certkit/pull/48
 [#46]: https://github.com/sensiblebit/certkit/pull/46

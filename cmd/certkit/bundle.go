@@ -4,6 +4,7 @@ import (
 	"crypto"
 	"crypto/x509"
 	"fmt"
+	"log/slog"
 	"os"
 	"slices"
 	"time"
@@ -50,6 +51,7 @@ func init() {
 
 	registerCompletion(bundleCmd, completionInput{"format", fixedCompletion("pem", "chain", "fullchain", "p12", "jks")})
 	registerCompletion(bundleCmd, completionInput{"trust-store", fixedCompletion("system", "mozilla")})
+	registerCompletion(bundleCmd, completionInput{"out-file", fileCompletion})
 }
 
 func runBundle(cmd *cobra.Command, args []string) error {
@@ -101,7 +103,7 @@ func runBundle(cmd *cobra.Command, args []string) error {
 	}
 
 	for _, w := range bundle.Warnings {
-		fmt.Fprintf(os.Stderr, "WARNING: %s\n", w)
+		slog.Warn("bundle", "warning", w)
 	}
 
 	output, err := formatBundleOutput(bundle, key, bundleFormat, passwords)

@@ -7,13 +7,155 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/sensiblebit/certkit"
 )
+
+func TestHasUnresolvedIssuers(t *testing.T) {
+	// WHY: HasUnresolvedIssuers gates AIA resolution — it must return false for
+	// empty stores, root-only stores, and stores where all issuers are present
+	// or issued by Mozilla roots. It must return true only when a non-root
+	// cert's issuer is genuinely missing.
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, store *MemStore)
+		want  bool
+	}{
+		{
+			name:  "empty store",
+			setup: func(t *testing.T, store *MemStore) {},
+			want:  false,
+		},
+		{
+			name: "only roots",
+			setup: func(t *testing.T, store *MemStore) {
+				ca := newRSACA(t)
+				if err := store.HandleCertificate(ca.cert, "ca.pem"); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: false,
+		},
+		{
+			name: "leaf with issuer in store",
+			setup: func(t *testing.T, store *MemStore) {
+				ca := newRSACA(t)
+				leaf := newRSALeaf(t, ca, "has-issuer.example.com", []string{"has-issuer.example.com"})
+				if err := store.HandleCertificate(ca.cert, "ca.pem"); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.HandleCertificate(leaf.cert, "leaf.pem"); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: false,
+		},
+		{
+			name: "leaf issued by Mozilla root returns false",
+			setup: func(t *testing.T, store *MemStore) {
+				// Parse the first Mozilla root to get its RawSubject.
+				pemData := certkit.MozillaRootPEM()
+				block, _ := pem.Decode(pemData)
+				if block == nil {
+					t.Fatal("no PEM block in Mozilla root bundle")
+				}
+				mozRoot, err := x509.ParseCertificate(block.Bytes)
+				if err != nil {
+					t.Fatalf("parsing Mozilla root: %v", err)
+				}
+
+				// Create a fake CA with the exact same RawSubject as the
+				// Mozilla root. This ensures the leaf's RawIssuer matches.
+				// HasUnresolvedIssuers/IsIssuedByMozillaRoot only checks
+				// RawIssuer bytes, not cryptographic signatures.
+				fakeKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				fakeCATmpl := &x509.Certificate{
+					SerialNumber:          randomSerial(t),
+					RawSubject:            mozRoot.RawSubject,
+					NotBefore:             time.Now().Add(-time.Hour),
+					NotAfter:              time.Now().Add(24 * time.Hour),
+					IsCA:                  true,
+					BasicConstraintsValid: true,
+					KeyUsage:              x509.KeyUsageCertSign,
+					SubjectKeyId:          mozRoot.SubjectKeyId,
+				}
+				fakeDER, err := x509.CreateCertificate(rand.Reader, fakeCATmpl, fakeCATmpl, &fakeKey.PublicKey, fakeKey)
+				if err != nil {
+					t.Fatalf("create fake CA: %v", err)
+				}
+				fakeCert, err := x509.ParseCertificate(fakeDER)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				leafTmpl := &x509.Certificate{
+					SerialNumber:   randomSerial(t),
+					Subject:        pkix.Name{CommonName: "mozilla-issued.example.com"},
+					DNSNames:       []string{"mozilla-issued.example.com"},
+					NotBefore:      time.Now().Add(-time.Hour),
+					NotAfter:       time.Now().Add(24 * time.Hour),
+					KeyUsage:       x509.KeyUsageDigitalSignature,
+					AuthorityKeyId: mozRoot.SubjectKeyId,
+				}
+				leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, fakeCert, &leafKey.PublicKey, fakeKey)
+				if err != nil {
+					t.Fatalf("create leaf signed by fake CA: %v", err)
+				}
+				leafCert, err := x509.ParseCertificate(leafDER)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				if string(leafCert.RawIssuer) != string(mozRoot.RawSubject) {
+					t.Fatal("leaf RawIssuer does not match Mozilla root RawSubject")
+				}
+
+				if err := store.HandleCertificate(leafCert, "leaf.pem"); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: false,
+		},
+		{
+			name: "leaf with missing issuer",
+			setup: func(t *testing.T, store *MemStore) {
+				ca := newRSACA(t)
+				leaf := newRSALeaf(t, ca, "orphan.example.com", []string{"orphan.example.com"})
+				// Only add the leaf, not the CA
+				if err := store.HandleCertificate(leaf.cert, "leaf.pem"); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			store := NewMemStore()
+			tt.setup(t, store)
+			if got := HasUnresolvedIssuers(store); got != tt.want {
+				t.Errorf("HasUnresolvedIssuers() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
 
 func TestResolveAIA_FetchesMissingIssuer(t *testing.T) {
 	// WHY: The core AIA resolution path must fetch an intermediate when the
@@ -176,9 +318,9 @@ func TestResolveAIA_SkipsResolvedAndRoots(t *testing.T) {
 			store := NewMemStore()
 			tt.setup(t, store)
 
-			fetchCount := 0
+			var fetchCount atomic.Int32
 			fetcher := func(_ context.Context, _ string) ([]byte, error) {
-				fetchCount++
+				fetchCount.Add(1)
 				return nil, fmt.Errorf("should not be called")
 			}
 
@@ -190,8 +332,8 @@ func TestResolveAIA_SkipsResolvedAndRoots(t *testing.T) {
 			if len(warnings) != 0 {
 				t.Errorf("expected 0 warnings, got %v", warnings)
 			}
-			if fetchCount != 0 {
-				t.Errorf("expected 0 fetches, got %d", fetchCount)
+			if fetchCount.Load() != 0 {
+				t.Errorf("expected 0 fetches, got %d", fetchCount.Load())
 			}
 		})
 	}
@@ -335,9 +477,9 @@ func TestResolveAIA_DeduplicatesURLs(t *testing.T) {
 		}
 	}
 
-	fetchCount := 0
+	var fetchCount atomic.Int32
 	fetcher := func(_ context.Context, _ string) ([]byte, error) {
-		fetchCount++
+		fetchCount.Add(1)
 		return caDER, nil
 	}
 
@@ -346,13 +488,13 @@ func TestResolveAIA_DeduplicatesURLs(t *testing.T) {
 		Fetch: fetcher,
 	})
 
-	if fetchCount != 1 {
-		t.Errorf("expected 1 fetch (URL deduped), got %d", fetchCount)
+	if fetchCount.Load() != 1 {
+		t.Errorf("expected 1 fetch (URL deduped), got %d", fetchCount.Load())
 	}
 
 	// Verify the fetched cert is actually in the store — without this,
 	// a fetcher that returned valid DER but HandleCertificate silently
-	// failed would still show fetchCount==1.
+	// failed would still show fetchCount.Load()==1.
 	allCerts := store.AllCertsFlat()
 	if len(allCerts) != 3 {
 		t.Errorf("expected 3 certs in store (2 leaves + 1 fetched CA), got %d", len(allCerts))
@@ -399,6 +541,10 @@ func TestResolveAIA_MaxDepth(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			rootCert, err := x509.ParseCertificate(rootDER)
+			if err != nil {
+				t.Fatal(err)
+			}
 
 			intKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 			if err != nil {
@@ -414,7 +560,11 @@ func TestResolveAIA_MaxDepth(t *testing.T) {
 				KeyUsage:              x509.KeyUsageCertSign,
 				IssuingCertificateURL: []string{"http://example.com/root.cer"},
 			}
-			intDER, err := x509.CreateCertificate(rand.Reader, intTmpl, rootTmpl, &intKey.PublicKey, rootKey)
+			intDER, err := x509.CreateCertificate(rand.Reader, intTmpl, rootCert, &intKey.PublicKey, rootKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			intCert, err := x509.ParseCertificate(intDER)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -430,7 +580,7 @@ func TestResolveAIA_MaxDepth(t *testing.T) {
 				NotAfter:              time.Now().Add(24 * time.Hour),
 				IssuingCertificateURL: []string{"http://example.com/intermediate.cer"},
 			}
-			leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, intTmpl, &leafKey.PublicKey, intKey)
+			leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, intCert, &leafKey.PublicKey, intKey)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -443,9 +593,9 @@ func TestResolveAIA_MaxDepth(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			fetchCount := 0
+			var fetchCount atomic.Int32
 			fetcher := func(_ context.Context, url string) ([]byte, error) {
-				fetchCount++
+				fetchCount.Add(1)
 				if strings.Contains(url, "intermediate") {
 					return intDER, nil
 				}
@@ -458,8 +608,8 @@ func TestResolveAIA_MaxDepth(t *testing.T) {
 				MaxDepth: tt.maxDepth,
 			})
 
-			if fetchCount != tt.wantFetchCount {
-				t.Errorf("expected %d fetch(es), got %d", tt.wantFetchCount, fetchCount)
+			if int(fetchCount.Load()) != tt.wantFetchCount {
+				t.Errorf("expected %d fetch(es), got %d", tt.wantFetchCount, fetchCount.Load())
 			}
 			allCerts := store.AllCertsFlat()
 			if len(allCerts) != tt.wantStoreCount {
@@ -653,5 +803,99 @@ func TestResolveAIA_CancelledContext(t *testing.T) {
 	}
 	if len(warnings) == 0 {
 		t.Error("expected at least one warning from cancelled fetch")
+	}
+}
+
+func TestResolveAIA_RejectsSSRFURL(t *testing.T) {
+	// WHY: When a certificate has a private/loopback AIA URL, ResolveAIA must
+	// reject it with a warning before invoking the fetcher — this is the
+	// integration point for ValidateAIAURL within the AIA resolution loop.
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		aiaURL string
+		errSub string
+	}{
+		{"loopback IPv4", "http://127.0.0.1/ca.cer", "AIA URL rejected"},
+		{"private 10.x", "http://10.0.0.1/ca.cer", "AIA URL rejected"},
+		{"file scheme", "file:///etc/passwd", "AIA URL rejected"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			store := NewMemStore()
+
+			caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			caTmpl := &x509.Certificate{
+				SerialNumber:          randomSerial(t),
+				Subject:               pkix.Name{CommonName: "SSRF CA"},
+				NotBefore:             time.Now().Add(-time.Hour),
+				NotAfter:              time.Now().Add(24 * time.Hour),
+				IsCA:                  true,
+				BasicConstraintsValid: true,
+				KeyUsage:              x509.KeyUsageCertSign,
+			}
+			caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			caCert, err := x509.ParseCertificate(caDER)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			leafTmpl := &x509.Certificate{
+				SerialNumber:          randomSerial(t),
+				Subject:               pkix.Name{CommonName: "ssrf.example.com"},
+				NotBefore:             time.Now().Add(-time.Hour),
+				NotAfter:              time.Now().Add(24 * time.Hour),
+				IssuingCertificateURL: []string{tt.aiaURL},
+			}
+			leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			leafCert, err := x509.ParseCertificate(leafDER)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if err := store.HandleCertificate(leafCert, "leaf.pem"); err != nil {
+				t.Fatal(err)
+			}
+
+			var fetchCount atomic.Int32
+			fetcher := func(_ context.Context, _ string) ([]byte, error) {
+				fetchCount.Add(1)
+				return caDER, nil
+			}
+
+			warnings := ResolveAIA(context.Background(), ResolveAIAInput{
+				Store: store,
+				Fetch: fetcher,
+			})
+
+			if fetchCount.Load() != 0 {
+				t.Errorf("fetcher should not be called for SSRF URL, got %d calls", fetchCount.Load())
+			}
+			if len(warnings) != 1 {
+				t.Fatalf("expected 1 warning, got %d: %v", len(warnings), warnings)
+			}
+			if !strings.Contains(warnings[0], tt.errSub) {
+				t.Errorf("warning = %q, want substring %q", warnings[0], tt.errSub)
+			}
+			if len(store.AllCertsFlat()) != 1 {
+				t.Errorf("store should still have only the leaf, got %d certs", len(store.AllCertsFlat()))
+			}
+		})
 	}
 }

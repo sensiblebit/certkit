@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"sort"
 	"time"
@@ -181,9 +182,11 @@ func (s *MemStore) AllCerts() map[string]*CertRecord {
 	return result
 }
 
-// AllKeys returns a snapshot of all key records keyed by SKI.
+// AllKeys returns a copy of all key records keyed by SKI.
 func (s *MemStore) AllKeys() map[string]*KeyRecord {
-	return s.keys
+	result := make(map[string]*KeyRecord, len(s.keys))
+	maps.Copy(result, s.keys)
+	return result
 }
 
 // AllCertsFlat returns all certificate records as a flat slice.
@@ -295,18 +298,54 @@ func (s *MemStore) BundleNames() []string {
 }
 
 // ScanSummary returns aggregate counts of stored certificates and keys.
-func (s *MemStore) ScanSummary() ScanSummary {
+// When input.RootPool is non-nil, it also counts expired and untrusted
+// certificates. Expired certificates are only counted as expired, never
+// as untrusted, to avoid misleading double-counts in the summary output.
+func (s *MemStore) ScanSummary(input ScanSummaryInput) ScanSummary {
 	summary := ScanSummary{
 		Keys: len(s.keys),
 	}
+
+	var intermediatePool *x509.CertPool
+	if input.RootPool != nil {
+		intermediatePool = s.IntermediatePool()
+	}
+
+	now := time.Now()
 	for _, rec := range s.certsByID {
+		expired := now.After(rec.NotAfter)
+
 		switch rec.CertType {
 		case "root":
 			summary.Roots++
+			if expired {
+				summary.ExpiredRoots++
+			}
+			if input.RootPool != nil && !expired {
+				if !certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{Cert: rec.Cert, Roots: input.RootPool, Intermediates: intermediatePool}) {
+					summary.UntrustedRoots++
+				}
+			}
 		case "intermediate":
 			summary.Intermediates++
+			if expired {
+				summary.ExpiredIntermediates++
+			}
+			if input.RootPool != nil && !expired {
+				if !certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{Cert: rec.Cert, Roots: input.RootPool, Intermediates: intermediatePool}) {
+					summary.UntrustedIntermediates++
+				}
+			}
 		case "leaf":
 			summary.Leaves++
+			if expired {
+				summary.ExpiredLeaves++
+			}
+			if input.RootPool != nil && !expired {
+				if !certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{Cert: rec.Cert, Roots: input.RootPool, Intermediates: intermediatePool}) {
+					summary.UntrustedLeaves++
+				}
+			}
 		}
 	}
 	summary.Matched = len(s.MatchedPairs())

@@ -1,13 +1,15 @@
 package main
 
 import (
-	"crypto/x509"
+	"context"
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -166,6 +168,18 @@ func runScan(cmd *cobra.Command, args []string) error {
 		internal.AssignBundleNames(store, bundleConfigs)
 	}
 
+	// Resolve missing intermediates via AIA before trust checking
+	if certstore.HasUnresolvedIssuers(store) {
+		slog.Info("resolving certificate chains")
+		aiaWarnings := certstore.ResolveAIA(cmd.Context(), certstore.ResolveAIAInput{
+			Store: store,
+			Fetch: httpAIAFetcher,
+		})
+		for _, w := range aiaWarnings {
+			slog.Warn("AIA resolution", "warning", w)
+		}
+	}
+
 	if scanDumpKeys != "" {
 		keys := store.AllKeysFlat()
 		if len(keys) > 0 {
@@ -176,36 +190,39 @@ func runScan(cmd *cobra.Command, args []string) error {
 			if err := os.WriteFile(scanDumpKeys, data, 0600); err != nil {
 				return fmt.Errorf("writing keys to %s: %w", scanDumpKeys, err)
 			}
-			fmt.Fprintf(os.Stderr, "Wrote %d key(s) to %s\n", len(keys), scanDumpKeys)
+			slog.Info("dumped keys", "count", len(keys), "path", scanDumpKeys)
 		} else {
-			fmt.Fprintln(os.Stderr, "No keys found to dump")
+			slog.Info("no keys found to dump")
 		}
 	}
 
 	if scanDumpCerts != "" {
 		certs := store.AllCertsFlat()
 		if len(certs) > 0 {
-			// Build mozilla root pool for verification (consistent with other commands)
+			// Build mozilla root pool for verification (consistent with summary)
 			mozillaPool, err := certkit.MozillaRootPool()
 			if err != nil {
-				return err
+				return fmt.Errorf("loading Mozilla root pool: %w", err)
 			}
+			intermediatePool := store.IntermediatePool()
 
 			var data []byte
 			var count, skipped int
+			now := time.Now()
 			for _, c := range certs {
 				cert := c.Cert
 
-				// Validate chain unless --force is set
+				// Skip expired certificates unless --allow-expired is set
+				if !allowExpired && now.After(cert.NotAfter) {
+					slog.Debug("skipping expired certificate", "subject", cert.Subject)
+					skipped++
+					continue
+				}
+
+				// Validate chain unless --force is set (uses same logic as summary)
 				if !scanForceExport {
-					verifyOpts := x509.VerifyOptions{Roots: mozillaPool}
-					if allowExpired {
-						// Set CurrentTime far in the future to bypass expiry checks
-						verifyOpts.CurrentTime = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
-					}
-					_, verifyErr := cert.Verify(verifyOpts)
-					if verifyErr != nil {
-						slog.Debug("skipping unverified certificate", "subject", cert.Subject, "error", verifyErr)
+					if !certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{Cert: cert, Roots: mozillaPool, Intermediates: intermediatePool}) {
+						slog.Debug("skipping untrusted certificate", "subject", cert.Subject)
 						skipped++
 						continue
 					}
@@ -222,18 +239,18 @@ func runScan(cmd *cobra.Command, args []string) error {
 				count++
 			}
 			if skipped > 0 {
-				fmt.Fprintf(os.Stderr, "Skipped %d unverified certificate(s) (use --force to include)\n", skipped)
+				slog.Warn("skipped certificates", "count", skipped)
 			}
 			if count > 0 {
 				if err := os.WriteFile(scanDumpCerts, data, 0644); err != nil {
 					return fmt.Errorf("writing certificates to %s: %w", scanDumpCerts, err)
 				}
-				fmt.Fprintf(os.Stderr, "Wrote %d certificate(s) to %s\n", count, scanDumpCerts)
+				slog.Info("dumped certificates", "count", count, "path", scanDumpCerts)
 			} else {
-				fmt.Fprintln(os.Stderr, "No verified certificates found to dump")
+				slog.Info("no verified certificates found to dump")
 			}
 		} else {
-			fmt.Fprintln(os.Stderr, "No certificates found to dump")
+			slog.Info("no certificates found to dump")
 		}
 	}
 
@@ -247,8 +264,14 @@ func runScan(cmd *cobra.Command, args []string) error {
 		}
 		store.DumpDebug()
 	} else {
-		// Print summary
-		summary := store.ScanSummary()
+		// Print summary with trust and expiry annotations
+		mozillaPool, err := certkit.MozillaRootPool()
+		if err != nil {
+			return fmt.Errorf("loading Mozilla root pool: %w", err)
+		}
+		summary := store.ScanSummary(certstore.ScanSummaryInput{
+			RootPool: mozillaPool,
+		})
 		switch scanFormat {
 		case "json":
 			data, err := json.MarshalIndent(summary, "", "  ")
@@ -260,9 +283,12 @@ func runScan(cmd *cobra.Command, args []string) error {
 			total := summary.Roots + summary.Intermediates + summary.Leaves
 			fmt.Printf("\nFound %d certificate(s) and %d key(s)\n", total, summary.Keys)
 			if total > 0 {
-				fmt.Printf("  Roots:         %d\n", summary.Roots)
-				fmt.Printf("  Intermediates: %d\n", summary.Intermediates)
-				fmt.Printf("  Leaves:        %d\n", summary.Leaves)
+				fmt.Printf("  Roots:          %d%s\n", summary.Roots,
+					internal.CertAnnotation(summary.ExpiredRoots, summary.UntrustedRoots))
+				fmt.Printf("  Intermediates:  %d%s\n", summary.Intermediates,
+					internal.CertAnnotation(summary.ExpiredIntermediates, summary.UntrustedIntermediates))
+				fmt.Printf("  Leaves:         %d%s\n", summary.Leaves,
+					internal.CertAnnotation(summary.ExpiredLeaves, summary.UntrustedLeaves))
 			}
 			if summary.Keys > 0 {
 				fmt.Printf("  Key-cert pairs: %d\n", summary.Matched)
@@ -279,6 +305,45 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// aiaHTTPClient is reused across AIA fetches to enable TCP connection reuse.
+// Redirects are limited to 3 and validated against SSRF rules.
+var aiaHTTPClient = &http.Client{
+	Timeout: 2 * time.Second,
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 3 {
+			return fmt.Errorf("stopped after 3 redirects")
+		}
+		if err := certkit.ValidateAIAURL(req.URL.String()); err != nil {
+			return fmt.Errorf("redirect blocked: %w", err)
+		}
+		return nil
+	},
+}
+
+// httpAIAFetcher fetches raw certificate bytes from a URL via HTTP.
+func httpAIAFetcher(ctx context.Context, rawURL string) ([]byte, error) {
+	if err := certkit.ValidateAIAURL(rawURL); err != nil {
+		return nil, fmt.Errorf("AIA URL rejected: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating AIA request: %w", err)
+	}
+	resp, err := aiaHTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetching AIA URL %s: %w", rawURL, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, rawURL)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1MB limit
+	if err != nil {
+		return nil, fmt.Errorf("reading AIA response from %s: %w", rawURL, err)
+	}
+	return data, nil
 }
 
 // formatDN formats a pkix.Name as a one-line distinguished name string

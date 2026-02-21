@@ -3,6 +3,7 @@ package certstore
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/sensiblebit/certkit"
 )
@@ -16,6 +17,24 @@ type ResolveAIAInput struct {
 	Store    *MemStore
 	Fetch    AIAFetcher
 	MaxDepth int // 0 defaults to 5
+}
+
+// HasUnresolvedIssuers reports whether any non-root certificate in the store
+// is missing its issuer (not in the store and not a Mozilla root).
+func HasUnresolvedIssuers(store *MemStore) bool {
+	for _, rec := range store.AllCertsFlat() {
+		if rec.CertType == "root" {
+			continue
+		}
+		if store.HasIssuer(rec.Cert) {
+			continue
+		}
+		if certkit.IsIssuedByMozillaRoot(rec.Cert) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 // ResolveAIA walks AIA CA Issuers URLs for all non-root certificates in the
@@ -60,6 +79,14 @@ func ResolveAIA(ctx context.Context, input ResolveAIAInput) []string {
 				}
 				seen[aiaURL] = true
 
+				if err := certkit.ValidateAIAURL(aiaURL); err != nil {
+					warnings = append(warnings, fmt.Sprintf(
+						"AIA URL rejected for %q: %v",
+						rec.Cert.Subject.CommonName, err,
+					))
+					continue
+				}
+
 				body, err := input.Fetch(ctx, aiaURL)
 				if err != nil {
 					warnings = append(warnings, fmt.Sprintf(
@@ -81,6 +108,7 @@ func ResolveAIA(ctx context.Context, input ResolveAIAInput) []string {
 
 				for _, issuer := range issuers {
 					if err := input.Store.HandleCertificate(issuer, "AIA: "+aiaURL); err != nil {
+						slog.Debug("skipping AIA certificate", "url", aiaURL, "error", err)
 						continue
 					}
 					fetched++

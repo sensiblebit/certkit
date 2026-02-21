@@ -7,9 +7,10 @@ package main
 
 import (
 	"context"
-	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"strings"
 	"syscall/js"
 	"time"
@@ -59,7 +60,9 @@ func addFiles(_ js.Value, args []js.Value) any {
 
 	handler := js.FuncOf(func(_ js.Value, promiseArgs []js.Value) any {
 		resolve := promiseArgs[0]
+		reject := promiseArgs[1]
 		go func() {
+			storeMu.Lock()
 			var results []map[string]any
 			for i := range length {
 				file := filesArg.Index(i)
@@ -86,8 +89,13 @@ func addFiles(_ js.Value, args []js.Value) any {
 					"error":  errMsg,
 				})
 			}
+			storeMu.Unlock()
 
-			jsonBytes, _ := json.Marshal(results)
+			jsonBytes, err := json.Marshal(results)
+			if err != nil {
+				reject.Invoke(fmt.Sprintf("marshaling addFiles results: %v", err))
+				return
+			}
 			resolve.Invoke(string(jsonBytes))
 
 			// Eagerly resolve AIA intermediates in the background.
@@ -99,13 +107,21 @@ func addFiles(_ js.Value, args []js.Value) any {
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
 
+				storeMu.Lock()
 				warnings := resolveAIA(ctx, globalStore)
+				storeMu.Unlock()
+
 				if warnings == nil {
 					warnings = []string{}
 				}
 
-				warnJSON, _ := json.Marshal(warnings)
-				cb := js.FuncOf(func(_ js.Value, _ []js.Value) any {
+				warnJSON, err := json.Marshal(warnings)
+				if err != nil {
+					slog.Error("marshaling AIA warnings", "error", err)
+				}
+				var cb js.Func
+				cb = js.FuncOf(func(_ js.Value, _ []js.Value) any {
+					defer cb.Release()
 					onComplete := js.Global().Get("certkitOnAIAComplete")
 					if onComplete.Type() == js.TypeFunction {
 						onComplete.Invoke(string(warnJSON))
@@ -117,11 +133,15 @@ func addFiles(_ js.Value, args []js.Value) any {
 		}()
 		return nil
 	})
-
-	return js.Global().Get("Promise").New(handler)
+	// Promise.New calls the executor synchronously; release immediately after.
+	p := js.Global().Get("Promise").New(handler)
+	handler.Release()
+	return p
 }
 
 // getState returns all certificates and keys with metadata as JSON.
+// Uses TryRLock to avoid deadlocking the JS event loop when AIA resolution
+// holds the write lock (AIA blocks on JS promises that need the event loop).
 // JS signature: certkitGetState() → string
 func getState(_ js.Value, _ []js.Value) any {
 	type certInfo struct {
@@ -151,13 +171,31 @@ func getState(_ js.Value, _ []js.Value) any {
 		Certs        []certInfo `json:"certs"`
 		Keys         []keyInfo  `json:"keys"`
 		MatchedPairs int        `json:"matched_pairs"`
+		Busy         bool       `json:"busy,omitempty"`
 	}
+
+	if !storeMu.TryRLock() {
+		// Store is locked by AIA resolution; return a busy indicator
+		// instead of blocking the JS event loop (which would deadlock).
+		resp := stateResponse{Busy: true}
+		jsonBytes, err := json.Marshal(resp)
+		if err != nil {
+			slog.Error("marshaling busy state", "error", err)
+			return `{"busy":true}`
+		}
+		return string(jsonBytes)
+	}
+	defer storeMu.RUnlock()
 
 	now := time.Now()
 	resp := stateResponse{}
 
 	// Build pools for chain verification.
-	roots, _ := certkit.MozillaRootPool()
+	roots, err := certkit.MozillaRootPool()
+	if err != nil {
+		slog.Error("loading Mozilla root pool", "error", err)
+		// Continue without trust checking — certs will all show as untrusted.
+	}
 	intermediatePool := globalStore.IntermediatePool()
 	allCerts := globalStore.AllCerts()
 	allKeys := globalStore.AllKeys()
@@ -165,15 +203,10 @@ func getState(_ js.Value, _ []js.Value) any {
 	for ski, rec := range allCerts {
 		_, hasKey := allKeys[ski]
 
-		// Check if cert chains to a Mozilla root at the current time.
-		// Expired certs will fail verification (Expired field shown separately).
+		expired := now.After(rec.NotAfter)
 		trusted := false
-		_, verifyErr := rec.Cert.Verify(x509.VerifyOptions{
-			Roots:         roots,
-			Intermediates: intermediatePool,
-		})
-		if verifyErr == nil {
-			trusted = true
+		if roots != nil {
+			trusted = certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{Cert: rec.Cert, Roots: roots, Intermediates: intermediatePool})
 		}
 
 		ci := certInfo{
@@ -183,7 +216,7 @@ func getState(_ js.Value, _ []js.Value) any {
 			KeyType:   rec.KeyType,
 			NotBefore: rec.NotBefore.UTC().Format(time.RFC3339),
 			NotAfter:  rec.NotAfter.UTC().Format(time.RFC3339),
-			Expired:   now.After(rec.NotAfter),
+			Expired:   expired,
 			HasKey:    hasKey,
 			Trusted:   trusted,
 			Issuer:    rec.Cert.Issuer.CommonName,
@@ -207,7 +240,11 @@ func getState(_ js.Value, _ []js.Value) any {
 
 	resp.MatchedPairs = len(globalStore.MatchedPairs())
 
-	jsonBytes, _ := json.Marshal(resp)
+	jsonBytes, err := json.Marshal(resp)
+	if err != nil {
+		slog.Error("marshaling state response", "error", err)
+		return `{"error":"internal marshal failure"}`
+	}
 	return string(jsonBytes)
 }
 
@@ -231,7 +268,10 @@ func exportBundlesJS(_ js.Value, args []js.Value) any {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
+			storeMu.RLock()
+			defer storeMu.RUnlock()
 			zipData, err := exportBundles(ctx, globalStore, filterSKIs)
+
 			if err != nil {
 				reject.Invoke(js.Global().Get("Error").New(err.Error()))
 				return
@@ -243,15 +283,23 @@ func exportBundlesJS(_ js.Value, args []js.Value) any {
 		}()
 		return nil
 	})
-
-	return js.Global().Get("Promise").New(handler)
+	// Promise.New calls the executor synchronously; release immediately after.
+	p := js.Global().Get("Promise").New(handler)
+	handler.Release()
+	return p
 }
 
 // resetStore clears all stored certificates and keys.
-// JS signature: certkitReset() → void
+// Uses TryLock to avoid deadlocking the JS event loop when AIA resolution
+// holds the lock. Returns false if the store is busy.
+// JS signature: certkitReset() → boolean
 func resetStore(_ js.Value, _ []js.Value) any {
+	if !storeMu.TryLock() {
+		return false
+	}
 	globalStore.Reset()
-	return nil
+	storeMu.Unlock()
+	return true
 }
 
 // hexToBytes decodes a hex string to bytes, returning nil on error.
@@ -267,5 +315,8 @@ func jsError(msg string) any {
 		reject.Invoke(js.Global().Get("Error").New(msg))
 		return nil
 	})
-	return js.Global().Get("Promise").New(handler)
+	// Promise.New calls the executor synchronously; release immediately after.
+	p := js.Global().Get("Promise").New(handler)
+	handler.Release()
+	return p
 }

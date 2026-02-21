@@ -34,3 +34,9 @@ func fixedCompletion(values ...string) func(*cobra.Command, []string, string) ([
 func directoryCompletion(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
 	return nil, cobra.ShellCompDirectiveFilterDirs
 }
+
+// fileCompletion is a shell completion function that suggests files using the
+// shell's default file completion behavior.
+func fileCompletion(_ *cobra.Command, _ []string, _ string) ([]string, cobra.ShellCompDirective) {
+	return nil, cobra.ShellCompDirectiveDefault
+}
