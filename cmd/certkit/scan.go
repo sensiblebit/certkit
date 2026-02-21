@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
@@ -200,27 +199,30 @@ func runScan(cmd *cobra.Command, args []string) error {
 	if scanDumpCerts != "" {
 		certs := store.AllCertsFlat()
 		if len(certs) > 0 {
-			// Build mozilla root pool for verification (consistent with other commands)
+			// Build mozilla root pool for verification (consistent with summary)
 			mozillaPool, err := certkit.MozillaRootPool()
 			if err != nil {
 				return err
 			}
+			intermediatePool := store.IntermediatePool()
 
 			var data []byte
 			var count, skipped int
+			now := time.Now()
 			for _, c := range certs {
 				cert := c.Cert
 
-				// Validate chain unless --force is set
+				// Skip expired certificates unless --allow-expired is set
+				if !allowExpired && now.After(cert.NotAfter) {
+					slog.Debug("skipping expired certificate", "subject", cert.Subject)
+					skipped++
+					continue
+				}
+
+				// Validate chain unless --force is set (uses same logic as summary)
 				if !scanForceExport {
-					verifyOpts := x509.VerifyOptions{Roots: mozillaPool}
-					if allowExpired {
-						// Set CurrentTime far in the future to bypass expiry checks
-						verifyOpts.CurrentTime = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
-					}
-					_, verifyErr := cert.Verify(verifyOpts)
-					if verifyErr != nil {
-						slog.Debug("skipping unverified certificate", "subject", cert.Subject, "error", verifyErr)
+					if !certkit.VerifyChainTrust(cert, mozillaPool, intermediatePool) {
+						slog.Debug("skipping untrusted certificate", "subject", cert.Subject)
 						skipped++
 						continue
 					}
@@ -237,7 +239,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 				count++
 			}
 			if skipped > 0 {
-				slog.Warn("skipped unverified certificates", "count", skipped)
+				slog.Warn("skipped certificates", "count", skipped)
 			}
 			if count > 0 {
 				if err := os.WriteFile(scanDumpCerts, data, 0644); err != nil {
@@ -322,14 +324,16 @@ func certAnnotation(expired, untrusted int) string {
 	return " (" + strings.Join(parts, ", ") + ")"
 }
 
+// aiaHTTPClient is reused across AIA fetches to enable TCP connection reuse.
+var aiaHTTPClient = &http.Client{Timeout: 2 * time.Second}
+
 // httpAIAFetcher fetches raw certificate bytes from a URL via HTTP.
 func httpAIAFetcher(ctx context.Context, url string) ([]byte, error) {
-	client := &http.Client{Timeout: 2 * time.Second}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, err
 	}
-	resp, err := client.Do(req)
+	resp, err := aiaHTTPClient.Do(req)
 	if err != nil {
 		return nil, err
 	}

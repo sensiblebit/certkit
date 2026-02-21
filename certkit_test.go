@@ -1324,6 +1324,244 @@ func TestComputeSKI_UnsupportedType(t *testing.T) {
 	}
 }
 
+func TestIsMozillaRoot(t *testing.T) {
+	// WHY: IsMozillaRoot must match genuine Mozilla roots by Subject+PublicKey
+	// and reject certs that share the same Subject but use a different key.
+	// This prevents spoofed trust anchors from bypassing chain verification.
+	t.Parallel()
+
+	// Parse the first Mozilla root cert from the embedded bundle.
+	pemData := MozillaRootPEM()
+	block, _ := pem.Decode(pemData)
+	if block == nil {
+		t.Fatal("failed to decode first PEM block from Mozilla bundle")
+	}
+	realRoot, err := x509.ParseCertificate(block.Bytes)
+	if err != nil {
+		t.Fatalf("parsing Mozilla root certificate: %v", err)
+	}
+
+	t.Run("genuine Mozilla root matches", func(t *testing.T) {
+		t.Parallel()
+		if !IsMozillaRoot(realRoot) {
+			t.Errorf("IsMozillaRoot returned false for genuine Mozilla root %q", realRoot.Subject.CommonName)
+		}
+	})
+
+	t.Run("spoofed subject with different key is rejected", func(t *testing.T) {
+		t.Parallel()
+		spoofKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		spoofTmpl := &x509.Certificate{
+			SerialNumber:          randomSerial(t),
+			Subject:               realRoot.Subject,
+			NotBefore:             time.Now().Add(-time.Hour),
+			NotAfter:              time.Now().Add(24 * time.Hour),
+			IsCA:                  true,
+			BasicConstraintsValid: true,
+			KeyUsage:              x509.KeyUsageCertSign,
+		}
+		spoofDER, err := x509.CreateCertificate(rand.Reader, spoofTmpl, spoofTmpl, &spoofKey.PublicKey, spoofKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		spoofCert, err := x509.ParseCertificate(spoofDER)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if IsMozillaRoot(spoofCert) {
+			t.Error("IsMozillaRoot should reject a cert with matching Subject but different key")
+		}
+	})
+
+	t.Run("unrelated cert returns false", func(t *testing.T) {
+		t.Parallel()
+		caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		caTmpl := &x509.Certificate{
+			SerialNumber:          randomSerial(t),
+			Subject:               pkix.Name{CommonName: "Definitely Not Mozilla"},
+			NotBefore:             time.Now().Add(-time.Hour),
+			NotAfter:              time.Now().Add(24 * time.Hour),
+			IsCA:                  true,
+			BasicConstraintsValid: true,
+		}
+		caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cert, err := x509.ParseCertificate(caDER)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if IsMozillaRoot(cert) {
+			t.Error("IsMozillaRoot should return false for unrelated cert")
+		}
+	})
+}
+
+func TestVerifyChainTrust(t *testing.T) {
+	// WHY: VerifyChainTrust is the shared trust verification function used by
+	// scan summary, inspect, WASM, and --dump-certs. Covers trusted chain,
+	// untrusted self-signed, expired-but-chained (time-shift to NotBefore+1s),
+	// and Mozilla root bypass.
+	t.Parallel()
+
+	// Build a test root → intermediate → leaf chain with wide validity.
+	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootTmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "Trust Test Root"},
+		NotBefore:             time.Now().Add(-5 * 365 * 24 * time.Hour),
+		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	rootDER, err := x509.CreateCertificate(rand.Reader, rootTmpl, rootTmpl, &rootKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootCert, err := x509.ParseCertificate(rootDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	interKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	interTmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "Trust Test Intermediate"},
+		NotBefore:             time.Now().Add(-5 * 365 * 24 * time.Hour),
+		NotAfter:              time.Now().Add(5 * 365 * 24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	interDER, err := x509.CreateCertificate(rand.Reader, interTmpl, rootCert, &interKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	interCert, err := x509.ParseCertificate(interDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	validLeafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validLeafTmpl := &x509.Certificate{
+		SerialNumber: randomSerial(t),
+		Subject:      pkix.Name{CommonName: "valid.example.com"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	validLeafDER, err := x509.CreateCertificate(rand.Reader, validLeafTmpl, interCert, &validLeafKey.PublicKey, interKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	validLeaf, err := x509.ParseCertificate(validLeafDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Expired leaf signed by the intermediate — valid 2y ago to yesterday
+	expiredLeafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiredLeafTmpl := &x509.Certificate{
+		SerialNumber: randomSerial(t),
+		Subject:      pkix.Name{CommonName: "expired.example.com"},
+		NotBefore:    time.Now().Add(-2 * 365 * 24 * time.Hour),
+		NotAfter:     time.Now().Add(-24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	expiredLeafDER, err := x509.CreateCertificate(rand.Reader, expiredLeafTmpl, interCert, &expiredLeafKey.PublicKey, interKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiredLeaf, err := x509.ParseCertificate(expiredLeafDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(rootCert)
+	interPool := x509.NewCertPool()
+	interPool.AddCert(interCert)
+
+	// Untrusted self-signed leaf (not in root pool)
+	untrustedKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	untrustedTmpl := &x509.Certificate{
+		SerialNumber: randomSerial(t),
+		Subject:      pkix.Name{CommonName: "untrusted.example.com"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+	}
+	untrustedDER, err := x509.CreateCertificate(rand.Reader, untrustedTmpl, untrustedTmpl, &untrustedKey.PublicKey, untrustedKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	untrustedCert, err := x509.ParseCertificate(untrustedDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		cert *x509.Certificate
+		want bool
+	}{
+		{"valid leaf with chain", validLeaf, true},
+		{"expired leaf with chain (time-shift)", expiredLeaf, true},
+		{"self-signed untrusted", untrustedCert, false},
+		{"root cert in pool", rootCert, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := VerifyChainTrust(tt.cert, rootPool, interPool); got != tt.want {
+				t.Errorf("VerifyChainTrust(%q) = %v, want %v", tt.cert.Subject.CommonName, got, tt.want)
+			}
+		})
+	}
+
+	// Separate test for Mozilla root bypass — uses a real Mozilla root cert.
+	t.Run("mozilla root bypasses chain verification", func(t *testing.T) {
+		t.Parallel()
+		pemData := MozillaRootPEM()
+		block, _ := pem.Decode(pemData)
+		if block == nil {
+			t.Fatal("no PEM block in Mozilla bundle")
+		}
+		mozRoot, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			t.Fatalf("parsing Mozilla root: %v", err)
+		}
+		// Pass an empty root pool — the cert should still be trusted via IsMozillaRoot.
+		emptyPool := x509.NewCertPool()
+		if !VerifyChainTrust(mozRoot, emptyPool, emptyPool) {
+			t.Errorf("VerifyChainTrust should trust Mozilla root %q even with empty pool", mozRoot.Subject.CommonName)
+		}
+	})
+}
+
 func TestAlgorithmName(t *testing.T) {
 	// WHY: KeyAlgorithmName and PublicKeyAlgorithmName produce display strings
 	// for CLI output and JSON; wrong names would confuse users and break JSON

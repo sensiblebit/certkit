@@ -296,10 +296,10 @@ func (s *MemStore) BundleNames() []string {
 
 // ScanSummary returns aggregate counts of stored certificates and keys.
 // When input.RootPool is non-nil, it also counts expired and untrusted
-// certificates for leaves and intermediates. For expired certs with
-// AllowExpired=true, trust is checked at a time just before expiry to
-// determine if the chain was ever valid. For expired certs with
-// AllowExpired=false, trust checking is skipped entirely.
+// certificates. For expired certs with AllowExpired=true, trust is checked
+// at a time just after issuance to determine if the chain was ever valid.
+// For expired certs with AllowExpired=false, trust checking is skipped
+// entirely for all cert types (roots, intermediates, and leaves).
 func (s *MemStore) ScanSummary(input ScanSummaryInput) ScanSummary {
 	summary := ScanSummary{
 		Keys: len(s.keys),
@@ -320,8 +320,8 @@ func (s *MemStore) ScanSummary(input ScanSummaryInput) ScanSummary {
 			if expired {
 				summary.ExpiredRoots++
 			}
-			if input.RootPool != nil {
-				if !s.verifyChain(rec.Cert, input.RootPool, intermediatePool, expired) {
+			if input.RootPool != nil && (input.AllowExpired || !expired) {
+				if !certkit.VerifyChainTrust(rec.Cert, input.RootPool, intermediatePool) {
 					summary.UntrustedRoots++
 				}
 			}
@@ -331,7 +331,7 @@ func (s *MemStore) ScanSummary(input ScanSummaryInput) ScanSummary {
 				summary.ExpiredIntermediates++
 			}
 			if input.RootPool != nil && (input.AllowExpired || !expired) {
-				if !s.verifyChain(rec.Cert, input.RootPool, intermediatePool, expired) {
+				if !certkit.VerifyChainTrust(rec.Cert, input.RootPool, intermediatePool) {
 					summary.UntrustedIntermediates++
 				}
 			}
@@ -341,7 +341,7 @@ func (s *MemStore) ScanSummary(input ScanSummaryInput) ScanSummary {
 				summary.ExpiredLeaves++
 			}
 			if input.RootPool != nil && (input.AllowExpired || !expired) {
-				if !s.verifyChain(rec.Cert, input.RootPool, intermediatePool, expired) {
+				if !certkit.VerifyChainTrust(rec.Cert, input.RootPool, intermediatePool) {
 					summary.UntrustedLeaves++
 				}
 			}
@@ -349,29 +349,6 @@ func (s *MemStore) ScanSummary(input ScanSummaryInput) ScanSummary {
 	}
 	summary.Matched = len(s.MatchedPairs())
 	return summary
-}
-
-// verifyChain checks whether the given certificate chains to a trusted root.
-// Cross-signed roots (same Subject as a Mozilla root, different Issuer) are
-// trusted by Subject match since their signing root may no longer be in the
-// store. For expired certs, it sets CurrentTime to just before the cert's
-// expiry to test whether the chain was ever valid, rather than failing on
-// expiry alone. Uses ExtKeyUsageAny since we're checking chain trust, not
-// specific key usage.
-func (s *MemStore) verifyChain(cert *x509.Certificate, rootPool, intermediatePool *x509.CertPool, expired bool) bool {
-	if certkit.IsMozillaRoot(cert) {
-		return true
-	}
-	opts := x509.VerifyOptions{
-		Roots:         rootPool,
-		Intermediates: intermediatePool,
-		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
-	}
-	if expired {
-		opts.CurrentTime = cert.NotAfter.Add(-1 * time.Second)
-	}
-	_, err := cert.Verify(opts)
-	return err == nil
 }
 
 // DumpDebug logs all certificates and keys at debug level.

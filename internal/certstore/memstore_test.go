@@ -809,6 +809,14 @@ func TestMemStore_ScanSummaryTrust(t *testing.T) {
 			addExpiredLeaf:    true,
 			wantExpiredLeaves: 1,
 		},
+		{
+			name:                "expired leaf is not counted as untrusted, non-expired untrusted leaf is",
+			allowExpired:        false,
+			addExpiredLeaf:      true,
+			addUntrustedLeaf:    true,
+			wantExpiredLeaves:   1,
+			wantUntrustedLeaves: 1,
+		},
 	}
 
 	for _, tt := range tests {

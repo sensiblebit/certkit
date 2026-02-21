@@ -4,6 +4,7 @@ import (
 	"crypto"
 	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"net"
 	"os"
@@ -424,6 +425,17 @@ func TestAnnotateInspectTrust(t *testing.T) {
 			results:     []InspectResult{inspectCert(expiredLeaf.cert)},
 			wantExpired: []bool{true},
 			wantTrusted: []bool{false},
+		},
+		{
+			name: "Mozilla root is trusted",
+			results: func() []InspectResult {
+				pemData := certkit.MozillaRootPEM()
+				block, _ := pem.Decode(pemData)
+				cert, _ := x509.ParseCertificate(block.Bytes)
+				return []InspectResult{inspectCert(cert)}
+			}(),
+			wantExpired: []bool{false},
+			wantTrusted: []bool{true},
 		},
 		{
 			name: "non-cert results are skipped",

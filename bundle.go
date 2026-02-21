@@ -1,6 +1,7 @@
 package certkit
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -24,6 +25,8 @@ var (
 	mozillaPoolErr      error
 	mozillaSubjectsOnce sync.Once
 	mozillaSubjects     map[string]bool
+	mozillaRootKeysOnce sync.Once
+	mozillaRootKeys     map[string][]byte // RawSubject → marshaled PKIX public key
 )
 
 // MozillaRootPEM returns the raw PEM-encoded Mozilla root certificate bundle.
@@ -73,17 +76,86 @@ func MozillaRootSubjects() map[string]bool {
 	return mozillaSubjects
 }
 
-// IsMozillaRoot reports whether the certificate's subject matches a Mozilla
-// root certificate's subject (by raw ASN.1 bytes). This identifies both
-// self-signed roots and cross-signed variants that share the same subject.
+// mozillaRootPublicKeys returns a map of raw ASN.1 subject byte strings to
+// their corresponding marshaled PKIX public key. Initialized once and cached.
+func mozillaRootPublicKeys() map[string][]byte {
+	mozillaRootKeysOnce.Do(func() {
+		mozillaRootKeys = make(map[string][]byte)
+		pemData := MozillaRootPEM()
+		for {
+			var block *pem.Block
+			block, pemData = pem.Decode(pemData)
+			if block == nil {
+				break
+			}
+			if block.Type != "CERTIFICATE" {
+				continue
+			}
+			cert, err := x509.ParseCertificate(block.Bytes)
+			if err != nil {
+				continue
+			}
+			pubBytes, err := x509.MarshalPKIXPublicKey(cert.PublicKey)
+			if err != nil {
+				continue
+			}
+			mozillaRootKeys[string(cert.RawSubject)] = pubBytes
+		}
+	})
+	return mozillaRootKeys
+}
+
+// IsMozillaRoot reports whether the certificate matches a Mozilla root
+// certificate by both Subject (raw ASN.1 bytes) and public key (marshaled
+// PKIX). This identifies self-signed roots and cross-signed variants that
+// share the same key pair. A Subject-only match is insufficient because an
+// attacker could forge the Subject; the public key check ensures the
+// certificate holds the same key as the genuine root.
+//
+// AKI (Authority Key Identifier) is intentionally not checked: cross-signed
+// roots have a different AKI (pointing to the cross-signer) than the
+// self-signed version, and the cross-signer may have been removed from the
+// Mozilla trust store. The public key match is cryptographically sufficient.
 func IsMozillaRoot(cert *x509.Certificate) bool {
-	return MozillaRootSubjects()[string(cert.RawSubject)]
+	expectedPub, ok := mozillaRootPublicKeys()[string(cert.RawSubject)]
+	if !ok {
+		return false
+	}
+	actualPub, err := x509.MarshalPKIXPublicKey(cert.PublicKey)
+	if err != nil {
+		return false
+	}
+	return bytes.Equal(expectedPub, actualPub)
 }
 
 // IsIssuedByMozillaRoot reports whether the certificate's issuer matches a
 // Mozilla root certificate's subject (by raw ASN.1 bytes).
 func IsIssuedByMozillaRoot(cert *x509.Certificate) bool {
 	return MozillaRootSubjects()[string(cert.RawIssuer)]
+}
+
+// VerifyChainTrust reports whether the given certificate chains to a trusted
+// root. Cross-signed roots (same Subject and public key as a Mozilla root)
+// are trusted directly. For expired certificates, verification is performed
+// at a time just after the certificate's NotBefore to determine if the chain
+// was ever valid — this is more robust than checking just before NotAfter,
+// because intermediates that expired between issuance and the leaf's expiry
+// will still be valid at NotBefore time.
+func VerifyChainTrust(cert *x509.Certificate, roots, intermediates *x509.CertPool) bool {
+	if IsMozillaRoot(cert) {
+		return true
+	}
+	opts := x509.VerifyOptions{
+		Roots:         roots,
+		Intermediates: intermediates,
+		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+	}
+	if time.Now().After(cert.NotAfter) {
+		// Use NotBefore + 1s: the issuing chain was necessarily valid at issuance.
+		opts.CurrentTime = cert.NotBefore.Add(time.Second)
+	}
+	_, err := cert.Verify(opts)
+	return err == nil
 }
 
 // BundleResult holds the resolved chain and metadata.

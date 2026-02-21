@@ -259,7 +259,6 @@ func AnnotateInspectTrust(results []InspectResult) error {
 	}
 
 	now := time.Now()
-	mozillaSubjects := certkit.MozillaRootSubjects()
 	for i := range results {
 		if results[i].cert == nil {
 			continue
@@ -268,25 +267,7 @@ func AnnotateInspectTrust(results []InspectResult) error {
 		expired := now.After(cert.NotAfter)
 		results[i].Expired = &expired
 
-		// Cross-signed roots share a Subject with a Mozilla root but have a
-		// different Issuer, so chain verification fails when the signing root
-		// is no longer in the store. Treat them as trusted by Subject match.
-		if mozillaSubjects[string(cert.RawSubject)] {
-			trusted := true
-			results[i].Trusted = &trusted
-			continue
-		}
-
-		opts := x509.VerifyOptions{
-			Roots:         mozillaPool,
-			Intermediates: intermediatePool,
-			KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
-		}
-		if expired {
-			opts.CurrentTime = cert.NotAfter.Add(-1 * time.Second)
-		}
-		_, verifyErr := cert.Verify(opts)
-		trusted := verifyErr == nil
+		trusted := certkit.VerifyChainTrust(cert, mozillaPool, intermediatePool)
 		results[i].Trusted = &trusted
 	}
 	return nil

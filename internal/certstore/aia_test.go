@@ -15,6 +15,73 @@ import (
 	"github.com/sensiblebit/certkit"
 )
 
+func TestHasUnresolvedIssuers(t *testing.T) {
+	// WHY: HasUnresolvedIssuers gates AIA resolution — it must return false for
+	// empty stores, root-only stores, and stores where all issuers are present
+	// or issued by Mozilla roots. It must return true only when a non-root
+	// cert's issuer is genuinely missing.
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		setup func(t *testing.T, store *MemStore)
+		want  bool
+	}{
+		{
+			name:  "empty store",
+			setup: func(t *testing.T, store *MemStore) {},
+			want:  false,
+		},
+		{
+			name: "only roots",
+			setup: func(t *testing.T, store *MemStore) {
+				ca := newRSACA(t)
+				if err := store.HandleCertificate(ca.cert, "ca.pem"); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: false,
+		},
+		{
+			name: "leaf with issuer in store",
+			setup: func(t *testing.T, store *MemStore) {
+				ca := newRSACA(t)
+				leaf := newRSALeaf(t, ca, "has-issuer.example.com", []string{"has-issuer.example.com"})
+				if err := store.HandleCertificate(ca.cert, "ca.pem"); err != nil {
+					t.Fatal(err)
+				}
+				if err := store.HandleCertificate(leaf.cert, "leaf.pem"); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: false,
+		},
+		{
+			name: "leaf with missing issuer",
+			setup: func(t *testing.T, store *MemStore) {
+				ca := newRSACA(t)
+				leaf := newRSALeaf(t, ca, "orphan.example.com", []string{"orphan.example.com"})
+				// Only add the leaf, not the CA
+				if err := store.HandleCertificate(leaf.cert, "leaf.pem"); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			store := NewMemStore()
+			tt.setup(t, store)
+			if got := HasUnresolvedIssuers(store); got != tt.want {
+				t.Errorf("HasUnresolvedIssuers() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestResolveAIA_FetchesMissingIssuer(t *testing.T) {
 	// WHY: The core AIA resolution path must fetch an intermediate when the
 	// store has a leaf whose issuer is not present. Without this, chains

@@ -39,7 +39,7 @@ func runInspect(cmd *cobra.Command, args []string) error {
 	}
 
 	if err := internal.AnnotateInspectTrust(results); err != nil {
-		return err
+		return fmt.Errorf("annotating trust: %w", err)
 	}
 
 	if !allowExpired {

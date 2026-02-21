@@ -10,13 +10,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Add shell tab completion for all enum flags (`--format`, `--algorithm`, `--curve`, `--log-level`, `--trust-store`) and directory flags (`--bundle-path`, `--out-path`) ([#56])
-- Add expired and untrusted certificate counts to scan summary (e.g., `Leaves: 6 (2 expired, 1 untrusted)`)
-- Add AIA resolution to scan summary path — fetch missing intermediates before trust checking
-- Add expired and trusted status to `inspect` command output for each certificate
+- Add expired and untrusted certificate counts to scan summary (e.g., `Leaves: 6 (2 expired, 1 untrusted)`) ([`b5969b0`])
+- Add AIA resolution to scan summary path — fetch missing intermediates before trust checking ([`b5969b0`])
+- Add expired and trusted status to `inspect` command output for each certificate ([`b5969b0`])
+- Add `VerifyChainTrust` shared function for consistent chain verification across CLI, WASM, inspect, and `--dump-certs`
+- Strengthen `IsMozillaRoot` to verify public key in addition to Subject — prevents spoofed trust anchors
+
+### Changed
+
+- Use `NotBefore + 1s` instead of `NotAfter - 1s` for expired certificate time-shift in chain verification — more robust when intermediates expired before the leaf
 
 ### Fixed
 
 - Fix `FormatCN` panic when certificate has no CN, no DNS SANs, and nil SerialNumber — now returns "unknown" ([`e70e8e5`])
+- Fix WASM `getState` silently ignoring `MozillaRootPool()` error — now logs error and continues without trust checking
+- Fix WASM `globalStore` race condition — add `sync.RWMutex` for concurrent access from goroutines
+- Fix `--dump-certs` using inconsistent chain verification (missing `ExtKeyUsageAny`, no `IsMozillaRoot` bypass)
+- Fix root certs always trust-checked regardless of `--allow-expired` — now consistent with leaf/intermediate behavior
+- Fix `certkit inspect` bare `return err` without context wrapping (ERR-1)
 
 ### Removed
 
@@ -515,6 +526,7 @@ Initial release.
 [0.1.1]: https://github.com/sensiblebit/certkit/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/sensiblebit/certkit/releases/tag/v0.1.0
 
+[`b5969b0`]: https://github.com/sensiblebit/certkit/commit/b5969b0
 [`e70e8e5`]: https://github.com/sensiblebit/certkit/commit/e70e8e5
 [`0fa55af`]: https://github.com/sensiblebit/certkit/commit/0fa55af
 [`b69caef`]: https://github.com/sensiblebit/certkit/commit/b69caef

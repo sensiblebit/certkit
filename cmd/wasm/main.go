@@ -7,9 +7,9 @@ package main
 
 import (
 	"context"
-	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"log/slog"
 	"strings"
 	"syscall/js"
 	"time"
@@ -60,6 +60,7 @@ func addFiles(_ js.Value, args []js.Value) any {
 	handler := js.FuncOf(func(_ js.Value, promiseArgs []js.Value) any {
 		resolve := promiseArgs[0]
 		go func() {
+			storeMu.Lock()
 			var results []map[string]any
 			for i := range length {
 				file := filesArg.Index(i)
@@ -86,6 +87,7 @@ func addFiles(_ js.Value, args []js.Value) any {
 					"error":  errMsg,
 				})
 			}
+			storeMu.Unlock()
 
 			jsonBytes, _ := json.Marshal(results)
 			resolve.Invoke(string(jsonBytes))
@@ -99,7 +101,10 @@ func addFiles(_ js.Value, args []js.Value) any {
 				ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 				defer cancel()
 
+				storeMu.Lock()
 				warnings := resolveAIA(ctx, globalStore)
+				storeMu.Unlock()
+
 				if warnings == nil {
 					warnings = []string{}
 				}
@@ -153,11 +158,18 @@ func getState(_ js.Value, _ []js.Value) any {
 		MatchedPairs int        `json:"matched_pairs"`
 	}
 
+	storeMu.RLock()
+	defer storeMu.RUnlock()
+
 	now := time.Now()
 	resp := stateResponse{}
 
 	// Build pools for chain verification.
-	roots, _ := certkit.MozillaRootPool()
+	roots, err := certkit.MozillaRootPool()
+	if err != nil {
+		slog.Error("loading Mozilla root pool", "error", err)
+		// Continue without trust checking — certs will all show as untrusted.
+	}
 	intermediatePool := globalStore.IntermediatePool()
 	allCerts := globalStore.AllCerts()
 	allKeys := globalStore.AllKeys()
@@ -165,23 +177,10 @@ func getState(_ js.Value, _ []js.Value) any {
 	for ski, rec := range allCerts {
 		_, hasKey := allKeys[ski]
 
-		// Cross-signed roots share a Subject with a Mozilla root but
-		// chain verification may fail if the signing root was removed.
 		expired := now.After(rec.NotAfter)
 		trusted := false
-		if certkit.IsMozillaRoot(rec.Cert) {
-			trusted = true
-		} else {
-			opts := x509.VerifyOptions{
-				Roots:         roots,
-				Intermediates: intermediatePool,
-				KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
-			}
-			if expired {
-				opts.CurrentTime = rec.Cert.NotAfter.Add(-1 * time.Second)
-			}
-			_, verifyErr := rec.Cert.Verify(opts)
-			trusted = verifyErr == nil
+		if roots != nil {
+			trusted = certkit.VerifyChainTrust(rec.Cert, roots, intermediatePool)
 		}
 
 		ci := certInfo{
@@ -239,7 +238,10 @@ func exportBundlesJS(_ js.Value, args []js.Value) any {
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
+			storeMu.RLock()
 			zipData, err := exportBundles(ctx, globalStore, filterSKIs)
+			storeMu.RUnlock()
+
 			if err != nil {
 				reject.Invoke(js.Global().Get("Error").New(err.Error()))
 				return
@@ -258,7 +260,9 @@ func exportBundlesJS(_ js.Value, args []js.Value) any {
 // resetStore clears all stored certificates and keys.
 // JS signature: certkitReset() → void
 func resetStore(_ js.Value, _ []js.Value) any {
+	storeMu.Lock()
 	globalStore.Reset()
+	storeMu.Unlock()
 	return nil
 }
 
