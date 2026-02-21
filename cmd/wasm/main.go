@@ -110,7 +110,9 @@ func addFiles(_ js.Value, args []js.Value) any {
 				}
 
 				warnJSON, _ := json.Marshal(warnings)
-				cb := js.FuncOf(func(_ js.Value, _ []js.Value) any {
+				var cb js.Func
+				cb = js.FuncOf(func(_ js.Value, _ []js.Value) any {
+					defer cb.Release()
 					onComplete := js.Global().Get("certkitOnAIAComplete")
 					if onComplete.Type() == js.TypeFunction {
 						onComplete.Invoke(string(warnJSON))

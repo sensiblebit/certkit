@@ -59,8 +59,10 @@ func jsFetchURL(ctx context.Context, url string) ([]byte, error) {
 		catchCb.Release()
 		return r.data, r.err
 	case <-ctx.Done():
-		thenCb.Release()
-		catchCb.Release()
+		// Do NOT release callbacks here. The JS promise is still pending and
+		// will eventually invoke one of them. Calling a released js.Func panics.
+		// The buffered channel (cap 1) absorbs the late send harmlessly.
+		// The callbacks leak, but that is preferable to a crash.
 		return nil, ctx.Err()
 	}
 }

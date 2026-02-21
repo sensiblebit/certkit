@@ -444,21 +444,12 @@ func TestAnnotateInspectTrust(t *testing.T) {
 			name: "chain in results exercises intermediate pool building",
 			results: func() []InspectResult {
 				ca := newRSACA(t)
-				interKey, _ := rsa.GenerateKey(rand.Reader, 2048)
-				interTmpl := &x509.Certificate{
-					SerialNumber:          randomSerial(t),
-					Subject:               pkix.Name{CommonName: "Test Inspect Intermediate"},
-					NotBefore:             time.Now().Add(-time.Hour),
-					NotAfter:              time.Now().Add(5 * 365 * 24 * time.Hour),
-					IsCA:                  true,
-					BasicConstraintsValid: true,
-					KeyUsage:              x509.KeyUsageCertSign,
-					AuthorityKeyId:        ca.cert.SubjectKeyId,
-				}
-				interDER, _ := x509.CreateCertificate(rand.Reader, interTmpl, ca.cert, &interKey.PublicKey, ca.key)
-				interCert, _ := x509.ParseCertificate(interDER)
+				inter := newIntermediateCA(t, ca)
 
-				leafKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+				leafKey, err := rsa.GenerateKey(rand.Reader, 2048)
+				if err != nil {
+					t.Fatal(err)
+				}
 				leafTmpl := &x509.Certificate{
 					SerialNumber:   randomSerial(t),
 					Subject:        pkix.Name{CommonName: "chain-leaf.example.com"},
@@ -466,14 +457,20 @@ func TestAnnotateInspectTrust(t *testing.T) {
 					NotBefore:      time.Now().Add(-time.Hour),
 					NotAfter:       time.Now().Add(365 * 24 * time.Hour),
 					KeyUsage:       x509.KeyUsageDigitalSignature,
-					AuthorityKeyId: interCert.SubjectKeyId,
+					AuthorityKeyId: inter.cert.SubjectKeyId,
 				}
-				leafDER, _ := x509.CreateCertificate(rand.Reader, leafTmpl, interCert, &leafKey.PublicKey, interKey)
-				leafCert, _ := x509.ParseCertificate(leafDER)
+				leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, inter.cert, &leafKey.PublicKey, inter.key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				leafCert, err := x509.ParseCertificate(leafDER)
+				if err != nil {
+					t.Fatal(err)
+				}
 
 				return []InspectResult{
 					inspectCert(ca.cert),
-					inspectCert(interCert),
+					inspectCert(inter.cert),
 					inspectCert(leafCert),
 				}
 			}(),

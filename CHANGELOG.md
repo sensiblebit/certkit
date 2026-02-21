@@ -23,6 +23,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fix SSRF bypass via unspecified addresses (`0.0.0.0`, `::`) in `ValidateAIAURL` ([#57])
+- Fix WASM `jsFetchURL` panic when context is cancelled before JS promise settles — callbacks are no longer released prematurely ([#57])
+- Fix WASM `addFiles` leaking `js.FuncOf` callback on every AIA completion notification ([#57])
 - Fix WASM `jsFetchURL` ignoring context cancellation — now returns `ctx.Err()` when context is done ([#56])
 - Fix `AllKeys()` returning internal map — callers could corrupt store state by modifying the returned map ([#56])
 - Fix `FormatCN` panic when certificate has no CN, no DNS SANs, and nil SerialNumber — now returns "unknown" ([`e70e8e5`])
@@ -585,6 +588,7 @@ Initial release.
 [`55b5c1e`]: https://github.com/sensiblebit/certkit/commit/55b5c1e
 [`8cf81d9`]: https://github.com/sensiblebit/certkit/commit/8cf81d9
 [`3569926`]: https://github.com/sensiblebit/certkit/commit/3569926
+[#57]: https://github.com/sensiblebit/certkit/pull/57
 [#56]: https://github.com/sensiblebit/certkit/pull/56
 [#48]: https://github.com/sensiblebit/certkit/pull/48
 [#46]: https://github.com/sensiblebit/certkit/pull/46

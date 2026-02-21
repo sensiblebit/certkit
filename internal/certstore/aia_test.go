@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -317,9 +318,9 @@ func TestResolveAIA_SkipsResolvedAndRoots(t *testing.T) {
 			store := NewMemStore()
 			tt.setup(t, store)
 
-			fetchCount := 0
+			var fetchCount atomic.Int32
 			fetcher := func(_ context.Context, _ string) ([]byte, error) {
-				fetchCount++
+				fetchCount.Add(1)
 				return nil, fmt.Errorf("should not be called")
 			}
 
@@ -331,8 +332,8 @@ func TestResolveAIA_SkipsResolvedAndRoots(t *testing.T) {
 			if len(warnings) != 0 {
 				t.Errorf("expected 0 warnings, got %v", warnings)
 			}
-			if fetchCount != 0 {
-				t.Errorf("expected 0 fetches, got %d", fetchCount)
+			if fetchCount.Load() != 0 {
+				t.Errorf("expected 0 fetches, got %d", fetchCount.Load())
 			}
 		})
 	}
@@ -476,9 +477,9 @@ func TestResolveAIA_DeduplicatesURLs(t *testing.T) {
 		}
 	}
 
-	fetchCount := 0
+	var fetchCount atomic.Int32
 	fetcher := func(_ context.Context, _ string) ([]byte, error) {
-		fetchCount++
+		fetchCount.Add(1)
 		return caDER, nil
 	}
 
@@ -487,13 +488,13 @@ func TestResolveAIA_DeduplicatesURLs(t *testing.T) {
 		Fetch: fetcher,
 	})
 
-	if fetchCount != 1 {
-		t.Errorf("expected 1 fetch (URL deduped), got %d", fetchCount)
+	if fetchCount.Load() != 1 {
+		t.Errorf("expected 1 fetch (URL deduped), got %d", fetchCount.Load())
 	}
 
 	// Verify the fetched cert is actually in the store — without this,
 	// a fetcher that returned valid DER but HandleCertificate silently
-	// failed would still show fetchCount==1.
+	// failed would still show fetchCount.Load()==1.
 	allCerts := store.AllCertsFlat()
 	if len(allCerts) != 3 {
 		t.Errorf("expected 3 certs in store (2 leaves + 1 fetched CA), got %d", len(allCerts))
@@ -540,6 +541,10 @@ func TestResolveAIA_MaxDepth(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			rootCert, err := x509.ParseCertificate(rootDER)
+			if err != nil {
+				t.Fatal(err)
+			}
 
 			intKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 			if err != nil {
@@ -555,7 +560,11 @@ func TestResolveAIA_MaxDepth(t *testing.T) {
 				KeyUsage:              x509.KeyUsageCertSign,
 				IssuingCertificateURL: []string{"http://example.com/root.cer"},
 			}
-			intDER, err := x509.CreateCertificate(rand.Reader, intTmpl, rootTmpl, &intKey.PublicKey, rootKey)
+			intDER, err := x509.CreateCertificate(rand.Reader, intTmpl, rootCert, &intKey.PublicKey, rootKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			intCert, err := x509.ParseCertificate(intDER)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -571,7 +580,7 @@ func TestResolveAIA_MaxDepth(t *testing.T) {
 				NotAfter:              time.Now().Add(24 * time.Hour),
 				IssuingCertificateURL: []string{"http://example.com/intermediate.cer"},
 			}
-			leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, intTmpl, &leafKey.PublicKey, intKey)
+			leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, intCert, &leafKey.PublicKey, intKey)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -584,9 +593,9 @@ func TestResolveAIA_MaxDepth(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			fetchCount := 0
+			var fetchCount atomic.Int32
 			fetcher := func(_ context.Context, url string) ([]byte, error) {
-				fetchCount++
+				fetchCount.Add(1)
 				if strings.Contains(url, "intermediate") {
 					return intDER, nil
 				}
@@ -599,8 +608,8 @@ func TestResolveAIA_MaxDepth(t *testing.T) {
 				MaxDepth: tt.maxDepth,
 			})
 
-			if fetchCount != tt.wantFetchCount {
-				t.Errorf("expected %d fetch(es), got %d", tt.wantFetchCount, fetchCount)
+			if int(fetchCount.Load()) != tt.wantFetchCount {
+				t.Errorf("expected %d fetch(es), got %d", tt.wantFetchCount, fetchCount.Load())
 			}
 			allCerts := store.AllCertsFlat()
 			if len(allCerts) != tt.wantStoreCount {

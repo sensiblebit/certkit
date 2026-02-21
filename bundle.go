@@ -156,8 +156,8 @@ func ValidateAIAURL(rawURL string) error {
 	if ip == nil {
 		return nil // hostname, not a literal IP — allow
 	}
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
-		return fmt.Errorf("blocked address %s (loopback or link-local)", host)
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+		return fmt.Errorf("blocked address %s (loopback, link-local, or unspecified)", host)
 	}
 	// RFC 1918 private ranges
 	privateRanges := []string{

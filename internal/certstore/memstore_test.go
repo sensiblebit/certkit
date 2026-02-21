@@ -794,6 +794,7 @@ func TestMemStore_ScanSummaryTrust(t *testing.T) {
 		addExpiredLeaf             bool
 		addUntrustedLeaf           bool
 		addExpiredRoot             bool
+		addUntrustedIntermediate   bool
 		wantExpiredRoots           int
 		wantUntrustedRoots         int
 		wantExpiredIntermediates   int
@@ -822,6 +823,11 @@ func TestMemStore_ScanSummaryTrust(t *testing.T) {
 			name:             "expired root is counted as expired not untrusted",
 			addExpiredRoot:   true,
 			wantExpiredRoots: 1,
+		},
+		{
+			name:                       "untrusted intermediate without trusted root",
+			addUntrustedIntermediate:   true,
+			wantUntrustedIntermediates: 1,
 		},
 	}
 
@@ -859,6 +865,14 @@ func TestMemStore_ScanSummaryTrust(t *testing.T) {
 				pool = x509.NewCertPool()
 				pool.AddCert(rootCert)
 				pool.AddCert(expiredRoot)
+			}
+			if tt.addUntrustedIntermediate {
+				// Intermediate from a private CA not in the root pool
+				privateCA := newRSACA(t)
+				inter := newIntermediateCA(t, privateCA)
+				if err := store.HandleCertificate(inter.cert, "untrusted-inter.pem"); err != nil {
+					t.Fatal(err)
+				}
 			}
 
 			summary := store.ScanSummary(ScanSummaryInput{
