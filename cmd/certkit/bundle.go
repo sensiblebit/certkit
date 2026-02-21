@@ -4,6 +4,7 @@ import (
 	"crypto"
 	"crypto/x509"
 	"fmt"
+	"log/slog"
 	"os"
 	"slices"
 	"time"
@@ -101,7 +102,7 @@ func runBundle(cmd *cobra.Command, args []string) error {
 	}
 
 	for _, w := range bundle.Warnings {
-		fmt.Fprintf(os.Stderr, "WARNING: %s\n", w)
+		slog.Warn("bundle", "warning", w)
 	}
 
 	output, err := formatBundleOutput(bundle, key, bundleFormat, passwords)

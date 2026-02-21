@@ -73,6 +73,13 @@ func MozillaRootSubjects() map[string]bool {
 	return mozillaSubjects
 }
 
+// IsMozillaRoot reports whether the certificate's subject matches a Mozilla
+// root certificate's subject (by raw ASN.1 bytes). This identifies both
+// self-signed roots and cross-signed variants that share the same subject.
+func IsMozillaRoot(cert *x509.Certificate) bool {
+	return MozillaRootSubjects()[string(cert.RawSubject)]
+}
+
 // IsIssuedByMozillaRoot reports whether the certificate's issuer matches a
 // Mozilla root certificate's subject (by raw ASN.1 bytes).
 func IsIssuedByMozillaRoot(cert *x509.Certificate) bool {

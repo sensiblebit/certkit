@@ -348,7 +348,7 @@ func TestMemStore_EmptyStore(t *testing.T) {
 		t.Error("IntermediatePool returned nil for empty store")
 	}
 
-	summary := store.ScanSummary()
+	summary := store.ScanSummary(ScanSummaryInput{})
 	if summary.Roots != 0 || summary.Intermediates != 0 || summary.Leaves != 0 || summary.Keys != 0 || summary.Matched != 0 {
 		t.Errorf("expected all zeros in empty scan summary, got %+v", summary)
 	}
@@ -685,7 +685,7 @@ func TestMemStore_ScanSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	summary := store.ScanSummary()
+	summary := store.ScanSummary(ScanSummaryInput{})
 	if summary.Roots != 1 {
 		t.Errorf("Roots = %d, want 1", summary.Roots)
 	}
@@ -700,6 +700,154 @@ func TestMemStore_ScanSummary(t *testing.T) {
 	}
 	if summary.Matched != 1 {
 		t.Errorf("Matched = %d, want 1", summary.Matched)
+	}
+}
+
+func TestMemStore_ScanSummaryTrust(t *testing.T) {
+	// WHY: The scan summary must distinguish expired from untrusted certs.
+	// Expired-but-chained certs should be "expired" but not "untrusted".
+	// Certs without a chain to the root pool should be "untrusted".
+	// When AllowExpired is false, expired certs skip trust checking entirely.
+	t.Parallel()
+
+	// Build a chain with temporally consistent validity periods.
+	// The root and intermediate must be valid during the expired leaf's
+	// lifetime (NotBefore well before the expired leaf's NotAfter).
+	rootKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootTmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "Trust Test Root CA"},
+		NotBefore:             time.Now().Add(-5 * 365 * 24 * time.Hour),
+		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	rootDER, err := x509.CreateCertificate(rand.Reader, rootTmpl, rootTmpl, &rootKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootCert, err := x509.ParseCertificate(rootDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	interKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	interTmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "Trust Test Intermediate CA"},
+		NotBefore:             time.Now().Add(-5 * 365 * 24 * time.Hour),
+		NotAfter:              time.Now().Add(5 * 365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		AuthorityKeyId:        rootCert.SubjectKeyId,
+	}
+	interDER, err := x509.CreateCertificate(rand.Reader, interTmpl, rootCert, &interKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	interCert, err := x509.ParseCertificate(interDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Expired leaf signed by the intermediate — valid 2y ago to yesterday
+	expiredKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiredTmpl := &x509.Certificate{
+		SerialNumber:   randomSerial(t),
+		Subject:        pkix.Name{CommonName: "expired.example.com"},
+		DNSNames:       []string{"expired.example.com"},
+		NotBefore:      time.Now().Add(-2 * 365 * 24 * time.Hour),
+		NotAfter:       time.Now().Add(-24 * time.Hour),
+		KeyUsage:       x509.KeyUsageDigitalSignature,
+		AuthorityKeyId: interCert.SubjectKeyId,
+	}
+	expiredDER, err := x509.CreateCertificate(rand.Reader, expiredTmpl, interCert, &expiredKey.PublicKey, interKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expiredCert, err := x509.ParseCertificate(expiredDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(rootCert)
+
+	tests := []struct {
+		name                string
+		allowExpired        bool
+		addExpiredLeaf      bool
+		addUntrustedLeaf    bool
+		wantExpiredLeaves   int
+		wantUntrustedLeaves int
+	}{
+		{
+			name:              "expired leaf with chain is expired not untrusted",
+			allowExpired:      true,
+			addExpiredLeaf:    true,
+			wantExpiredLeaves: 1,
+		},
+		{
+			name:                "untrusted leaf without chain",
+			addUntrustedLeaf:    true,
+			wantUntrustedLeaves: 1,
+		},
+		{
+			name:              "expired leaf skips trust when allow-expired is false",
+			allowExpired:      false,
+			addExpiredLeaf:    true,
+			wantExpiredLeaves: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			store := NewMemStore()
+
+			if err := store.HandleCertificate(rootCert, "root.pem"); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.HandleCertificate(interCert, "inter.pem"); err != nil {
+				t.Fatal(err)
+			}
+
+			if tt.addExpiredLeaf {
+				if err := store.HandleCertificate(expiredCert, "expired.pem"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tt.addUntrustedLeaf {
+				untrustedCA := newRSACA(t)
+				untrusted := newRSALeaf(t, untrustedCA, "untrusted.example.com", []string{"untrusted.example.com"})
+				if err := store.HandleCertificate(untrusted.cert, "untrusted.pem"); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			summary := store.ScanSummary(ScanSummaryInput{
+				RootPool:     rootPool,
+				AllowExpired: tt.allowExpired,
+			})
+
+			if summary.ExpiredLeaves != tt.wantExpiredLeaves {
+				t.Errorf("ExpiredLeaves = %d, want %d", summary.ExpiredLeaves, tt.wantExpiredLeaves)
+			}
+			if summary.UntrustedLeaves != tt.wantUntrustedLeaves {
+				t.Errorf("UntrustedLeaves = %d, want %d", summary.UntrustedLeaves, tt.wantUntrustedLeaves)
+			}
+		})
 	}
 }
 

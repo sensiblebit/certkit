@@ -165,15 +165,23 @@ func getState(_ js.Value, _ []js.Value) any {
 	for ski, rec := range allCerts {
 		_, hasKey := allKeys[ski]
 
-		// Check if cert chains to a Mozilla root at the current time.
-		// Expired certs will fail verification (Expired field shown separately).
+		// Cross-signed roots share a Subject with a Mozilla root but
+		// chain verification may fail if the signing root was removed.
+		expired := now.After(rec.NotAfter)
 		trusted := false
-		_, verifyErr := rec.Cert.Verify(x509.VerifyOptions{
-			Roots:         roots,
-			Intermediates: intermediatePool,
-		})
-		if verifyErr == nil {
+		if certkit.IsMozillaRoot(rec.Cert) {
 			trusted = true
+		} else {
+			opts := x509.VerifyOptions{
+				Roots:         roots,
+				Intermediates: intermediatePool,
+				KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+			}
+			if expired {
+				opts.CurrentTime = rec.Cert.NotAfter.Add(-1 * time.Second)
+			}
+			_, verifyErr := rec.Cert.Verify(opts)
+			trusted = verifyErr == nil
 		}
 
 		ci := certInfo{
@@ -183,7 +191,7 @@ func getState(_ js.Value, _ []js.Value) any {
 			KeyType:   rec.KeyType,
 			NotBefore: rec.NotBefore.UTC().Format(time.RFC3339),
 			NotAfter:  rec.NotAfter.UTC().Format(time.RFC3339),
-			Expired:   now.After(rec.NotAfter),
+			Expired:   expired,
 			HasKey:    hasKey,
 			Trusted:   trusted,
 			Issuer:    rec.Cert.Issuer.CommonName,

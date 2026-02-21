@@ -10,6 +10,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Add shell tab completion for all enum flags (`--format`, `--algorithm`, `--curve`, `--log-level`, `--trust-store`) and directory flags (`--bundle-path`, `--out-path`) ([#56])
+- Add expired and untrusted certificate counts to scan summary (e.g., `Leaves: 6 (2 expired, 1 untrusted)`)
+- Add AIA resolution to scan summary path — fetch missing intermediates before trust checking
+- Add expired and trusted status to `inspect` command output for each certificate
 
 ### Fixed
 

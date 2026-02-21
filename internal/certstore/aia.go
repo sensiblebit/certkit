@@ -18,6 +18,24 @@ type ResolveAIAInput struct {
 	MaxDepth int // 0 defaults to 5
 }
 
+// HasUnresolvedIssuers reports whether any non-root certificate in the store
+// is missing its issuer (not in the store and not a Mozilla root).
+func HasUnresolvedIssuers(store *MemStore) bool {
+	for _, rec := range store.AllCertsFlat() {
+		if rec.CertType == "root" {
+			continue
+		}
+		if store.HasIssuer(rec.Cert) {
+			continue
+		}
+		if certkit.IsIssuedByMozillaRoot(rec.Cert) {
+			continue
+		}
+		return true
+	}
+	return false
+}
+
 // ResolveAIA walks AIA CA Issuers URLs for all non-root certificates in the
 // store, fetching any missing intermediate issuers. Certificates whose issuer
 // is already in the store or is a Mozilla root are skipped.

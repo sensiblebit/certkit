@@ -1,13 +1,16 @@
 package main
 
 import (
+	"context"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"io/fs"
 	"log/slog"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -166,6 +169,18 @@ func runScan(cmd *cobra.Command, args []string) error {
 		internal.AssignBundleNames(store, bundleConfigs)
 	}
 
+	// Resolve missing intermediates via AIA before trust checking
+	if certstore.HasUnresolvedIssuers(store) {
+		slog.Info("resolving certificate chains")
+		aiaWarnings := certstore.ResolveAIA(cmd.Context(), certstore.ResolveAIAInput{
+			Store: store,
+			Fetch: httpAIAFetcher,
+		})
+		for _, w := range aiaWarnings {
+			slog.Warn("AIA resolution", "warning", w)
+		}
+	}
+
 	if scanDumpKeys != "" {
 		keys := store.AllKeysFlat()
 		if len(keys) > 0 {
@@ -176,9 +191,9 @@ func runScan(cmd *cobra.Command, args []string) error {
 			if err := os.WriteFile(scanDumpKeys, data, 0600); err != nil {
 				return fmt.Errorf("writing keys to %s: %w", scanDumpKeys, err)
 			}
-			fmt.Fprintf(os.Stderr, "Wrote %d key(s) to %s\n", len(keys), scanDumpKeys)
+			slog.Info("dumped keys", "count", len(keys), "path", scanDumpKeys)
 		} else {
-			fmt.Fprintln(os.Stderr, "No keys found to dump")
+			slog.Info("no keys found to dump")
 		}
 	}
 
@@ -222,18 +237,18 @@ func runScan(cmd *cobra.Command, args []string) error {
 				count++
 			}
 			if skipped > 0 {
-				fmt.Fprintf(os.Stderr, "Skipped %d unverified certificate(s) (use --force to include)\n", skipped)
+				slog.Warn("skipped unverified certificates", "count", skipped)
 			}
 			if count > 0 {
 				if err := os.WriteFile(scanDumpCerts, data, 0644); err != nil {
 					return fmt.Errorf("writing certificates to %s: %w", scanDumpCerts, err)
 				}
-				fmt.Fprintf(os.Stderr, "Wrote %d certificate(s) to %s\n", count, scanDumpCerts)
+				slog.Info("dumped certificates", "count", count, "path", scanDumpCerts)
 			} else {
-				fmt.Fprintln(os.Stderr, "No verified certificates found to dump")
+				slog.Info("no verified certificates found to dump")
 			}
 		} else {
-			fmt.Fprintln(os.Stderr, "No certificates found to dump")
+			slog.Info("no certificates found to dump")
 		}
 	}
 
@@ -247,8 +262,15 @@ func runScan(cmd *cobra.Command, args []string) error {
 		}
 		store.DumpDebug()
 	} else {
-		// Print summary
-		summary := store.ScanSummary()
+		// Print summary with trust and expiry annotations
+		mozillaPool, err := certkit.MozillaRootPool()
+		if err != nil {
+			return err
+		}
+		summary := store.ScanSummary(certstore.ScanSummaryInput{
+			RootPool:     mozillaPool,
+			AllowExpired: allowExpired,
+		})
 		switch scanFormat {
 		case "json":
 			data, err := json.MarshalIndent(summary, "", "  ")
@@ -260,9 +282,12 @@ func runScan(cmd *cobra.Command, args []string) error {
 			total := summary.Roots + summary.Intermediates + summary.Leaves
 			fmt.Printf("\nFound %d certificate(s) and %d key(s)\n", total, summary.Keys)
 			if total > 0 {
-				fmt.Printf("  Roots:         %d\n", summary.Roots)
-				fmt.Printf("  Intermediates: %d\n", summary.Intermediates)
-				fmt.Printf("  Leaves:        %d\n", summary.Leaves)
+				fmt.Printf("  Roots:          %d%s\n", summary.Roots,
+					certAnnotation(summary.ExpiredRoots, summary.UntrustedRoots))
+				fmt.Printf("  Intermediates:  %d%s\n", summary.Intermediates,
+					certAnnotation(summary.ExpiredIntermediates, summary.UntrustedIntermediates))
+				fmt.Printf("  Leaves:         %d%s\n", summary.Leaves,
+					certAnnotation(summary.ExpiredLeaves, summary.UntrustedLeaves))
 			}
 			if summary.Keys > 0 {
 				fmt.Printf("  Key-cert pairs: %d\n", summary.Matched)
@@ -279,6 +304,40 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// certAnnotation returns a parenthetical annotation like " (2 expired, 1 untrusted)"
+// for non-zero counts, or an empty string if both are zero.
+func certAnnotation(expired, untrusted int) string {
+	var parts []string
+	if expired > 0 {
+		parts = append(parts, fmt.Sprintf("%d expired", expired))
+	}
+	if untrusted > 0 {
+		parts = append(parts, fmt.Sprintf("%d untrusted", untrusted))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(parts, ", ") + ")"
+}
+
+// httpAIAFetcher fetches raw certificate bytes from a URL via HTTP.
+func httpAIAFetcher(ctx context.Context, url string) ([]byte, error) {
+	client := &http.Client{Timeout: 2 * time.Second}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, url)
+	}
+	return io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1MB limit
 }
 
 // formatDN formats a pkix.Name as a one-line distinguished name string

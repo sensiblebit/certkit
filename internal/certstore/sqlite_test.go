@@ -72,7 +72,7 @@ func TestSaveToSQLite_RoundTrip(t *testing.T) {
 		t.Error("stored key does not Equal original after round-trip")
 	}
 
-	summary := store2.ScanSummary()
+	summary := store2.ScanSummary(ScanSummaryInput{})
 	if summary.Roots != 1 {
 		t.Errorf("roots: got %d, want 1", summary.Roots)
 	}

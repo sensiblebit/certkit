@@ -397,6 +397,87 @@ func TestInspectFile_GarbageData(t *testing.T) {
 	}
 }
 
+func TestAnnotateInspectTrust(t *testing.T) {
+	// WHY: AnnotateInspectTrust must set Expired and Trusted fields on cert
+	// results. Self-signed certs (not in Mozilla roots) should be untrusted.
+	// Expired certs should be marked expired but still get trust-checked
+	// (at a time just before expiry) so "expired" and "untrusted" are independent.
+	t.Parallel()
+	ca := newRSACA(t)
+	validLeaf := newRSALeaf(t, ca, "valid.example.com", []string{"valid.example.com"}, nil)
+	expiredLeaf := newExpiredLeaf(t, ca)
+
+	tests := []struct {
+		name        string
+		results     []InspectResult
+		wantExpired []bool
+		wantTrusted []bool
+	}{
+		{
+			name:        "valid self-signed leaf is not expired but untrusted",
+			results:     []InspectResult{inspectCert(validLeaf.cert)},
+			wantExpired: []bool{false},
+			wantTrusted: []bool{false}, // self-signed CA, not in Mozilla roots
+		},
+		{
+			name:        "expired self-signed leaf is expired and untrusted",
+			results:     []InspectResult{inspectCert(expiredLeaf.cert)},
+			wantExpired: []bool{true},
+			wantTrusted: []bool{false},
+		},
+		{
+			name: "non-cert results are skipped",
+			results: []InspectResult{
+				{Type: "private_key", KeyType: "RSA", KeySize: "2048"},
+				{Type: "csr", CSRSubject: "CN=test"},
+			},
+			wantExpired: []bool{},
+			wantTrusted: []bool{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			// Make a copy so parallel tests don't interfere
+			results := make([]InspectResult, len(tt.results))
+			copy(results, tt.results)
+
+			if err := AnnotateInspectTrust(results); err != nil {
+				t.Fatalf("AnnotateInspectTrust: %v", err)
+			}
+
+			var gotExpired, gotTrusted []bool
+			for _, r := range results {
+				if r.Expired != nil {
+					gotExpired = append(gotExpired, *r.Expired)
+				}
+				if r.Trusted != nil {
+					gotTrusted = append(gotTrusted, *r.Trusted)
+				}
+			}
+
+			if len(gotExpired) != len(tt.wantExpired) {
+				t.Fatalf("got %d Expired annotations, want %d", len(gotExpired), len(tt.wantExpired))
+			}
+			for i, want := range tt.wantExpired {
+				if gotExpired[i] != want {
+					t.Errorf("results[%d].Expired = %v, want %v", i, gotExpired[i], want)
+				}
+			}
+
+			if len(gotTrusted) != len(tt.wantTrusted) {
+				t.Fatalf("got %d Trusted annotations, want %d", len(gotTrusted), len(tt.wantTrusted))
+			}
+			for i, want := range tt.wantTrusted {
+				if gotTrusted[i] != want {
+					t.Errorf("results[%d].Trusted = %v, want %v", i, gotTrusted[i], want)
+				}
+			}
+		})
+	}
+}
+
 func TestFormatInspectResults_UnsupportedFormat(t *testing.T) {
 	// WHY: Only "text" and "json" formats are supported; an unsupported format must return an error, not silently produce empty output.
 	t.Parallel()
@@ -575,6 +656,17 @@ func TestFormatInspectResults_Text(t *testing.T) {
 			},
 			mustContain:    []string{"Certificate Signing Request:"},
 			mustNotContain: []string{"DNS Names:"},
+		},
+		{
+			name: "certificate with expired and trusted annotations",
+			results: func() []InspectResult {
+				expired := true
+				trusted := false
+				return []InspectResult{
+					{Type: "certificate", Subject: "CN=test", Expired: &expired, Trusted: &trusted},
+				}
+			}(),
+			mustContain: []string{"Expired:     yes", "Trusted:     no"},
 		},
 	}
 
