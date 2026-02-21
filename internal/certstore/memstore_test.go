@@ -710,9 +710,9 @@ func TestMemStore_ScanSummary(t *testing.T) {
 
 func TestMemStore_ScanSummaryTrust(t *testing.T) {
 	// WHY: The scan summary must distinguish expired from untrusted certs.
-	// Expired-but-chained certs should be "expired" but not "untrusted".
-	// Certs without a chain to the root pool should be "untrusted".
-	// When AllowExpired is false, expired certs skip trust checking entirely.
+	// Expired certs are only counted as expired, never as untrusted, to avoid
+	// misleading double-counts. Non-expired certs without a chain to the root
+	// pool are counted as untrusted.
 	t.Parallel()
 
 	// Build a chain with temporally consistent validity periods.
@@ -791,7 +791,6 @@ func TestMemStore_ScanSummaryTrust(t *testing.T) {
 
 	tests := []struct {
 		name                       string
-		allowExpired               bool
 		addExpiredLeaf             bool
 		addUntrustedLeaf           bool
 		addExpiredRoot             bool
@@ -803,8 +802,7 @@ func TestMemStore_ScanSummaryTrust(t *testing.T) {
 		wantUntrustedLeaves        int
 	}{
 		{
-			name:              "expired leaf with chain is expired not untrusted",
-			allowExpired:      true,
+			name:              "expired leaf is counted as expired not untrusted",
 			addExpiredLeaf:    true,
 			wantExpiredLeaves: 1,
 		},
@@ -814,22 +812,14 @@ func TestMemStore_ScanSummaryTrust(t *testing.T) {
 			wantUntrustedLeaves: 1,
 		},
 		{
-			name:              "expired leaf skips trust when allow-expired is false",
-			allowExpired:      false,
-			addExpiredLeaf:    true,
-			wantExpiredLeaves: 1,
-		},
-		{
-			name:                "expired leaf is not counted as untrusted, non-expired untrusted leaf is",
-			allowExpired:        false,
+			name:                "expired and untrusted leaves counted separately",
 			addExpiredLeaf:      true,
 			addUntrustedLeaf:    true,
 			wantExpiredLeaves:   1,
 			wantUntrustedLeaves: 1,
 		},
 		{
-			name:             "expired root in pool is expired but not untrusted",
-			allowExpired:     true,
+			name:             "expired root is counted as expired not untrusted",
 			addExpiredRoot:   true,
 			wantExpiredRoots: 1,
 		},
@@ -872,8 +862,7 @@ func TestMemStore_ScanSummaryTrust(t *testing.T) {
 			}
 
 			summary := store.ScanSummary(ScanSummaryInput{
-				RootPool:     pool,
-				AllowExpired: tt.allowExpired,
+				RootPool: pool,
 			})
 
 			if summary.ExpiredRoots != tt.wantExpiredRoots {

@@ -29,7 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix WASM `getState` silently ignoring `MozillaRootPool()` error — now logs error and continues without trust checking
 - Fix WASM `globalStore` race condition — add `sync.RWMutex` for concurrent access from goroutines
 - Fix `--dump-certs` using inconsistent chain verification (missing `ExtKeyUsageAny`, no `IsMozillaRoot` bypass)
-- Fix root certs always trust-checked regardless of `--allow-expired` — now consistent with leaf/intermediate behavior
+- Fix expired certificates double-counted as both expired and untrusted in scan summary — now only counted as expired ([#56])
 - Fix `certkit inspect` bare `return err` without context wrapping (ERR-1)
 
 ### Removed

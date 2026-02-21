@@ -270,8 +270,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		summary := store.ScanSummary(certstore.ScanSummaryInput{
-			RootPool:     mozillaPool,
-			AllowExpired: allowExpired,
+			RootPool: mozillaPool,
 		})
 		switch scanFormat {
 		case "json":

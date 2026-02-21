@@ -299,10 +299,8 @@ func (s *MemStore) BundleNames() []string {
 
 // ScanSummary returns aggregate counts of stored certificates and keys.
 // When input.RootPool is non-nil, it also counts expired and untrusted
-// certificates. For expired certs with AllowExpired=true, trust is checked
-// at a time just after issuance to determine if the chain was ever valid.
-// For expired certs with AllowExpired=false, trust checking is skipped
-// entirely for all cert types (roots, intermediates, and leaves).
+// certificates. Expired certificates are only counted as expired, never
+// as untrusted, to avoid misleading double-counts in the summary output.
 func (s *MemStore) ScanSummary(input ScanSummaryInput) ScanSummary {
 	summary := ScanSummary{
 		Keys: len(s.keys),
@@ -323,7 +321,7 @@ func (s *MemStore) ScanSummary(input ScanSummaryInput) ScanSummary {
 			if expired {
 				summary.ExpiredRoots++
 			}
-			if input.RootPool != nil && (input.AllowExpired || !expired) {
+			if input.RootPool != nil && !expired {
 				if !certkit.VerifyChainTrust(rec.Cert, input.RootPool, intermediatePool) {
 					summary.UntrustedRoots++
 				}
@@ -333,7 +331,7 @@ func (s *MemStore) ScanSummary(input ScanSummaryInput) ScanSummary {
 			if expired {
 				summary.ExpiredIntermediates++
 			}
-			if input.RootPool != nil && (input.AllowExpired || !expired) {
+			if input.RootPool != nil && !expired {
 				if !certkit.VerifyChainTrust(rec.Cert, input.RootPool, intermediatePool) {
 					summary.UntrustedIntermediates++
 				}
@@ -343,7 +341,7 @@ func (s *MemStore) ScanSummary(input ScanSummaryInput) ScanSummary {
 			if expired {
 				summary.ExpiredLeaves++
 			}
-			if input.RootPool != nil && (input.AllowExpired || !expired) {
+			if input.RootPool != nil && !expired {
 				if !certkit.VerifyChainTrust(rec.Cert, input.RootPool, intermediatePool) {
 					summary.UntrustedLeaves++
 				}
