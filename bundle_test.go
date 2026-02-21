@@ -560,12 +560,16 @@ func TestFetchAIACertificates_duplicateURLs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// Replace 127.0.0.1 with localhost to avoid ValidateAIAURL SSRF blocking
+	// of literal loopback IPs. Hostname-based URLs pass SSRF validation.
+	srvURL := strings.Replace(srv.URL, "127.0.0.1", "localhost", 1)
+
 	leafTemplate := &x509.Certificate{
 		SerialNumber:          randomSerial(t),
 		Subject:               pkix.Name{CommonName: "dup-aia-leaf"},
 		NotBefore:             time.Now().Add(-1 * time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
-		IssuingCertificateURL: []string{srv.URL + "/ca.cer", srv.URL + "/ca.cer"},
+		IssuingCertificateURL: []string{srvURL + "/ca.cer", srvURL + "/ca.cer"},
 	}
 	issuerCert, err := x509.ParseCertificate(issuerBytes)
 	if err != nil {

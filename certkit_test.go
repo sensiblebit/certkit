@@ -1562,6 +1562,53 @@ func TestVerifyChainTrust(t *testing.T) {
 	})
 }
 
+func TestValidateAIAURL(t *testing.T) {
+	// WHY: ValidateAIAURL prevents SSRF by rejecting non-HTTP schemes and
+	// literal private/loopback/link-local IP addresses. Each case covers a
+	// distinct rejection rule or an allowed pattern.
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		url     string
+		wantErr bool
+		errSub  string
+	}{
+		{"valid http", "http://ca.example.com/issuer.cer", false, ""},
+		{"valid https", "https://ca.example.com/issuer.cer", false, ""},
+		{"ftp rejected", "ftp://ca.example.com/issuer.cer", true, "unsupported scheme"},
+		{"file rejected", "file:///etc/passwd", true, "unsupported scheme"},
+		{"empty scheme rejected", "://foo", true, ""},
+		{"loopback IPv4", "http://127.0.0.1/ca.cer", true, "loopback"},
+		{"loopback IPv6", "http://[::1]/ca.cer", true, "loopback"},
+		{"link-local IPv4", "http://169.254.1.1/ca.cer", true, "loopback or link-local"},
+		{"private 10.x", "http://10.0.0.1/ca.cer", true, "blocked private"},
+		{"private 172.16.x", "http://172.16.0.1/ca.cer", true, "blocked private"},
+		{"private 192.168.x", "http://192.168.1.1/ca.cer", true, "blocked private"},
+		{"public IP allowed", "http://8.8.8.8/ca.cer", false, ""},
+		{"hostname allowed even if resolves to private", "http://internal.company.com/ca.cer", false, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateAIAURL(tt.url)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for %q", tt.url)
+				}
+				if tt.errSub != "" && !strings.Contains(err.Error(), tt.errSub) {
+					t.Errorf("error = %v, want substring %q", err, tt.errSub)
+				}
+			} else {
+				if err != nil {
+					t.Errorf("unexpected error for %q: %v", tt.url, err)
+				}
+			}
+		})
+	}
+}
+
 func TestAlgorithmName(t *testing.T) {
 	// WHY: KeyAlgorithmName and PublicKeyAlgorithmName produce display strings
 	// for CLI output and JSON; wrong names would confuse users and break JSON

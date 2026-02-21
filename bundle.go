@@ -129,9 +129,50 @@ func IsMozillaRoot(cert *x509.Certificate) bool {
 }
 
 // IsIssuedByMozillaRoot reports whether the certificate's issuer matches a
-// Mozilla root certificate's subject (by raw ASN.1 bytes).
+// Mozilla root certificate's subject (by raw ASN.1 bytes). This is used as a
+// performance optimization to skip AIA fetching when the issuer is a well-known
+// root — it is NOT a trust decision. Trust verification requires full chain
+// validation via VerifyChainTrust.
 func IsIssuedByMozillaRoot(cert *x509.Certificate) bool {
 	return MozillaRootSubjects()[string(cert.RawIssuer)]
+}
+
+// ValidateAIAURL checks whether a URL is safe to fetch for AIA certificate
+// resolution. It rejects non-HTTP(S) schemes and literal private/loopback/
+// link-local IP addresses to prevent SSRF.
+func ValidateAIAURL(rawURL string) error {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("parsing URL: %w", err)
+	}
+	switch parsed.Scheme {
+	case "http", "https":
+		// allowed
+	default:
+		return fmt.Errorf("unsupported scheme %q (only http and https are allowed)", parsed.Scheme)
+	}
+	host := parsed.Hostname()
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return nil // hostname, not a literal IP — allow
+	}
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() {
+		return fmt.Errorf("blocked address %s (loopback or link-local)", host)
+	}
+	// RFC 1918 private ranges
+	privateRanges := []string{
+		"10.0.0.0/8",
+		"172.16.0.0/12",
+		"192.168.0.0/16",
+		"fc00::/7", // IPv6 ULA
+	}
+	for _, cidr := range privateRanges {
+		_, network, _ := net.ParseCIDR(cidr)
+		if network.Contains(ip) {
+			return fmt.Errorf("blocked private address %s", host)
+		}
+	}
+	return nil
 }
 
 // VerifyChainTrust reports whether the given certificate chains to a trusted
@@ -243,7 +284,19 @@ func FetchAIACertificates(ctx context.Context, cert *x509.Certificate, timeout t
 	var fetched []*x509.Certificate
 	var warnings []string
 
-	client := &http.Client{Timeout: timeout}
+	const maxRedirects = 3
+	client := &http.Client{
+		Timeout: timeout,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= maxRedirects {
+				return fmt.Errorf("stopped after %d redirects", maxRedirects)
+			}
+			if err := ValidateAIAURL(req.URL.String()); err != nil {
+				return fmt.Errorf("redirect blocked: %w", err)
+			}
+			return nil
+		},
+	}
 	seen := make(map[string]bool)
 	queue := []*x509.Certificate{cert}
 
@@ -256,6 +309,11 @@ func FetchAIACertificates(ctx context.Context, cert *x509.Certificate, timeout t
 				continue
 			}
 			seen[aiaURL] = true
+
+			if err := ValidateAIAURL(aiaURL); err != nil {
+				warnings = append(warnings, fmt.Sprintf("AIA URL rejected for %s: %v", aiaURL, err))
+				continue
+			}
 
 			certs, err := fetchCertificatesFromURL(ctx, client, aiaURL)
 			if err != nil {

@@ -325,11 +325,26 @@ func certAnnotation(expired, untrusted int) string {
 }
 
 // aiaHTTPClient is reused across AIA fetches to enable TCP connection reuse.
-var aiaHTTPClient = &http.Client{Timeout: 2 * time.Second}
+// Redirects are limited to 3 and validated against SSRF rules.
+var aiaHTTPClient = &http.Client{
+	Timeout: 2 * time.Second,
+	CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 3 {
+			return fmt.Errorf("stopped after 3 redirects")
+		}
+		if err := certkit.ValidateAIAURL(req.URL.String()); err != nil {
+			return fmt.Errorf("redirect blocked: %w", err)
+		}
+		return nil
+	},
+}
 
 // httpAIAFetcher fetches raw certificate bytes from a URL via HTTP.
-func httpAIAFetcher(ctx context.Context, url string) ([]byte, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+func httpAIAFetcher(ctx context.Context, rawURL string) ([]byte, error) {
+	if err := certkit.ValidateAIAURL(rawURL); err != nil {
+		return nil, fmt.Errorf("AIA URL rejected: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -339,7 +354,7 @@ func httpAIAFetcher(ctx context.Context, url string) ([]byte, error) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, url)
+		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, rawURL)
 	}
 	return io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1MB limit
 }
