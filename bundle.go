@@ -182,6 +182,11 @@ func ValidateAIAURL(rawURL string) error {
 // was ever valid — this is more robust than checking just before NotAfter,
 // because intermediates that expired between issuance and the leaf's expiry
 // will still be valid at NotBefore time.
+//
+// Known limitation: if an intermediate expired before the leaf's NotBefore,
+// the time-shifted verification will still fail because the intermediate is
+// invalid at the leaf's issuance time. This is an uncommon edge case in
+// practice (intermediates outlive the leaves they sign).
 func VerifyChainTrust(cert *x509.Certificate, roots, intermediates *x509.CertPool) bool {
 	if IsMozillaRoot(cert) {
 		return true

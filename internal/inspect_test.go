@@ -2,7 +2,10 @@ package internal
 
 import (
 	"crypto"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -436,6 +439,46 @@ func TestAnnotateInspectTrust(t *testing.T) {
 			}(),
 			wantExpired: []bool{false},
 			wantTrusted: []bool{true},
+		},
+		{
+			name: "chain in results exercises intermediate pool building",
+			results: func() []InspectResult {
+				ca := newRSACA(t)
+				interKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+				interTmpl := &x509.Certificate{
+					SerialNumber:          randomSerial(t),
+					Subject:               pkix.Name{CommonName: "Test Inspect Intermediate"},
+					NotBefore:             time.Now().Add(-time.Hour),
+					NotAfter:              time.Now().Add(5 * 365 * 24 * time.Hour),
+					IsCA:                  true,
+					BasicConstraintsValid: true,
+					KeyUsage:              x509.KeyUsageCertSign,
+					AuthorityKeyId:        ca.cert.SubjectKeyId,
+				}
+				interDER, _ := x509.CreateCertificate(rand.Reader, interTmpl, ca.cert, &interKey.PublicKey, ca.key)
+				interCert, _ := x509.ParseCertificate(interDER)
+
+				leafKey, _ := rsa.GenerateKey(rand.Reader, 2048)
+				leafTmpl := &x509.Certificate{
+					SerialNumber:   randomSerial(t),
+					Subject:        pkix.Name{CommonName: "chain-leaf.example.com"},
+					DNSNames:       []string{"chain-leaf.example.com"},
+					NotBefore:      time.Now().Add(-time.Hour),
+					NotAfter:       time.Now().Add(365 * 24 * time.Hour),
+					KeyUsage:       x509.KeyUsageDigitalSignature,
+					AuthorityKeyId: interCert.SubjectKeyId,
+				}
+				leafDER, _ := x509.CreateCertificate(rand.Reader, leafTmpl, interCert, &leafKey.PublicKey, interKey)
+				leafCert, _ := x509.ParseCertificate(leafDER)
+
+				return []InspectResult{
+					inspectCert(ca.cert),
+					inspectCert(interCert),
+					inspectCert(leafCert),
+				}
+			}(),
+			wantExpired: []bool{false, false, false},
+			wantTrusted: []bool{false, false, false}, // private CA, not in Mozilla roots
 		},
 		{
 			name: "non-cert results are skipped",

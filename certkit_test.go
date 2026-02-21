@@ -1522,6 +1522,27 @@ func TestVerifyChainTrust(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Not-yet-valid leaf — NotBefore in the future
+	futureLeafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	futureLeafTmpl := &x509.Certificate{
+		SerialNumber: randomSerial(t),
+		Subject:      pkix.Name{CommonName: "future.example.com"},
+		NotBefore:    time.Now().Add(24 * time.Hour),
+		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+	}
+	futureLeafDER, err := x509.CreateCertificate(rand.Reader, futureLeafTmpl, interCert, &futureLeafKey.PublicKey, interKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	futureLeaf, err := x509.ParseCertificate(futureLeafDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	tests := []struct {
 		name string
 		cert *x509.Certificate
@@ -1531,6 +1552,7 @@ func TestVerifyChainTrust(t *testing.T) {
 		{"expired leaf with chain (time-shift)", expiredLeaf, true},
 		{"self-signed untrusted", untrustedCert, false},
 		{"root cert in pool", rootCert, true},
+		{"not-yet-valid leaf", futureLeaf, false},
 	}
 
 	for _, tt := range tests {

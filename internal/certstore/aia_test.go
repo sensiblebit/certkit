@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/pem"
 	"fmt"
 	"strings"
 	"testing"
@@ -51,6 +52,79 @@ func TestHasUnresolvedIssuers(t *testing.T) {
 					t.Fatal(err)
 				}
 				if err := store.HandleCertificate(leaf.cert, "leaf.pem"); err != nil {
+					t.Fatal(err)
+				}
+			},
+			want: false,
+		},
+		{
+			name: "leaf issued by Mozilla root returns false",
+			setup: func(t *testing.T, store *MemStore) {
+				// Parse the first Mozilla root to get its RawSubject.
+				pemData := certkit.MozillaRootPEM()
+				block, _ := pem.Decode(pemData)
+				if block == nil {
+					t.Fatal("no PEM block in Mozilla root bundle")
+				}
+				mozRoot, err := x509.ParseCertificate(block.Bytes)
+				if err != nil {
+					t.Fatalf("parsing Mozilla root: %v", err)
+				}
+
+				// Create a fake CA with the exact same RawSubject as the
+				// Mozilla root. This ensures the leaf's RawIssuer matches.
+				// HasUnresolvedIssuers/IsIssuedByMozillaRoot only checks
+				// RawIssuer bytes, not cryptographic signatures.
+				fakeKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				fakeCATmpl := &x509.Certificate{
+					SerialNumber:          randomSerial(t),
+					RawSubject:            mozRoot.RawSubject,
+					NotBefore:             time.Now().Add(-time.Hour),
+					NotAfter:              time.Now().Add(24 * time.Hour),
+					IsCA:                  true,
+					BasicConstraintsValid: true,
+					KeyUsage:              x509.KeyUsageCertSign,
+					SubjectKeyId:          mozRoot.SubjectKeyId,
+				}
+				fakeDER, err := x509.CreateCertificate(rand.Reader, fakeCATmpl, fakeCATmpl, &fakeKey.PublicKey, fakeKey)
+				if err != nil {
+					t.Fatalf("create fake CA: %v", err)
+				}
+				fakeCert, err := x509.ParseCertificate(fakeDER)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				leafTmpl := &x509.Certificate{
+					SerialNumber:   randomSerial(t),
+					Subject:        pkix.Name{CommonName: "mozilla-issued.example.com"},
+					DNSNames:       []string{"mozilla-issued.example.com"},
+					NotBefore:      time.Now().Add(-time.Hour),
+					NotAfter:       time.Now().Add(24 * time.Hour),
+					KeyUsage:       x509.KeyUsageDigitalSignature,
+					AuthorityKeyId: mozRoot.SubjectKeyId,
+				}
+				leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, fakeCert, &leafKey.PublicKey, fakeKey)
+				if err != nil {
+					t.Fatalf("create leaf signed by fake CA: %v", err)
+				}
+				leafCert, err := x509.ParseCertificate(leafDER)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				if string(leafCert.RawIssuer) != string(mozRoot.RawSubject) {
+					t.Fatal("leaf RawIssuer does not match Mozilla root RawSubject")
+				}
+
+				if err := store.HandleCertificate(leafCert, "leaf.pem"); err != nil {
 					t.Fatal(err)
 				}
 			},

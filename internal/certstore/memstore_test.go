@@ -352,6 +352,11 @@ func TestMemStore_EmptyStore(t *testing.T) {
 	if summary.Roots != 0 || summary.Intermediates != 0 || summary.Leaves != 0 || summary.Keys != 0 || summary.Matched != 0 {
 		t.Errorf("expected all zeros in empty scan summary, got %+v", summary)
 	}
+	if summary.ExpiredRoots != 0 || summary.UntrustedRoots != 0 ||
+		summary.ExpiredIntermediates != 0 || summary.UntrustedIntermediates != 0 ||
+		summary.ExpiredLeaves != 0 || summary.UntrustedLeaves != 0 {
+		t.Errorf("expected all trust/expiry fields zero in empty scan summary, got %+v", summary)
+	}
 }
 
 func TestMemStore_MultipleCertsAndKeys(t *testing.T) {
@@ -785,12 +790,17 @@ func TestMemStore_ScanSummaryTrust(t *testing.T) {
 	rootPool.AddCert(rootCert)
 
 	tests := []struct {
-		name                string
-		allowExpired        bool
-		addExpiredLeaf      bool
-		addUntrustedLeaf    bool
-		wantExpiredLeaves   int
-		wantUntrustedLeaves int
+		name                       string
+		allowExpired               bool
+		addExpiredLeaf             bool
+		addUntrustedLeaf           bool
+		addExpiredRoot             bool
+		wantExpiredRoots           int
+		wantUntrustedRoots         int
+		wantExpiredIntermediates   int
+		wantUntrustedIntermediates int
+		wantExpiredLeaves          int
+		wantUntrustedLeaves        int
 	}{
 		{
 			name:              "expired leaf with chain is expired not untrusted",
@@ -817,12 +827,19 @@ func TestMemStore_ScanSummaryTrust(t *testing.T) {
 			wantExpiredLeaves:   1,
 			wantUntrustedLeaves: 1,
 		},
+		{
+			name:             "expired root in pool is expired but not untrusted",
+			allowExpired:     true,
+			addExpiredRoot:   true,
+			wantExpiredRoots: 1,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			store := NewMemStore()
+			pool := rootPool
 
 			if err := store.HandleCertificate(rootCert, "root.pem"); err != nil {
 				t.Fatal(err)
@@ -843,12 +860,34 @@ func TestMemStore_ScanSummaryTrust(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
+			if tt.addExpiredRoot {
+				expiredRoot := newExpiredRoot(t)
+				if err := store.HandleCertificate(expiredRoot, "expired-root.pem"); err != nil {
+					t.Fatal(err)
+				}
+				// Add expired root to pool so it's trusted when time-shifted
+				pool = x509.NewCertPool()
+				pool.AddCert(rootCert)
+				pool.AddCert(expiredRoot)
+			}
 
 			summary := store.ScanSummary(ScanSummaryInput{
-				RootPool:     rootPool,
+				RootPool:     pool,
 				AllowExpired: tt.allowExpired,
 			})
 
+			if summary.ExpiredRoots != tt.wantExpiredRoots {
+				t.Errorf("ExpiredRoots = %d, want %d", summary.ExpiredRoots, tt.wantExpiredRoots)
+			}
+			if summary.UntrustedRoots != tt.wantUntrustedRoots {
+				t.Errorf("UntrustedRoots = %d, want %d", summary.UntrustedRoots, tt.wantUntrustedRoots)
+			}
+			if summary.ExpiredIntermediates != tt.wantExpiredIntermediates {
+				t.Errorf("ExpiredIntermediates = %d, want %d", summary.ExpiredIntermediates, tt.wantExpiredIntermediates)
+			}
+			if summary.UntrustedIntermediates != tt.wantUntrustedIntermediates {
+				t.Errorf("UntrustedIntermediates = %d, want %d", summary.UntrustedIntermediates, tt.wantUntrustedIntermediates)
+			}
 			if summary.ExpiredLeaves != tt.wantExpiredLeaves {
 				t.Errorf("ExpiredLeaves = %d, want %d", summary.ExpiredLeaves, tt.wantExpiredLeaves)
 			}

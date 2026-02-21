@@ -218,6 +218,35 @@ func newExpiredLeaf(t *testing.T, ca testCA) testLeaf {
 	return testLeaf{cert: cert, certPEM: certPEM, certDER: certDER, key: key, keyPEM: keyPEM}
 }
 
+// newExpiredRoot generates a self-signed root CA certificate that has expired.
+func newExpiredRoot(t *testing.T) *x509.Certificate {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate expired root key: %v", err)
+	}
+
+	tmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "Expired Test Root CA"},
+		NotBefore:             time.Now().Add(-3 * 365 * 24 * time.Hour),
+		NotAfter:              time.Now().Add(-24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+	if err != nil {
+		t.Fatalf("create expired root cert: %v", err)
+	}
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatalf("parse expired root cert: %v", err)
+	}
+	return cert
+}
+
 // newIntermediateCA generates an intermediate CA signed by the given root CA.
 func newIntermediateCA(t *testing.T, root testCA) testCA {
 	t.Helper()
