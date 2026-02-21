@@ -94,6 +94,7 @@ func MozillaRootSubjects() map[string]bool {
 			}
 			cert, err := x509.ParseCertificate(block.Bytes)
 			if err != nil {
+				slog.Debug("skipping unparseable certificate in Mozilla root bundle", "error", err)
 				continue
 			}
 			mozillaSubjects[string(cert.RawSubject)] = true
@@ -219,23 +220,30 @@ func ValidateAIAURL(rawURL string) error {
 // the time-shifted verification will still fail because the intermediate is
 // invalid at the leaf's issuance time. This is an uncommon edge case in
 // practice (intermediates outlive the leaves they sign).
-func VerifyChainTrust(cert *x509.Certificate, roots, intermediates *x509.CertPool) bool {
-	if roots == nil {
+// VerifyChainTrustInput holds parameters for VerifyChainTrust.
+type VerifyChainTrustInput struct {
+	Cert          *x509.Certificate
+	Roots         *x509.CertPool
+	Intermediates *x509.CertPool
+}
+
+func VerifyChainTrust(input VerifyChainTrustInput) bool {
+	if input.Roots == nil {
 		return false
 	}
-	if IsMozillaRoot(cert) {
+	if IsMozillaRoot(input.Cert) {
 		return true
 	}
 	opts := x509.VerifyOptions{
-		Roots:         roots,
-		Intermediates: intermediates,
+		Roots:         input.Roots,
+		Intermediates: input.Intermediates,
 		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
 	}
-	if time.Now().After(cert.NotAfter) {
+	if time.Now().After(input.Cert.NotAfter) {
 		// Use NotBefore + 1s: the issuing chain was necessarily valid at issuance.
-		opts.CurrentTime = cert.NotBefore.Add(time.Second)
+		opts.CurrentTime = input.Cert.NotBefore.Add(time.Second)
 	}
-	_, err := cert.Verify(opts)
+	_, err := input.Cert.Verify(opts)
 	return err == nil
 }
 

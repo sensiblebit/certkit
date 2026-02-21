@@ -1558,7 +1558,7 @@ func TestVerifyChainTrust(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			if got := VerifyChainTrust(tt.cert, rootPool, interPool); got != tt.want {
+			if got := VerifyChainTrust(VerifyChainTrustInput{Cert: tt.cert, Roots: rootPool, Intermediates: interPool}); got != tt.want {
 				t.Errorf("VerifyChainTrust(%q) = %v, want %v", tt.cert.Subject.CommonName, got, tt.want)
 			}
 		})
@@ -1566,7 +1566,7 @@ func TestVerifyChainTrust(t *testing.T) {
 
 	t.Run("nil roots returns false", func(t *testing.T) {
 		t.Parallel()
-		if VerifyChainTrust(validLeaf, nil, interPool) {
+		if VerifyChainTrust(VerifyChainTrustInput{Cert: validLeaf, Roots: nil, Intermediates: interPool}) {
 			t.Error("VerifyChainTrust should return false when roots is nil")
 		}
 	})
@@ -1574,7 +1574,7 @@ func TestVerifyChainTrust(t *testing.T) {
 	t.Run("nil intermediates pool", func(t *testing.T) {
 		t.Parallel()
 		// Root cert should be trusted even with nil intermediates pool.
-		if !VerifyChainTrust(rootCert, rootPool, nil) {
+		if !VerifyChainTrust(VerifyChainTrustInput{Cert: rootCert, Roots: rootPool}) {
 			t.Error("root cert in pool should be trusted with nil intermediates")
 		}
 	})
@@ -1630,7 +1630,7 @@ func TestVerifyChainTrust(t *testing.T) {
 		expInterPool.AddCert(expInterCert)
 
 		// Time-shift to leaf.NotBefore+1s — intermediate was valid then.
-		if !VerifyChainTrust(leaf2, rootPool, expInterPool) {
+		if !VerifyChainTrust(VerifyChainTrustInput{Cert: leaf2, Roots: rootPool, Intermediates: expInterPool}) {
 			t.Error("VerifyChainTrust should trust leaf with expired intermediate that was valid at leaf NotBefore")
 		}
 	})
@@ -1649,7 +1649,7 @@ func TestVerifyChainTrust(t *testing.T) {
 		}
 		// Pass an empty root pool — the cert should still be trusted via IsMozillaRoot.
 		emptyPool := x509.NewCertPool()
-		if !VerifyChainTrust(mozRoot, emptyPool, emptyPool) {
+		if !VerifyChainTrust(VerifyChainTrustInput{Cert: mozRoot, Roots: emptyPool, Intermediates: emptyPool}) {
 			t.Errorf("VerifyChainTrust should trust Mozilla root %q even with empty pool", mozRoot.Subject.CommonName)
 		}
 	})

@@ -267,7 +267,7 @@ func AnnotateInspectTrust(results []InspectResult) error {
 		expired := now.After(cert.NotAfter)
 		results[i].Expired = &expired
 
-		trusted := certkit.VerifyChainTrust(cert, mozillaPool, intermediatePool)
+		trusted := certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{Cert: cert, Roots: mozillaPool, Intermediates: intermediatePool})
 		results[i].Trusted = &trusted
 	}
 	return nil

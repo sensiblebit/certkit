@@ -322,7 +322,7 @@ func (s *MemStore) ScanSummary(input ScanSummaryInput) ScanSummary {
 				summary.ExpiredRoots++
 			}
 			if input.RootPool != nil && !expired {
-				if !certkit.VerifyChainTrust(rec.Cert, input.RootPool, intermediatePool) {
+				if !certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{Cert: rec.Cert, Roots: input.RootPool, Intermediates: intermediatePool}) {
 					summary.UntrustedRoots++
 				}
 			}
@@ -332,7 +332,7 @@ func (s *MemStore) ScanSummary(input ScanSummaryInput) ScanSummary {
 				summary.ExpiredIntermediates++
 			}
 			if input.RootPool != nil && !expired {
-				if !certkit.VerifyChainTrust(rec.Cert, input.RootPool, intermediatePool) {
+				if !certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{Cert: rec.Cert, Roots: input.RootPool, Intermediates: intermediatePool}) {
 					summary.UntrustedIntermediates++
 				}
 			}
@@ -342,7 +342,7 @@ func (s *MemStore) ScanSummary(input ScanSummaryInput) ScanSummary {
 				summary.ExpiredLeaves++
 			}
 			if input.RootPool != nil && !expired {
-				if !certkit.VerifyChainTrust(rec.Cert, input.RootPool, intermediatePool) {
+				if !certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{Cert: rec.Cert, Roots: input.RootPool, Intermediates: intermediatePool}) {
 					summary.UntrustedLeaves++
 				}
 			}

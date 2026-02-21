@@ -221,7 +221,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 
 				// Validate chain unless --force is set (uses same logic as summary)
 				if !scanForceExport {
-					if !certkit.VerifyChainTrust(cert, mozillaPool, intermediatePool) {
+					if !certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{Cert: cert, Roots: mozillaPool, Intermediates: intermediatePool}) {
 						slog.Debug("skipping untrusted certificate", "subject", cert.Subject)
 						skipped++
 						continue
@@ -339,7 +339,11 @@ func httpAIAFetcher(ctx context.Context, rawURL string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, rawURL)
 	}
-	return io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1MB limit
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1MB limit
+	if err != nil {
+		return nil, fmt.Errorf("reading AIA response from %s: %w", rawURL, err)
+	}
+	return data, nil
 }
 
 // formatDN formats a pkix.Name as a one-line distinguished name string

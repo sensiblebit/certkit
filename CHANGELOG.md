@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** `VerifyChainTrust` now takes a `VerifyChainTrustInput` struct instead of positional arguments (CS-5 compliance) ([#57])
 - Use `NotBefore + 1s` instead of `NotAfter - 1s` for expired certificate time-shift in chain verification — more robust when intermediates expired before the leaf ([#56])
 
 ### Fixed
@@ -45,6 +46,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix `--dump-certs` using inconsistent chain verification (missing `ExtKeyUsageAny`, no `IsMozillaRoot` bypass) ([#56])
 - Fix expired certificates double-counted as both expired and untrusted in scan summary — now only counted as expired ([#56])
 - Fix `certkit inspect` bare `return err` without context wrapping (ERR-1) ([#56])
+- Fix bare `io.ReadAll` return in `httpAIAFetcher` missing error context (ERR-1) ([#57])
+- Fix WASM `addFiles` resolving with empty string when `json.Marshal` fails — now rejects the promise (ERR-5) ([#57])
+- Fix silent `continue` in `MozillaRootSubjects` when certificate parsing fails — now logs with `slog.Debug` (ERR-5) ([#57])
 
 ### Tests
 

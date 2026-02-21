@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"strings"
 	"syscall/js"
@@ -59,6 +60,7 @@ func addFiles(_ js.Value, args []js.Value) any {
 
 	handler := js.FuncOf(func(_ js.Value, promiseArgs []js.Value) any {
 		resolve := promiseArgs[0]
+		reject := promiseArgs[1]
 		go func() {
 			storeMu.Lock()
 			var results []map[string]any
@@ -91,7 +93,8 @@ func addFiles(_ js.Value, args []js.Value) any {
 
 			jsonBytes, err := json.Marshal(results)
 			if err != nil {
-				slog.Error("marshaling addFiles results", "error", err)
+				reject.Invoke(fmt.Sprintf("marshaling addFiles results: %v", err))
+				return
 			}
 			resolve.Invoke(string(jsonBytes))
 
@@ -203,7 +206,7 @@ func getState(_ js.Value, _ []js.Value) any {
 		expired := now.After(rec.NotAfter)
 		trusted := false
 		if roots != nil {
-			trusted = certkit.VerifyChainTrust(rec.Cert, roots, intermediatePool)
+			trusted = certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{Cert: rec.Cert, Roots: roots, Intermediates: intermediatePool})
 		}
 
 		ci := certInfo{
