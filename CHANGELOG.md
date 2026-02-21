@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add shell tab completion for all enum flags (`--format`, `--algorithm`, `--curve`, `--log-level`, `--trust-store`) and directory flags (`--bundle-path`, `--out-path`) ([#56])
+
 ### Fixed
 
 - Fix `FormatCN` panic when certificate has no CN, no DNS SANs, and nil SerialNumber — now returns "unknown" ([`e70e8e5`])
@@ -563,6 +567,7 @@ Initial release.
 [`55b5c1e`]: https://github.com/sensiblebit/certkit/commit/55b5c1e
 [`8cf81d9`]: https://github.com/sensiblebit/certkit/commit/8cf81d9
 [`3569926`]: https://github.com/sensiblebit/certkit/commit/3569926
+[#56]: https://github.com/sensiblebit/certkit/pull/56
 [#48]: https://github.com/sensiblebit/certkit/pull/48
 [#46]: https://github.com/sensiblebit/certkit/pull/46
 [#45]: https://github.com/sensiblebit/certkit/pull/45

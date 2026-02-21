@@ -46,6 +46,9 @@ func init() {
 	verifyCmd.Flags().StringVarP(&verifyExpiry, "expiry", "e", "", "Check if cert expires within duration (e.g., 30d, 720h)")
 	verifyCmd.Flags().StringVar(&verifyTrustStore, "trust-store", "mozilla", "Trust store for chain validation: system, mozilla")
 	verifyCmd.Flags().StringVar(&verifyFormat, "format", "text", "Output format: text or json")
+
+	registerCompletion(verifyCmd, completionInput{"format", fixedCompletion("text", "json")})
+	registerCompletion(verifyCmd, completionInput{"trust-store", fixedCompletion("system", "mozilla")})
 }
 
 // parseDuration extends time.ParseDuration to support a "d" suffix for days.

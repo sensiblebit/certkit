@@ -41,6 +41,26 @@ Requires Go 1.25+.
 go build -o certkit ./cmd/certkit/
 ```
 
+### Shell Completion
+
+certkit supports tab completion for bash, zsh, fish, and PowerShell. Run `certkit completion --help` for details, or set it up with:
+
+```sh
+# Bash
+source <(certkit completion bash)
+
+# Zsh
+source <(certkit completion zsh)
+
+# Fish
+certkit completion fish | source
+
+# PowerShell
+certkit completion powershell | Out-String | Invoke-Expression
+```
+
+To load completions for every new session, see `certkit completion <shell> --help` for persistent installation instructions.
+
 ## Quick Start
 
 See what's in a certificate:

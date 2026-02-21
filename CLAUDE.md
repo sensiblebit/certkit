@@ -341,7 +341,7 @@ pre-commit install --hook-type commit-msg
 pre-commit run --all-files  # Manual run against all files
 ```
 
-Configured hooks: `no-commit-to-branch`, `branch-name`, `commit-message` (commit-msg stage), `goimports`, `go-fix`, `go vet`, `go build`, `go test`, `wasm`, `prettier`, `vitest`, `wrangler build`, `markdownlint`.
+Configured hooks: `no-commit-to-branch`, `branch-name`, `commit-message` (commit-msg stage), `goimports`, `go-fix`, `go-vet`, `golangci-lint`, `wasm`, `go-build`, `go-test`, `prettier`, `vitest`, `wrangler-build`, `markdownlint`.
 
 ### Tooling gates
 
