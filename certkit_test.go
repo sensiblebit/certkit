@@ -1564,6 +1564,13 @@ func TestVerifyChainTrust(t *testing.T) {
 		})
 	}
 
+	t.Run("nil roots returns false", func(t *testing.T) {
+		t.Parallel()
+		if VerifyChainTrust(validLeaf, nil, interPool) {
+			t.Error("VerifyChainTrust should return false when roots is nil")
+		}
+	})
+
 	// Separate test for Mozilla root bypass — uses a real Mozilla root cert.
 	t.Run("mozilla root bypasses chain verification", func(t *testing.T) {
 		t.Parallel()
@@ -1610,6 +1617,7 @@ func TestValidateAIAURL(t *testing.T) {
 		{"private 10.x", "http://10.0.0.1/ca.cer", true, "blocked private"},
 		{"private 172.16.x", "http://172.16.0.1/ca.cer", true, "blocked private"},
 		{"private 192.168.x", "http://192.168.1.1/ca.cer", true, "blocked private"},
+		{"CGN 100.64.x", "http://100.64.0.1/ca.cer", true, "blocked private"},
 		{"public IP allowed", "http://8.8.8.8/ca.cer", false, ""},
 		{"hostname allowed even if resolves to private", "http://internal.company.com/ca.cer", false, ""},
 	}

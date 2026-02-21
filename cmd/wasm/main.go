@@ -124,11 +124,15 @@ func addFiles(_ js.Value, args []js.Value) any {
 		}()
 		return nil
 	})
-
-	return js.Global().Get("Promise").New(handler)
+	// Promise.New calls the executor synchronously; release immediately after.
+	p := js.Global().Get("Promise").New(handler)
+	handler.Release()
+	return p
 }
 
 // getState returns all certificates and keys with metadata as JSON.
+// Uses TryRLock to avoid deadlocking the JS event loop when AIA resolution
+// holds the write lock (AIA blocks on JS promises that need the event loop).
 // JS signature: certkitGetState() → string
 func getState(_ js.Value, _ []js.Value) any {
 	type certInfo struct {
@@ -158,9 +162,16 @@ func getState(_ js.Value, _ []js.Value) any {
 		Certs        []certInfo `json:"certs"`
 		Keys         []keyInfo  `json:"keys"`
 		MatchedPairs int        `json:"matched_pairs"`
+		Busy         bool       `json:"busy,omitempty"`
 	}
 
-	storeMu.RLock()
+	if !storeMu.TryRLock() {
+		// Store is locked by AIA resolution; return a busy indicator
+		// instead of blocking the JS event loop (which would deadlock).
+		resp := stateResponse{Busy: true}
+		jsonBytes, _ := json.Marshal(resp)
+		return string(jsonBytes)
+	}
 	defer storeMu.RUnlock()
 
 	now := time.Now()
@@ -255,17 +266,23 @@ func exportBundlesJS(_ js.Value, args []js.Value) any {
 		}()
 		return nil
 	})
-
-	return js.Global().Get("Promise").New(handler)
+	// Promise.New calls the executor synchronously; release immediately after.
+	p := js.Global().Get("Promise").New(handler)
+	handler.Release()
+	return p
 }
 
 // resetStore clears all stored certificates and keys.
-// JS signature: certkitReset() → void
+// Uses TryLock to avoid deadlocking the JS event loop when AIA resolution
+// holds the lock. Returns false if the store is busy.
+// JS signature: certkitReset() → boolean
 func resetStore(_ js.Value, _ []js.Value) any {
-	storeMu.Lock()
+	if !storeMu.TryLock() {
+		return false
+	}
 	globalStore.Reset()
 	storeMu.Unlock()
-	return nil
+	return true
 }
 
 // hexToBytes decodes a hex string to bytes, returning nil on error.
@@ -281,5 +298,8 @@ func jsError(msg string) any {
 		reject.Invoke(js.Global().Get("Error").New(msg))
 		return nil
 	})
-	return js.Global().Get("Promise").New(handler)
+	// Promise.New calls the executor synchronously; release immediately after.
+	p := js.Global().Get("Promise").New(handler)
+	handler.Release()
+	return p
 }

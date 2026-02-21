@@ -37,9 +37,16 @@ func jsFetchURL(ctx context.Context, url string) ([]byte, error) {
 
 	promise := fetchFn.Invoke(url)
 
+	const maxAIAResponseSize = 1 << 20 // 1MB, consistent with CLI httpAIAFetcher
+
 	thenCb := js.FuncOf(func(_ js.Value, args []js.Value) any {
 		uint8Array := args[0]
-		data := make([]byte, uint8Array.Length())
+		size := uint8Array.Length()
+		if size > maxAIAResponseSize {
+			ch <- result{err: fmt.Errorf("AIA response too large (%d bytes, max %d)", size, maxAIAResponseSize)}
+			return nil
+		}
+		data := make([]byte, size)
 		js.CopyBytesToGo(data, uint8Array)
 		ch <- result{data: data}
 		return nil

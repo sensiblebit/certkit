@@ -78,6 +78,14 @@ func ResolveAIA(ctx context.Context, input ResolveAIAInput) []string {
 				}
 				seen[aiaURL] = true
 
+				if err := certkit.ValidateAIAURL(aiaURL); err != nil {
+					warnings = append(warnings, fmt.Sprintf(
+						"AIA URL rejected for %q: %v",
+						rec.Cert.Subject.CommonName, err,
+					))
+					continue
+				}
+
 				body, err := input.Fetch(ctx, aiaURL)
 				if err != nil {
 					warnings = append(warnings, fmt.Sprintf(

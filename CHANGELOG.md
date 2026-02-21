@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Fix SSRF bypass via unspecified addresses (`0.0.0.0`, `::`) in `ValidateAIAURL` ([#57])
+- Fix SSRF bypass via CGN/shared address space (`100.64.0.0/10`) in `ValidateAIAURL` ([#57])
+- Fix `ValidateAIAURL` re-parsing CIDR ranges on every call — now parsed once at init ([#57])
+- Fix missing SSRF validation in `ResolveAIA` — AIA URLs are now validated before fetching, not just in caller-provided callbacks ([#57])
+- Fix `VerifyChainTrust` silently falling back to system roots when `roots` is nil — now returns false ([#57])
+- Fix WASM `jsFetchURL` accepting unbounded response data — now enforces 1MB limit consistent with CLI ([#57])
+- Fix WASM `getState`/`resetStore` deadlocking JS event loop when AIA resolution holds the store lock — now uses `TryRLock`/`TryLock` ([#57])
+- Fix WASM `js.FuncOf` promise executor callbacks leaking in `addFiles`, `exportBundlesJS`, and `jsError` — now released after `Promise.New` ([#57])
 - Fix WASM `jsFetchURL` panic when context is cancelled before JS promise settles — callbacks are no longer released prematurely ([#57])
 - Fix WASM `addFiles` leaking `js.FuncOf` callback on every AIA completion notification ([#57])
 - Fix WASM `jsFetchURL` ignoring context cancellation — now returns `ctx.Err()` when context is done ([#56])

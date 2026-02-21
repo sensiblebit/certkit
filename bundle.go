@@ -29,6 +29,26 @@ var (
 	mozillaRootKeys     map[string][]byte // RawSubject → marshaled PKIX public key
 )
 
+// privateNetworks contains CIDR ranges for private, reserved, and shared
+// address space. Parsed once at init to avoid repeated net.ParseCIDR calls.
+var privateNetworks []*net.IPNet
+
+func init() {
+	for _, cidr := range []string{
+		"10.0.0.0/8",     // RFC 1918
+		"172.16.0.0/12",  // RFC 1918
+		"192.168.0.0/16", // RFC 1918
+		"100.64.0.0/10",  // RFC 6598 CGN / shared address space
+		"fc00::/7",       // IPv6 ULA
+	} {
+		_, network, err := net.ParseCIDR(cidr)
+		if err != nil {
+			panic(fmt.Sprintf("invalid CIDR %q: %v", cidr, err))
+		}
+		privateNetworks = append(privateNetworks, network)
+	}
+}
+
 // MozillaRootPEM returns the raw PEM-encoded Mozilla root certificate bundle.
 func MozillaRootPEM() []byte {
 	return []byte(embedded.MozillaCACertificatesPEM())
@@ -159,15 +179,7 @@ func ValidateAIAURL(rawURL string) error {
 	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
 		return fmt.Errorf("blocked address %s (loopback, link-local, or unspecified)", host)
 	}
-	// RFC 1918 private ranges
-	privateRanges := []string{
-		"10.0.0.0/8",
-		"172.16.0.0/12",
-		"192.168.0.0/16",
-		"fc00::/7", // IPv6 ULA
-	}
-	for _, cidr := range privateRanges {
-		_, network, _ := net.ParseCIDR(cidr)
+	for _, network := range privateNetworks {
 		if network.Contains(ip) {
 			return fmt.Errorf("blocked private address %s", host)
 		}
@@ -188,6 +200,9 @@ func ValidateAIAURL(rawURL string) error {
 // invalid at the leaf's issuance time. This is an uncommon edge case in
 // practice (intermediates outlive the leaves they sign).
 func VerifyChainTrust(cert *x509.Certificate, roots, intermediates *x509.CertPool) bool {
+	if roots == nil {
+		return false
+	}
 	if IsMozillaRoot(cert) {
 		return true
 	}
