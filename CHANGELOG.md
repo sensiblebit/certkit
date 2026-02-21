@@ -14,23 +14,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add expired and untrusted certificate counts to scan summary (e.g., `Leaves: 6 (2 expired, 1 untrusted)`) ([`b5969b0`])
 - Add AIA resolution to scan summary path — fetch missing intermediates before trust checking ([`b5969b0`])
 - Add expired and trusted status to `inspect` command output for each certificate ([`b5969b0`])
-- Add `VerifyChainTrust` shared function for consistent chain verification across CLI, WASM, inspect, and `--dump-certs`
-- Strengthen `IsMozillaRoot` to verify public key in addition to Subject — prevents spoofed trust anchors
+- Add `VerifyChainTrust` shared function for consistent chain verification across CLI, WASM, inspect, and `--dump-certs` ([#56])
+- Strengthen `IsMozillaRoot` to verify public key in addition to Subject — prevents spoofed trust anchors ([#56])
 
 ### Changed
 
-- Use `NotBefore + 1s` instead of `NotAfter - 1s` for expired certificate time-shift in chain verification — more robust when intermediates expired before the leaf
+- Use `NotBefore + 1s` instead of `NotAfter - 1s` for expired certificate time-shift in chain verification — more robust when intermediates expired before the leaf ([#56])
 
 ### Fixed
 
 - Fix WASM `jsFetchURL` ignoring context cancellation — now returns `ctx.Err()` when context is done ([#56])
 - Fix `AllKeys()` returning internal map — callers could corrupt store state by modifying the returned map ([#56])
 - Fix `FormatCN` panic when certificate has no CN, no DNS SANs, and nil SerialNumber — now returns "unknown" ([`e70e8e5`])
-- Fix WASM `getState` silently ignoring `MozillaRootPool()` error — now logs error and continues without trust checking
-- Fix WASM `globalStore` race condition — add `sync.RWMutex` for concurrent access from goroutines
-- Fix `--dump-certs` using inconsistent chain verification (missing `ExtKeyUsageAny`, no `IsMozillaRoot` bypass)
+- Fix WASM `getState` silently ignoring `MozillaRootPool()` error — now logs error and continues without trust checking ([#56])
+- Fix WASM `globalStore` race condition — add `sync.RWMutex` for concurrent access from goroutines ([#56])
+- Fix `--dump-certs` using inconsistent chain verification (missing `ExtKeyUsageAny`, no `IsMozillaRoot` bypass) ([#56])
 - Fix expired certificates double-counted as both expired and untrusted in scan summary — now only counted as expired ([#56])
-- Fix `certkit inspect` bare `return err` without context wrapping (ERR-1)
+- Fix `certkit inspect` bare `return err` without context wrapping (ERR-1) ([#56])
 
 ### Removed
 
