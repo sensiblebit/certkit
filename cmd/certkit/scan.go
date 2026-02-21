@@ -285,11 +285,11 @@ func runScan(cmd *cobra.Command, args []string) error {
 			fmt.Printf("\nFound %d certificate(s) and %d key(s)\n", total, summary.Keys)
 			if total > 0 {
 				fmt.Printf("  Roots:          %d%s\n", summary.Roots,
-					certAnnotation(summary.ExpiredRoots, summary.UntrustedRoots))
+					internal.CertAnnotation(summary.ExpiredRoots, summary.UntrustedRoots))
 				fmt.Printf("  Intermediates:  %d%s\n", summary.Intermediates,
-					certAnnotation(summary.ExpiredIntermediates, summary.UntrustedIntermediates))
+					internal.CertAnnotation(summary.ExpiredIntermediates, summary.UntrustedIntermediates))
 				fmt.Printf("  Leaves:         %d%s\n", summary.Leaves,
-					certAnnotation(summary.ExpiredLeaves, summary.UntrustedLeaves))
+					internal.CertAnnotation(summary.ExpiredLeaves, summary.UntrustedLeaves))
 			}
 			if summary.Keys > 0 {
 				fmt.Printf("  Key-cert pairs: %d\n", summary.Matched)
@@ -306,22 +306,6 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
-}
-
-// certAnnotation returns a parenthetical annotation like " (2 expired, 1 untrusted)"
-// for non-zero counts, or an empty string if both are zero.
-func certAnnotation(expired, untrusted int) string {
-	var parts []string
-	if expired > 0 {
-		parts = append(parts, fmt.Sprintf("%d expired", expired))
-	}
-	if untrusted > 0 {
-		parts = append(parts, fmt.Sprintf("%d untrusted", untrusted))
-	}
-	if len(parts) == 0 {
-		return ""
-	}
-	return " (" + strings.Join(parts, ", ") + ")"
 }
 
 // aiaHTTPClient is reused across AIA fetches to enable TCP connection reuse.

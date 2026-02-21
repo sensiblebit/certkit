@@ -51,6 +51,7 @@ func init() {
 
 	registerCompletion(bundleCmd, completionInput{"format", fixedCompletion("pem", "chain", "fullchain", "p12", "jks")})
 	registerCompletion(bundleCmd, completionInput{"trust-store", fixedCompletion("system", "mozilla")})
+	registerCompletion(bundleCmd, completionInput{"out-file", fileCompletion})
 }
 
 func runBundle(cmd *cobra.Command, args []string) error {

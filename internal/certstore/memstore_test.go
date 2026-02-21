@@ -1176,6 +1176,36 @@ func TestMemStore_HandleKey_NilPEM(t *testing.T) {
 	}
 }
 
+func TestMemStore_AllKeys_ReturnsCopy(t *testing.T) {
+	// WHY: AllKeys must return a copy of the internal map so callers cannot
+	// corrupt store state by modifying the returned map.
+	t.Parallel()
+
+	store := NewMemStore()
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "copy.example.com", []string{"copy.example.com"})
+
+	if err := store.HandleKey(leaf.key, leaf.keyPEM, "copy.key"); err != nil {
+		t.Fatal(err)
+	}
+
+	keys := store.AllKeys()
+	if len(keys) != 1 {
+		t.Fatalf("expected 1 key, got %d", len(keys))
+	}
+
+	// Mutate the returned map — should not affect the store
+	for ski := range keys {
+		delete(keys, ski)
+	}
+
+	// Store must still have the key
+	keys2 := store.AllKeys()
+	if len(keys2) != 1 {
+		t.Errorf("store was mutated via returned map: got %d keys, want 1", len(keys2))
+	}
+}
+
 func TestMemStore_MatchedPairs_OrphanedKey(t *testing.T) {
 	// WHY: A key without any matching certificate must NOT appear in MatchedPairs.
 	// MatchedPairs iterates certsBySKI and checks for matching keys; an orphaned

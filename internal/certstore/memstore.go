@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"sort"
 	"time"
@@ -181,9 +182,11 @@ func (s *MemStore) AllCerts() map[string]*CertRecord {
 	return result
 }
 
-// AllKeys returns a snapshot of all key records keyed by SKI.
+// AllKeys returns a copy of all key records keyed by SKI.
 func (s *MemStore) AllKeys() map[string]*KeyRecord {
-	return s.keys
+	result := make(map[string]*KeyRecord, len(s.keys))
+	maps.Copy(result, s.keys)
+	return result
 }
 
 // AllCertsFlat returns all certificate records as a flat slice.
