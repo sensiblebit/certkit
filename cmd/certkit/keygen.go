@@ -39,9 +39,9 @@ func init() {
 	keygenCmd.Flags().StringVar(&keygenCN, "cn", "", "Common Name for CSR generation")
 	keygenCmd.Flags().StringSliceVar(&keygenSANs, "sans", nil, "Comma-separated SANs for CSR generation")
 
-	registerCompletion(keygenCmd, "algorithm", fixedCompletion("rsa", "ecdsa", "ed25519"))
-	registerCompletion(keygenCmd, "curve", fixedCompletion("P-256", "P-384", "P-521"))
-	registerCompletion(keygenCmd, "out-path", directoryCompletion)
+	registerCompletion(keygenCmd, completionInput{"algorithm", fixedCompletion("rsa", "ecdsa", "ed25519")})
+	registerCompletion(keygenCmd, completionInput{"curve", fixedCompletion("P-256", "P-384", "P-521")})
+	registerCompletion(keygenCmd, completionInput{"out-path", directoryCompletion})
 }
 
 func runKeygen(cmd *cobra.Command, args []string) error {

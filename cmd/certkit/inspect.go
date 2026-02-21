@@ -25,7 +25,7 @@ var inspectCmd = &cobra.Command{
 func init() {
 	inspectCmd.Flags().StringVar(&inspectFormat, "format", "text", "Output format: text or json")
 
-	registerCompletion(inspectCmd, "format", fixedCompletion("text", "json"))
+	registerCompletion(inspectCmd, completionInput{"format", fixedCompletion("text", "json")})
 }
 
 func runInspect(cmd *cobra.Command, args []string) error {

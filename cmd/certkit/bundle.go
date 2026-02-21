@@ -48,8 +48,8 @@ func init() {
 	bundleCmd.Flags().BoolVarP(&bundleForce, "force", "f", false, "Skip chain verification")
 	bundleCmd.Flags().StringVar(&bundleTrustStore, "trust-store", "mozilla", "Trust store: system, mozilla")
 
-	registerCompletion(bundleCmd, "format", fixedCompletion("pem", "chain", "fullchain", "p12", "jks"))
-	registerCompletion(bundleCmd, "trust-store", fixedCompletion("system", "mozilla"))
+	registerCompletion(bundleCmd, completionInput{"format", fixedCompletion("pem", "chain", "fullchain", "p12", "jks")})
+	registerCompletion(bundleCmd, completionInput{"trust-store", fixedCompletion("system", "mozilla")})
 }
 
 func runBundle(cmd *cobra.Command, args []string) error {

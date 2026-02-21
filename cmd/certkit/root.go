@@ -30,7 +30,7 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&passwordFile, "password-file", "", "File containing passwords, one per line")
 	rootCmd.PersistentFlags().BoolVar(&allowExpired, "allow-expired", false, "Include expired certificates")
 
-	registerCompletion(rootCmd, "log-level", fixedCompletion("debug", "info", "warn", "error"))
+	registerCompletion(rootCmd, completionInput{"log-level", fixedCompletion("debug", "info", "warn", "error")})
 
 	rootCmd.AddCommand(scanCmd)
 	rootCmd.AddCommand(bundleCmd)
