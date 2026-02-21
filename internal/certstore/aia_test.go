@@ -805,3 +805,97 @@ func TestResolveAIA_CancelledContext(t *testing.T) {
 		t.Error("expected at least one warning from cancelled fetch")
 	}
 }
+
+func TestResolveAIA_RejectsSSRFURL(t *testing.T) {
+	// WHY: When a certificate has a private/loopback AIA URL, ResolveAIA must
+	// reject it with a warning before invoking the fetcher — this is the
+	// integration point for ValidateAIAURL within the AIA resolution loop.
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		aiaURL string
+		errSub string
+	}{
+		{"loopback IPv4", "http://127.0.0.1/ca.cer", "AIA URL rejected"},
+		{"private 10.x", "http://10.0.0.1/ca.cer", "AIA URL rejected"},
+		{"file scheme", "file:///etc/passwd", "AIA URL rejected"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			store := NewMemStore()
+
+			caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			caTmpl := &x509.Certificate{
+				SerialNumber:          randomSerial(t),
+				Subject:               pkix.Name{CommonName: "SSRF CA"},
+				NotBefore:             time.Now().Add(-time.Hour),
+				NotAfter:              time.Now().Add(24 * time.Hour),
+				IsCA:                  true,
+				BasicConstraintsValid: true,
+				KeyUsage:              x509.KeyUsageCertSign,
+			}
+			caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			caCert, err := x509.ParseCertificate(caDER)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			leafTmpl := &x509.Certificate{
+				SerialNumber:          randomSerial(t),
+				Subject:               pkix.Name{CommonName: "ssrf.example.com"},
+				NotBefore:             time.Now().Add(-time.Hour),
+				NotAfter:              time.Now().Add(24 * time.Hour),
+				IssuingCertificateURL: []string{tt.aiaURL},
+			}
+			leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			leafCert, err := x509.ParseCertificate(leafDER)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			if err := store.HandleCertificate(leafCert, "leaf.pem"); err != nil {
+				t.Fatal(err)
+			}
+
+			var fetchCount atomic.Int32
+			fetcher := func(_ context.Context, _ string) ([]byte, error) {
+				fetchCount.Add(1)
+				return caDER, nil
+			}
+
+			warnings := ResolveAIA(context.Background(), ResolveAIAInput{
+				Store: store,
+				Fetch: fetcher,
+			})
+
+			if fetchCount.Load() != 0 {
+				t.Errorf("fetcher should not be called for SSRF URL, got %d calls", fetchCount.Load())
+			}
+			if len(warnings) != 1 {
+				t.Fatalf("expected 1 warning, got %d: %v", len(warnings), warnings)
+			}
+			if !strings.Contains(warnings[0], tt.errSub) {
+				t.Errorf("warning = %q, want substring %q", warnings[0], tt.errSub)
+			}
+			if len(store.AllCertsFlat()) != 1 {
+				t.Errorf("store should still have only the leaf, got %d certs", len(store.AllCertsFlat()))
+			}
+		})
+	}
+}

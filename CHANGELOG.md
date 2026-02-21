@@ -23,6 +23,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fix bare `return err` without context wrapping (ERR-1) in scan command `MozillaRootPool` and `httpAIAFetcher` calls ([#57])
+- Fix silent error swallowing (ERR-5) in `mozillaRootPublicKeys`, `ResolveAIA`, and WASM `json.Marshal` calls — now log with `slog` ([#57])
+- Fix WASM `jsFetchURL` catch callback panic when JS promise rejects with null or non-Error value ([#57])
+- Fix WASM `exportBundlesJS` missing `defer` on `RUnlock` — panic during export would permanently deadlock the store ([#57])
 - Fix SSRF bypass via unspecified addresses (`0.0.0.0`, `::`) in `ValidateAIAURL` ([#57])
 - Fix SSRF bypass via CGN/shared address space (`100.64.0.0/10`) in `ValidateAIAURL` ([#57])
 - Fix `ValidateAIAURL` re-parsing CIDR ranges on every call — now parsed once at init ([#57])
@@ -41,6 +45,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix `--dump-certs` using inconsistent chain verification (missing `ExtKeyUsageAny`, no `IsMozillaRoot` bypass) ([#56])
 - Fix expired certificates double-counted as both expired and untrusted in scan summary — now only counted as expired ([#56])
 - Fix `certkit inspect` bare `return err` without context wrapping (ERR-1) ([#56])
+
+### Tests
+
+- Add `ResolveAIA` SSRF URL rejection test — verifies private/loopback AIA URLs produce warnings without invoking the fetcher ([#57])
+- Add `VerifyChainTrust` edge case tests: nil intermediates pool, expired intermediate valid at leaf's NotBefore ([#57])
+- Add `ScanSummary` nil-pool test — verifies expired counts are computed but untrusted counts are skipped when no root pool is provided ([#57])
+- Strengthen `ValidateAIAURL` empty-scheme assertion to verify specific error message ([#57])
 
 ### Removed
 

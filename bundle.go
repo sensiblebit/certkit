@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/url"
@@ -113,10 +114,12 @@ func mozillaRootPublicKeys() map[string][]byte {
 			}
 			cert, err := x509.ParseCertificate(block.Bytes)
 			if err != nil {
+				slog.Debug("skipping unparseable root certificate", "error", err)
 				continue
 			}
 			pubBytes, err := x509.MarshalPKIXPublicKey(cert.PublicKey)
 			if err != nil {
+				slog.Debug("skipping root with unmarshalable public key", "error", err)
 				continue
 			}
 			mozillaRootKeys[string(cert.RawSubject)] = pubBytes

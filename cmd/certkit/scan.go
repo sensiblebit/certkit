@@ -202,7 +202,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 			// Build mozilla root pool for verification (consistent with summary)
 			mozillaPool, err := certkit.MozillaRootPool()
 			if err != nil {
-				return err
+				return fmt.Errorf("loading Mozilla root pool: %w", err)
 			}
 			intermediatePool := store.IntermediatePool()
 
@@ -267,7 +267,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 		// Print summary with trust and expiry annotations
 		mozillaPool, err := certkit.MozillaRootPool()
 		if err != nil {
-			return err
+			return fmt.Errorf("loading Mozilla root pool: %w", err)
 		}
 		summary := store.ScanSummary(certstore.ScanSummaryInput{
 			RootPool: mozillaPool,
@@ -329,11 +329,11 @@ func httpAIAFetcher(ctx context.Context, rawURL string) ([]byte, error) {
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("creating AIA request: %w", err)
 	}
 	resp, err := aiaHTTPClient.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("fetching AIA URL %s: %w", rawURL, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {

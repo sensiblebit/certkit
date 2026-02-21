@@ -901,6 +901,36 @@ func TestMemStore_ScanSummaryTrust(t *testing.T) {
 	}
 }
 
+func TestMemStore_ScanSummaryNilPool(t *testing.T) {
+	// WHY: When RootPool is nil, ScanSummary must skip trust checking entirely.
+	// Expired counts are still computed, but untrusted counts must be zero.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	expired := newExpiredLeaf(t, ca)
+
+	store := NewMemStore()
+	if err := store.HandleCertificate(ca.cert, "ca.pem"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HandleCertificate(expired.cert, "expired.pem"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Nil pool — trust checking is skipped
+	summary := store.ScanSummary(ScanSummaryInput{})
+
+	if summary.ExpiredLeaves != 1 {
+		t.Errorf("ExpiredLeaves = %d, want 1", summary.ExpiredLeaves)
+	}
+	if summary.UntrustedLeaves != 0 {
+		t.Errorf("UntrustedLeaves = %d, want 0 (nil pool skips trust)", summary.UntrustedLeaves)
+	}
+	if summary.UntrustedRoots != 0 {
+		t.Errorf("UntrustedRoots = %d, want 0 (nil pool skips trust)", summary.UntrustedRoots)
+	}
+}
+
 func TestMemStore_AllCertsFlat(t *testing.T) {
 	// WHY: AllCertsFlat must return every stored cert, including multiple certs
 	// per SKI, for operations like --dump-certs that need the full list.

@@ -89,7 +89,10 @@ func addFiles(_ js.Value, args []js.Value) any {
 			}
 			storeMu.Unlock()
 
-			jsonBytes, _ := json.Marshal(results)
+			jsonBytes, err := json.Marshal(results)
+			if err != nil {
+				slog.Error("marshaling addFiles results", "error", err)
+			}
 			resolve.Invoke(string(jsonBytes))
 
 			// Eagerly resolve AIA intermediates in the background.
@@ -109,7 +112,10 @@ func addFiles(_ js.Value, args []js.Value) any {
 					warnings = []string{}
 				}
 
-				warnJSON, _ := json.Marshal(warnings)
+				warnJSON, err := json.Marshal(warnings)
+				if err != nil {
+					slog.Error("marshaling AIA warnings", "error", err)
+				}
 				var cb js.Func
 				cb = js.FuncOf(func(_ js.Value, _ []js.Value) any {
 					defer cb.Release()
@@ -169,7 +175,11 @@ func getState(_ js.Value, _ []js.Value) any {
 		// Store is locked by AIA resolution; return a busy indicator
 		// instead of blocking the JS event loop (which would deadlock).
 		resp := stateResponse{Busy: true}
-		jsonBytes, _ := json.Marshal(resp)
+		jsonBytes, err := json.Marshal(resp)
+		if err != nil {
+			slog.Error("marshaling busy state", "error", err)
+			return `{"busy":true}`
+		}
 		return string(jsonBytes)
 	}
 	defer storeMu.RUnlock()
@@ -227,7 +237,11 @@ func getState(_ js.Value, _ []js.Value) any {
 
 	resp.MatchedPairs = len(globalStore.MatchedPairs())
 
-	jsonBytes, _ := json.Marshal(resp)
+	jsonBytes, err := json.Marshal(resp)
+	if err != nil {
+		slog.Error("marshaling state response", "error", err)
+		return `{"error":"internal marshal failure"}`
+	}
 	return string(jsonBytes)
 }
 
@@ -252,8 +266,8 @@ func exportBundlesJS(_ js.Value, args []js.Value) any {
 			defer cancel()
 
 			storeMu.RLock()
+			defer storeMu.RUnlock()
 			zipData, err := exportBundles(ctx, globalStore, filterSKIs)
-			storeMu.RUnlock()
 
 			if err != nil {
 				reject.Invoke(js.Global().Get("Error").New(err.Error()))

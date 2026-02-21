@@ -3,6 +3,7 @@ package certstore
 import (
 	"context"
 	"fmt"
+	"log/slog"
 
 	"github.com/sensiblebit/certkit"
 )
@@ -107,6 +108,7 @@ func ResolveAIA(ctx context.Context, input ResolveAIAInput) []string {
 
 				for _, issuer := range issuers {
 					if err := input.Store.HandleCertificate(issuer, "AIA: "+aiaURL); err != nil {
+						slog.Debug("skipping AIA certificate", "url", aiaURL, "error", err)
 						continue
 					}
 					fetched++

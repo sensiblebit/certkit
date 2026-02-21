@@ -1571,6 +1571,70 @@ func TestVerifyChainTrust(t *testing.T) {
 		}
 	})
 
+	t.Run("nil intermediates pool", func(t *testing.T) {
+		t.Parallel()
+		// Root cert should be trusted even with nil intermediates pool.
+		if !VerifyChainTrust(rootCert, rootPool, nil) {
+			t.Error("root cert in pool should be trusted with nil intermediates")
+		}
+	})
+
+	t.Run("expired intermediate valid at leaf NotBefore", func(t *testing.T) {
+		t.Parallel()
+		// Build a chain where the intermediate was valid when the leaf was
+		// issued (at leaf.NotBefore) but has since expired.
+		expInterKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		expInterTmpl := &x509.Certificate{
+			SerialNumber:          randomSerial(t),
+			Subject:               pkix.Name{CommonName: "Expired Intermediate"},
+			NotBefore:             time.Now().Add(-3 * 365 * 24 * time.Hour),
+			NotAfter:              time.Now().Add(-24 * time.Hour), // expired yesterday
+			IsCA:                  true,
+			BasicConstraintsValid: true,
+			KeyUsage:              x509.KeyUsageCertSign,
+		}
+		expInterDER, err := x509.CreateCertificate(rand.Reader, expInterTmpl, rootCert, &expInterKey.PublicKey, rootKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		expInterCert, err := x509.ParseCertificate(expInterDER)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Leaf issued 2y ago (intermediate was valid then), expired yesterday.
+		leafKey2, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		leafTmpl2 := &x509.Certificate{
+			SerialNumber: randomSerial(t),
+			Subject:      pkix.Name{CommonName: "expired-inter-leaf.example.com"},
+			NotBefore:    time.Now().Add(-2 * 365 * 24 * time.Hour),
+			NotAfter:     time.Now().Add(-24 * time.Hour),
+			KeyUsage:     x509.KeyUsageDigitalSignature,
+		}
+		leafDER2, err := x509.CreateCertificate(rand.Reader, leafTmpl2, expInterCert, &leafKey2.PublicKey, expInterKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		leaf2, err := x509.ParseCertificate(leafDER2)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		expInterPool := x509.NewCertPool()
+		expInterPool.AddCert(expInterCert)
+
+		// Time-shift to leaf.NotBefore+1s — intermediate was valid then.
+		if !VerifyChainTrust(leaf2, rootPool, expInterPool) {
+			t.Error("VerifyChainTrust should trust leaf with expired intermediate that was valid at leaf NotBefore")
+		}
+	})
+
 	// Separate test for Mozilla root bypass — uses a real Mozilla root cert.
 	t.Run("mozilla root bypasses chain verification", func(t *testing.T) {
 		t.Parallel()
@@ -1607,7 +1671,7 @@ func TestValidateAIAURL(t *testing.T) {
 		{"valid https", "https://ca.example.com/issuer.cer", false, ""},
 		{"ftp rejected", "ftp://ca.example.com/issuer.cer", true, "unsupported scheme"},
 		{"file rejected", "file:///etc/passwd", true, "unsupported scheme"},
-		{"empty scheme rejected", "://foo", true, ""},
+		{"empty scheme rejected", "://foo", true, "parsing URL"},
 		{"loopback IPv4", "http://127.0.0.1/ca.cer", true, "loopback"},
 		{"loopback IPv6", "http://[::1]/ca.cer", true, "loopback"},
 		{"link-local IPv4", "http://169.254.1.1/ca.cer", true, "loopback, link-local, or unspecified"},

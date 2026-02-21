@@ -53,8 +53,14 @@ func jsFetchURL(ctx context.Context, url string) ([]byte, error) {
 	})
 
 	catchCb := js.FuncOf(func(_ js.Value, args []js.Value) any {
-		errMsg := args[0].Get("message").String()
-		ch <- result{err: fmt.Errorf("%s", errMsg)}
+		val := args[0]
+		var errMsg string
+		if val.Type() == js.TypeObject || val.Type() == js.TypeFunction {
+			errMsg = val.Get("message").String()
+		} else {
+			errMsg = val.String()
+		}
+		ch <- result{err: fmt.Errorf("AIA fetch: %s", errMsg)}
 		return nil
 	})
 
