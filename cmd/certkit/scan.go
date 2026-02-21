@@ -55,6 +55,9 @@ func init() {
 	scanCmd.Flags().StringVar(&scanDumpCerts, "dump-certs", "", "Dump all discovered certificates to a single PEM file")
 	scanCmd.Flags().Int64Var(&scanMaxFileSize, "max-file-size", 10*1024*1024, "Skip files larger than this size in bytes (0 to disable)")
 	scanCmd.Flags().StringVar(&scanFormat, "format", "text", "Output format: text or json")
+
+	registerCompletion(scanCmd, "format", fixedCompletion("text", "json"))
+	registerCompletion(scanCmd, "bundle-path", directoryCompletion)
 }
 
 func runScan(cmd *cobra.Command, args []string) error {

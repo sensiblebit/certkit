@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add shell tab completion for all enum flags (`--format`, `--algorithm`, `--curve`, `--log-level`, `--trust-store`) and directory flags (`--bundle-path`, `--out-path`)
+
 ### Fixed
 
 - Fix `FormatCN` panic when certificate has no CN, no DNS SANs, and nil SerialNumber — now returns "unknown" ([`e70e8e5`])
