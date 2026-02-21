@@ -74,6 +74,11 @@ func MozillaRootPool() (*x509.CertPool, error) {
 // MozillaRootSubjects returns a set of raw ASN.1 subject byte strings from all
 // Mozilla root certificates. The result is initialized once and cached for the
 // lifetime of the process.
+//
+// The returned map is shared and must not be modified by callers. We
+// intentionally return the backing map directly rather than a defensive copy
+// because all callers perform read-only lookups, and copying ~150 entries on
+// every call would violate PERF-2 for no practical safety gain.
 func MozillaRootSubjects() map[string]bool {
 	mozillaSubjectsOnce.Do(func() {
 		mozillaSubjects = make(map[string]bool)
@@ -163,6 +168,18 @@ func IsIssuedByMozillaRoot(cert *x509.Certificate) bool {
 // ValidateAIAURL checks whether a URL is safe to fetch for AIA certificate
 // resolution. It rejects non-HTTP(S) schemes and literal private/loopback/
 // link-local IP addresses to prevent SSRF.
+//
+// Known limitation: hostnames that resolve to private IPs are intentionally
+// allowed. This means DNS rebinding (a hostname resolving to a public IP at
+// validation time, then to a private IP at connection time) is theoretically
+// possible. We accept this because:
+//
+//  1. certkit is a short-lived CLI process — the window between ValidateAIAURL
+//     and the HTTP request is ~2ms, making rebinding impractical to exploit.
+//  2. Blocking hostnames that resolve to private IPs would break legitimate
+//     internal CAs whose AIA endpoints are on private networks.
+//  3. Adding net.Dialer.Control to check resolved IPs doesn't help: if we
+//     allow private IPs for internal CAs, the check is the same TOCTOU race.
 func ValidateAIAURL(rawURL string) error {
 	parsed, err := url.Parse(rawURL)
 	if err != nil {
@@ -177,7 +194,7 @@ func ValidateAIAURL(rawURL string) error {
 	host := parsed.Hostname()
 	ip := net.ParseIP(host)
 	if ip == nil {
-		return nil // hostname, not a literal IP — allow
+		return nil // hostname, not a literal IP — allow (see doc comment)
 	}
 	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
 		return fmt.Errorf("blocked address %s (loopback, link-local, or unspecified)", host)
