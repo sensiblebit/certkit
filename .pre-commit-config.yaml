@@ -8,7 +8,7 @@ repos:
         args: [--branch, main]
 
   - repo: https://github.com/sensiblebit/.github
-    rev: "bb8938c"
+    rev: "15d19ac"
     hooks:
       - id: branch-name
       - id: commit-message
@@ -16,9 +16,9 @@ repos:
       - id: go-fix
       - id: wasm
       - id: go-vet
+      - id: golangci-lint
       - id: go-build
       - id: go-test
-      - id: golangci-lint
 
   # ── JS / TS ──
   - repo: https://github.com/pre-commit/mirrors-prettier
