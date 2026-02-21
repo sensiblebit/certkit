@@ -14,9 +14,9 @@ repos:
       - id: commit-message
       - id: goimports
       - id: go-fix
-      - id: wasm
       - id: go-vet
       - id: golangci-lint
+      - id: wasm
       - id: go-build
       - id: go-test
 
