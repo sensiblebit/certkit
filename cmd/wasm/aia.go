@@ -13,10 +13,26 @@ import (
 // resolveAIA walks AIA CA Issuers URLs for all non-root certificates in the
 // store, fetching missing intermediates via JavaScript. Delegates the algorithm
 // to the shared certstore.ResolveAIA with a JS fetch transport.
+//
+// Progress is dispatched to JS via setTimeout so the browser event loop can
+// update the progress bar without blocking the AIA goroutine.
 func resolveAIA(ctx context.Context, s *certstore.MemStore) []string {
 	return certstore.ResolveAIA(ctx, certstore.ResolveAIAInput{
-		Store: s,
-		Fetch: jsFetchURL,
+		Store:       s,
+		Fetch:       jsFetchURL,
+		Concurrency: 50,
+		OnProgress: func(completed, total int) {
+			var cb js.Func
+			cb = js.FuncOf(func(_ js.Value, _ []js.Value) any {
+				defer cb.Release()
+				fn := js.Global().Get("certkitOnAIAProgress")
+				if fn.Type() == js.TypeFunction {
+					fn.Invoke(completed, total)
+				}
+				return nil
+			})
+			js.Global().Call("setTimeout", cb, 0)
+		},
 	})
 }
 

@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add tab navigation to web UI with Inspect and Verify tabs
+- Add Verify tab to web UI — paste PEM certificates to check expiration, self-signed status, signature strength, and chain trust against the Mozilla root store
+- Add `certkitValidateCert` WASM function for browser-based certificate validation
+- Add concurrent AIA resolution — fetches up to `Concurrency` URLs in parallel per depth round (default 20, WASM uses 50)
+
 ## [0.8.0] - 2026-02-22
 
 ### Added
