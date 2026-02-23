@@ -63,6 +63,7 @@ func addFiles(_ js.Value, args []js.Value) any {
 		reject := promiseArgs[1]
 		go func() {
 			storeMu.Lock()
+			defer storeMu.Unlock()
 			var results []map[string]any
 			for i := range length {
 				file := filesArg.Index(i)
@@ -89,7 +90,6 @@ func addFiles(_ js.Value, args []js.Value) any {
 					"error":  errMsg,
 				})
 			}
-			storeMu.Unlock()
 
 			jsonBytes, err := json.Marshal(results)
 			if err != nil {
@@ -108,8 +108,8 @@ func addFiles(_ js.Value, args []js.Value) any {
 				defer cancel()
 
 				storeMu.Lock()
+				defer storeMu.Unlock()
 				warnings := resolveAIA(ctx, globalStore)
-				storeMu.Unlock()
 
 				if warnings == nil {
 					warnings = []string{}
@@ -118,6 +118,7 @@ func addFiles(_ js.Value, args []js.Value) any {
 				warnJSON, err := json.Marshal(warnings)
 				if err != nil {
 					slog.Error("marshaling AIA warnings", "error", err)
+					return
 				}
 				var cb js.Func
 				cb = js.FuncOf(func(_ js.Value, _ []js.Value) any {
