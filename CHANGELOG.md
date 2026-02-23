@@ -9,10 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Add tab navigation to web UI with Inspect and Verify tabs
-- Add Verify tab to web UI — paste PEM certificates to check expiration, self-signed status, signature strength, and chain trust against the Mozilla root store
 - Add `certkitValidateCert` WASM function for browser-based certificate validation
 - Add concurrent AIA resolution — fetches up to `Concurrency` URLs in parallel per depth round (default 20, WASM uses 50)
+- Add `serial` field to WASM `getState()` certificate data — hex-encoded serial number
+- Add paste support to web UI drop zone — Ctrl+V / Cmd+V pastes PEM or certificate text directly without needing a file
+
+### Changed
+
+- Replace Inspect/Verify tab navigation with unified category tabs (Leaf, Intermediate, Root, Keys) — certificates are now organized by type with click-to-expand detail rows showing validation checks and metadata
 
 ## [0.8.0] - 2026-02-22
 
