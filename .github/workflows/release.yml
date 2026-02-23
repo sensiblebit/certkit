@@ -35,7 +35,6 @@ jobs:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
 
   winget:
-    if: false # Enable after initial manual winget-pkgs submission
     needs: release
     runs-on: windows-latest
     steps:
