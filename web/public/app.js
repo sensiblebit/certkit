@@ -226,12 +226,18 @@ async function readEntries(entries) {
 
 async function processFiles(files) {
   if (processing) return;
-  const fileObjects = await Promise.all(
-    files.map(async (f) => {
-      const buf = await f.arrayBuffer();
-      return { name: f.name, data: new Uint8Array(buf) };
-    }),
-  );
+  let fileObjects;
+  try {
+    fileObjects = await Promise.all(
+      files.map(async (f) => {
+        const buf = await f.arrayBuffer();
+        return { name: f.name, data: new Uint8Array(buf) };
+      }),
+    );
+  } catch (err) {
+    showStatus(`Error reading files: ${err.message}`, true);
+    return;
+  }
   await addFileObjects(fileObjects, `Processing ${files.length} file(s)...`);
 }
 
@@ -923,6 +929,7 @@ exportBtn.addEventListener("click", async () => {
 resetBtn.addEventListener("click", () => {
   if (!wasmReady) return;
   certkitReset();
+  processing = false;
   lastState = null;
   aiaComplete = false;
   selectedSKIs.clear();
