@@ -11,9 +11,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add `ValidateAIAURL` to block SSRF via non-HTTP schemes and literal private/loopback IP addresses in AIA URLs ([#56])
 - Add shell tab completion for all enum flags (`--format`, `--algorithm`, `--curve`, `--log-level`, `--trust-store`), directory flags (`--bundle-path`, `--out-path`), and file flags (`--out-file`) ([#56])
-- Add expired and untrusted certificate counts to scan summary (e.g., `Leaves: 6 (2 expired, 1 untrusted)`) ([`b5969b0`])
-- Add AIA resolution to scan summary path — fetch missing intermediates before trust checking ([`b5969b0`])
-- Add expired and trusted status to `inspect` command output for each certificate ([`b5969b0`])
+- Add expired and untrusted certificate counts to scan summary (e.g., `Leaves: 6 (2 expired, 1 untrusted)`) ([#57])
+- Add AIA resolution to scan summary path — fetch missing intermediates before trust checking ([#57])
+- Add expired and trusted status to `inspect` command output for each certificate ([#57])
 - Add `VerifyChainTrust` shared function for consistent chain verification across CLI, WASM, inspect, and `--dump-certs` ([#56])
 - Strengthen `IsMozillaRoot` to verify public key in addition to Subject — prevents spoofed trust anchors ([#56])
 
@@ -38,6 +38,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix WASM `js.FuncOf` promise executor callbacks leaking in `addFiles`, `exportBundlesJS`, and `jsError` — now released after `Promise.New` ([#57])
 - Fix WASM `jsFetchURL` panic when context is cancelled before JS promise settles — callbacks are no longer released prematurely ([#57])
 - Fix WASM `addFiles` leaking `js.FuncOf` callback on every AIA completion notification ([#57])
+- Fix `VerifyChainTrust` godoc attaching to `VerifyChainTrustInput` struct instead of the function (API-1) ([#58])
+- Fix WASM `addFiles` missing `defer` on `storeMu.Unlock` — panic during file processing would permanently deadlock the store ([#58])
+- Fix WASM AIA goroutine missing `defer` on `storeMu.Unlock` — panic during AIA resolution would permanently deadlock the store ([#58])
+- Fix WASM AIA goroutine falling through to `onComplete` callback with nil JSON when `json.Marshal` fails (ERR-6) ([#58])
+- Fix changelog entries referencing non-existent commit `b5969b0` — replaced with PR ref ([#58])
 - Fix WASM `jsFetchURL` ignoring context cancellation — now returns `ctx.Err()` when context is done ([#56])
 - Fix `AllKeys()` returning internal map — callers could corrupt store state by modifying the returned map ([#56])
 - Fix `FormatCN` panic when certificate has no CN, no DNS SANs, and nil SerialNumber — now returns "unknown" ([`e70e8e5`])
@@ -554,7 +559,6 @@ Initial release.
 [0.1.1]: https://github.com/sensiblebit/certkit/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/sensiblebit/certkit/releases/tag/v0.1.0
 
-[`b5969b0`]: https://github.com/sensiblebit/certkit/commit/b5969b0
 [`e70e8e5`]: https://github.com/sensiblebit/certkit/commit/e70e8e5
 [`0fa55af`]: https://github.com/sensiblebit/certkit/commit/0fa55af
 [`b69caef`]: https://github.com/sensiblebit/certkit/commit/b69caef
@@ -610,6 +614,7 @@ Initial release.
 [`55b5c1e`]: https://github.com/sensiblebit/certkit/commit/55b5c1e
 [`8cf81d9`]: https://github.com/sensiblebit/certkit/commit/8cf81d9
 [`3569926`]: https://github.com/sensiblebit/certkit/commit/3569926
+[#58]: https://github.com/sensiblebit/certkit/pull/58
 [#57]: https://github.com/sensiblebit/certkit/pull/57
 [#56]: https://github.com/sensiblebit/certkit/pull/56
 [#48]: https://github.com/sensiblebit/certkit/pull/48

@@ -208,6 +208,13 @@ func ValidateAIAURL(rawURL string) error {
 	return nil
 }
 
+// VerifyChainTrustInput holds parameters for VerifyChainTrust.
+type VerifyChainTrustInput struct {
+	Cert          *x509.Certificate
+	Roots         *x509.CertPool
+	Intermediates *x509.CertPool
+}
+
 // VerifyChainTrust reports whether the given certificate chains to a trusted
 // root. Cross-signed roots (same Subject and public key as a Mozilla root)
 // are trusted directly. For expired certificates, verification is performed
@@ -220,13 +227,6 @@ func ValidateAIAURL(rawURL string) error {
 // the time-shifted verification will still fail because the intermediate is
 // invalid at the leaf's issuance time. This is an uncommon edge case in
 // practice (intermediates outlive the leaves they sign).
-// VerifyChainTrustInput holds parameters for VerifyChainTrust.
-type VerifyChainTrustInput struct {
-	Cert          *x509.Certificate
-	Roots         *x509.CertPool
-	Intermediates *x509.CertPool
-}
-
 func VerifyChainTrust(input VerifyChainTrustInput) bool {
 	if input.Roots == nil {
 		return false
