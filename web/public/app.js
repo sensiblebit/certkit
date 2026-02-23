@@ -28,8 +28,8 @@ const selectAll = document.getElementById("select-all");
 // State
 let wasmReady = false;
 let aiaComplete = false;
+let processing = false;
 const selectedSKIs = new Set();
-let visibleCertSKIs = new Set();
 const certSort = { column: "expiry", direction: "desc" };
 const keySort = { column: "match", direction: "desc" };
 let activeCategory = "leaf";
@@ -123,7 +123,7 @@ dropZone.addEventListener("dragleave", () => {
 dropZone.addEventListener("drop", async (e) => {
   e.preventDefault();
   dropZone.classList.remove("dragging");
-  if (!wasmReady) return;
+  if (!wasmReady || processing) return;
 
   const items = e.dataTransfer.items;
   if (items) {
@@ -135,7 +135,7 @@ dropZone.addEventListener("drop", async (e) => {
 });
 
 fileInput.addEventListener("change", async () => {
-  if (!wasmReady) return;
+  if (!wasmReady || processing) return;
   const files = Array.from(fileInput.files);
   if (files.length > 0) {
     await processFiles(files);
@@ -152,28 +152,7 @@ dropZone.addEventListener("keydown", (e) => {
 
 // --- Paste Support ---
 
-async function processPasted(data) {
-  showStatus("Processing pasted data...", false, true);
-  try {
-    const resultJSON = await certkitAddFiles(
-      [{ name: "pasted.pem", data }],
-      passwordsInput.value.trim(),
-    );
-    const results = JSON.parse(resultJSON);
-
-    const errors = results.filter((r) => r.status === "error");
-    if (errors.length > 0) {
-      const msgs = errors.map((e) => `${e.name}: ${e.error}`);
-      console.warn("Processing errors:", msgs);
-    }
-
-    refreshUI();
-    aiaComplete = false;
-    showStatus("Resolving certificate chains via AIA...", false, true);
-  } catch (err) {
-    showStatus(`Error: ${err.message}`, true);
-  }
-}
+const MAX_PASTE_BYTES = 1024 * 1024; // 1 MB
 
 document.addEventListener("paste", async (e) => {
   // Don't intercept paste into input fields.
@@ -182,11 +161,22 @@ document.addEventListener("paste", async (e) => {
     return;
   }
   e.preventDefault();
-  if (!wasmReady) return;
+  if (!wasmReady) {
+    showStatus("Please wait, WASM module is still loading...");
+    return;
+  }
+  if (processing) return;
   const text = e.clipboardData.getData("text/plain");
   if (!text.trim()) return;
+  if (text.length > MAX_PASTE_BYTES) {
+    showStatus("Pasted data is too large (max 1 MB)", true);
+    return;
+  }
   const data = new TextEncoder().encode(text);
-  await processPasted(data);
+  await addFileObjects(
+    [{ name: "pasted.pem", data }],
+    "Processing pasted data...",
+  );
 });
 
 // --- File Collection (supports recursive folder reading) ---
@@ -235,19 +225,27 @@ async function readEntries(entries) {
 // --- File Processing ---
 
 async function processFiles(files) {
-  showStatus(`Processing ${files.length} file(s)...`, false, true);
-
-  const passwords = passwordsInput.value.trim();
-
+  if (processing) return;
   const fileObjects = await Promise.all(
     files.map(async (f) => {
       const buf = await f.arrayBuffer();
       return { name: f.name, data: new Uint8Array(buf) };
     }),
   );
+  await addFileObjects(fileObjects, `Processing ${files.length} file(s)...`);
+}
+
+// Shared helper for both file drops and paste. Sends file objects to WASM,
+// handles errors, and kicks off AIA resolution.
+async function addFileObjects(fileObjects, statusMessage) {
+  processing = true;
+  showStatus(statusMessage, false, true);
 
   try {
-    const resultJSON = await certkitAddFiles(fileObjects, passwords);
+    const resultJSON = await certkitAddFiles(
+      fileObjects,
+      passwordsInput.value.trim(),
+    );
     const results = JSON.parse(resultJSON);
 
     const errors = results.filter((r) => r.status === "error");
@@ -256,11 +254,19 @@ async function processFiles(files) {
       console.warn("Processing errors:", msgs);
     }
 
+    // If every input failed, show a user-visible error and bail.
+    if (errors.length === results.length) {
+      showStatus(`Could not parse input: ${errors[0].error}`, true);
+      return;
+    }
+
     refreshUI();
     aiaComplete = false;
     showStatus("Resolving certificate chains via AIA...", false, true);
   } catch (err) {
     showStatus(`Error: ${err.message}`, true);
+  } finally {
+    processing = false;
   }
 }
 
@@ -496,9 +502,6 @@ function renderCerts() {
     if (filterUntrusted.checked && !c.trusted) return false;
     return true;
   });
-
-  // Store visible cert SKIs so renderKeys can filter keys to match.
-  visibleCertSKIs = new Set(visible.map((c) => c.ski));
 
   renderSummary();
 
@@ -774,7 +777,7 @@ function buildMetadataHTML(cert) {
 
   let html = `<div class="metadata-grid">`;
   for (const [label, value] of rows) {
-    const cls = label === "Serial" || label === "SKI" ? " mono" : "";
+    const cls = label === "SKI" ? " mono" : "";
     html += `<div class="metadata-label">${escapeHTML(
       label,
     )}</div><div class="metadata-value${cls}">${escapeHTML(value || "")}</div>`;
@@ -830,7 +833,9 @@ function keyRowClick(tr) {
 
   let html = `<div class="key-match-header">Matching Certificates</div>`;
   for (const cert of matchingCerts) {
-    const typeBadge = `<span class="badge badge-${cert.cert_type}">${cert.cert_type}</span>`;
+    const typeBadge = `<span class="badge badge-${escapeHTML(
+      cert.cert_type,
+    )}">${escapeHTML(cert.cert_type)}</span>`;
     const trustedBadge = cert.trusted
       ? `<span class="badge badge-match">trusted</span>`
       : `<span class="badge badge-expired">untrusted</span>`;
@@ -921,7 +926,6 @@ resetBtn.addEventListener("click", () => {
   lastState = null;
   aiaComplete = false;
   selectedSKIs.clear();
-  visibleCertSKIs = new Set();
   certSort.column = "expiry";
   certSort.direction = "desc";
   keySort.column = "match";

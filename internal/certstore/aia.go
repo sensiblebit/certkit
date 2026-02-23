@@ -166,7 +166,15 @@ func ResolveAIA(ctx context.Context, input ResolveAIAInput) []string {
 
 		for i, item := range work {
 			wg.Go(func() {
-				sem <- struct{}{}        // acquire
+				select {
+				case sem <- struct{}{}: // acquire
+				case <-ctx.Done():
+					results[i] = aiaFetchResult{
+						url:     item.url,
+						warning: fmt.Sprintf("context cancelled fetching %s: %v", item.url, ctx.Err()),
+					}
+					return
+				}
 				defer func() { <-sem }() // release
 
 				r := aiaFetchResult{url: item.url}
