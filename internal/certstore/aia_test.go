@@ -1038,15 +1038,17 @@ func TestResolveAIA_ProgressNoDuplicateCounting(t *testing.T) {
 		t.Fatal("expected progress ticks, got none")
 	}
 
+	// Total must stay stable: no new certs are discovered (CA-A is a
+	// self-signed root, not an intermediate), so total should be 2
+	// (leaf A + leaf B) in every tick. The old buggy formula inflated
+	// total from 2→3 in round 2 when leaf B re-entered the queue.
+	expectedTotal := 2
 	for i, tick := range ticks {
 		if tick.completed > tick.total {
 			t.Errorf("tick %d: completed (%d) > total (%d)", i, tick.completed, tick.total)
 		}
-	}
-
-	// The final tick should reach 100%.
-	last := ticks[len(ticks)-1]
-	if last.completed != last.total {
-		t.Errorf("final tick: completed (%d) != total (%d)", last.completed, last.total)
+		if tick.total != expectedTotal {
+			t.Errorf("tick %d: total = %d, want %d (inflated by double-counting)", i, tick.total, expectedTotal)
+		}
 	}
 }
