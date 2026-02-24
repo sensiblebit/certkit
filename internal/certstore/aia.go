@@ -101,6 +101,7 @@ func ResolveAIA(ctx context.Context, input ResolveAIAInput) []string {
 
 	progressTotal := 0
 	processed := make(map[string]bool)
+	totalSeen := make(map[string]bool)
 
 	for range maxDepth {
 		var queue []*CertRecord
@@ -114,9 +115,14 @@ func ResolveAIA(ctx context.Context, input ResolveAIAInput) []string {
 			break
 		}
 
-		// Recount progressTotal each round to include newly-discovered
-		// intermediates, preventing completed from exceeding total.
-		progressTotal = len(processed) + len(queue)
+		// Track unique certs that have ever entered the queue. Using a
+		// separate set avoids double-counting certs that persist across
+		// rounds (e.g. when their AIA fetch fails but they still need
+		// resolution).
+		for _, rec := range queue {
+			totalSeen[fmt.Sprintf("%x", rec.Cert.SubjectKeyId)] = true
+		}
+		progressTotal = len(totalSeen)
 
 		// Phase 1: Collect unique work items and pre-validate URLs.
 		// Only the main goroutine touches `seen` — no concurrent access.
