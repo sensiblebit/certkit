@@ -8,6 +8,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"strings"
 	"testing"
 	"time"
 )
@@ -117,12 +118,8 @@ func TestCheckKeyStrength(t *testing.T) {
 			if check.Status != tt.status {
 				t.Errorf("CheckKeyStrength() status = %q, want %q; detail = %q", check.Status, tt.status, check.Detail)
 			}
-			if check.Detail != "" && tt.detail != "" {
-				if len(check.Detail) < len(tt.detail) || check.Detail[:len(tt.detail)] != tt.detail {
-					if !containsSubstring(check.Detail, tt.detail) {
-						t.Errorf("CheckKeyStrength() detail = %q, want substring %q", check.Detail, tt.detail)
-					}
-				}
+			if tt.detail != "" && !strings.Contains(check.Detail, tt.detail) {
+				t.Errorf("CheckKeyStrength() detail = %q, want substring %q", check.Detail, tt.detail)
 			}
 		})
 	}
@@ -219,17 +216,4 @@ func TestCheckTrustChain_SelfSigned(t *testing.T) {
 	if checks[1].Status != "fail" {
 		t.Errorf("Trusted Root: status = %q, want fail", checks[1].Status)
 	}
-}
-
-func containsSubstring(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && findSubstring(s, substr))
-}
-
-func findSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
