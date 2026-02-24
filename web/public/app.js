@@ -1,6 +1,6 @@
 import { formatDate, escapeHTML } from "./utils.js";
 
-// DOM references
+// DOM references — Scan page
 const dropZone = document.getElementById("drop-zone");
 const fileInput = document.getElementById("file-input");
 const passwordsInput = document.getElementById("passwords");
@@ -25,10 +25,25 @@ const filterUnmatched = document.getElementById("filter-unmatched");
 const filterUntrusted = document.getElementById("filter-untrusted");
 const selectAll = document.getElementById("select-all");
 
+// DOM references — Inspect page
+const inspectDropZone = document.getElementById("inspect-drop-zone");
+const inspectFileInput = document.getElementById("inspect-file-input");
+const inspectPasswordsInput = document.getElementById("inspect-passwords");
+const inspectStatusBar = document.getElementById("inspect-status");
+const inspectStatusText = document.getElementById("inspect-status-text");
+const inspectResultsSection = document.getElementById("inspect-results");
+const inspectCards = document.getElementById("inspect-cards");
+const inspectResetBtn = document.getElementById("inspect-reset-btn");
+
+// DOM references — Page tabs
+const pageScan = document.getElementById("page-scan");
+const pageInspect = document.getElementById("page-inspect");
+
 // State
 let wasmReady = false;
 let aiaComplete = false;
 let processing = false;
+let activePage = "scan";
 const selectedSKIs = new Set();
 const certSort = { column: "expiry", direction: "desc" };
 const keySort = { column: "match", direction: "desc" };
@@ -107,7 +122,24 @@ loadWasm().catch((err) => {
   showStatus(`Failed to load WASM: ${err.message}`, true);
 });
 
-// --- Drop Zone ---
+// --- Page-level Tabs (Scan / Inspect) ---
+
+function switchPage(page) {
+  activePage = page;
+  for (const btn of document.querySelectorAll(".page-tab")) {
+    const isActive = btn.dataset.page === page;
+    btn.classList.toggle("active", isActive);
+    btn.setAttribute("aria-selected", String(isActive));
+  }
+  pageScan.hidden = page !== "scan";
+  pageInspect.hidden = page !== "inspect";
+}
+
+for (const btn of document.querySelectorAll(".page-tab")) {
+  btn.addEventListener("click", () => switchPage(btn.dataset.page));
+}
+
+// --- Drop Zone (Scan) ---
 
 dropZone.addEventListener("click", () => fileInput.click());
 
@@ -169,14 +201,22 @@ document.addEventListener("paste", async (e) => {
   const text = e.clipboardData.getData("text/plain");
   if (!text.trim()) return;
   if (text.length > MAX_PASTE_BYTES) {
-    showStatus("Pasted data is too large (max 1 MB)", true);
+    if (activePage === "inspect") {
+      showInspectStatus("Pasted data is too large (max 1 MB)", true);
+    } else {
+      showStatus("Pasted data is too large (max 1 MB)", true);
+    }
     return;
   }
   const data = new TextEncoder().encode(text);
-  await addFileObjects(
-    [{ name: "pasted.pem", data }],
-    "Processing pasted data...",
-  );
+  if (activePage === "inspect") {
+    await inspectFileObjects([{ name: "pasted.pem", data }]);
+  } else {
+    await addFileObjects(
+      [{ name: "pasted.pem", data }],
+      "Processing pasted data...",
+    );
+  }
 });
 
 // --- File Collection (supports recursive folder reading) ---
@@ -313,6 +353,223 @@ window.certkitOnAIAProgress = function (completed, total) {
   progressFill.setAttribute("aria-valuenow", String(pct));
   progressLabel.textContent = `${pct}%`;
 };
+
+// --- Drop Zone (Inspect) ---
+
+inspectDropZone.addEventListener("click", () => inspectFileInput.click());
+
+inspectDropZone.addEventListener("dragover", (e) => {
+  e.preventDefault();
+  inspectDropZone.classList.add("dragging");
+});
+
+inspectDropZone.addEventListener("dragleave", () => {
+  inspectDropZone.classList.remove("dragging");
+});
+
+inspectDropZone.addEventListener("drop", async (e) => {
+  e.preventDefault();
+  inspectDropZone.classList.remove("dragging");
+  if (!wasmReady || processing) return;
+
+  const items = e.dataTransfer.items;
+  if (items) {
+    const files = await collectFiles(items);
+    if (files.length > 0) {
+      await processInspectFiles(files);
+    }
+  }
+});
+
+inspectFileInput.addEventListener("change", async () => {
+  if (!wasmReady || processing) return;
+  const files = Array.from(inspectFileInput.files);
+  if (files.length > 0) {
+    await processInspectFiles(files);
+  }
+  inspectFileInput.value = "";
+});
+
+inspectDropZone.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" || e.key === " ") {
+    e.preventDefault();
+    inspectFileInput.click();
+  }
+});
+
+// --- Inspect File Processing ---
+
+async function processInspectFiles(files) {
+  if (processing) return;
+  let fileObjects;
+  try {
+    fileObjects = await Promise.all(
+      files.map(async (f) => {
+        const buf = await f.arrayBuffer();
+        return { name: f.name, data: new Uint8Array(buf) };
+      }),
+    );
+  } catch (err) {
+    showInspectStatus(`Error reading files: ${err.message}`, true);
+    return;
+  }
+  await inspectFileObjects(fileObjects);
+}
+
+async function inspectFileObjects(fileObjects) {
+  processing = true;
+  showInspectStatus("Inspecting...", false);
+
+  try {
+    const resultJSON = await certkitInspect(
+      fileObjects,
+      inspectPasswordsInput.value.trim(),
+    );
+    const results = JSON.parse(resultJSON);
+
+    if (!results || results.length === 0) {
+      showInspectStatus("No certificates, keys, or CSRs found in input.", true);
+      return;
+    }
+
+    hideInspectStatus();
+    renderInspectResults(results);
+  } catch (err) {
+    showInspectStatus(`Error: ${err.message}`, true);
+  } finally {
+    processing = false;
+  }
+}
+
+// --- Inspect Results Rendering ---
+
+function renderInspectResults(results) {
+  inspectResultsSection.hidden = false;
+  inspectCards.innerHTML = "";
+
+  for (const r of results) {
+    switch (r.type) {
+      case "certificate":
+        inspectCards.appendChild(buildCertCard(r));
+        break;
+      case "csr":
+        inspectCards.appendChild(buildCSRCard(r));
+        break;
+      case "private_key":
+        inspectCards.appendChild(buildKeyCard(r));
+        break;
+    }
+  }
+}
+
+function buildCertCard(r) {
+  const card = document.createElement("div");
+  card.className = "inspect-card";
+
+  const typeBadge = `<span class="badge badge-${escapeHTML(r.cert_type || "leaf")}">${escapeHTML(r.cert_type || "unknown")}</span>`;
+  const badges = [typeBadge];
+  if (r.expired === true) {
+    badges.push(`<span class="badge badge-expired">expired</span>`);
+  }
+  if (r.trusted === true) {
+    badges.push(`<span class="badge badge-match">trusted</span>`);
+  } else if (r.trusted === false) {
+    badges.push(`<span class="badge badge-expired">untrusted</span>`);
+  }
+
+  card.innerHTML = `
+    <div class="inspect-card-header">Certificate ${badges.join(" ")}</div>
+    <div class="inspect-card-body">
+      <div class="metadata-grid">
+        ${metaRow("Subject", r.subject)}
+        ${metaRow("Issuer", r.issuer)}
+        ${r.sans && r.sans.length > 0 ? metaRow("SANs", r.sans.join(", ")) : ""}
+        ${metaRow("Serial", r.serial, true)}
+        ${metaRow("Type", r.cert_type)}
+        ${r.is_ca != null ? metaRow("CA", r.is_ca ? "Yes" : "No") : ""}
+        ${metaRow("Not Before", formatDate(r.not_before))}
+        ${metaRow("Not After", formatDate(r.not_after))}
+        ${metaRow("Key", `${r.key_algorithm || ""} ${r.key_size || ""}`.trim())}
+        ${metaRow("Signature", r.signature_algorithm)}
+        ${r.key_usages && r.key_usages.length > 0 ? metaRow("Key Usage", r.key_usages.join(", ")) : ""}
+        ${r.ekus && r.ekus.length > 0 ? metaRow("EKU", r.ekus.join(", ")) : ""}
+        ${metaRow("SHA-256", r.sha256_fingerprint, true)}
+        ${metaRow("SHA-1", r.sha1_fingerprint, true)}
+        ${r.subject_key_id ? metaRow("SKI", r.subject_key_id, true) : ""}
+        ${r.authority_key_id ? metaRow("AKI", r.authority_key_id, true) : ""}
+      </div>
+    </div>`;
+  return card;
+}
+
+function buildCSRCard(r) {
+  const card = document.createElement("div");
+  card.className = "inspect-card";
+
+  card.innerHTML = `
+    <div class="inspect-card-header">Certificate Signing Request</div>
+    <div class="inspect-card-body">
+      <div class="metadata-grid">
+        ${metaRow("Subject", r.csr_subject)}
+        ${r.sans && r.sans.length > 0 ? metaRow("SANs", r.sans.join(", ")) : ""}
+        ${r.is_ca != null ? metaRow("CA", r.is_ca ? "Yes" : "No") : ""}
+        ${metaRow("Key", `${r.key_algorithm || ""} ${r.key_size || ""}`.trim())}
+        ${metaRow("Signature", r.signature_algorithm)}
+        ${r.key_usages && r.key_usages.length > 0 ? metaRow("Key Usage", r.key_usages.join(", ")) : ""}
+        ${r.ekus && r.ekus.length > 0 ? metaRow("EKU", r.ekus.join(", ")) : ""}
+        ${r.subject_key_id ? metaRow("SKI", r.subject_key_id, true) : ""}
+      </div>
+    </div>`;
+  return card;
+}
+
+function buildKeyCard(r) {
+  const card = document.createElement("div");
+  card.className = "inspect-card";
+
+  card.innerHTML = `
+    <div class="inspect-card-header">Private Key</div>
+    <div class="inspect-card-body">
+      <div class="metadata-grid">
+        ${metaRow("Type", r.key_type)}
+        ${metaRow("Size", r.key_size)}
+        ${r.subject_key_id ? metaRow("SKI (SHA-256)", r.subject_key_id, true) : ""}
+        ${r.subject_key_id_sha1 ? metaRow("SKI (SHA-1)", r.subject_key_id_sha1, true) : ""}
+      </div>
+    </div>`;
+  return card;
+}
+
+function metaRow(label, value, mono = false) {
+  if (!value && value !== 0) return "";
+  const cls = mono ? " mono" : "";
+  return `<div class="metadata-label">${escapeHTML(label)}</div><div class="metadata-value${cls}">${escapeHTML(String(value))}</div>`;
+}
+
+// --- Inspect Status Helpers ---
+
+function showInspectStatus(message, isError = false) {
+  inspectStatusBar.hidden = false;
+  inspectStatusText.textContent = message;
+  inspectStatusBar.className = "status-bar";
+  if (isError) inspectStatusBar.style.color = "var(--danger)";
+  else {
+    inspectStatusBar.classList.add("processing");
+    inspectStatusBar.style.color = "";
+  }
+}
+
+function hideInspectStatus() {
+  inspectStatusBar.hidden = true;
+}
+
+// --- Inspect Reset ---
+
+inspectResetBtn.addEventListener("click", () => {
+  inspectResultsSection.hidden = true;
+  inspectCards.innerHTML = "";
+  hideInspectStatus();
+});
 
 // --- Category Tabs ---
 

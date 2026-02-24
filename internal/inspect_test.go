@@ -285,14 +285,14 @@ func TestInspectFile_CSR(t *testing.T) {
 	if !strings.Contains(csrResult.CSRSubject, "csr.example.com") {
 		t.Errorf("CSR subject should contain CN, got %s", csrResult.CSRSubject)
 	}
-	if len(csrResult.CSRDNSNames) != 2 {
-		t.Fatalf("expected 2 DNS names, got %d", len(csrResult.CSRDNSNames))
+	if len(csrResult.SANs) != 2 {
+		t.Fatalf("expected 2 SANs, got %d: %v", len(csrResult.SANs), csrResult.SANs)
 	}
-	if !slices.Contains(csrResult.CSRDNSNames, "csr.example.com") {
-		t.Error("CSR DNS names should contain csr.example.com")
+	if !slices.Contains(csrResult.SANs, "csr.example.com") {
+		t.Error("CSR SANs should contain csr.example.com")
 	}
-	if !slices.Contains(csrResult.CSRDNSNames, "www.csr.example.com") {
-		t.Error("CSR DNS names should contain www.csr.example.com")
+	if !slices.Contains(csrResult.SANs, "www.csr.example.com") {
+		t.Error("CSR SANs should contain www.csr.example.com")
 	}
 }
 
@@ -682,15 +682,15 @@ func TestFormatInspectResults_Text(t *testing.T) {
 			mustContain: []string{"Certificate:", "CN=test", "RSA 2048", "AA:BB", "Private Key:"},
 		},
 		{
-			name: "CSR with DNS names",
+			name: "CSR with SANs",
 			results: []InspectResult{
 				{
-					Type:        "csr",
-					CSRSubject:  "CN=example.com,O=Test Corp",
-					KeyAlgo:     "ECDSA",
-					KeySize:     "P-256",
-					SigAlg:      "SHA256-RSA",
-					CSRDNSNames: []string{"example.com", "www.example.com"},
+					Type:       "csr",
+					CSRSubject: "CN=example.com,O=Test Corp",
+					KeyAlgo:    "ECDSA",
+					KeySize:    "P-256",
+					SigAlg:     "SHA256-RSA",
+					SANs:       []string{"example.com", "www.example.com"},
 				},
 			},
 			mustContain: []string{
@@ -702,12 +702,12 @@ func TestFormatInspectResults_Text(t *testing.T) {
 			},
 		},
 		{
-			name: "CSR without DNS names",
+			name: "CSR without SANs",
 			results: []InspectResult{
 				{Type: "csr", CSRSubject: "CN=test", KeyAlgo: "RSA", KeySize: "2048", SigAlg: "SHA256-RSA"},
 			},
 			mustContain:    []string{"Certificate Signing Request:"},
-			mustNotContain: []string{"DNS Names:"},
+			mustNotContain: []string{"SANs:"},
 		},
 		{
 			name: "certificate with expired and trusted annotations",

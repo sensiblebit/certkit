@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add Scan/Inspect page-level tabs to web UI — Inspect tab provides stateless inspection of certificates, keys, and CSRs with detailed metadata cards
+- Add `certkitInspect` WASM function for stateless inspection of certificates, keys, and CSRs without accumulating into the global store
+- Add `InspectData` function to `internal` package for inspecting in-memory bytes (used by both CLI and WASM)
+- Add `FormatDN` function to render `emailAddress` OID as a human-readable label instead of raw hex in distinguished names
+- Add `FormatEKUs` function (moved from WASM-only code to shared root package) for consistent EKU formatting across CLI and WASM
+- Add EKU and email SAN display to `inspect` command output for certificates and CSRs
+- Add AIA resolution to `inspect` command and WASM `certkitInspect` — automatically fetches missing intermediate certificates before trust annotation
 - Add `certkitValidateCert` WASM function for browser-based certificate validation ([`392878a`])
 - Add concurrent AIA resolution — fetches up to `Concurrency` URLs in parallel per depth round (default 20, WASM uses 50) ([`392878a`])
 - Add `serial` field to WASM `getState()` certificate data — hex-encoded serial number ([`392878a`])

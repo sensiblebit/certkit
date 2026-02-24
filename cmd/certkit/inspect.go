@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"slices"
 
 	"github.com/sensiblebit/certkit/internal"
@@ -36,6 +37,12 @@ func runInspect(cmd *cobra.Command, args []string) error {
 	results, err := internal.InspectFile(args[0], passwords)
 	if err != nil {
 		return fmt.Errorf("inspecting %s: %w", args[0], err)
+	}
+
+	// Resolve missing intermediates via AIA before trust annotation.
+	results, aiaWarnings := internal.ResolveInspectAIA(cmd.Context(), results, httpAIAFetcher)
+	for _, w := range aiaWarnings {
+		slog.Warn("AIA resolution", "warning", w)
 	}
 
 	if err := internal.AnnotateInspectTrust(results); err != nil {
