@@ -787,9 +787,7 @@ func TestResolveAIA_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
-	fetchCalled := false
 	fetcher := func(fctx context.Context, url string) ([]byte, error) {
-		fetchCalled = true
 		return nil, fctx.Err()
 	}
 
@@ -798,11 +796,11 @@ func TestResolveAIA_CancelledContext(t *testing.T) {
 		Fetch: fetcher,
 	})
 
-	if !fetchCalled {
-		t.Error("fetcher should have been called")
-	}
+	// With a pre-cancelled context, the semaphore select may short-circuit
+	// before calling the fetcher, or the fetcher may run and return ctx.Err().
+	// Either path produces a warning — assert that.
 	if len(warnings) == 0 {
-		t.Error("expected at least one warning from cancelled fetch")
+		t.Error("expected at least one warning from cancelled context")
 	}
 }
 
