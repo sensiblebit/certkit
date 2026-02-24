@@ -7,8 +7,6 @@ package main
 
 import (
 	"context"
-	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -35,6 +33,7 @@ func main() {
 	js.Global().Set("certkitExportBundles", js.FuncOf(exportBundlesJS))
 	js.Global().Set("certkitReset", js.FuncOf(resetStore))
 	js.Global().Set("certkitValidateCert", js.FuncOf(validateCertificate))
+	js.Global().Set("certkitInspect", js.FuncOf(inspectFiles))
 
 	// Block forever — WASM modules must not exit.
 	select {}
@@ -221,7 +220,7 @@ func getState(_ js.Value, _ []js.Value) any {
 			serial = strings.ToUpper(rec.Cert.SerialNumber.Text(16))
 		}
 
-		ekus := formatEKUs(rec.Cert.ExtKeyUsage)
+		ekus := certkit.FormatEKUs(rec.Cert.ExtKeyUsage)
 		if ekus == nil {
 			ekus = []string{}
 		}
@@ -241,8 +240,8 @@ func getState(_ js.Value, _ []js.Value) any {
 			Expired:   expired,
 			HasKey:    hasKey,
 			Trusted:   trusted,
-			Subject:   formatDN(rec.Cert.Subject),
-			Issuer:    formatDN(rec.Cert.Issuer),
+			Subject:   certkit.FormatDN(rec.Cert.Subject),
+			Issuer:    certkit.FormatDN(rec.Cert.Issuer),
 			SANs:      sans,
 			EKUs:      ekus,
 			Source:    rec.Source,
@@ -324,55 +323,6 @@ func resetStore(_ js.Value, _ []js.Value) any {
 	globalStore.Reset()
 	storeMu.Unlock()
 	return true
-}
-
-// formatDN formats a pkix.Name as a comma-separated string of its components.
-func formatDN(name pkix.Name) string {
-	var parts []string
-	for _, c := range name.Country {
-		parts = append(parts, "C="+c)
-	}
-	for _, s := range name.Province {
-		parts = append(parts, "ST="+s)
-	}
-	for _, l := range name.Locality {
-		parts = append(parts, "L="+l)
-	}
-	for _, o := range name.Organization {
-		parts = append(parts, "O="+o)
-	}
-	for _, ou := range name.OrganizationalUnit {
-		parts = append(parts, "OU="+ou)
-	}
-	if name.CommonName != "" {
-		parts = append(parts, "CN="+name.CommonName)
-	}
-	return strings.Join(parts, ", ")
-}
-
-var extKeyUsageNames = map[x509.ExtKeyUsage]string{
-	x509.ExtKeyUsageAny:                        "Any",
-	x509.ExtKeyUsageServerAuth:                 "Server Authentication",
-	x509.ExtKeyUsageClientAuth:                 "Client Authentication",
-	x509.ExtKeyUsageCodeSigning:                "Code Signing",
-	x509.ExtKeyUsageEmailProtection:            "Email Protection",
-	x509.ExtKeyUsageTimeStamping:               "Time Stamping",
-	x509.ExtKeyUsageOCSPSigning:                "OCSP Signing",
-	x509.ExtKeyUsageMicrosoftServerGatedCrypto: "Microsoft Server Gated Crypto",
-	x509.ExtKeyUsageNetscapeServerGatedCrypto:  "Netscape Server Gated Crypto",
-}
-
-// formatEKUs returns human-readable names for extended key usages.
-func formatEKUs(ekus []x509.ExtKeyUsage) []string {
-	var out []string
-	for _, eku := range ekus {
-		if name, ok := extKeyUsageNames[eku]; ok {
-			out = append(out, name)
-		} else {
-			out = append(out, fmt.Sprintf("Unknown (%d)", int(eku)))
-		}
-	}
-	return out
 }
 
 // hexToBytes decodes a hex string to bytes, returning nil on error.

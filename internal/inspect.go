@@ -1,11 +1,13 @@
 package internal
 
 import (
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/asn1"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -17,29 +19,33 @@ import (
 	"github.com/sensiblebit/certkit/internal/certstore"
 )
 
-// InspectResult holds the inspection details for a file.
+// InspectResult holds the inspection details for a single certificate, key, or CSR.
 type InspectResult struct {
-	Type        string   `json:"type"`
-	Subject     string   `json:"subject,omitempty"`
-	Issuer      string   `json:"issuer,omitempty"`
-	Serial      string   `json:"serial,omitempty"`
-	NotBefore   string   `json:"not_before,omitempty"`
-	NotAfter    string   `json:"not_after,omitempty"`
-	CertType    string   `json:"cert_type,omitempty"`
-	Expired     *bool    `json:"expired,omitempty"`
-	Trusted     *bool    `json:"trusted,omitempty"`
-	KeyAlgo     string   `json:"key_algorithm,omitempty"`
-	KeySize     string   `json:"key_size,omitempty"`
-	SANs        []string `json:"sans,omitempty"`
-	SHA256      string   `json:"sha256_fingerprint,omitempty"`
-	SHA1        string   `json:"sha1_fingerprint,omitempty"`
-	SKI         string   `json:"subject_key_id,omitempty"`
-	SKILegacy   string   `json:"subject_key_id_sha1,omitempty"`
-	AKI         string   `json:"authority_key_id,omitempty"`
-	SigAlg      string   `json:"signature_algorithm,omitempty"`
-	KeyType     string   `json:"key_type,omitempty"`
-	CSRSubject  string   `json:"csr_subject,omitempty"`
-	CSRDNSNames []string `json:"csr_dns_names,omitempty"`
+	Type      string   `json:"type"`
+	Subject   string   `json:"subject,omitempty"`
+	Issuer    string   `json:"issuer,omitempty"`
+	Serial    string   `json:"serial,omitempty"`
+	NotBefore string   `json:"not_before,omitempty"`
+	NotAfter  string   `json:"not_after,omitempty"`
+	CertType  string   `json:"cert_type,omitempty"`
+	Expired   *bool    `json:"expired,omitempty"`
+	Trusted   *bool    `json:"trusted,omitempty"`
+	IsCA      *bool    `json:"is_ca,omitempty"`
+	KeyAlgo   string   `json:"key_algorithm,omitempty"`
+	KeySize   string   `json:"key_size,omitempty"`
+	SANs      []string `json:"sans,omitempty"`
+	KeyUsages []string `json:"key_usages,omitempty"`
+	EKUs      []string `json:"ekus,omitempty"`
+	SHA256    string   `json:"sha256_fingerprint,omitempty"`
+	SHA1      string   `json:"sha1_fingerprint,omitempty"`
+	SKI       string   `json:"subject_key_id,omitempty"`
+	SKILegacy string   `json:"subject_key_id_sha1,omitempty"`
+	AKI       string   `json:"authority_key_id,omitempty"`
+	SigAlg    string   `json:"signature_algorithm,omitempty"`
+	KeyType   string   `json:"key_type,omitempty"`
+
+	// CSR-specific fields. Populated only when Type == "csr".
+	CSRSubject string `json:"csr_subject,omitempty"`
 
 	cert *x509.Certificate // unexported; retained for trust annotation
 }
@@ -51,19 +57,22 @@ func InspectFile(path string, passwords []string) ([]InspectResult, error) {
 		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
 
-	var results []InspectResult
-
-	if certkit.IsPEM(data) {
-		results = append(results, inspectPEMData(data, passwords)...)
-	} else {
-		results = append(results, inspectDERData(data, passwords)...)
-	}
-
+	results := InspectData(data, passwords)
 	if len(results) == 0 {
 		return nil, fmt.Errorf("no certificates, keys, or CSRs found in %s", path)
 	}
 
 	return results, nil
+}
+
+// InspectData parses raw bytes and returns inspection results for all
+// certificates, keys, and CSRs found. It tries PEM first, then DER and
+// container formats (PKCS#12, PKCS#7, JKS).
+func InspectData(data []byte, passwords []string) []InspectResult {
+	if certkit.IsPEM(data) {
+		return inspectPEMData(data, passwords)
+	}
+	return inspectDERData(data, passwords)
 }
 
 func inspectPEMData(data []byte, passwords []string) []InspectResult {
@@ -155,21 +164,28 @@ func inspectDERData(data []byte, passwords []string) []InspectResult {
 
 func inspectCert(cert *x509.Certificate) InspectResult {
 	sans := slices.Concat(cert.DNSNames, certstore.FormatIPAddresses(cert.IPAddresses))
+	sans = append(sans, cert.EmailAddresses...)
 	for _, uri := range cert.URIs {
 		sans = append(sans, uri.String())
 	}
+	sans = append(sans, certkit.ParseOtherNameSANs(cert.Extensions)...)
+
+	isCA := cert.IsCA
 
 	return InspectResult{
 		Type:      "certificate",
-		Subject:   cert.Subject.String(),
-		Issuer:    cert.Issuer.String(),
+		Subject:   certkit.FormatDN(cert.Subject),
+		Issuer:    certkit.FormatDN(cert.Issuer),
 		Serial:    cert.SerialNumber.String(),
 		NotBefore: cert.NotBefore.UTC().Format(time.RFC3339),
 		NotAfter:  cert.NotAfter.UTC().Format(time.RFC3339),
 		CertType:  certkit.GetCertificateType(cert),
+		IsCA:      &isCA,
 		KeyAlgo:   certkit.PublicKeyAlgorithmName(cert.PublicKey),
 		KeySize:   publicKeySize(cert.PublicKey),
 		SANs:      sans,
+		KeyUsages: certkit.FormatKeyUsage(cert.KeyUsage),
+		EKUs:      certkit.FormatEKUs(cert.ExtKeyUsage),
 		SHA256:    certkit.CertFingerprintColonSHA256(cert),
 		SHA1:      certkit.CertFingerprintColonSHA1(cert),
 		SKI:       certkit.CertSKIEmbedded(cert),
@@ -179,15 +195,62 @@ func inspectCert(cert *x509.Certificate) InspectResult {
 	}
 }
 
+// OIDs for extensions we extract from CSRs (Go does not parse these into typed fields).
+var (
+	oidExtKeyUsage         = asn1.ObjectIdentifier{2, 5, 29, 15}
+	oidExtExtKeyUsage      = asn1.ObjectIdentifier{2, 5, 29, 37}
+	oidExtBasicConstraints = asn1.ObjectIdentifier{2, 5, 29, 19}
+)
+
 func inspectCSR(csr *x509.CertificateRequest) InspectResult {
-	return InspectResult{
-		Type:        "csr",
-		CSRSubject:  csr.Subject.String(),
-		KeyAlgo:     certkit.PublicKeyAlgorithmName(csr.PublicKey),
-		KeySize:     publicKeySize(csr.PublicKey),
-		SigAlg:      csr.SignatureAlgorithm.String(),
-		CSRDNSNames: csr.DNSNames,
+	sans := slices.Concat(csr.DNSNames, certstore.FormatIPAddresses(csr.IPAddresses))
+	sans = append(sans, csr.EmailAddresses...)
+	for _, uri := range csr.URIs {
+		sans = append(sans, uri.String())
 	}
+	sans = append(sans, certkit.ParseOtherNameSANs(csr.Extensions)...)
+
+	r := InspectResult{
+		Type:       "csr",
+		CSRSubject: certkit.FormatDN(csr.Subject),
+		KeyAlgo:    certkit.PublicKeyAlgorithmName(csr.PublicKey),
+		KeySize:    publicKeySize(csr.PublicKey),
+		SigAlg:     csr.SignatureAlgorithm.String(),
+		SANs:       sans,
+	}
+
+	// Compute SKI from the CSR's public key.
+	if ski, err := certkit.ComputeSKI(csr.PublicKey); err == nil {
+		r.SKI = certkit.ColonHex(ski)
+	}
+
+	// Parse requested extensions that Go does not populate as typed fields.
+	for _, ext := range csr.Extensions {
+		switch {
+		case ext.Id.Equal(oidExtKeyUsage):
+			r.KeyUsages = certkit.FormatKeyUsageBitString(ext.Value)
+		case ext.Id.Equal(oidExtExtKeyUsage):
+			r.EKUs = certkit.FormatEKUOIDs(ext.Value)
+		case ext.Id.Equal(oidExtBasicConstraints):
+			isCA := parseBasicConstraintsCA(ext.Value)
+			r.IsCA = &isCA
+		}
+	}
+
+	return r
+}
+
+// parseBasicConstraintsCA extracts the isCA boolean from a raw Basic
+// Constraints extension value.
+func parseBasicConstraintsCA(raw []byte) bool {
+	var bc struct {
+		IsCA       bool `asn1:"optional"`
+		MaxPathLen int  `asn1:"optional,default:-1"`
+	}
+	if _, err := asn1.Unmarshal(raw, &bc); err != nil {
+		return false
+	}
+	return bc.IsCA
 }
 
 func inspectKey(key any) InspectResult {
@@ -239,6 +302,44 @@ func privateKeySize(key any) string {
 	default:
 		return "unknown"
 	}
+}
+
+// ResolveInspectAIA fetches missing intermediate certificates via AIA for the
+// given inspect results. It creates a temporary MemStore, adds all certificates
+// from the results, resolves AIA using the provided fetcher, inspects any newly
+// fetched certificates, and returns the extended results along with warnings.
+func ResolveInspectAIA(ctx context.Context, results []InspectResult, fetch certstore.AIAFetcher) ([]InspectResult, []string) {
+	store := certstore.NewMemStore()
+	for _, r := range results {
+		if r.cert != nil {
+			_ = store.HandleCertificate(r.cert, "inspect")
+		}
+	}
+
+	if !certstore.HasUnresolvedIssuers(store) {
+		return results, nil
+	}
+
+	// Track existing certs so we can identify newly fetched ones.
+	existing := make(map[string]bool)
+	for _, rec := range store.AllCertsFlat() {
+		existing[certkit.CertFingerprint(rec.Cert)] = true
+	}
+
+	warnings := certstore.ResolveAIA(ctx, certstore.ResolveAIAInput{
+		Store: store,
+		Fetch: fetch,
+	})
+
+	for _, rec := range store.AllCertsFlat() {
+		fp := certkit.CertFingerprint(rec.Cert)
+		if existing[fp] {
+			continue
+		}
+		results = append(results, inspectCert(rec.Cert))
+	}
+
+	return results, warnings
 }
 
 // AnnotateInspectTrust sets the Expired and Trusted fields on certificate
@@ -305,6 +406,9 @@ func formatInspectText(results []InspectResult) string {
 			fmt.Fprintf(&sb, "  Issuer:      %s\n", r.Issuer)
 			fmt.Fprintf(&sb, "  Serial:      %s\n", r.Serial)
 			fmt.Fprintf(&sb, "  Type:        %s\n", r.CertType)
+			if r.IsCA != nil {
+				fmt.Fprintf(&sb, "  CA:          %s\n", boolYesNo(*r.IsCA))
+			}
 			fmt.Fprintf(&sb, "  Not Before:  %s\n", r.NotBefore)
 			fmt.Fprintf(&sb, "  Not After:   %s\n", r.NotAfter)
 			if r.Expired != nil {
@@ -315,6 +419,12 @@ func formatInspectText(results []InspectResult) string {
 			}
 			fmt.Fprintf(&sb, "  Key:         %s %s\n", r.KeyAlgo, r.KeySize)
 			fmt.Fprintf(&sb, "  Signature:   %s\n", r.SigAlg)
+			if len(r.KeyUsages) > 0 {
+				fmt.Fprintf(&sb, "  Key Usage:   %s\n", strings.Join(r.KeyUsages, ", "))
+			}
+			if len(r.EKUs) > 0 {
+				fmt.Fprintf(&sb, "  EKU:         %s\n", strings.Join(r.EKUs, ", "))
+			}
 			fmt.Fprintf(&sb, "  SHA-256:     %s\n", r.SHA256)
 			fmt.Fprintf(&sb, "  SHA-1:       %s\n", r.SHA1)
 			if r.SKI != "" {
@@ -326,10 +436,22 @@ func formatInspectText(results []InspectResult) string {
 		case "csr":
 			fmt.Fprintf(&sb, "Certificate Signing Request:\n")
 			fmt.Fprintf(&sb, "  Subject:     %s\n", r.CSRSubject)
+			if len(r.SANs) > 0 {
+				fmt.Fprintf(&sb, "  SANs:        %s\n", strings.Join(r.SANs, ", "))
+			}
+			if r.IsCA != nil {
+				fmt.Fprintf(&sb, "  CA:          %s\n", boolYesNo(*r.IsCA))
+			}
 			fmt.Fprintf(&sb, "  Key:         %s %s\n", r.KeyAlgo, r.KeySize)
 			fmt.Fprintf(&sb, "  Signature:   %s\n", r.SigAlg)
-			if len(r.CSRDNSNames) > 0 {
-				fmt.Fprintf(&sb, "  DNS Names:   %s\n", strings.Join(r.CSRDNSNames, ", "))
+			if len(r.KeyUsages) > 0 {
+				fmt.Fprintf(&sb, "  Key Usage:   %s\n", strings.Join(r.KeyUsages, ", "))
+			}
+			if len(r.EKUs) > 0 {
+				fmt.Fprintf(&sb, "  EKU:         %s\n", strings.Join(r.EKUs, ", "))
+			}
+			if r.SKI != "" {
+				fmt.Fprintf(&sb, "  SKI:         %s\n", r.SKI)
 			}
 		case "private_key":
 			fmt.Fprintf(&sb, "Private Key:\n")

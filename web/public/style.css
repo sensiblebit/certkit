@@ -88,6 +88,77 @@ header p {
   font-size: 0.875rem;
 }
 
+/* --- Page-level Tabs (Scan / Inspect) --- */
+
+.page-tabs {
+  display: flex;
+  gap: 0;
+  margin-bottom: 1.25rem;
+  border-bottom: 2px solid var(--border);
+}
+
+.page-tab {
+  padding: 0.5rem 1.25rem;
+  border: none;
+  background: none;
+  color: var(--fg-secondary);
+  font-family: var(--font-sans);
+  font-size: 0.9375rem;
+  font-weight: 500;
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -2px;
+  transition:
+    color 0.15s,
+    border-color 0.15s;
+}
+
+.page-tab:hover {
+  color: var(--fg);
+}
+
+.page-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+.page-panel[hidden] {
+  display: none;
+}
+
+/* --- Inspect Cards --- */
+
+.inspect-card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 1rem;
+  overflow: hidden;
+}
+
+.inspect-card-header {
+  padding: 0.625rem 0.75rem;
+  background: var(--bg-secondary);
+  font-weight: 600;
+  font-size: 0.875rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.inspect-card-body {
+  padding: 0;
+}
+
+.inspect-card-body .metadata-grid {
+  border-top: none;
+  margin-top: 0;
+}
+
+#inspect-results {
+  margin-top: 1.5rem;
+}
+
 /* --- Category Tabs --- */
 
 .category-tabs {

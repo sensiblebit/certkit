@@ -1772,3 +1772,69 @@ func TestAlgorithmName(t *testing.T) {
 		}
 	})
 }
+
+func TestFormatDN(t *testing.T) {
+	t.Parallel()
+
+	// emailAddress OID (1.2.840.113549.1.9.1)
+	oidEmail := asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 1}
+
+	tests := []struct {
+		name string
+		dn   pkix.Name
+		want string
+	}{
+		{
+			name: "standard OIDs only delegates to String",
+			dn: pkix.Name{
+				CommonName:   "example.com",
+				Organization: []string{"Example Inc."},
+				Country:      []string{"US"},
+			},
+			want: "CN=example.com,O=Example Inc.,C=US",
+		},
+		{
+			name: "emailAddress rendered with label",
+			dn: pkix.Name{
+				CommonName:   "acme.com",
+				Organization: []string{"Acme Corp"},
+				Country:      []string{"US"},
+				// Names simulates what the ASN.1 parser populates.
+				Names: []pkix.AttributeTypeAndValue{
+					{Type: asn1.ObjectIdentifier{2, 5, 4, 6}, Value: "US"},
+					{Type: asn1.ObjectIdentifier{2, 5, 4, 10}, Value: "Acme Corp"},
+					{Type: asn1.ObjectIdentifier{2, 5, 4, 3}, Value: "acme.com"},
+					{Type: oidEmail, Value: "admin@acme.com"},
+				},
+			},
+			// Go's String() puts standard OIDs first (RFC 4514 reverse),
+			// then appends extra OIDs at the end.
+			want: "CN=acme.com,O=Acme Corp,C=US,emailAddress=admin@acme.com",
+		},
+		{
+			name: "emailAddress with special characters escaped",
+			dn: pkix.Name{
+				CommonName: "example.com",
+				Names: []pkix.AttributeTypeAndValue{
+					{Type: asn1.ObjectIdentifier{2, 5, 4, 3}, Value: "example.com"},
+					{Type: oidEmail, Value: "user+tag@example.com"},
+				},
+			},
+			want: "CN=example.com,emailAddress=user\\+tag@example.com",
+		},
+		{
+			name: "empty name",
+			dn:   pkix.Name{},
+			want: "",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := FormatDN(tt.dn)
+			if got != tt.want {
+				t.Errorf("FormatDN() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

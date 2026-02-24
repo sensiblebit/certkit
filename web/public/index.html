@@ -36,215 +36,308 @@
     </header>
 
     <main>
-      <section class="explainer">
-        <p>
-          Drop your certificate and key files below. certkit will parse them,
-          match private keys to their certificates by Subject Key Identifier,
-          resolve certificate chains via AIA, verify trust against the Mozilla
-          root store, and package everything into organized bundles you can
-          deploy directly.
-        </p>
-        <details>
-          <summary>Supported formats and how it works</summary>
-          <ul>
-            <li>
-              <strong>Formats:</strong> PEM, DER, PKCS#12 (.p12/.pfx), PKCS#7
-              (.p7b), JKS (.jks), and ZIP/TAR archives containing any of the
-              above.
-            </li>
-            <li>
-              <strong>Key matching:</strong> Private keys are matched to
-              certificates using the Subject Key Identifier (SKI). Drop them in
-              any order, from any number of files.
-            </li>
-            <li>
-              <strong>Chain resolution:</strong> Missing intermediate
-              certificates are fetched automatically via Authority Information
-              Access (AIA) URLs embedded in your certs.
-            </li>
-            <li>
-              <strong>Trust validation:</strong> Each certificate is verified
-              against the embedded Mozilla CA root store. Untrusted and expired
-              certificates are flagged with badges.
-            </li>
-            <li>
-              <strong>Export:</strong> Select which bundles to include, then
-              download a ZIP containing the leaf cert, chain, full chain,
-              intermediates, root, private key, and PKCS#12 archive for each.
-            </li>
-            <li>
-              <strong>Privacy:</strong> Everything runs locally in your browser
-              via WebAssembly. No files are uploaded to any server.
-            </li>
-          </ul>
-        </details>
-      </section>
+      <nav class="page-tabs" role="tablist">
+        <button
+          class="page-tab active"
+          data-page="scan"
+          role="tab"
+          aria-selected="true"
+        >
+          Scan
+        </button>
+        <button
+          class="page-tab"
+          data-page="inspect"
+          role="tab"
+          aria-selected="false"
+        >
+          Inspect
+        </button>
+      </nav>
 
-      <section
-        id="drop-zone"
-        class="drop-zone"
-        tabindex="0"
-        role="button"
-        aria-label="Drop files here or click to browse"
-      >
-        <div class="drop-zone-content">
-          <svg
-            width="48"
-            height="48"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="1.5"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-          >
-            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-            <polyline points="17 8 12 3 7 8" />
-            <line x1="12" y1="3" x2="12" y2="15" />
-          </svg>
-          <p>Drop files or folders here</p>
-          <p class="hint">
-            PEM, DER, PKCS#12, PKCS#7, JKS, ZIP — drop, browse, or paste
+      <div id="page-scan" class="page-panel">
+        <section class="explainer">
+          <p>
+            Drop your certificate and key files below. certkit will parse them,
+            match private keys to their certificates by Subject Key Identifier,
+            resolve certificate chains via AIA, verify trust against the Mozilla
+            root store, and package everything into organized bundles you can
+            deploy directly.
           </p>
-        </div>
-        <input type="file" id="file-input" multiple hidden />
-      </section>
+          <details>
+            <summary>Supported formats and how it works</summary>
+            <ul>
+              <li>
+                <strong>Formats:</strong> PEM, DER, PKCS#12 (.p12/.pfx), PKCS#7
+                (.p7b), JKS (.jks), and ZIP/TAR archives containing any of the
+                above.
+              </li>
+              <li>
+                <strong>Key matching:</strong> Private keys are matched to
+                certificates using the Subject Key Identifier (SKI). Drop them
+                in any order, from any number of files.
+              </li>
+              <li>
+                <strong>Chain resolution:</strong> Missing intermediate
+                certificates are fetched automatically via Authority Information
+                Access (AIA) URLs embedded in your certs.
+              </li>
+              <li>
+                <strong>Trust validation:</strong> Each certificate is verified
+                against the embedded Mozilla CA root store. Untrusted and
+                expired certificates are flagged with badges.
+              </li>
+              <li>
+                <strong>Export:</strong> Select which bundles to include, then
+                download a ZIP containing the leaf cert, chain, full chain,
+                intermediates, root, private key, and PKCS#12 archive for each.
+              </li>
+              <li>
+                <strong>Privacy:</strong> Everything runs locally in your
+                browser via WebAssembly. No files are uploaded to any server.
+              </li>
+            </ul>
+          </details>
+        </section>
 
-      <section class="options-section">
-        <div class="option-row">
-          <label for="passwords"
-            >Passwords
-            <span class="hint"
-              >(comma-separated, for encrypted files)</span
-            ></label
-          >
-          <input
-            type="text"
-            id="passwords"
-            placeholder="password1, password2, ..."
-          />
-        </div>
-      </section>
-
-      <section id="status-bar" class="status-bar" hidden>
-        <span id="status-text">Loading WASM...</span>
-        <div id="progress-container" class="progress-container" hidden>
-          <div class="progress-bar">
-            <div
-              id="progress-fill"
-              class="progress-fill"
-              role="progressbar"
-              aria-valuemin="0"
-              aria-valuemax="100"
-              aria-valuenow="0"
-            ></div>
+        <section
+          id="drop-zone"
+          class="drop-zone"
+          tabindex="0"
+          role="button"
+          aria-label="Drop files here or click to browse"
+        >
+          <div class="drop-zone-content">
+            <svg
+              width="48"
+              height="48"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="17 8 12 3 7 8" />
+              <line x1="12" y1="3" x2="12" y2="15" />
+            </svg>
+            <p>Drop files or folders here</p>
+            <p class="hint">
+              PEM, DER, PKCS#12, PKCS#7, JKS, ZIP — drop, browse, or paste
+            </p>
           </div>
-          <span id="progress-label" class="progress-label"></span>
-        </div>
-      </section>
+          <input type="file" id="file-input" multiple hidden />
+        </section>
 
-      <section id="results-section" hidden>
-        <div class="results-header">
-          <h2>Results</h2>
-          <div class="results-actions">
-            <button id="export-btn" class="btn btn-primary" disabled>
-              Export Bundles (ZIP)
+        <section class="options-section">
+          <div class="option-row">
+            <label for="passwords"
+              >Passwords
+              <span class="hint"
+                >(comma-separated, for encrypted files)</span
+              ></label
+            >
+            <input
+              type="text"
+              id="passwords"
+              placeholder="password1, password2, ..."
+            />
+          </div>
+        </section>
+
+        <section id="status-bar" class="status-bar" hidden>
+          <span id="status-text">Loading WASM...</span>
+          <div id="progress-container" class="progress-container" hidden>
+            <div class="progress-bar">
+              <div
+                id="progress-fill"
+                class="progress-fill"
+                role="progressbar"
+                aria-valuemin="0"
+                aria-valuemax="100"
+                aria-valuenow="0"
+              ></div>
+            </div>
+            <span id="progress-label" class="progress-label"></span>
+          </div>
+        </section>
+
+        <section id="results-section" hidden>
+          <div class="results-header">
+            <h2>Results</h2>
+            <div class="results-actions">
+              <button id="export-btn" class="btn btn-primary" disabled>
+                Export Bundles (ZIP)
+              </button>
+              <button id="reset-btn" class="btn btn-secondary">Reset</button>
+            </div>
+          </div>
+
+          <div id="summary" class="summary"></div>
+
+          <div id="filters" class="filters" hidden>
+            <label class="filter-label"
+              ><input type="checkbox" id="filter-expired" /> Hide expired</label
+            >
+            <label class="filter-label"
+              ><input type="checkbox" id="filter-untrusted" /> Hide
+              untrusted</label
+            >
+            <label class="filter-label"
+              ><input type="checkbox" id="filter-unmatched" /> Hide
+              unmatched</label
+            >
+          </div>
+
+          <nav class="category-tabs" id="category-tabs" role="tablist">
+            <button
+              class="cat-tab active"
+              data-cat="leaf"
+              role="tab"
+              aria-selected="true"
+            >
+              Leaf
             </button>
-            <button id="reset-btn" class="btn btn-secondary">Reset</button>
-          </div>
-        </div>
+            <button
+              class="cat-tab"
+              data-cat="intermediate"
+              role="tab"
+              aria-selected="false"
+            >
+              Intermediate
+            </button>
+            <button
+              class="cat-tab"
+              data-cat="root"
+              role="tab"
+              aria-selected="false"
+            >
+              Root
+            </button>
+            <button
+              class="cat-tab"
+              data-cat="keys"
+              role="tab"
+              aria-selected="false"
+            >
+              Keys
+            </button>
+          </nav>
 
-        <div id="summary" class="summary"></div>
-
-        <div id="filters" class="filters" hidden>
-          <label class="filter-label"
-            ><input type="checkbox" id="filter-expired" /> Hide expired</label
-          >
-          <label class="filter-label"
-            ><input type="checkbox" id="filter-untrusted" /> Hide
-            untrusted</label
-          >
-          <label class="filter-label"
-            ><input type="checkbox" id="filter-unmatched" /> Hide
-            unmatched</label
-          >
-        </div>
-
-        <nav class="category-tabs" id="category-tabs" role="tablist">
-          <button
-            class="cat-tab active"
-            data-cat="leaf"
-            role="tab"
-            aria-selected="true"
-          >
-            Leaf
-          </button>
-          <button
-            class="cat-tab"
-            data-cat="intermediate"
-            role="tab"
-            aria-selected="false"
-          >
-            Intermediate
-          </button>
-          <button
-            class="cat-tab"
-            data-cat="root"
-            role="tab"
-            aria-selected="false"
-          >
-            Root
-          </button>
-          <button
-            class="cat-tab"
-            data-cat="keys"
-            role="tab"
-            aria-selected="false"
-          >
-            Keys
-          </button>
-        </nav>
-
-        <div id="cert-table-container" class="table-container">
-          <table id="results-table">
-            <thead>
-              <tr>
-                <th class="col-select">
-                  <input type="checkbox" id="select-all" title="Select all" />
-                </th>
-                <th data-sort="cn">CN / Name</th>
-                <th data-sort="serial" class="serial">Serial</th>
-                <th data-sort="key_type">Key Type</th>
-                <th data-sort="expiry">Expiry</th>
-                <th data-sort="trusted">Trusted</th>
-                <th data-sort="match">Key Match</th>
-              </tr>
-            </thead>
-            <tbody id="results-body"></tbody>
-          </table>
-        </div>
-
-        <div id="keys-section" hidden>
-          <div class="table-container">
-            <table id="keys-table">
+          <div id="cert-table-container" class="table-container">
+            <table id="results-table">
               <thead>
                 <tr>
-                  <th data-sort="type">Type</th>
-                  <th data-sort="bits">Bits</th>
-                  <th data-sort="ski">SKI</th>
-                  <th data-sort="match">Cert Match</th>
+                  <th class="col-select">
+                    <input type="checkbox" id="select-all" title="Select all" />
+                  </th>
+                  <th data-sort="cn">CN / Name</th>
+                  <th data-sort="serial" class="serial">Serial</th>
+                  <th data-sort="key_type">Key Type</th>
+                  <th data-sort="expiry">Expiry</th>
+                  <th data-sort="trusted">Trusted</th>
+                  <th data-sort="match">Key Match</th>
                 </tr>
               </thead>
-              <tbody id="keys-body"></tbody>
+              <tbody id="results-body"></tbody>
             </table>
           </div>
-        </div>
 
-        <div id="warnings-section" hidden>
-          <h3>Warnings</h3>
-          <ul id="warnings-list"></ul>
-        </div>
-      </section>
+          <div id="keys-section" hidden>
+            <div class="table-container">
+              <table id="keys-table">
+                <thead>
+                  <tr>
+                    <th data-sort="type">Type</th>
+                    <th data-sort="bits">Bits</th>
+                    <th data-sort="ski">SKI</th>
+                    <th data-sort="match">Cert Match</th>
+                  </tr>
+                </thead>
+                <tbody id="keys-body"></tbody>
+              </table>
+            </div>
+          </div>
+
+          <div id="warnings-section" hidden>
+            <h3>Warnings</h3>
+            <ul id="warnings-list"></ul>
+          </div>
+        </section>
+      </div>
+
+      <div id="page-inspect" class="page-panel" hidden>
+        <section class="explainer">
+          <p>
+            Drop or paste a certificate, key, CSR, or bundle to inspect it.
+            Shows detailed information including SANs, fingerprints, EKUs, trust
+            status, and more.
+          </p>
+        </section>
+
+        <section
+          id="inspect-drop-zone"
+          class="drop-zone"
+          tabindex="0"
+          role="button"
+          aria-label="Drop a file here or click to browse"
+        >
+          <div class="drop-zone-content">
+            <svg
+              width="48"
+              height="48"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="1.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+              <polyline points="17 8 12 3 7 8" />
+              <line x1="12" y1="3" x2="12" y2="15" />
+            </svg>
+            <p>Drop a file here</p>
+            <p class="hint">
+              PEM, DER, PKCS#12, PKCS#7, JKS, CSR — drop, browse, or paste
+            </p>
+          </div>
+          <input type="file" id="inspect-file-input" multiple hidden />
+        </section>
+
+        <section class="options-section">
+          <div class="option-row">
+            <label for="inspect-passwords"
+              >Passwords
+              <span class="hint"
+                >(comma-separated, for encrypted files)</span
+              ></label
+            >
+            <input
+              type="text"
+              id="inspect-passwords"
+              placeholder="password1, password2, ..."
+            />
+          </div>
+        </section>
+
+        <section id="inspect-status" class="status-bar" hidden>
+          <span id="inspect-status-text"></span>
+        </section>
+
+        <section id="inspect-results" hidden>
+          <div class="results-header">
+            <h2>Inspection</h2>
+            <div class="results-actions">
+              <button id="inspect-reset-btn" class="btn btn-secondary">
+                Reset
+              </button>
+            </div>
+          </div>
+          <div id="inspect-cards"></div>
+        </section>
+      </div>
     </main>
 
     <footer>
