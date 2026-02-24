@@ -152,8 +152,8 @@ func ResolveAIA(ctx context.Context, input ResolveAIAInput) []string {
 		if len(work) == 0 {
 			// All URLs were already seen or rejected — mark certs processed.
 			for _, rec := range queue {
-				if !processed[rec.SKI] {
-					processed[rec.SKI] = true
+				if id := certID(rec.Cert); !processed[id] {
+					processed[id] = true
 					if input.OnProgress != nil {
 						input.OnProgress(len(processed), progressTotal)
 					}
