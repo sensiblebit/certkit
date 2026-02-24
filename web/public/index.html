@@ -64,8 +64,8 @@
             </li>
             <li>
               <strong>Trust validation:</strong> Each certificate is verified
-              against the embedded Mozilla CA root store. Untrusted, expired,
-              and non-leaf certificates are hidden by default.
+              against the embedded Mozilla CA root store. Untrusted and expired
+              certificates are flagged with badges.
             </li>
             <li>
               <strong>Export:</strong> Select which bundles to include, then
@@ -104,7 +104,7 @@
           </svg>
           <p>Drop files or folders here</p>
           <p class="hint">
-            PEM, DER, PKCS#12, PKCS#7, JKS, ZIP — or click to browse
+            PEM, DER, PKCS#12, PKCS#7, JKS, ZIP — drop, browse, or paste
           </p>
         </div>
         <input type="file" id="file-input" multiple hidden />
@@ -128,6 +128,19 @@
 
       <section id="status-bar" class="status-bar" hidden>
         <span id="status-text">Loading WASM...</span>
+        <div id="progress-container" class="progress-container" hidden>
+          <div class="progress-bar">
+            <div
+              id="progress-fill"
+              class="progress-fill"
+              role="progressbar"
+              aria-valuemin="0"
+              aria-valuemax="100"
+              aria-valuenow="0"
+            ></div>
+          </div>
+          <span id="progress-label" class="progress-label"></span>
+        </div>
       </section>
 
       <section id="results-section" hidden>
@@ -145,24 +158,54 @@
 
         <div id="filters" class="filters" hidden>
           <label class="filter-label"
-            ><input type="checkbox" id="filter-expired" checked /> Hide
-            expired</label
+            ><input type="checkbox" id="filter-expired" /> Hide expired</label
           >
           <label class="filter-label"
-            ><input type="checkbox" id="filter-unmatched" checked /> Hide
-            unmatched</label
-          >
-          <label class="filter-label"
-            ><input type="checkbox" id="filter-nonleaf" checked /> Hide
-            non-leaf</label
-          >
-          <label class="filter-label"
-            ><input type="checkbox" id="filter-untrusted" checked /> Hide
+            ><input type="checkbox" id="filter-untrusted" /> Hide
             untrusted</label
+          >
+          <label class="filter-label"
+            ><input type="checkbox" id="filter-unmatched" /> Hide
+            unmatched</label
           >
         </div>
 
-        <div class="table-container">
+        <nav class="category-tabs" id="category-tabs" role="tablist">
+          <button
+            class="cat-tab active"
+            data-cat="leaf"
+            role="tab"
+            aria-selected="true"
+          >
+            Leaf
+          </button>
+          <button
+            class="cat-tab"
+            data-cat="intermediate"
+            role="tab"
+            aria-selected="false"
+          >
+            Intermediate
+          </button>
+          <button
+            class="cat-tab"
+            data-cat="root"
+            role="tab"
+            aria-selected="false"
+          >
+            Root
+          </button>
+          <button
+            class="cat-tab"
+            data-cat="keys"
+            role="tab"
+            aria-selected="false"
+          >
+            Keys
+          </button>
+        </nav>
+
+        <div id="cert-table-container" class="table-container">
           <table id="results-table">
             <thead>
               <tr>
@@ -170,12 +213,11 @@
                   <input type="checkbox" id="select-all" title="Select all" />
                 </th>
                 <th data-sort="cn">CN / Name</th>
-                <th data-sort="type">Type</th>
+                <th data-sort="serial" class="serial">Serial</th>
                 <th data-sort="key_type">Key Type</th>
                 <th data-sort="expiry">Expiry</th>
-                <th data-sort="ski">SKI</th>
+                <th data-sort="trusted">Trusted</th>
                 <th data-sort="match">Key Match</th>
-                <th data-sort="source">Source</th>
               </tr>
             </thead>
             <tbody id="results-body"></tbody>
@@ -183,12 +225,6 @@
         </div>
 
         <div id="keys-section" hidden>
-          <h3>Private Keys</h3>
-          <div class="filters">
-            <label class="filter-label"
-              ><input type="checkbox" id="keys-show-all" /> Show all</label
-            >
-          </div>
           <div class="table-container">
             <table id="keys-table">
               <thead>
@@ -197,7 +233,6 @@
                   <th data-sort="bits">Bits</th>
                   <th data-sort="ski">SKI</th>
                   <th data-sort="match">Cert Match</th>
-                  <th data-sort="source">Source</th>
                 </tr>
               </thead>
               <tbody id="keys-body"></tbody>

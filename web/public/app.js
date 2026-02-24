@@ -6,8 +6,12 @@ const fileInput = document.getElementById("file-input");
 const passwordsInput = document.getElementById("passwords");
 const statusBar = document.getElementById("status-bar");
 const statusText = document.getElementById("status-text");
+const progressContainer = document.getElementById("progress-container");
+const progressFill = document.getElementById("progress-fill");
+const progressLabel = document.getElementById("progress-label");
 const resultsSection = document.getElementById("results-section");
 const summaryDiv = document.getElementById("summary");
+const certTableContainer = document.getElementById("cert-table-container");
 const resultsBody = document.getElementById("results-body");
 const keysSection = document.getElementById("keys-section");
 const keysBody = document.getElementById("keys-body");
@@ -18,17 +22,26 @@ const resetBtn = document.getElementById("reset-btn");
 const filtersDiv = document.getElementById("filters");
 const filterExpired = document.getElementById("filter-expired");
 const filterUnmatched = document.getElementById("filter-unmatched");
-const filterNonleaf = document.getElementById("filter-nonleaf");
 const filterUntrusted = document.getElementById("filter-untrusted");
 const selectAll = document.getElementById("select-all");
-const keysShowAll = document.getElementById("keys-show-all");
 
 // State
 let wasmReady = false;
+let aiaComplete = false;
+let processing = false;
 const selectedSKIs = new Set();
-let visibleCertSKIs = new Set();
 const certSort = { column: "expiry", direction: "desc" };
 const keySort = { column: "match", direction: "desc" };
+let activeCategory = "leaf";
+let selectedDetailSKI = null;
+let selectedKeyDetailSKI = null;
+
+// Status icons for validation checks
+const STATUS_ICONS = {
+  pass: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`,
+  fail: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="15" y1="9" x2="9" y2="15"/><line x1="9" y1="9" x2="15" y2="15"/></svg>`,
+  warn: `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>`,
+};
 
 // certkitFetchURL is called from Go (WASM) to fetch AIA certificates.
 // Tries direct fetch first, then falls back to our own /api/fetch proxy
@@ -110,7 +123,7 @@ dropZone.addEventListener("dragleave", () => {
 dropZone.addEventListener("drop", async (e) => {
   e.preventDefault();
   dropZone.classList.remove("dragging");
-  if (!wasmReady) return;
+  if (!wasmReady || processing) return;
 
   const items = e.dataTransfer.items;
   if (items) {
@@ -122,7 +135,7 @@ dropZone.addEventListener("drop", async (e) => {
 });
 
 fileInput.addEventListener("change", async () => {
-  if (!wasmReady) return;
+  if (!wasmReady || processing) return;
   const files = Array.from(fileInput.files);
   if (files.length > 0) {
     await processFiles(files);
@@ -135,6 +148,35 @@ dropZone.addEventListener("keydown", (e) => {
     e.preventDefault();
     fileInput.click();
   }
+});
+
+// --- Paste Support ---
+
+const MAX_PASTE_BYTES = 1024 * 1024; // 1 MB
+
+document.addEventListener("paste", async (e) => {
+  // Don't intercept paste into input fields.
+  const tag = e.target.tagName;
+  if (tag === "INPUT" || tag === "TEXTAREA" || e.target.isContentEditable) {
+    return;
+  }
+  e.preventDefault();
+  if (!wasmReady) {
+    showStatus("Please wait, WASM module is still loading...");
+    return;
+  }
+  if (processing) return;
+  const text = e.clipboardData.getData("text/plain");
+  if (!text.trim()) return;
+  if (text.length > MAX_PASTE_BYTES) {
+    showStatus("Pasted data is too large (max 1 MB)", true);
+    return;
+  }
+  const data = new TextEncoder().encode(text);
+  await addFileObjects(
+    [{ name: "pasted.pem", data }],
+    "Processing pasted data...",
+  );
 });
 
 // --- File Collection (supports recursive folder reading) ---
@@ -183,19 +225,33 @@ async function readEntries(entries) {
 // --- File Processing ---
 
 async function processFiles(files) {
-  showStatus(`Processing ${files.length} file(s)...`, false, true);
+  if (processing) return;
+  let fileObjects;
+  try {
+    fileObjects = await Promise.all(
+      files.map(async (f) => {
+        const buf = await f.arrayBuffer();
+        return { name: f.name, data: new Uint8Array(buf) };
+      }),
+    );
+  } catch (err) {
+    showStatus(`Error reading files: ${err.message}`, true);
+    return;
+  }
+  await addFileObjects(fileObjects, `Processing ${files.length} file(s)...`);
+}
 
-  const passwords = passwordsInput.value.trim();
-
-  const fileObjects = await Promise.all(
-    files.map(async (f) => {
-      const buf = await f.arrayBuffer();
-      return { name: f.name, data: new Uint8Array(buf) };
-    }),
-  );
+// Shared helper for both file drops and paste. Sends file objects to WASM,
+// handles errors, and kicks off AIA resolution.
+async function addFileObjects(fileObjects, statusMessage) {
+  processing = true;
+  showStatus(statusMessage, false, true);
 
   try {
-    const resultJSON = await certkitAddFiles(fileObjects, passwords);
+    const resultJSON = await certkitAddFiles(
+      fileObjects,
+      passwordsInput.value.trim(),
+    );
     const results = JSON.parse(resultJSON);
 
     const errors = results.filter((r) => r.status === "error");
@@ -204,16 +260,26 @@ async function processFiles(files) {
       console.warn("Processing errors:", msgs);
     }
 
+    // If every input failed, show a user-visible error and bail.
+    if (errors.length === results.length) {
+      showStatus(`Could not parse input: ${errors[0].error}`, true);
+      return;
+    }
+
     refreshUI();
+    aiaComplete = false;
     showStatus("Resolving certificate chains via AIA...", false, true);
   } catch (err) {
     showStatus(`Error: ${err.message}`, true);
+  } finally {
+    processing = false;
   }
 }
 
 // Called from Go after background AIA resolution completes.
 // Refreshes the UI with any newly fetched intermediates and shows warnings.
 window.certkitOnAIAComplete = function (warningsJSON) {
+  aiaComplete = true;
   const warnings = JSON.parse(warningsJSON || "[]") || [];
   refreshUI();
 
@@ -236,10 +302,45 @@ window.certkitOnAIAComplete = function (warningsJSON) {
   }
 };
 
+// Called from Go via setTimeout during AIA resolution with per-cert progress.
+// Ignores late callbacks that arrive after certkitOnAIAComplete has fired.
+window.certkitOnAIAProgress = function (completed, total) {
+  if (aiaComplete) return;
+  const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+  statusText.textContent = `Resolving certificate chains via AIA... (${completed} of ${total})`;
+  progressContainer.hidden = false;
+  progressFill.style.width = `${pct}%`;
+  progressFill.setAttribute("aria-valuenow", String(pct));
+  progressLabel.textContent = `${pct}%`;
+};
+
+// --- Category Tabs ---
+
+function switchCategory(cat) {
+  activeCategory = cat;
+  for (const btn of document.querySelectorAll(".cat-tab")) {
+    const isActive = btn.dataset.cat === cat;
+    btn.classList.toggle("active", isActive);
+    btn.setAttribute("aria-selected", String(isActive));
+  }
+
+  if (cat === "keys") {
+    certTableContainer.hidden = true;
+    keysSection.hidden = false;
+    renderKeys();
+  } else {
+    certTableContainer.hidden = false;
+    keysSection.hidden = true;
+    renderCerts();
+  }
+}
+
+for (const btn of document.querySelectorAll(".cat-tab")) {
+  btn.addEventListener("click", () => switchCategory(btn.dataset.cat));
+}
+
 // --- Filters ---
 
-// Re-render both tables when any filter changes — cert filters cascade to keys
-// because keys only show when their corresponding cert is visible.
 function onFilterChange() {
   renderCerts();
   renderKeys();
@@ -247,14 +348,11 @@ function onFilterChange() {
 
 filterExpired.addEventListener("change", onFilterChange);
 filterUnmatched.addEventListener("change", onFilterChange);
-filterNonleaf.addEventListener("change", onFilterChange);
 filterUntrusted.addEventListener("change", onFilterChange);
-keysShowAll.addEventListener("change", renderKeys);
 
 // --- Sorting ---
 
-const CERT_TYPE_ORDER = { leaf: 0, intermediate: 1, root: 2 };
-const SORT_DEFAULT_DESC = new Set(["expiry", "match"]);
+const SORT_DEFAULT_DESC = new Set(["expiry", "match", "trusted"]);
 
 function toggleSort(state, column) {
   if (state.column === column) {
@@ -269,21 +367,16 @@ function certCompare(a, b, column) {
   switch (column) {
     case "cn":
       return (a.cn || "").localeCompare(b.cn || "");
-    case "type":
-      return (
-        (CERT_TYPE_ORDER[a.cert_type] ?? 3) -
-        (CERT_TYPE_ORDER[b.cert_type] ?? 3)
-      );
+    case "serial":
+      return (a.serial || "").localeCompare(b.serial || "");
     case "key_type":
       return (a.key_type || "").localeCompare(b.key_type || "");
     case "expiry":
       return (a.not_after || "").localeCompare(b.not_after || "");
-    case "ski":
-      return (a.ski || "").localeCompare(b.ski || "");
+    case "trusted":
+      return (a.trusted ? 1 : 0) - (b.trusted ? 1 : 0);
     case "match":
       return (a.has_key ? 1 : 0) - (b.has_key ? 1 : 0);
-    case "source":
-      return (a.source || "").localeCompare(b.source || "");
     default:
       return 0;
   }
@@ -299,8 +392,6 @@ function keyCompare(a, b, column) {
       return (a.ski || "").localeCompare(b.ski || "");
     case "match":
       return (a.has_cert ? 1 : 0) - (b.has_cert ? 1 : 0);
-    case "source":
-      return (a.source || "").localeCompare(b.source || "");
     default:
       return 0;
   }
@@ -340,6 +431,7 @@ document
 // Handle individual cert checkbox changes via event delegation.
 resultsBody.addEventListener("change", (e) => {
   if (!e.target.classList.contains("cert-select")) return;
+  e.stopPropagation(); // Prevent row click handler from toggling detail
   const ski = e.target.dataset.ski;
   if (e.target.checked) {
     selectedSKIs.add(ski);
@@ -375,16 +467,13 @@ function refreshUI() {
   const stateJSON = certkitGetState();
   lastState = JSON.parse(stateJSON);
 
-  // Auto-select newly discovered matched certs (from file add or AIA resolution).
-  for (const c of lastState.certs || []) {
-    if (c.has_key) selectedSKIs.add(c.ski);
-  }
-
   resultsSection.hidden = false;
   filtersDiv.hidden = false;
 
   renderCerts();
-  renderKeys();
+  if (activeCategory === "keys") {
+    renderKeys();
+  }
 }
 
 function renderSummary() {
@@ -392,21 +481,20 @@ function renderSummary() {
   const allCerts = lastState.certs || [];
   const allKeys = lastState.keys || [];
 
-  // Cert count uses visibleCertSKIs (computed by renderCerts).
-  const visibleCertCount = visibleCertSKIs.size;
-  // Keys follow cert visibility unless "Show all" is checked or no certs exist.
-  const showAll = keysShowAll.checked || allCerts.length === 0;
-  const visibleKeyCount = showAll
-    ? allKeys.length
-    : allKeys.filter((k) => visibleCertSKIs.has(k.ski)).length;
-
-  const hiddenCerts = allCerts.length - visibleCertCount;
-  const hiddenKeys = allKeys.length - visibleKeyCount;
+  const leafCount = allCerts.filter((c) => c.cert_type === "leaf").length;
+  const intermediateCount = allCerts.filter(
+    (c) => c.cert_type === "intermediate",
+  ).length;
+  const rootCount = allCerts.filter((c) => c.cert_type === "root").length;
+  const keyCount = allKeys.length;
+  const matchedCount = lastState.matched_pairs;
 
   summaryDiv.innerHTML = `
-    <div class="summary-item"><span class="summary-count">${visibleCertCount}</span> certificates${hiddenCerts > 0 ? ` <span class="summary-hidden">(${hiddenCerts} hidden)</span>` : ""}</div>
-    <div class="summary-item"><span class="summary-count">${visibleKeyCount}</span> keys${hiddenKeys > 0 ? ` <span class="summary-hidden">(${hiddenKeys} hidden)</span>` : ""}</div>
-    <div class="summary-item"><span class="summary-count">${lastState.matched_pairs}</span> matched pairs</div>
+    <div class="summary-item"><span class="summary-count">${leafCount}</span> leaf</div>
+    <div class="summary-item"><span class="summary-count">${intermediateCount}</span> intermediate</div>
+    <div class="summary-item"><span class="summary-count">${rootCount}</span> root</div>
+    <div class="summary-item"><span class="summary-count">${keyCount}</span> keys</div>
+    <div class="summary-item"><span class="summary-count">${matchedCount}</span> matched</div>
   `;
 }
 
@@ -414,18 +502,20 @@ function renderCerts() {
   if (!lastState) return;
 
   const allCerts = lastState.certs || [];
+
+  // Filter by active category tab.
   const visible = allCerts.filter((c) => {
+    if (c.cert_type !== activeCategory) return false;
     if (filterExpired.checked && c.expired) return false;
     if (filterUnmatched.checked && !c.has_key) return false;
-    if (filterNonleaf.checked && c.cert_type !== "leaf") return false;
     if (filterUntrusted.checked && !c.trusted) return false;
     return true;
   });
 
-  // Store visible cert SKIs so renderKeys can filter keys to match.
-  visibleCertSKIs = new Set(visible.map((c) => c.ski));
-
   renderSummary();
+
+  // Preserve selected detail row.
+  const hadDetail = selectedDetailSKI;
 
   // Sort — tiebreak by CN ascending when primary values are equal.
   const dir = certSort.direction === "asc" ? 1 : -1;
@@ -438,8 +528,11 @@ function renderCerts() {
   resultsBody.innerHTML = "";
   for (const cert of visible) {
     const tr = document.createElement("tr");
+    tr.dataset.ski = cert.ski;
+    if (cert.ski === selectedDetailSKI) {
+      tr.classList.add("selected");
+    }
 
-    const typeBadge = `<span class="badge badge-${cert.cert_type}">${cert.cert_type}</span>`;
     const matchBadge = cert.has_key
       ? `<span class="badge badge-match">matched</span>`
       : `<span class="badge badge-no-match">no key</span>`;
@@ -447,22 +540,43 @@ function renderCerts() {
     const expiryBadge = cert.expired
       ? ` <span class="badge badge-expired">expired</span>`
       : "";
+    const trustedBadge = cert.trusted
+      ? `<span class="badge badge-match">trusted</span>`
+      : `<span class="badge badge-expired">untrusted</span>`;
 
     const canExport = cert.has_key;
     const checked = canExport && selectedSKIs.has(cert.ski) ? "checked" : "";
     const disabled = canExport ? "" : "disabled";
 
     tr.innerHTML = `
-            <td class="col-select"><input type="checkbox" class="cert-select" data-ski="${escapeHTML(cert.ski)}" ${checked} ${disabled}></td>
+            <td class="col-select"><input type="checkbox" class="cert-select" data-ski="${escapeHTML(
+              cert.ski,
+            )}" ${checked} ${disabled}></td>
             <td title="${escapeHTML(cert.issuer)}">${escapeHTML(cert.cn)}</td>
-            <td>${typeBadge}</td>
+            <td class="serial" title="${escapeHTML(cert.serial)}">${escapeHTML(
+              cert.serial,
+            )}</td>
             <td>${escapeHTML(cert.key_type)}</td>
-            <td><span class="${expiryClass}">${formatDate(cert.not_after)}</span>${expiryBadge}</td>
-            <td class="ski" title="${escapeHTML(cert.ski)}">${escapeHTML(cert.ski)}</td>
+            <td><span class="${expiryClass}">${formatDate(
+              cert.not_after,
+            )}</span>${expiryBadge}</td>
+            <td>${trustedBadge}</td>
             <td>${matchBadge}</td>
-            <td>${escapeHTML(cert.source)}</td>
         `;
     resultsBody.appendChild(tr);
+  }
+
+  // Restore open detail row after re-render.
+  if (hadDetail) {
+    const openRow = resultsBody.querySelector(
+      `tr[data-ski="${CSS.escape(hadDetail)}"]`,
+    );
+    if (openRow) {
+      const existing = resultsBody.querySelector(".cert-detail-row");
+      if (!existing) {
+        certRowClick(openRow);
+      }
+    }
   }
 
   updateSortIndicators(document.getElementById("results-table"), certSort);
@@ -474,20 +588,15 @@ function renderKeys() {
   if (!lastState) return;
   const allKeys = lastState.keys || [];
 
-  if (allKeys.length === 0) {
-    keysSection.hidden = true;
+  if (allKeys.length === 0 && activeCategory === "keys") {
+    keysBody.innerHTML = "";
     return;
   }
-  keysSection.hidden = false;
 
-  // Show all keys when the checkbox is checked or no certs have been loaded.
-  const allCerts = lastState.certs || [];
-  const showAll = keysShowAll.checked || allCerts.length === 0;
-  const visible = showAll
-    ? allKeys.slice()
-    : allKeys.filter((k) => visibleCertSKIs.has(k.ski));
-
-  renderSummary();
+  const visible = allKeys.filter((k) => {
+    if (filterUnmatched.checked && !k.has_cert) return false;
+    return true;
+  });
 
   // Sort — tiebreak by type ascending when primary values are equal.
   const dir = keySort.direction === "asc" ? 1 : -1;
@@ -497,9 +606,16 @@ function renderKeys() {
     return keyCompare(a, b, "type");
   });
 
+  // Preserve selected detail row.
+  const hadKeyDetail = selectedKeyDetailSKI;
+
   keysBody.innerHTML = "";
   for (const key of visible) {
     const tr = document.createElement("tr");
+    tr.dataset.ski = key.ski;
+    if (key.ski === selectedKeyDetailSKI) {
+      tr.classList.add("selected");
+    }
     const matchBadge = key.has_cert
       ? `<span class="badge badge-match">matched</span>`
       : `<span class="badge badge-no-match">no cert</span>`;
@@ -508,9 +624,18 @@ function renderKeys() {
       <td>${key.bit_length}</td>
       <td class="ski" title="${escapeHTML(key.ski)}">${escapeHTML(key.ski)}</td>
       <td>${matchBadge}</td>
-      <td>${escapeHTML(key.source)}</td>
     `;
     keysBody.appendChild(tr);
+  }
+
+  // Restore open detail row after re-render.
+  if (hadKeyDetail) {
+    const openRow = keysBody.querySelector(
+      `tr[data-ski="${CSS.escape(hadKeyDetail)}"]`,
+    );
+    if (openRow && !keysBody.querySelector(".key-detail-row")) {
+      keyRowClick(openRow);
+    }
   }
 
   updateSortIndicators(document.getElementById("keys-table"), keySort);
@@ -550,6 +675,237 @@ function updateExportBtn() {
       : "Export Bundles (ZIP)";
 }
 
+// --- Click-to-expand detail rows ---
+
+function removeDetail() {
+  const existing = resultsBody.querySelector(".cert-detail-row");
+  if (existing) existing.remove();
+}
+
+function insertDetail(afterRow, html) {
+  removeDetail();
+  const detailTr = document.createElement("tr");
+  detailTr.className = "cert-detail-row";
+  detailTr.innerHTML = `<td colspan="7"><div class="cert-detail-inner">${html}</div></td>`;
+  afterRow.after(detailTr);
+}
+
+async function certRowClick(tr) {
+  const ski = tr.dataset.ski;
+  if (!ski || !wasmReady) return;
+
+  // Toggle: clicking the same row closes it.
+  if (
+    selectedDetailSKI === ski &&
+    resultsBody.querySelector(".cert-detail-row")
+  ) {
+    selectedDetailSKI = null;
+    removeDetail();
+    tr.classList.remove("selected");
+    return;
+  }
+
+  selectedDetailSKI = ski;
+  for (const row of resultsBody.querySelectorAll("tr:not(.cert-detail-row)")) {
+    row.classList.toggle("selected", row.dataset.ski === ski);
+  }
+
+  // Show loading state inline.
+  insertDetail(tr, `<span class="hint">Verifying...</span>`);
+
+  try {
+    const resultJSON = await certkitValidateCert(ski);
+    if (selectedDetailSKI !== ski || !tr.isConnected) return;
+    const result = JSON.parse(resultJSON);
+
+    // Find the cert data for metadata.
+    const cert = (lastState.certs || []).find((c) => c.ski === ski);
+    const html = buildChecksHTML(result) + buildMetadataHTML(cert);
+    insertDetail(tr, html);
+  } catch (err) {
+    if (selectedDetailSKI !== ski || !tr.isConnected) return;
+    insertDetail(
+      tr,
+      `<div class="verify-banner-inline invalid"><span class="check-status check-fail">${
+        STATUS_ICONS.fail
+      }</span> ${escapeHTML(err.message)}</div>`,
+    );
+  }
+}
+
+resultsBody.addEventListener("click", (e) => {
+  // Don't trigger on checkbox clicks.
+  if (e.target.closest(".col-select") || e.target.closest("input")) return;
+  const tr = e.target.closest("tr:not(.cert-detail-row)");
+  if (tr) certRowClick(tr);
+});
+
+function buildChecksHTML(result) {
+  const bannerIcon = result.valid ? STATUS_ICONS.pass : STATUS_ICONS.fail;
+  const bannerClass = result.valid ? "valid" : "invalid";
+  const statusClass = result.valid ? "check-pass" : "check-fail";
+  const bannerText = result.valid ? "Valid" : "Invalid";
+
+  let html = `<div class="verify-banner-inline ${bannerClass}"><span class="check-status ${statusClass}">${bannerIcon}</span> ${escapeHTML(
+    bannerText,
+  )}</div>`;
+
+  for (const check of result.checks) {
+    const icon = STATUS_ICONS[check.status] || STATUS_ICONS.warn;
+    const cls =
+      check.status === "pass"
+        ? "check-pass"
+        : check.status === "fail"
+          ? "check-fail"
+          : "check-warn";
+    html += `
+      <div class="check-row">
+        <div>
+          <span class="check-label">${escapeHTML(check.name)}</span>
+          <span class="check-detail">${escapeHTML(check.detail)}</span>
+        </div>
+        <span class="check-status ${cls}">${icon}</span>
+      </div>`;
+  }
+  return html;
+}
+
+function buildMetadataHTML(cert) {
+  if (!cert) return "";
+
+  const sans =
+    cert.sans && cert.sans.length > 0 ? cert.sans.join(", ") : "None";
+  const ekus = cert.ekus && cert.ekus.length > 0 ? cert.ekus.join(", ") : "";
+
+  const rows = [
+    ["Subject", cert.subject],
+    ["Issuer", cert.issuer],
+    ["SANs", sans],
+    ["SKI", cert.ski],
+    ["Not Before", formatDate(cert.not_before)],
+  ];
+  if (ekus) rows.splice(3, 0, ["EKU", ekus]);
+
+  let html = `<div class="metadata-grid">`;
+  for (const [label, value] of rows) {
+    const cls = label === "SKI" ? " mono" : "";
+    html += `<div class="metadata-label">${escapeHTML(
+      label,
+    )}</div><div class="metadata-value${cls}">${escapeHTML(value || "")}</div>`;
+  }
+  html += `</div>`;
+  return html;
+}
+
+// --- Click-to-expand key detail rows ---
+
+function removeKeyDetail() {
+  const existing = keysBody.querySelector(".key-detail-row");
+  if (existing) existing.remove();
+}
+
+function insertKeyDetail(afterRow, html) {
+  removeKeyDetail();
+  const detailTr = document.createElement("tr");
+  detailTr.className = "key-detail-row";
+  detailTr.innerHTML = `<td colspan="4"><div class="key-detail-inner">${html}</div></td>`;
+  afterRow.after(detailTr);
+}
+
+function keyRowClick(tr) {
+  const ski = tr.dataset.ski;
+  if (!ski) return;
+
+  // Toggle: clicking the same row closes it.
+  if (
+    selectedKeyDetailSKI === ski &&
+    keysBody.querySelector(".key-detail-row")
+  ) {
+    selectedKeyDetailSKI = null;
+    removeKeyDetail();
+    tr.classList.remove("selected");
+    return;
+  }
+
+  selectedKeyDetailSKI = ski;
+  for (const row of keysBody.querySelectorAll("tr:not(.key-detail-row)")) {
+    row.classList.toggle("selected", row.dataset.ski === ski);
+  }
+
+  // Find matching certs by SKI.
+  const matchingCerts = (lastState.certs || []).filter((c) => c.ski === ski);
+  if (matchingCerts.length === 0) {
+    insertKeyDetail(
+      tr,
+      `<span class="hint">No matching certificates found.</span>`,
+    );
+    return;
+  }
+
+  let html = `<div class="key-match-header">Matching Certificates</div>`;
+  for (const cert of matchingCerts) {
+    const typeBadge = `<span class="badge badge-${escapeHTML(
+      cert.cert_type,
+    )}">${escapeHTML(cert.cert_type)}</span>`;
+    const trustedBadge = cert.trusted
+      ? `<span class="badge badge-match">trusted</span>`
+      : `<span class="badge badge-expired">untrusted</span>`;
+    const expiryBadge = cert.expired
+      ? `<span class="badge badge-expired">expired</span>`
+      : "";
+
+    html += `
+      <div class="key-match-cert">
+        <div class="key-match-info">
+          <span class="key-match-cn">${escapeHTML(cert.cn)}</span>
+          ${typeBadge} ${trustedBadge} ${expiryBadge}
+        </div>
+        <div class="key-match-meta">${escapeHTML(cert.issuer)} — ${formatDate(
+          cert.not_after,
+        )}</div>
+        <button class="btn-go-to-cert" data-cat="${escapeHTML(
+          cert.cert_type,
+        )}" data-ski="${escapeHTML(cert.ski)}">View certificate</button>
+      </div>`;
+  }
+  insertKeyDetail(tr, html);
+}
+
+keysBody.addEventListener("click", (e) => {
+  // Handle "View certificate" button clicks.
+  const goBtn = e.target.closest(".btn-go-to-cert");
+  if (goBtn) {
+    const cat = goBtn.dataset.cat;
+    const ski = goBtn.dataset.ski;
+
+    // Uncheck filters that would hide the target cert.
+    const cert = (lastState.certs || []).find((c) => c.ski === ski);
+    if (cert) {
+      if (cert.expired && filterExpired.checked) filterExpired.checked = false;
+      if (!cert.trusted && filterUntrusted.checked)
+        filterUntrusted.checked = false;
+      if (!cert.has_key && filterUnmatched.checked)
+        filterUnmatched.checked = false;
+    }
+
+    switchCategory(cat);
+    // Highlight and expand the target cert row after tab switch.
+    requestAnimationFrame(() => {
+      const targetRow = resultsBody.querySelector(
+        `tr[data-ski="${CSS.escape(ski)}"]`,
+      );
+      if (targetRow) {
+        targetRow.scrollIntoView({ behavior: "smooth", block: "center" });
+        certRowClick(targetRow);
+      }
+    });
+    return;
+  }
+
+  const tr = e.target.closest("tr:not(.key-detail-row)");
+  if (tr) keyRowClick(tr);
+});
+
 // --- Export ---
 
 exportBtn.addEventListener("click", async () => {
@@ -578,24 +934,34 @@ exportBtn.addEventListener("click", async () => {
 resetBtn.addEventListener("click", () => {
   if (!wasmReady) return;
   certkitReset();
+  processing = false;
   lastState = null;
+  aiaComplete = false;
   selectedSKIs.clear();
-  visibleCertSKIs = new Set();
-  keysShowAll.checked = false;
   certSort.column = "expiry";
   certSort.direction = "desc";
   keySort.column = "match";
   keySort.direction = "desc";
+  activeCategory = "leaf";
+  selectedDetailSKI = null;
+  selectedKeyDetailSKI = null;
   resultsSection.hidden = true;
   filtersDiv.hidden = true;
   resultsBody.innerHTML = "";
   keysBody.innerHTML = "";
   keysSection.hidden = true;
+  certTableContainer.hidden = false;
   warningsSection.hidden = true;
   summaryDiv.innerHTML = "";
   exportBtn.textContent = "Export Bundles (ZIP)";
   exportBtn.disabled = true;
   hideStatus();
+  // Reset tab selection
+  for (const btn of document.querySelectorAll(".cat-tab")) {
+    const isLeaf = btn.dataset.cat === "leaf";
+    btn.classList.toggle("active", isLeaf);
+    btn.setAttribute("aria-selected", String(isLeaf));
+  }
 });
 
 // --- Helpers ---
@@ -604,6 +970,9 @@ function showStatus(message, isError = false, isProcessing = false) {
   statusBar.hidden = false;
   statusText.textContent = message;
   statusBar.className = "status-bar";
+  progressContainer.hidden = true;
+  progressFill.style.width = "0%";
+  progressFill.setAttribute("aria-valuenow", "0");
   if (isError) statusBar.style.color = "var(--danger)";
   else if (isProcessing) statusBar.classList.add("processing");
   else statusBar.style.color = "";
@@ -611,6 +980,9 @@ function showStatus(message, isError = false, isProcessing = false) {
 
 function hideStatus() {
   statusBar.hidden = true;
+  progressContainer.hidden = true;
+  progressFill.style.width = "0%";
+  progressFill.setAttribute("aria-valuenow", "0");
 }
 
 function downloadBlob(data, filename, mimeType) {
