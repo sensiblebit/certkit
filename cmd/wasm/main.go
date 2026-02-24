@@ -350,22 +350,23 @@ func formatDN(name pkix.Name) string {
 	return strings.Join(parts, ", ")
 }
 
+var extKeyUsageNames = map[x509.ExtKeyUsage]string{
+	x509.ExtKeyUsageAny:                        "Any",
+	x509.ExtKeyUsageServerAuth:                 "Server Authentication",
+	x509.ExtKeyUsageClientAuth:                 "Client Authentication",
+	x509.ExtKeyUsageCodeSigning:                "Code Signing",
+	x509.ExtKeyUsageEmailProtection:            "Email Protection",
+	x509.ExtKeyUsageTimeStamping:               "Time Stamping",
+	x509.ExtKeyUsageOCSPSigning:                "OCSP Signing",
+	x509.ExtKeyUsageMicrosoftServerGatedCrypto: "Microsoft Server Gated Crypto",
+	x509.ExtKeyUsageNetscapeServerGatedCrypto:  "Netscape Server Gated Crypto",
+}
+
 // formatEKUs returns human-readable names for extended key usages.
 func formatEKUs(ekus []x509.ExtKeyUsage) []string {
-	names := map[x509.ExtKeyUsage]string{
-		x509.ExtKeyUsageAny:                        "Any",
-		x509.ExtKeyUsageServerAuth:                 "Server Authentication",
-		x509.ExtKeyUsageClientAuth:                 "Client Authentication",
-		x509.ExtKeyUsageCodeSigning:                "Code Signing",
-		x509.ExtKeyUsageEmailProtection:            "Email Protection",
-		x509.ExtKeyUsageTimeStamping:               "Time Stamping",
-		x509.ExtKeyUsageOCSPSigning:                "OCSP Signing",
-		x509.ExtKeyUsageMicrosoftServerGatedCrypto: "Microsoft Server Gated Crypto",
-		x509.ExtKeyUsageNetscapeServerGatedCrypto:  "Netscape Server Gated Crypto",
-	}
 	var out []string
 	for _, eku := range ekus {
-		if name, ok := names[eku]; ok {
+		if name, ok := extKeyUsageNames[eku]; ok {
 			out = append(out, name)
 		} else {
 			out = append(out, fmt.Sprintf("Unknown (%d)", int(eku)))

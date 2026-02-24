@@ -715,6 +715,7 @@ async function certRowClick(tr) {
 
   try {
     const resultJSON = await certkitValidateCert(ski);
+    if (selectedDetailSKI !== ski || !tr.isConnected) return;
     const result = JSON.parse(resultJSON);
 
     // Find the cert data for metadata.
@@ -722,6 +723,7 @@ async function certRowClick(tr) {
     const html = buildChecksHTML(result) + buildMetadataHTML(cert);
     insertDetail(tr, html);
   } catch (err) {
+    if (selectedDetailSKI !== ski || !tr.isConnected) return;
     insertDetail(
       tr,
       `<div class="verify-banner-inline invalid"><span class="check-status check-fail">${
@@ -956,7 +958,9 @@ resetBtn.addEventListener("click", () => {
   hideStatus();
   // Reset tab selection
   for (const btn of document.querySelectorAll(".cat-tab")) {
-    btn.classList.toggle("active", btn.dataset.cat === "leaf");
+    const isLeaf = btn.dataset.cat === "leaf";
+    btn.classList.toggle("active", isLeaf);
+    btn.setAttribute("aria-selected", String(isLeaf));
   }
 });
 

@@ -49,7 +49,7 @@ func validateCertificate(_ js.Value, args []js.Value) any {
 			}
 			jsonBytes, err := json.Marshal(result)
 			if err != nil {
-				reject.Invoke(js.Global().Get("Error").New(fmt.Sprintf("marshaling validation result: %v", err)))
+				reject.Invoke(js.Global().Get("Error").New(fmt.Errorf("marshaling validation result: %w", err).Error()))
 				return
 			}
 			resolve.Invoke(string(jsonBytes))
@@ -103,6 +103,7 @@ func runValidation(_ context.Context, store *certstore.MemStore, skiColon string
 		Leaf:          leaf,
 		Intermediates: intermediatePool,
 		Roots:         roots,
+		Now:           now,
 	})...)
 
 	hasFail := false
@@ -218,6 +219,7 @@ type checkTrustChainInput struct {
 	Leaf          *x509.Certificate
 	Intermediates *x509.CertPool
 	Roots         *x509.CertPool
+	Now           time.Time
 }
 
 // checkTrustChain returns two checks: "Trust Chain" (path) and "Trusted Root".
@@ -245,7 +247,7 @@ func checkTrustChain(input checkTrustChainInput) []validationCheck {
 		Intermediates: intermediates,
 		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
 	}
-	if time.Now().After(leaf.NotAfter) {
+	if input.Now.After(leaf.NotAfter) {
 		opts.CurrentTime = leaf.NotBefore.Add(time.Second)
 	}
 
