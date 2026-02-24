@@ -9,14 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Add `certkitValidateCert` WASM function for browser-based certificate validation ([`d8b9759`])
-- Add concurrent AIA resolution — fetches up to `Concurrency` URLs in parallel per depth round (default 20, WASM uses 50) ([`d8b9759`])
-- Add `serial` field to WASM `getState()` certificate data — hex-encoded serial number ([`d8b9759`])
-- Add paste support to web UI drop zone — Ctrl+V / Cmd+V pastes PEM or certificate text directly without needing a file ([`837e5e8`])
+- Add `certkitValidateCert` WASM function for browser-based certificate validation ([`392878a`])
+- Add concurrent AIA resolution — fetches up to `Concurrency` URLs in parallel per depth round (default 20, WASM uses 50) ([`392878a`])
+- Add `serial` field to WASM `getState()` certificate data — hex-encoded serial number ([`392878a`])
+- Add paste support to web UI drop zone — Ctrl+V / Cmd+V pastes PEM or certificate text directly without needing a file ([`392878a`])
 
 ### Changed
 
-- Replace Inspect/Verify tab navigation with unified category tabs (Leaf, Intermediate, Root, Keys) — certificates are now organized by type with click-to-expand detail rows showing validation checks and metadata ([`d8b9759`])
+- Replace Inspect/Verify tab navigation with unified category tabs (Leaf, Intermediate, Root, Keys) — certificates are now organized by type with click-to-expand detail rows showing validation checks and metadata ([`392878a`])
 
 ## [0.8.0] - 2026-02-22
 
@@ -573,8 +573,7 @@ Initial release.
 [0.1.1]: https://github.com/sensiblebit/certkit/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/sensiblebit/certkit/releases/tag/v0.1.0
 
-[`d8b9759`]: https://github.com/sensiblebit/certkit/commit/d8b9759
-[`837e5e8`]: https://github.com/sensiblebit/certkit/commit/837e5e8
+[`392878a`]: https://github.com/sensiblebit/certkit/commit/392878a
 [`e70e8e5`]: https://github.com/sensiblebit/certkit/commit/e70e8e5
 [`0fa55af`]: https://github.com/sensiblebit/certkit/commit/0fa55af
 [`b69caef`]: https://github.com/sensiblebit/certkit/commit/b69caef

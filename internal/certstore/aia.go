@@ -78,7 +78,6 @@ func ResolveAIA(ctx context.Context, input ResolveAIAInput) []string {
 
 	var warnings []string
 	seen := make(map[string]bool)
-	processed := make(map[string]bool) // track unique certs across rounds
 
 	// needsResolution reports whether a cert's issuer is missing from the
 	// store and not a known Mozilla root. Certs that are themselves Mozilla
@@ -100,13 +99,8 @@ func ResolveAIA(ctx context.Context, input ResolveAIAInput) []string {
 		return true
 	}
 
-	// Count total certs needing resolution up front for progress reporting.
 	progressTotal := 0
-	for _, rec := range input.Store.AllCertsFlat() {
-		if needsResolution(rec) {
-			progressTotal++
-		}
-	}
+	processed := make(map[string]bool)
 
 	for range maxDepth {
 		var queue []*CertRecord
@@ -119,6 +113,10 @@ func ResolveAIA(ctx context.Context, input ResolveAIAInput) []string {
 		if len(queue) == 0 {
 			break
 		}
+
+		// Recount progressTotal each round to include newly-discovered
+		// intermediates, preventing completed from exceeding total.
+		progressTotal = len(processed) + len(queue)
 
 		// Phase 1: Collect unique work items and pre-validate URLs.
 		// Only the main goroutine touches `seen` — no concurrent access.
