@@ -13,10 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add concurrent AIA resolution — fetches up to `Concurrency` URLs in parallel per depth round (default 20, WASM uses 50) ([`392878a`])
 - Add `serial` field to WASM `getState()` certificate data — hex-encoded serial number ([`392878a`])
 - Add paste support to web UI drop zone — Ctrl+V / Cmd+V pastes PEM or certificate text directly without needing a file ([`392878a`])
+- Extract `RunValidation`, `CheckExpiration`, `CheckKeyStrength`, `CheckSignature`, `CheckTrustChain` from WASM into `internal/certstore` — validation policy logic is now testable without WASM build constraints ([#63])
 
 ### Changed
 
 - Replace Inspect/Verify tab navigation with unified category tabs (Leaf, Intermediate, Root, Keys) — certificates are now organized by type with click-to-expand detail rows showing validation checks and metadata ([`392878a`])
+- `RunValidation` checks `ctx.Err()` between Mozilla root pool load and validation checks to honor WASM timeout constraints ([#63])
+
+### Fixed
+
+- Fix AIA `progressTotal` double-counting certs whose issuer fetch fails — the same cert appeared in both `processed` and `queue` sets, inflating the progress bar total ([#64])
 
 ## [0.8.0] - 2026-02-22
 
@@ -629,6 +635,8 @@ Initial release.
 [`55b5c1e`]: https://github.com/sensiblebit/certkit/commit/55b5c1e
 [`8cf81d9`]: https://github.com/sensiblebit/certkit/commit/8cf81d9
 [`3569926`]: https://github.com/sensiblebit/certkit/commit/3569926
+[#64]: https://github.com/sensiblebit/certkit/pull/64
+[#63]: https://github.com/sensiblebit/certkit/pull/63
 [#58]: https://github.com/sensiblebit/certkit/pull/58
 [#57]: https://github.com/sensiblebit/certkit/pull/57
 [#56]: https://github.com/sensiblebit/certkit/pull/56

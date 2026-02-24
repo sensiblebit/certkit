@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -895,5 +896,159 @@ func TestResolveAIA_RejectsSSRFURL(t *testing.T) {
 				t.Errorf("store should still have only the leaf, got %d certs", len(store.AllCertsFlat()))
 			}
 		})
+	}
+}
+
+func TestResolveAIA_ProgressNoDuplicateCounting(t *testing.T) {
+	// WHY: When a cert's AIA fetch fails, it remains unresolved and re-enters
+	// the queue on the next depth round. The progress total must not
+	// double-count it — completed should never exceed total.
+	//
+	// Setup: two leaves under different CAs. Leaf A's AIA URL returns a valid
+	// intermediate (fetched > 0, loop continues to round 2). Leaf B's AIA URL
+	// always fails (B re-enters queue in round 2). If totalSeen doesn't
+	// deduplicate, progressTotal inflates on round 2.
+	t.Parallel()
+
+	store := NewMemStore()
+
+	// CA-A: its intermediate will be fetchable.
+	caAKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caATmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "Progress CA-A"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		SubjectKeyId:          []byte{1, 2, 3, 4},
+	}
+	caADER, err := x509.CreateCertificate(rand.Reader, caATmpl, caATmpl, &caAKey.PublicKey, caAKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caACert, err := x509.ParseCertificate(caADER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// CA-B: its intermediate will NOT be fetchable.
+	caBKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caBTmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "Progress CA-B"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		SubjectKeyId:          []byte{5, 6, 7, 8},
+	}
+	caBDER, err := x509.CreateCertificate(rand.Reader, caBTmpl, caBTmpl, &caBKey.PublicKey, caBKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caBCert, err := x509.ParseCertificate(caBDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Leaf A: AIA URL will succeed.
+	leafAKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafATmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "leaf-a.example.com"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IssuingCertificateURL: []string{"http://example.com/ca-a.cer"},
+	}
+	leafADER, err := x509.CreateCertificate(rand.Reader, leafATmpl, caACert, &leafAKey.PublicKey, caAKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafACert, err := x509.ParseCertificate(leafADER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Leaf B: AIA URL will always fail.
+	leafBKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafBTmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "leaf-b.example.com"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IssuingCertificateURL: []string{"http://example.com/ca-b.cer"},
+	}
+	leafBDER, err := x509.CreateCertificate(rand.Reader, leafBTmpl, caBCert, &leafBKey.PublicKey, caBKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafBCert, err := x509.ParseCertificate(leafBDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.HandleCertificate(leafACert, "leaf-a.pem"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HandleCertificate(leafBCert, "leaf-b.pem"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Fetcher: leaf A's URL returns CA-A (success), leaf B's URL always fails.
+	fetcher := func(_ context.Context, url string) ([]byte, error) {
+		if url == "http://example.com/ca-a.cer" {
+			return caADER, nil
+		}
+		return nil, fmt.Errorf("connection refused")
+	}
+
+	var mu sync.Mutex
+	var ticks []struct{ completed, total int }
+	onProgress := func(completed, total int) {
+		mu.Lock()
+		ticks = append(ticks, struct{ completed, total int }{completed, total})
+		mu.Unlock()
+	}
+
+	ResolveAIA(context.Background(), ResolveAIAInput{
+		Store:      store,
+		Fetch:      fetcher,
+		OnProgress: onProgress,
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	if len(ticks) == 0 {
+		t.Fatal("expected progress ticks, got none")
+	}
+
+	// Total must stay stable: no new certs are discovered (CA-A is a
+	// self-signed root, not an intermediate), so total should be 2
+	// (leaf A + leaf B) in every tick. The old buggy formula inflated
+	// total from 2→3 in round 2 when leaf B re-entered the queue.
+	expectedTotal := 2
+	for i, tick := range ticks {
+		if tick.completed > tick.total {
+			t.Errorf("tick %d: completed (%d) > total (%d)", i, tick.completed, tick.total)
+		}
+		if tick.total != expectedTotal {
+			t.Errorf("tick %d: total = %d, want %d (inflated by double-counting)", i, tick.total, expectedTotal)
+		}
 	}
 }

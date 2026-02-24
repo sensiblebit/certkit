@@ -68,44 +68,60 @@ func TestCheckKeyStrength(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name   string
-		cert   *x509.Certificate
-		status string
-		detail string // substring to match
+		name     string
+		makeCert func(t *testing.T) *x509.Certificate
+		status   string
+		detail   string // substring to match
 	}{
 		{
 			name: "RSA 2048 passes",
-			cert: func() *x509.Certificate {
-				key, _ := rsa.GenerateKey(rand.Reader, 2048)
+			makeCert: func(t *testing.T) *x509.Certificate {
+				t.Helper()
+				key, err := rsa.GenerateKey(rand.Reader, 2048)
+				if err != nil {
+					t.Fatalf("generate RSA 2048 key: %v", err)
+				}
 				return &x509.Certificate{PublicKey: &key.PublicKey}
-			}(),
+			},
 			status: "pass",
 			detail: "RSA 2048-bit",
 		},
 		{
 			name: "RSA 1024 fails",
-			cert: func() *x509.Certificate {
-				key, _ := rsa.GenerateKey(rand.Reader, 1024) //nolint:gosec // intentionally weak for test
+			makeCert: func(t *testing.T) *x509.Certificate {
+				t.Helper()
+				key, err := rsa.GenerateKey(rand.Reader, 1024) //nolint:gosec // intentionally weak for test
+				if err != nil {
+					t.Fatalf("generate RSA 1024 key: %v", err)
+				}
 				return &x509.Certificate{PublicKey: &key.PublicKey}
-			}(),
+			},
 			status: "fail",
 			detail: "RSA 1024-bit",
 		},
 		{
 			name: "ECDSA P-256 passes",
-			cert: func() *x509.Certificate {
-				key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			makeCert: func(t *testing.T) *x509.Certificate {
+				t.Helper()
+				key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				if err != nil {
+					t.Fatalf("generate ECDSA P-256 key: %v", err)
+				}
 				return &x509.Certificate{PublicKey: &key.PublicKey}
-			}(),
+			},
 			status: "pass",
 			detail: "ECDSA",
 		},
 		{
 			name: "Ed25519 passes",
-			cert: func() *x509.Certificate {
-				pub, _, _ := ed25519.GenerateKey(rand.Reader)
+			makeCert: func(t *testing.T) *x509.Certificate {
+				t.Helper()
+				pub, _, err := ed25519.GenerateKey(rand.Reader)
+				if err != nil {
+					t.Fatalf("generate Ed25519 key: %v", err)
+				}
 				return &x509.Certificate{PublicKey: pub}
-			}(),
+			},
 			status: "pass",
 			detail: "Ed25519",
 		},
@@ -114,7 +130,8 @@ func TestCheckKeyStrength(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			check := CheckKeyStrength(tt.cert)
+			cert := tt.makeCert(t)
+			check := CheckKeyStrength(cert)
 			if check.Status != tt.status {
 				t.Errorf("CheckKeyStrength() status = %q, want %q; detail = %q", check.Status, tt.status, check.Detail)
 			}
@@ -154,66 +171,77 @@ func TestCheckSignature(t *testing.T) {
 	}
 }
 
-func TestCheckTrustChain_NilRoots(t *testing.T) {
+func TestCheckTrustChain(t *testing.T) {
 	t.Parallel()
 
-	cert := &x509.Certificate{
-		Subject: pkix.Name{CommonName: "test.example.com"},
+	tests := []struct {
+		name        string
+		makeInput   func(t *testing.T) CheckTrustChainInput
+		chainStatus string
+		rootStatus  string
+	}{
+		{
+			name: "nil roots fails both checks",
+			makeInput: func(t *testing.T) CheckTrustChainInput {
+				t.Helper()
+				return CheckTrustChainInput{
+					Leaf:  &x509.Certificate{Subject: pkix.Name{CommonName: "test.example.com"}},
+					Roots: nil,
+					Now:   time.Now(),
+				}
+			},
+			chainStatus: "fail",
+			rootStatus:  "fail",
+		},
+		{
+			name: "self-signed non-root fails both checks",
+			makeInput: func(t *testing.T) CheckTrustChainInput {
+				t.Helper()
+				key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				if err != nil {
+					t.Fatalf("generate key: %v", err)
+				}
+				template := &x509.Certificate{
+					SerialNumber:          randomSerial(t),
+					Subject:               pkix.Name{CommonName: "self-signed.example.com"},
+					NotBefore:             time.Now().Add(-time.Hour),
+					NotAfter:              time.Now().Add(24 * time.Hour),
+					KeyUsage:              x509.KeyUsageDigitalSignature,
+					BasicConstraintsValid: true,
+				}
+				certBytes, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+				if err != nil {
+					t.Fatalf("create self-signed cert: %v", err)
+				}
+				cert, err := x509.ParseCertificate(certBytes)
+				if err != nil {
+					t.Fatalf("parse self-signed cert: %v", err)
+				}
+				return CheckTrustChainInput{
+					Leaf:  cert,
+					Roots: x509.NewCertPool(),
+					Now:   time.Now(),
+				}
+			},
+			chainStatus: "fail",
+			rootStatus:  "fail",
+		},
 	}
-	checks := CheckTrustChain(CheckTrustChainInput{
-		Leaf:  cert,
-		Roots: nil,
-		Now:   time.Now(),
-	})
-	if len(checks) != 2 {
-		t.Fatalf("expected 2 checks, got %d", len(checks))
-	}
-	for _, c := range checks {
-		if c.Status != "fail" {
-			t.Errorf("check %q: status = %q, want fail", c.Name, c.Status)
-		}
-	}
-}
 
-func TestCheckTrustChain_SelfSigned(t *testing.T) {
-	// WHY: A self-signed leaf that is not a Mozilla root should fail trust
-	// chain verification — it cannot build a chain to a trusted root.
-	t.Parallel()
-
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	template := &x509.Certificate{
-		SerialNumber:          randomSerial(t),
-		Subject:               pkix.Name{CommonName: "self-signed.example.com"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		KeyUsage:              x509.KeyUsageDigitalSignature,
-		BasicConstraintsValid: true,
-	}
-	certBytes, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cert, err := x509.ParseCertificate(certBytes)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	roots := x509.NewCertPool()
-	checks := CheckTrustChain(CheckTrustChainInput{
-		Leaf:  cert,
-		Roots: roots,
-		Now:   time.Now(),
-	})
-	if len(checks) != 2 {
-		t.Fatalf("expected 2 checks, got %d", len(checks))
-	}
-	if checks[0].Status != "fail" {
-		t.Errorf("Trust Chain: status = %q, want fail", checks[0].Status)
-	}
-	if checks[1].Status != "fail" {
-		t.Errorf("Trusted Root: status = %q, want fail", checks[1].Status)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			input := tt.makeInput(t)
+			checks := CheckTrustChain(input)
+			if len(checks) != 2 {
+				t.Fatalf("expected 2 checks, got %d", len(checks))
+			}
+			if checks[0].Status != tt.chainStatus {
+				t.Errorf("Trust Chain: status = %q, want %q", checks[0].Status, tt.chainStatus)
+			}
+			if checks[1].Status != tt.rootStatus {
+				t.Errorf("Trusted Root: status = %q, want %q", checks[1].Status, tt.rootStatus)
+			}
+		})
 	}
 }
