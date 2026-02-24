@@ -903,58 +903,117 @@ func TestResolveAIA_ProgressNoDuplicateCounting(t *testing.T) {
 	// WHY: When a cert's AIA fetch fails, it remains unresolved and re-enters
 	// the queue on the next depth round. The progress total must not
 	// double-count it — completed should never exceed total.
+	//
+	// Setup: two leaves under different CAs. Leaf A's AIA URL returns a valid
+	// intermediate (fetched > 0, loop continues to round 2). Leaf B's AIA URL
+	// always fails (B re-enters queue in round 2). If totalSeen doesn't
+	// deduplicate, progressTotal inflates on round 2.
 	t.Parallel()
 
 	store := NewMemStore()
 
-	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	// CA-A: its intermediate will be fetchable.
+	caAKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	caTmpl := &x509.Certificate{
+	caATmpl := &x509.Certificate{
 		SerialNumber:          randomSerial(t),
-		Subject:               pkix.Name{CommonName: "Progress CA"},
+		Subject:               pkix.Name{CommonName: "Progress CA-A"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
 		IsCA:                  true,
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign,
+		SubjectKeyId:          []byte{1, 2, 3, 4},
 	}
-	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	caADER, err := x509.CreateCertificate(rand.Reader, caATmpl, caATmpl, &caAKey.PublicKey, caAKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	caCert, err := x509.ParseCertificate(caDER)
+	caACert, err := x509.ParseCertificate(caADER)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	// CA-B: its intermediate will NOT be fetchable.
+	caBKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	leafTmpl := &x509.Certificate{
+	caBTmpl := &x509.Certificate{
 		SerialNumber:          randomSerial(t),
-		Subject:               pkix.Name{CommonName: "progress.example.com"},
+		Subject:               pkix.Name{CommonName: "Progress CA-B"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
-		IssuingCertificateURL: []string{"http://example.com/ca.cer"},
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		SubjectKeyId:          []byte{5, 6, 7, 8},
 	}
-	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
+	caBDER, err := x509.CreateCertificate(rand.Reader, caBTmpl, caBTmpl, &caBKey.PublicKey, caBKey)
 	if err != nil {
 		t.Fatal(err)
 	}
-	leafCert, err := x509.ParseCertificate(leafDER)
+	caBCert, err := x509.ParseCertificate(caBDER)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	if err := store.HandleCertificate(leafCert, "leaf.pem"); err != nil {
+	// Leaf A: AIA URL will succeed.
+	leafAKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafATmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "leaf-a.example.com"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IssuingCertificateURL: []string{"http://example.com/ca-a.cer"},
+	}
+	leafADER, err := x509.CreateCertificate(rand.Reader, leafATmpl, caACert, &leafAKey.PublicKey, caAKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafACert, err := x509.ParseCertificate(leafADER)
+	if err != nil {
 		t.Fatal(err)
 	}
 
-	// Fetcher always fails — cert stays unresolved across rounds.
-	fetcher := func(_ context.Context, _ string) ([]byte, error) {
+	// Leaf B: AIA URL will always fail.
+	leafBKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafBTmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "leaf-b.example.com"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IssuingCertificateURL: []string{"http://example.com/ca-b.cer"},
+	}
+	leafBDER, err := x509.CreateCertificate(rand.Reader, leafBTmpl, caBCert, &leafBKey.PublicKey, caBKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafBCert, err := x509.ParseCertificate(leafBDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.HandleCertificate(leafACert, "leaf-a.pem"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HandleCertificate(leafBCert, "leaf-b.pem"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Fetcher: leaf A's URL returns CA-A (success), leaf B's URL always fails.
+	fetcher := func(_ context.Context, url string) ([]byte, error) {
+		if url == "http://example.com/ca-a.cer" {
+			return caADER, nil
+		}
 		return nil, fmt.Errorf("connection refused")
 	}
 
@@ -975,6 +1034,10 @@ func TestResolveAIA_ProgressNoDuplicateCounting(t *testing.T) {
 	mu.Lock()
 	defer mu.Unlock()
 
+	if len(ticks) == 0 {
+		t.Fatal("expected progress ticks, got none")
+	}
+
 	for i, tick := range ticks {
 		if tick.completed > tick.total {
 			t.Errorf("tick %d: completed (%d) > total (%d)", i, tick.completed, tick.total)
@@ -982,10 +1045,8 @@ func TestResolveAIA_ProgressNoDuplicateCounting(t *testing.T) {
 	}
 
 	// The final tick should reach 100%.
-	if len(ticks) > 0 {
-		last := ticks[len(ticks)-1]
-		if last.completed != last.total {
-			t.Errorf("final tick: completed (%d) != total (%d)", last.completed, last.total)
-		}
+	last := ticks[len(ticks)-1]
+	if last.completed != last.total {
+		t.Errorf("final tick: completed (%d) != total (%d)", last.completed, last.total)
 	}
 }
