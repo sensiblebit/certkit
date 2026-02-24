@@ -7,6 +7,8 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -32,6 +34,7 @@ func main() {
 	js.Global().Set("certkitGetState", js.FuncOf(getState))
 	js.Global().Set("certkitExportBundles", js.FuncOf(exportBundlesJS))
 	js.Global().Set("certkitReset", js.FuncOf(resetStore))
+	js.Global().Set("certkitValidateCert", js.FuncOf(validateCertificate))
 
 	// Block forever — WASM modules must not exit.
 	select {}
@@ -148,6 +151,7 @@ func getState(_ js.Value, _ []js.Value) any {
 	type certInfo struct {
 		SKI       string   `json:"ski"`
 		CN        string   `json:"cn"`
+		Serial    string   `json:"serial"`
 		CertType  string   `json:"cert_type"`
 		KeyType   string   `json:"key_type"`
 		NotBefore string   `json:"not_before"`
@@ -155,8 +159,10 @@ func getState(_ js.Value, _ []js.Value) any {
 		Expired   bool     `json:"expired"`
 		HasKey    bool     `json:"has_key"`
 		Trusted   bool     `json:"trusted"`
+		Subject   string   `json:"subject"`
 		Issuer    string   `json:"issuer"`
 		SANs      []string `json:"sans"`
+		EKUs      []string `json:"ekus"`
 		Source    string   `json:"source"`
 	}
 
@@ -210,9 +216,24 @@ func getState(_ js.Value, _ []js.Value) any {
 			trusted = certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{Cert: rec.Cert, Roots: roots, Intermediates: intermediatePool})
 		}
 
+		serial := ""
+		if rec.Cert.SerialNumber != nil {
+			serial = strings.ToUpper(rec.Cert.SerialNumber.Text(16))
+		}
+
+		ekus := formatEKUs(rec.Cert.ExtKeyUsage)
+		if ekus == nil {
+			ekus = []string{}
+		}
+		sans := rec.Cert.DNSNames
+		if sans == nil {
+			sans = []string{}
+		}
+
 		ci := certInfo{
 			SKI:       certkit.ColonHex(hexToBytes(ski)),
 			CN:        certstore.FormatCN(rec.Cert),
+			Serial:    serial,
 			CertType:  rec.CertType,
 			KeyType:   rec.KeyType,
 			NotBefore: rec.NotBefore.UTC().Format(time.RFC3339),
@@ -220,8 +241,10 @@ func getState(_ js.Value, _ []js.Value) any {
 			Expired:   expired,
 			HasKey:    hasKey,
 			Trusted:   trusted,
-			Issuer:    rec.Cert.Issuer.CommonName,
-			SANs:      rec.Cert.DNSNames,
+			Subject:   formatDN(rec.Cert.Subject),
+			Issuer:    formatDN(rec.Cert.Issuer),
+			SANs:      sans,
+			EKUs:      ekus,
 			Source:    rec.Source,
 		}
 		resp.Certs = append(resp.Certs, ci)
@@ -301,6 +324,54 @@ func resetStore(_ js.Value, _ []js.Value) any {
 	globalStore.Reset()
 	storeMu.Unlock()
 	return true
+}
+
+// formatDN formats a pkix.Name as a comma-separated string of its components.
+func formatDN(name pkix.Name) string {
+	var parts []string
+	for _, c := range name.Country {
+		parts = append(parts, "C="+c)
+	}
+	for _, s := range name.Province {
+		parts = append(parts, "ST="+s)
+	}
+	for _, l := range name.Locality {
+		parts = append(parts, "L="+l)
+	}
+	for _, o := range name.Organization {
+		parts = append(parts, "O="+o)
+	}
+	for _, ou := range name.OrganizationalUnit {
+		parts = append(parts, "OU="+ou)
+	}
+	if name.CommonName != "" {
+		parts = append(parts, "CN="+name.CommonName)
+	}
+	return strings.Join(parts, ", ")
+}
+
+// formatEKUs returns human-readable names for extended key usages.
+func formatEKUs(ekus []x509.ExtKeyUsage) []string {
+	names := map[x509.ExtKeyUsage]string{
+		x509.ExtKeyUsageAny:                        "Any",
+		x509.ExtKeyUsageServerAuth:                 "Server Authentication",
+		x509.ExtKeyUsageClientAuth:                 "Client Authentication",
+		x509.ExtKeyUsageCodeSigning:                "Code Signing",
+		x509.ExtKeyUsageEmailProtection:            "Email Protection",
+		x509.ExtKeyUsageTimeStamping:               "Time Stamping",
+		x509.ExtKeyUsageOCSPSigning:                "OCSP Signing",
+		x509.ExtKeyUsageMicrosoftServerGatedCrypto: "Microsoft Server Gated Crypto",
+		x509.ExtKeyUsageNetscapeServerGatedCrypto:  "Netscape Server Gated Crypto",
+	}
+	var out []string
+	for _, eku := range ekus {
+		if name, ok := names[eku]; ok {
+			out = append(out, name)
+		} else {
+			out = append(out, fmt.Sprintf("Unknown (%d)", int(eku)))
+		}
+	}
+	return out
 }
 
 // hexToBytes decodes a hex string to bytes, returning nil on error.

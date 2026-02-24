@@ -3,13 +3,13 @@
 package main
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/rsa"
 	"crypto/x509"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"math"
 	"strings"
 	"syscall/js"
@@ -33,13 +33,16 @@ func validateCertificate(_ js.Value, args []js.Value) any {
 		resolve := promiseArgs[0]
 		reject := promiseArgs[1]
 		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
 			if !storeMu.TryRLock() {
 				reject.Invoke(js.Global().Get("Error").New("store is busy"))
 				return
 			}
 			defer storeMu.RUnlock()
 
-			result, err := runValidation(globalStore, ski)
+			result, err := runValidation(ctx, globalStore, ski)
 			if err != nil {
 				reject.Invoke(js.Global().Get("Error").New(err.Error()))
 				return
@@ -73,7 +76,7 @@ type validationCheck struct {
 }
 
 // runValidation looks up a cert by SKI and runs all checks against it.
-func runValidation(store *certstore.MemStore, skiColon string) (*validationResult, error) {
+func runValidation(_ context.Context, store *certstore.MemStore, skiColon string) (*validationResult, error) {
 	skiHex := strings.ReplaceAll(skiColon, ":", "")
 	skiHex = strings.ToLower(skiHex)
 
@@ -89,14 +92,18 @@ func runValidation(store *certstore.MemStore, skiColon string) (*validationResul
 
 	roots, err := certkit.MozillaRootPool()
 	if err != nil {
-		slog.Error("loading Mozilla root pool for validation", "error", err)
+		return nil, fmt.Errorf("loading Mozilla root pool: %w", err)
 	}
 
 	var checks []validationCheck
 	checks = append(checks, checkExpiration(leaf, now))
 	checks = append(checks, checkKeyStrength(leaf))
 	checks = append(checks, checkSignature(leaf))
-	checks = append(checks, checkTrustChain(leaf, intermediatePool, roots)...)
+	checks = append(checks, checkTrustChain(checkTrustChainInput{
+		Leaf:          leaf,
+		Intermediates: intermediatePool,
+		Roots:         roots,
+	})...)
 
 	hasFail := false
 	for _, c := range checks {
@@ -206,8 +213,18 @@ func checkSignature(cert *x509.Certificate) validationCheck {
 	}
 }
 
+// checkTrustChainInput holds parameters for checkTrustChain.
+type checkTrustChainInput struct {
+	Leaf          *x509.Certificate
+	Intermediates *x509.CertPool
+	Roots         *x509.CertPool
+}
+
 // checkTrustChain returns two checks: "Trust Chain" (path) and "Trusted Root".
-func checkTrustChain(leaf *x509.Certificate, intermediates, roots *x509.CertPool) []validationCheck {
+func checkTrustChain(input checkTrustChainInput) []validationCheck {
+	leaf := input.Leaf
+	intermediates := input.Intermediates
+	roots := input.Roots
 	if roots == nil {
 		return []validationCheck{
 			{Name: "Trust Chain", Status: "fail", Detail: "Could not load root store"},

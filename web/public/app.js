@@ -310,6 +310,7 @@ window.certkitOnAIAProgress = function (completed, total) {
   statusText.textContent = `Resolving certificate chains via AIA... (${completed} of ${total})`;
   progressContainer.hidden = false;
   progressFill.style.width = `${pct}%`;
+  progressFill.setAttribute("aria-valuenow", String(pct));
   progressLabel.textContent = `${pct}%`;
 };
 
@@ -318,7 +319,9 @@ window.certkitOnAIAProgress = function (completed, total) {
 function switchCategory(cat) {
   activeCategory = cat;
   for (const btn of document.querySelectorAll(".cat-tab")) {
-    btn.classList.toggle("active", btn.dataset.cat === cat);
+    const isActive = btn.dataset.cat === cat;
+    btn.classList.toggle("active", isActive);
+    btn.setAttribute("aria-selected", String(isActive));
   }
 
   if (cat === "keys") {
@@ -965,6 +968,7 @@ function showStatus(message, isError = false, isProcessing = false) {
   statusBar.className = "status-bar";
   progressContainer.hidden = true;
   progressFill.style.width = "0%";
+  progressFill.setAttribute("aria-valuenow", "0");
   if (isError) statusBar.style.color = "var(--danger)";
   else if (isProcessing) statusBar.classList.add("processing");
   else statusBar.style.color = "";
@@ -974,6 +978,7 @@ function hideStatus() {
   statusBar.hidden = true;
   progressContainer.hidden = true;
   progressFill.style.width = "0%";
+  progressFill.setAttribute("aria-valuenow", "0");
 }
 
 function downloadBlob(data, filename, mimeType) {
