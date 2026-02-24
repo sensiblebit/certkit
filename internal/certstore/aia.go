@@ -120,7 +120,7 @@ func ResolveAIA(ctx context.Context, input ResolveAIAInput) []string {
 		// rounds (e.g. when their AIA fetch fails but they still need
 		// resolution).
 		for _, rec := range queue {
-			totalSeen[fmt.Sprintf("%x", rec.Cert.SubjectKeyId)] = true
+			totalSeen[certID(rec.Cert)] = true
 		}
 		progressTotal = len(totalSeen)
 
@@ -152,9 +152,8 @@ func ResolveAIA(ctx context.Context, input ResolveAIAInput) []string {
 		if len(work) == 0 {
 			// All URLs were already seen or rejected — mark certs processed.
 			for _, rec := range queue {
-				ski := fmt.Sprintf("%x", rec.Cert.SubjectKeyId)
-				if !processed[ski] {
-					processed[ski] = true
+				if !processed[rec.SKI] {
+					processed[rec.SKI] = true
 					if input.OnProgress != nil {
 						input.OnProgress(len(processed), progressTotal)
 					}
@@ -229,9 +228,8 @@ func ResolveAIA(ctx context.Context, input ResolveAIAInput) []string {
 
 		// Mark all certs in this round as processed and report progress.
 		for _, rec := range queue {
-			ski := fmt.Sprintf("%x", rec.Cert.SubjectKeyId)
-			if !processed[ski] {
-				processed[ski] = true
+			if id := certID(rec.Cert); !processed[id] {
+				processed[id] = true
 				if input.OnProgress != nil {
 					input.OnProgress(len(processed), progressTotal)
 				}

@@ -10,6 +10,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -895,5 +896,96 @@ func TestResolveAIA_RejectsSSRFURL(t *testing.T) {
 				t.Errorf("store should still have only the leaf, got %d certs", len(store.AllCertsFlat()))
 			}
 		})
+	}
+}
+
+func TestResolveAIA_ProgressNoDuplicateCounting(t *testing.T) {
+	// WHY: When a cert's AIA fetch fails, it remains unresolved and re-enters
+	// the queue on the next depth round. The progress total must not
+	// double-count it — completed should never exceed total.
+	t.Parallel()
+
+	store := NewMemStore()
+
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caTmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "Progress CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafTmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "progress.example.com"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IssuingCertificateURL: []string{"http://example.com/ca.cer"},
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafCert, err := x509.ParseCertificate(leafDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := store.HandleCertificate(leafCert, "leaf.pem"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Fetcher always fails — cert stays unresolved across rounds.
+	fetcher := func(_ context.Context, _ string) ([]byte, error) {
+		return nil, fmt.Errorf("connection refused")
+	}
+
+	var mu sync.Mutex
+	var ticks []struct{ completed, total int }
+	onProgress := func(completed, total int) {
+		mu.Lock()
+		ticks = append(ticks, struct{ completed, total int }{completed, total})
+		mu.Unlock()
+	}
+
+	ResolveAIA(context.Background(), ResolveAIAInput{
+		Store:      store,
+		Fetch:      fetcher,
+		OnProgress: onProgress,
+	})
+
+	mu.Lock()
+	defer mu.Unlock()
+
+	for i, tick := range ticks {
+		if tick.completed > tick.total {
+			t.Errorf("tick %d: completed (%d) > total (%d)", i, tick.completed, tick.total)
+		}
+	}
+
+	// The final tick should reach 100%.
+	if len(ticks) > 0 {
+		last := ticks[len(ticks)-1]
+		if last.completed != last.total {
+			t.Errorf("final tick: completed (%d) != total (%d)", last.completed, last.total)
+		}
 	}
 }

@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Fix AIA `progressTotal` double-counting certs whose issuer fetch fails — the same cert appeared in both `processed` and `queue` sets, inflating the progress bar total ([#63])
+- Fix AIA `progressTotal` double-counting certs whose issuer fetch fails — the same cert appeared in both `processed` and `queue` sets, inflating the progress bar total ([#64])
 
 ## [0.8.0] - 2026-02-22
 
@@ -635,6 +635,7 @@ Initial release.
 [`55b5c1e`]: https://github.com/sensiblebit/certkit/commit/55b5c1e
 [`8cf81d9`]: https://github.com/sensiblebit/certkit/commit/8cf81d9
 [`3569926`]: https://github.com/sensiblebit/certkit/commit/3569926
+[#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63
 [#58]: https://github.com/sensiblebit/certkit/pull/58
 [#57]: https://github.com/sensiblebit/certkit/pull/57
