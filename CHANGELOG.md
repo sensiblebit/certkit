@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-02-25
+
 ### Added
 
 - Add Scan/Inspect page-level tabs to web UI — Inspect tab provides stateless inspection of certificates, keys, and CSRs with detailed metadata cards
@@ -575,7 +577,8 @@ Initial release.
 - PKCS#12, PKCS#7, and JKS encode/decode support
 - Homebrew distribution via GoReleaser
 
-[Unreleased]: https://github.com/sensiblebit/certkit/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/sensiblebit/certkit/compare/v0.8.1...HEAD
+[0.8.1]: https://github.com/sensiblebit/certkit/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/sensiblebit/certkit/compare/v0.7.7...v0.8.0
 [0.7.7]: https://github.com/sensiblebit/certkit/compare/v0.7.6...v0.7.7
 [0.7.6]: https://github.com/sensiblebit/certkit/compare/v0.7.5...v0.7.6
