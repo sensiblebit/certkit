@@ -305,7 +305,7 @@ func otherNameStringTag(oid asn1.ObjectIdentifier) int {
 func marshalOtherNameGN(on OtherNameSAN) ([]byte, error) {
 	oidBytes, err := asn1.Marshal(on.OID)
 	if err != nil {
-		return nil, fmt.Errorf("marshaling OtherName OID: %w", err)
+		return nil, fmt.Errorf("marshaling otherName OID: %w", err)
 	}
 
 	tag := otherNameStringTag(on.OID)
@@ -324,7 +324,7 @@ func marshalOtherNameGN(on OtherNameSAN) ([]byte, error) {
 		})
 	}
 	if err != nil {
-		return nil, fmt.Errorf("marshaling OtherName value: %w", err)
+		return nil, fmt.Errorf("marshaling otherName value: %w", err)
 	}
 
 	explicitBytes, err := asn1.Marshal(asn1.RawValue{
@@ -334,7 +334,7 @@ func marshalOtherNameGN(on OtherNameSAN) ([]byte, error) {
 		Bytes:      valueBytes,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("marshaling OtherName explicit wrapper: %w", err)
+		return nil, fmt.Errorf("marshaling otherName explicit wrapper: %w", err)
 	}
 
 	seqContent := append(oidBytes, explicitBytes...)

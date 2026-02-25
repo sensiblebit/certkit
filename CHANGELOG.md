@@ -24,6 +24,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix `MarshalSANExtension` accepting nil URI entries and invalid IP addresses without validation ([#74])
 - Fix `parseOtherNameEntriesFromSANBytes` silently discarding parse errors without logging (ERR-5) ([#74])
 - Fix error strings in `ResolveOtherNameOID` using capitalized "OtherName" instead of lowercase (ERR-4) ([#74])
+
+### Changed
+
 - Refactor OtherName SAN parsing to share common walker between `parseOtherNamesFromSANBytes` and `parseOtherNameEntriesFromSANBytes` ([#74])
 
 ### Tests

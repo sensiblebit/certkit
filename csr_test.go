@@ -727,6 +727,8 @@ func TestGenerateCSRFromTemplate_WithOtherNames(t *testing.T) {
 		wantDNS        []string
 		wantEmails     []string
 		wantIPStrs     []string
+		wantErr        bool
+		wantErrIs      error
 	}{
 		{
 			name: "UPN only",
@@ -787,12 +789,32 @@ func TestGenerateCSRFromTemplate_WithOtherNames(t *testing.T) {
 			wantDNS:    []string{"example.com"},
 			wantIPStrs: []string{"10.0.0.1"},
 		},
+		{
+			name: "invalid OtherName type",
+			tmpl: &CSRTemplate{
+				Subject: CSRSubject{CommonName: "test"},
+				OtherNames: []CSRTemplateOtherName{
+					{Type: "BOGUS", Value: "value"},
+				},
+			},
+			wantErr:   true,
+			wantErrIs: ErrUnknownOtherNameType,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			csrPEM, err := GenerateCSRFromTemplate(tt.tmpl, key)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("expected error")
+				}
+				if tt.wantErrIs != nil && !errors.Is(err, tt.wantErrIs) {
+					t.Errorf("error should wrap %v, got: %v", tt.wantErrIs, err)
+				}
+				return
+			}
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -844,30 +866,6 @@ func TestGenerateCSRFromTemplate_WithOtherNames(t *testing.T) {
 				t.Errorf("found %d SAN extensions, want at most 1 (RFC 5280 violation)", sanCount)
 			}
 		})
-	}
-}
-
-func TestGenerateCSRFromTemplate_InvalidOtherNameType(t *testing.T) {
-	// WHY: Invalid OtherName type strings must produce clear errors rather than
-	// silently generating malformed CSRs.
-	t.Parallel()
-
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	tmpl := &CSRTemplate{
-		Subject: CSRSubject{CommonName: "test"},
-		OtherNames: []CSRTemplateOtherName{
-			{Type: "BOGUS", Value: "value"},
-		},
-	}
-	_, err = GenerateCSRFromTemplate(tmpl, key)
-	if err == nil {
-		t.Error("expected error for invalid OtherName type")
-	}
-	if !errors.Is(err, ErrUnknownOtherNameType) {
-		t.Errorf("error should wrap ErrUnknownOtherNameType, got: %v", err)
 	}
 }
 

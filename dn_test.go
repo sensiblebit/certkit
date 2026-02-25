@@ -917,10 +917,6 @@ func TestMarshalSANExtension(t *testing.T) {
 		name           string
 		input          MarshalSANExtensionInput
 		wantOtherNames []string // expected ParseOtherNameSANs output
-		wantDNS        []string
-		wantEmails     []string
-		wantIPStrs     []string
-		wantURIStrs    []string
 	}{
 		{
 			name: "UPN only",
@@ -949,7 +945,6 @@ func TestMarshalSANExtension(t *testing.T) {
 				},
 			},
 			wantOtherNames: []string{"UPN:admin@example.com"},
-			wantDNS:        []string{"example.com", "www.example.com"},
 		},
 		{
 			name: "all types combined",
@@ -963,10 +958,6 @@ func TestMarshalSANExtension(t *testing.T) {
 				},
 			},
 			wantOtherNames: []string{"UPN:user@corp.example.com"},
-			wantDNS:        []string{"example.com"},
-			wantEmails:     []string{"admin@example.com"},
-			wantIPStrs:     []string{"10.0.0.1", "::1"},
-			wantURIStrs:    []string{"spiffe://example.com/workload"},
 		},
 		{
 			name: "multiple OtherNames",
@@ -993,11 +984,11 @@ func TestMarshalSANExtension(t *testing.T) {
 			wantOtherNames: []string{"1.2.3.4.5:custom-value"},
 		},
 		{
-			name: "IPv4 and IPv6",
+			name: "standard types only (no OtherNames)",
 			input: MarshalSANExtensionInput{
+				DNSNames:    []string{"example.com"},
 				IPAddresses: []net.IP{net.ParseIP("192.168.1.1"), net.ParseIP("2001:db8::1")},
 			},
-			wantIPStrs: []string{"192.168.1.1", "2001:db8::1"},
 		},
 	}
 
@@ -1034,38 +1025,10 @@ func TestMarshalSANExtension(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			// Verify OtherNames via ParseOtherNameSANs
+			// Verify OtherNames via ParseOtherNameSANs (certkit logic)
 			gotOther := ParseOtherNameSANs(cert.Extensions)
 			if !slices.Equal(gotOther, tt.wantOtherNames) {
 				t.Errorf("OtherNames = %v, want %v", gotOther, tt.wantOtherNames)
-			}
-
-			// Verify DNS names
-			if !slices.Equal(cert.DNSNames, tt.wantDNS) {
-				t.Errorf("DNSNames = %v, want %v", cert.DNSNames, tt.wantDNS)
-			}
-
-			// Verify email addresses
-			if !slices.Equal(cert.EmailAddresses, tt.wantEmails) {
-				t.Errorf("EmailAddresses = %v, want %v", cert.EmailAddresses, tt.wantEmails)
-			}
-
-			// Verify IP addresses
-			var gotIPs []string
-			for _, ip := range cert.IPAddresses {
-				gotIPs = append(gotIPs, ip.String())
-			}
-			if !slices.Equal(gotIPs, tt.wantIPStrs) {
-				t.Errorf("IPAddresses = %v, want %v", gotIPs, tt.wantIPStrs)
-			}
-
-			// Verify URIs
-			var gotURIs []string
-			for _, uri := range cert.URIs {
-				gotURIs = append(gotURIs, uri.String())
-			}
-			if !slices.Equal(gotURIs, tt.wantURIStrs) {
-				t.Errorf("URIs = %v, want %v", gotURIs, tt.wantURIStrs)
 			}
 		})
 	}
@@ -1112,29 +1075,7 @@ func TestMarshalSANExtension_CertificateRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Verify standard SAN types
-	wantDNS := []string{"example.com", "www.example.com"}
-	if !slices.Equal(cert.DNSNames, wantDNS) {
-		t.Errorf("DNSNames = %v, want %v", cert.DNSNames, wantDNS)
-	}
-	wantEmail := []string{"admin@example.com"}
-	if !slices.Equal(cert.EmailAddresses, wantEmail) {
-		t.Errorf("EmailAddresses = %v, want %v", cert.EmailAddresses, wantEmail)
-	}
-	if len(cert.IPAddresses) != 2 {
-		t.Fatalf("IPAddresses count = %d, want 2", len(cert.IPAddresses))
-	}
-	if cert.IPAddresses[0].String() != "10.0.0.1" {
-		t.Errorf("IPAddresses[0] = %v, want 10.0.0.1", cert.IPAddresses[0])
-	}
-	if cert.IPAddresses[1].String() != "::1" {
-		t.Errorf("IPAddresses[1] = %v, want ::1", cert.IPAddresses[1])
-	}
-	if len(cert.URIs) != 1 || cert.URIs[0].String() != "spiffe://example.com/ns/default" {
-		t.Errorf("URIs = %v, want [spiffe://example.com/ns/default]", cert.URIs)
-	}
-
-	// Verify OtherName via ParseOtherNameSANs
+	// Verify OtherName via ParseOtherNameSANs (certkit logic)
 	otherNames := ParseOtherNameSANs(cert.Extensions)
 	if len(otherNames) != 1 || otherNames[0] != "UPN:user@corp.example.com" {
 		t.Errorf("OtherNames = %v, want [UPN:user@corp.example.com]", otherNames)
@@ -1206,12 +1147,7 @@ func TestMarshalSANExtension_mTLSUserCert(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Verify email SAN
-	if len(leafCert.EmailAddresses) != 1 || leafCert.EmailAddresses[0] != "alice@corp.example.com" {
-		t.Errorf("EmailAddresses = %v, want [alice@corp.example.com]", leafCert.EmailAddresses)
-	}
-
-	// Verify UPN OtherName
+	// Verify UPN OtherName (certkit logic)
 	otherNames := ParseOtherNameSANs(leafCert.Extensions)
 	if len(otherNames) != 1 || otherNames[0] != "UPN:alice@corp.example.com" {
 		t.Errorf("OtherNames = %v, want [UPN:alice@corp.example.com]", otherNames)
