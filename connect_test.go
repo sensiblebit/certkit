@@ -107,6 +107,139 @@ func TestConnectTLS(t *testing.T) {
 	}
 }
 
+func TestConnectTLS_ClientAuth(t *testing.T) {
+	t.Parallel()
+
+	// WHY: Verify mTLS detection — the server requests a client cert,
+	// we send an empty one, and the result captures the acceptable CAs
+	// and signature schemes from the CertificateRequest.
+
+	// Create a CA cert used as the acceptable client CA.
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Test Client CA", Organization: []string{"TestOrg"}},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create a server cert signed by the CA.
+	serverKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "localhost"},
+		DNSNames:     []string{"localhost"},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	serverDER, err := x509.CreateCertificate(rand.Reader, serverTemplate, caCert, &serverKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	clientCAPool := x509.NewCertPool()
+	clientCAPool.AddCert(caCert)
+
+	tlsCert := tls.Certificate{
+		Certificate: [][]byte{serverDER, caDER},
+		PrivateKey:  serverKey,
+	}
+
+	// Server requests client cert — uses RequestClientCert so the
+	// handshake completes even without a valid client cert.
+	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		Certificates: []tls.Certificate{tlsCert},
+		ClientAuth:   tls.RequestClientCert,
+		ClientCAs:    clientCAPool,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Close() }()
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			if tc, ok := conn.(*tls.Conn); ok {
+				_ = tc.Handshake()
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	_, portStr, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := ConnectTLS(ctx, ConnectTLSInput{
+		Host: "127.0.0.1",
+		Port: portStr,
+	})
+	if err != nil {
+		t.Fatalf("ConnectTLS failed: %v", err)
+	}
+
+	if result.ClientAuth == nil {
+		t.Fatal("ClientAuth is nil, expected mTLS info")
+	}
+	if !result.ClientAuth.Requested {
+		t.Error("ClientAuth.Requested = false, want true")
+	}
+	if len(result.ClientAuth.AcceptableCAs) != 1 {
+		t.Fatalf("AcceptableCAs count = %d, want 1", len(result.ClientAuth.AcceptableCAs))
+	}
+	if !strings.Contains(result.ClientAuth.AcceptableCAs[0], "Test Client CA") {
+		t.Errorf("AcceptableCAs[0] = %q, want to contain %q", result.ClientAuth.AcceptableCAs[0], "Test Client CA")
+	}
+	if len(result.ClientAuth.SignatureSchemes) == 0 {
+		t.Error("SignatureSchemes is empty")
+	}
+
+	// Chain should still be present and verifiable properties intact.
+	if len(result.PeerChain) == 0 {
+		t.Fatal("PeerChain is empty")
+	}
+	if result.PeerChain[0].Subject.CommonName != "localhost" {
+		t.Errorf("leaf CN = %q, want %q", result.PeerChain[0].Subject.CommonName, "localhost")
+	}
+
+	// Verify FormatConnectResult includes mTLS info.
+	output := FormatConnectResult(result)
+	if !strings.Contains(output, "Client Auth:") {
+		t.Error("FormatConnectResult output missing Client Auth line")
+	}
+	if !strings.Contains(output, "1 acceptable CA(s)") {
+		t.Errorf("FormatConnectResult output missing CA count, got:\n%s", output)
+	}
+}
+
 func TestConnectTLS_EmptyHost(t *testing.T) {
 	t.Parallel()
 	_, err := ConnectTLS(context.Background(), ConnectTLSInput{})

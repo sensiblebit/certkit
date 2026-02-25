@@ -4,6 +4,8 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
 	"fmt"
 	"net"
 	"strings"
@@ -20,6 +22,16 @@ type ConnectTLSInput struct {
 	ServerName string
 }
 
+// ClientAuthInfo describes the server's client certificate request (mTLS).
+type ClientAuthInfo struct {
+	// Requested is true when the server sent a CertificateRequest.
+	Requested bool `json:"requested"`
+	// AcceptableCAs are the DN strings of CAs the server trusts for client certs.
+	AcceptableCAs []string `json:"acceptable_cas,omitempty"`
+	// SignatureSchemes are the signature algorithms the server will accept.
+	SignatureSchemes []string `json:"signature_schemes,omitempty"`
+}
+
 // ConnectResult contains the results of a TLS connection probe.
 type ConnectResult struct {
 	// Host is the hostname that was connected to.
@@ -32,6 +44,10 @@ type ConnectResult struct {
 	CipherSuite string `json:"cipher_suite"`
 	// ServerName is the SNI value sent.
 	ServerName string `json:"server_name"`
+	// ALPN is the negotiated application protocol (e.g. "h2", "http/1.1").
+	ALPN string `json:"alpn,omitempty"`
+	// ClientAuth describes whether the server requested a client certificate (mTLS).
+	ClientAuth *ClientAuthInfo `json:"client_auth,omitempty"`
 	// PeerChain is the certificate chain presented by the server.
 	PeerChain []*x509.Certificate `json:"-"`
 	// VerifiedChains contains the verified certificate chains.
@@ -63,9 +79,28 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 		return nil, fmt.Errorf("connecting to %s: %w", addr, err)
 	}
 
+	var clientAuth *ClientAuthInfo
+
 	tlsConf := &tls.Config{
 		ServerName:         serverName,
 		InsecureSkipVerify: true, //nolint:gosec // We do our own verification below.
+		GetClientCertificate: func(cri *tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			info := &ClientAuthInfo{Requested: true}
+			for _, rawDN := range cri.AcceptableCAs {
+				var rdnSeq pkix.RDNSequence
+				if _, err := asn1.Unmarshal(rawDN, &rdnSeq); err != nil {
+					continue
+				}
+				var name pkix.Name
+				name.FillFromRDNSequence(&rdnSeq)
+				info.AcceptableCAs = append(info.AcceptableCAs, FormatDN(name))
+			}
+			for _, scheme := range cri.SignatureSchemes {
+				info.SignatureSchemes = append(info.SignatureSchemes, signatureSchemeString(scheme))
+			}
+			clientAuth = info
+			return &tls.Certificate{}, nil
+		},
 	}
 
 	tlsConn := tls.Client(conn, tlsConf)
@@ -77,10 +112,15 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 		}
 	}
 
-	if err := tlsConn.HandshakeContext(ctx); err != nil {
-		return nil, fmt.Errorf("TLS handshake with %s: %w", addr, err)
+	handshakeErr := tlsConn.HandshakeContext(ctx)
+	if handshakeErr != nil && clientAuth == nil {
+		return nil, fmt.Errorf("TLS handshake with %s: %w", addr, handshakeErr)
 	}
 
+	// When the server requested a client cert and rejected our empty
+	// response, the handshake fails but we still have useful state:
+	// peer certs arrived before the CertificateRequest, so we can
+	// verify the chain and report mTLS info normally.
 	state := tlsConn.ConnectionState()
 
 	result := &ConnectResult{
@@ -89,6 +129,8 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 		Protocol:    tlsVersionString(state.Version),
 		CipherSuite: tls.CipherSuiteName(state.CipherSuite),
 		ServerName:  serverName,
+		ALPN:        state.NegotiatedProtocol,
+		ClientAuth:  clientAuth,
 		PeerChain:   state.PeerCertificates,
 	}
 
@@ -110,6 +152,42 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 	}
 
 	return result, nil
+}
+
+// signatureSchemeString returns a human-readable name for a TLS signature scheme.
+func signatureSchemeString(scheme tls.SignatureScheme) string {
+	switch scheme {
+	// RSASSA-PKCS1-v1_5
+	case tls.PKCS1WithSHA256:
+		return "RSA-PKCS1-SHA256"
+	case tls.PKCS1WithSHA384:
+		return "RSA-PKCS1-SHA384"
+	case tls.PKCS1WithSHA512:
+		return "RSA-PKCS1-SHA512"
+	case tls.PKCS1WithSHA1:
+		return "RSA-PKCS1-SHA1"
+	// RSA-PSS
+	case tls.PSSWithSHA256:
+		return "RSA-PSS-SHA256"
+	case tls.PSSWithSHA384:
+		return "RSA-PSS-SHA384"
+	case tls.PSSWithSHA512:
+		return "RSA-PSS-SHA512"
+	// ECDSA
+	case tls.ECDSAWithP256AndSHA256:
+		return "ECDSA-P256-SHA256"
+	case tls.ECDSAWithP384AndSHA384:
+		return "ECDSA-P384-SHA384"
+	case tls.ECDSAWithP521AndSHA512:
+		return "ECDSA-P521-SHA512"
+	case tls.ECDSAWithSHA1:
+		return "ECDSA-SHA1"
+	// EdDSA
+	case tls.Ed25519:
+		return "Ed25519"
+	default:
+		return fmt.Sprintf("0x%04x", uint16(scheme))
+	}
 }
 
 // tlsVersionString returns a human-readable TLS version string.
@@ -136,10 +214,22 @@ func FormatConnectResult(r *ConnectResult) string {
 	fmt.Fprintf(&out, "Cipher Suite: %s\n", r.CipherSuite)
 	fmt.Fprintf(&out, "Server Name:  %s\n", r.ServerName)
 
+	if r.ALPN != "" {
+		fmt.Fprintf(&out, "ALPN:         %s\n", r.ALPN)
+	}
+
 	if r.VerifyError != "" {
 		fmt.Fprintf(&out, "Verify:       FAILED (%s)\n", r.VerifyError)
 	} else {
 		out.WriteString("Verify:       OK\n")
+	}
+
+	if r.ClientAuth != nil && r.ClientAuth.Requested {
+		if len(r.ClientAuth.AcceptableCAs) > 0 {
+			fmt.Fprintf(&out, "Client Auth:  requested (%d acceptable CA(s))\n", len(r.ClientAuth.AcceptableCAs))
+		} else {
+			out.WriteString("Client Auth:  requested (any CA)\n")
+		}
 	}
 
 	fmt.Fprintf(&out, "\nCertificate chain (%d certificate(s)):\n", len(r.PeerChain))

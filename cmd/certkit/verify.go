@@ -117,6 +117,7 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		CheckChain:     true, // Always verify chain
 		ExpiryDuration: expiryDuration,
 		TrustStore:     verifyTrustStore,
+		Verbose:        verbose,
 	}
 
 	result, err := internal.VerifyCert(cmd.Context(), input)

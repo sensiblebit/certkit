@@ -40,6 +40,13 @@ func init() {
 	registerCompletion(ocspCmd, completionInput{"format", fixedCompletion("text", "json")})
 }
 
+// ocspVerboseJSON wraps OCSPResult with certificate context for verbose JSON output.
+type ocspVerboseJSON struct {
+	*certkit.OCSPResult
+	CertSubject string `json:"cert_subject"`
+	CertIssuer  string `json:"cert_issuer"`
+}
+
 func runOCSP(cmd *cobra.Command, args []string) error {
 	passwords, err := internal.ProcessPasswords(passwordList, passwordFile)
 	if err != nil {
@@ -87,12 +94,29 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 
 	switch ocspFormat {
 	case "json":
-		data, err := json.MarshalIndent(result, "", "  ")
-		if err != nil {
-			return fmt.Errorf("marshaling JSON: %w", err)
+		if verbose {
+			verboseResult := ocspVerboseJSON{
+				OCSPResult:  result,
+				CertSubject: certkit.FormatDN(contents.Leaf.Subject),
+				CertIssuer:  certkit.FormatDN(contents.Leaf.Issuer),
+			}
+			data, err := json.MarshalIndent(verboseResult, "", "  ")
+			if err != nil {
+				return fmt.Errorf("marshaling JSON: %w", err)
+			}
+			fmt.Println(string(data))
+		} else {
+			data, err := json.MarshalIndent(result, "", "  ")
+			if err != nil {
+				return fmt.Errorf("marshaling JSON: %w", err)
+			}
+			fmt.Println(string(data))
 		}
-		fmt.Println(string(data))
 	case "text":
+		if verbose {
+			fmt.Printf("Subject:      %s\n", certkit.FormatDN(contents.Leaf.Subject))
+			fmt.Printf("Issuer:       %s\n", certkit.FormatDN(contents.Leaf.Issuer))
+		}
 		fmt.Print(certkit.FormatOCSPResult(result))
 	default:
 		return fmt.Errorf("unsupported output format %q (use text or json)", ocspFormat)

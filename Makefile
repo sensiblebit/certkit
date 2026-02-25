@@ -1,7 +1,10 @@
-.PHONY: build test vet wasm wasm-serve wasm-dev clean
+.PHONY: build install test vet wasm wasm-serve wasm-dev clean
 
 build:
-	go build -trimpath ./...
+	go build -trimpath -ldflags="-s -w -X main.version=$(VERSION)" -o certkit ./cmd/certkit/
+
+install:
+	go install -trimpath -ldflags="-s -w -X main.version=$(VERSION)" ./cmd/certkit/
 
 test:
 	go test -race ./...
@@ -27,4 +30,4 @@ wasm-dev: wasm
 	cd web && npx wrangler pages dev ./public
 
 clean:
-	rm -f web/public/certkit.wasm web/public/wasm_exec.js
+	rm -f certkit web/public/certkit.wasm web/public/wasm_exec.js

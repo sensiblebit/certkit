@@ -19,6 +19,11 @@ type CRLInfo struct {
 	NumEntries int `json:"num_entries"`
 	// SignatureAlgorithm is the algorithm used to sign the CRL.
 	SignatureAlgorithm string `json:"signature_algorithm"`
+
+	// CRLNumber is the CRL sequence number (omitted when not present).
+	CRLNumber string `json:"crl_number,omitempty"`
+	// AKI is the authority key identifier (omitted when not present).
+	AKI string `json:"authority_key_id,omitempty"`
 }
 
 // ParseCRL parses a CRL from PEM or DER data. Returns the parsed
@@ -49,22 +54,35 @@ func CRLContainsCert(crl *x509.RevocationList, cert *x509.Certificate) bool {
 
 // CRLInfoFromList extracts display information from a parsed RevocationList.
 func CRLInfoFromList(crl *x509.RevocationList) *CRLInfo {
-	return &CRLInfo{
+	info := &CRLInfo{
 		Issuer:             FormatDN(crl.Issuer),
 		ThisUpdate:         crl.ThisUpdate.UTC().Format(time.RFC3339),
 		NextUpdate:         crl.NextUpdate.UTC().Format(time.RFC3339),
 		NumEntries:         len(crl.RevokedCertificateEntries),
 		SignatureAlgorithm: crl.SignatureAlgorithm.String(),
 	}
+	if crl.Number != nil {
+		info.CRLNumber = crl.Number.String()
+	}
+	if len(crl.AuthorityKeyId) > 0 {
+		info.AKI = ColonHex(crl.AuthorityKeyId)
+	}
+	return info
 }
 
 // FormatCRLInfo formats CRL information as human-readable text.
 func FormatCRLInfo(info *CRLInfo) string {
 	var out string
-	out += fmt.Sprintf("Issuer:     %s\n", info.Issuer)
+	out += fmt.Sprintf("Issuer:      %s\n", info.Issuer)
+	if info.CRLNumber != "" {
+		out += fmt.Sprintf("CRL Number:  %s\n", info.CRLNumber)
+	}
 	out += fmt.Sprintf("This Update: %s\n", info.ThisUpdate)
 	out += fmt.Sprintf("Next Update: %s\n", info.NextUpdate)
 	out += fmt.Sprintf("Entries:     %d\n", info.NumEntries)
 	out += fmt.Sprintf("Signature:   %s\n", info.SignatureAlgorithm)
+	if info.AKI != "" {
+		out += fmt.Sprintf("AKI:         %s\n", info.AKI)
+	}
 	return out
 }

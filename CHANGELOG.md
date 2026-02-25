@@ -55,6 +55,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add mTLS detection to `connect` command — shows whether the server requests a client certificate, acceptable CAs, and accepted signature algorithms
+- Add ALPN (negotiated application protocol) to `connect` command output
+- Add `--verbose` / `-v` global flag for extended certificate details in `connect`, `verify`, `scan`, and `ocsp` output (serial, key info, signature algorithm, key usage, EKU, fingerprints, SKI/AKI)
+- Add CRL number and authority key identifier to `crl` output
 - Add `convert` command for converting between PEM, DER, PKCS#12, JKS, and PKCS#7 formats
 - Add `sign` command with `self-signed` and `csr` subcommands for certificate signing
 - Add `connect` command for TLS connection testing with certificate chain display

@@ -2,8 +2,13 @@ package main
 
 import (
 	"context"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/rsa"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net"
 	"strings"
 	"time"
@@ -41,13 +46,15 @@ func init() {
 
 // connectResultJSON is a JSON-serializable version of ConnectResult.
 type connectResultJSON struct {
-	Host        string            `json:"host"`
-	Port        string            `json:"port"`
-	Protocol    string            `json:"protocol"`
-	CipherSuite string            `json:"cipher_suite"`
-	ServerName  string            `json:"server_name"`
-	VerifyError string            `json:"verify_error,omitempty"`
-	Chain       []connectCertJSON `json:"chain"`
+	Host        string                  `json:"host"`
+	Port        string                  `json:"port"`
+	Protocol    string                  `json:"protocol"`
+	CipherSuite string                  `json:"cipher_suite"`
+	ServerName  string                  `json:"server_name"`
+	ALPN        string                  `json:"alpn,omitempty"`
+	ClientAuth  *certkit.ClientAuthInfo `json:"client_auth,omitempty"`
+	VerifyError string                  `json:"verify_error,omitempty"`
+	Chain       []connectCertJSON       `json:"chain"`
 }
 
 type connectCertJSON struct {
@@ -58,6 +65,19 @@ type connectCertJSON struct {
 	SHA256    string   `json:"sha256_fingerprint"`
 	CertType  string   `json:"cert_type"`
 	SANs      []string `json:"sans,omitempty"`
+
+	// Verbose-only fields (populated when --verbose is set).
+	Serial    string   `json:"serial,omitempty"`
+	IsCA      *bool    `json:"is_ca,omitempty"`
+	Expired   *bool    `json:"expired,omitempty"`
+	KeyAlgo   string   `json:"key_algorithm,omitempty"`
+	KeySize   string   `json:"key_size,omitempty"`
+	SigAlg    string   `json:"signature_algorithm,omitempty"`
+	KeyUsages []string `json:"key_usages,omitempty"`
+	EKUs      []string `json:"ekus,omitempty"`
+	SHA1      string   `json:"sha1_fingerprint,omitempty"`
+	SKI       string   `json:"subject_key_id,omitempty"`
+	AKI       string   `json:"authority_key_id,omitempty"`
 }
 
 func runConnect(cmd *cobra.Command, args []string) error {
@@ -78,6 +98,8 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("connecting to %s: %w", args[0], err)
 	}
 
+	now := time.Now()
+
 	switch connectFormat {
 	case "json":
 		jr := connectResultJSON{
@@ -86,10 +108,12 @@ func runConnect(cmd *cobra.Command, args []string) error {
 			Protocol:    result.Protocol,
 			CipherSuite: result.CipherSuite,
 			ServerName:  result.ServerName,
+			ALPN:        result.ALPN,
+			ClientAuth:  result.ClientAuth,
 			VerifyError: result.VerifyError,
 		}
 		for _, cert := range result.PeerChain {
-			jr.Chain = append(jr.Chain, connectCertJSON{
+			cj := connectCertJSON{
 				Subject:   certkit.FormatDN(cert.Subject),
 				Issuer:    certkit.FormatDN(cert.Issuer),
 				NotBefore: cert.NotBefore.UTC().Format(time.RFC3339),
@@ -97,7 +121,23 @@ func runConnect(cmd *cobra.Command, args []string) error {
 				SHA256:    certkit.CertFingerprint(cert),
 				CertType:  certkit.GetCertificateType(cert),
 				SANs:      cert.DNSNames,
-			})
+			}
+			if verbose {
+				isCA := cert.IsCA
+				expired := now.After(cert.NotAfter)
+				cj.Serial = formatSerial(cert.SerialNumber)
+				cj.IsCA = &isCA
+				cj.Expired = &expired
+				cj.KeyAlgo = certkit.PublicKeyAlgorithmName(cert.PublicKey)
+				cj.KeySize = publicKeySize(cert.PublicKey)
+				cj.SigAlg = cert.SignatureAlgorithm.String()
+				cj.KeyUsages = certkit.FormatKeyUsage(cert.KeyUsage)
+				cj.EKUs = certkit.FormatEKUs(cert.ExtKeyUsage)
+				cj.SHA1 = certkit.CertFingerprintColonSHA1(cert)
+				cj.SKI = certkit.CertSKIEmbedded(cert)
+				cj.AKI = certkit.CertAKIEmbedded(cert)
+			}
+			jr.Chain = append(jr.Chain, cj)
 		}
 		data, err := json.MarshalIndent(jr, "", "  ")
 		if err != nil {
@@ -105,7 +145,11 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		}
 		fmt.Println(string(data))
 	case "text":
-		fmt.Print(certkit.FormatConnectResult(result))
+		if verbose {
+			fmt.Print(formatConnectVerbose(result, now))
+		} else {
+			fmt.Print(certkit.FormatConnectResult(result))
+		}
 	default:
 		return fmt.Errorf("unsupported output format %q (use text or json)", connectFormat)
 	}
@@ -115,6 +159,102 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// formatConnectVerbose formats a ConnectResult with extended certificate details.
+func formatConnectVerbose(r *certkit.ConnectResult, now time.Time) string {
+	var out strings.Builder
+	fmt.Fprintf(&out, "Host:         %s:%s\n", r.Host, r.Port)
+	fmt.Fprintf(&out, "Protocol:     %s\n", r.Protocol)
+	fmt.Fprintf(&out, "Cipher Suite: %s\n", r.CipherSuite)
+	fmt.Fprintf(&out, "Server Name:  %s\n", r.ServerName)
+
+	if r.ALPN != "" {
+		fmt.Fprintf(&out, "ALPN:         %s\n", r.ALPN)
+	}
+
+	if r.VerifyError != "" {
+		fmt.Fprintf(&out, "Verify:       FAILED (%s)\n", r.VerifyError)
+	} else {
+		out.WriteString("Verify:       OK\n")
+	}
+
+	if r.ClientAuth != nil && r.ClientAuth.Requested {
+		out.WriteString("Client Auth:  requested\n")
+		if len(r.ClientAuth.AcceptableCAs) > 0 {
+			out.WriteString("  Acceptable CAs:\n")
+			for _, ca := range r.ClientAuth.AcceptableCAs {
+				fmt.Fprintf(&out, "    %s\n", ca)
+			}
+		}
+		if len(r.ClientAuth.SignatureSchemes) > 0 {
+			fmt.Fprintf(&out, "  Signature Schemes:\n    %s\n", strings.Join(r.ClientAuth.SignatureSchemes, ", "))
+		}
+	}
+
+	fmt.Fprintf(&out, "\nCertificate chain (%d certificate(s)):\n", len(r.PeerChain))
+	for i, cert := range r.PeerChain {
+		expired := ""
+		if now.After(cert.NotAfter) {
+			expired = " [EXPIRED]"
+		}
+		certType := certkit.GetCertificateType(cert)
+		fmt.Fprintf(&out, "  %d: %s (%s)%s\n", i, certkit.FormatDN(cert.Subject), certType, expired)
+		fmt.Fprintf(&out, "     Issuer:      %s\n", certkit.FormatDN(cert.Issuer))
+		fmt.Fprintf(&out, "     Serial:      %s\n", formatSerial(cert.SerialNumber))
+		fmt.Fprintf(&out, "     Not Before:  %s\n", cert.NotBefore.UTC().Format(time.RFC3339))
+		fmt.Fprintf(&out, "     Not After:   %s\n", cert.NotAfter.UTC().Format(time.RFC3339))
+		if now.After(cert.NotAfter) {
+			out.WriteString("     Expired:     yes\n")
+		} else {
+			out.WriteString("     Expired:     no\n")
+		}
+		fmt.Fprintf(&out, "     Key:         %s %s\n",
+			certkit.PublicKeyAlgorithmName(cert.PublicKey),
+			publicKeySize(cert.PublicKey))
+		fmt.Fprintf(&out, "     Signature:   %s\n", cert.SignatureAlgorithm)
+		if ku := certkit.FormatKeyUsage(cert.KeyUsage); len(ku) > 0 {
+			fmt.Fprintf(&out, "     Key Usage:   %s\n", strings.Join(ku, ", "))
+		}
+		if ekus := certkit.FormatEKUs(cert.ExtKeyUsage); len(ekus) > 0 {
+			fmt.Fprintf(&out, "     EKU:         %s\n", strings.Join(ekus, ", "))
+		}
+		if len(cert.DNSNames) > 0 {
+			fmt.Fprintf(&out, "     SANs:        %s\n", strings.Join(cert.DNSNames, ", "))
+		}
+		fmt.Fprintf(&out, "     SHA-256:     %s\n", certkit.CertFingerprintColonSHA256(cert))
+		fmt.Fprintf(&out, "     SHA-1:       %s\n", certkit.CertFingerprintColonSHA1(cert))
+		if ski := certkit.CertSKIEmbedded(cert); ski != "" {
+			fmt.Fprintf(&out, "     SKI:         %s\n", ski)
+		}
+		if aki := certkit.CertAKIEmbedded(cert); aki != "" {
+			fmt.Fprintf(&out, "     AKI:         %s\n", aki)
+		}
+	}
+
+	return out.String()
+}
+
+// publicKeySize returns the key size/curve name for a public key (e.g. "2048", "P-256", "256").
+func publicKeySize(pub crypto.PublicKey) string {
+	switch k := pub.(type) {
+	case *rsa.PublicKey:
+		return fmt.Sprintf("%d", k.N.BitLen())
+	case *ecdsa.PublicKey:
+		return k.Curve.Params().Name
+	case ed25519.PublicKey:
+		return "256"
+	default:
+		return "unknown"
+	}
+}
+
+// formatSerial formats a certificate serial number as a decimal string.
+func formatSerial(serial *big.Int) string {
+	if serial == nil {
+		return ""
+	}
+	return serial.String()
 }
 
 // parseHostPort splits a host[:port] string, defaulting port to "443".

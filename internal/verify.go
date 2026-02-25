@@ -23,6 +23,7 @@ type VerifyInput struct {
 	CheckChain     bool
 	ExpiryDuration time.Duration
 	TrustStore     string
+	Verbose        bool
 }
 
 // ChainCert holds display information for one certificate in the chain.
@@ -31,6 +32,20 @@ type ChainCert struct {
 	Expiry  string `json:"expiry"`
 	SKI     string `json:"subject_key_id,omitempty"`
 	IsRoot  bool   `json:"is_root,omitempty"`
+
+	// Verbose-only fields (populated when VerifyInput.Verbose is true).
+	Issuer    string   `json:"issuer,omitempty"`
+	Serial    string   `json:"serial,omitempty"`
+	NotBefore string   `json:"not_before,omitempty"`
+	CertType  string   `json:"cert_type,omitempty"`
+	KeyAlgo   string   `json:"key_algorithm,omitempty"`
+	KeySize   string   `json:"key_size,omitempty"`
+	SigAlg    string   `json:"signature_algorithm,omitempty"`
+	KeyUsages []string `json:"key_usages,omitempty"`
+	EKUs      []string `json:"ekus,omitempty"`
+	SHA256    string   `json:"sha256_fingerprint,omitempty"`
+	SHA1      string   `json:"sha1_fingerprint,omitempty"`
+	AKI       string   `json:"authority_key_id,omitempty"`
 }
 
 // VerifyResult holds the results of certificate verification checks.
@@ -49,6 +64,21 @@ type VerifyResult struct {
 	ExpiryInfo  string      `json:"expiry_info,omitempty"`
 	Errors      []string    `json:"errors,omitempty"`
 	Diagnoses   []Diagnosis `json:"diagnoses,omitempty"`
+
+	// Verbose-only fields (populated when VerifyInput.Verbose is true).
+	Issuer    string   `json:"issuer,omitempty"`
+	Serial    string   `json:"serial,omitempty"`
+	NotBefore string   `json:"not_before,omitempty"`
+	CertType  string   `json:"cert_type,omitempty"`
+	IsCA      *bool    `json:"is_ca,omitempty"`
+	KeyAlgo   string   `json:"key_algorithm,omitempty"`
+	KeySize   string   `json:"key_size,omitempty"`
+	SigAlg    string   `json:"signature_algorithm,omitempty"`
+	KeyUsages []string `json:"key_usages,omitempty"`
+	EKUs      []string `json:"ekus,omitempty"`
+	SHA256    string   `json:"sha256_fingerprint,omitempty"`
+	SHA1      string   `json:"sha1_fingerprint,omitempty"`
+	AKI       string   `json:"authority_key_id,omitempty"`
 }
 
 // VerifyCert verifies a certificate with optional key matching, chain validation, and expiry checking.
@@ -60,6 +90,23 @@ func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) 
 		SANs:     cert.DNSNames,
 		NotAfter: cert.NotAfter.UTC().Format(time.RFC3339),
 		SKI:      certkit.CertSKIEmbedded(cert),
+	}
+
+	if input.Verbose {
+		isCA := cert.IsCA
+		result.Issuer = certkit.FormatDN(cert.Issuer)
+		result.Serial = cert.SerialNumber.String()
+		result.NotBefore = cert.NotBefore.UTC().Format(time.RFC3339)
+		result.CertType = certkit.GetCertificateType(cert)
+		result.IsCA = &isCA
+		result.KeyAlgo = certkit.PublicKeyAlgorithmName(cert.PublicKey)
+		result.KeySize = publicKeySize(cert.PublicKey)
+		result.SigAlg = cert.SignatureAlgorithm.String()
+		result.KeyUsages = certkit.FormatKeyUsage(cert.KeyUsage)
+		result.EKUs = certkit.FormatEKUs(cert.ExtKeyUsage)
+		result.SHA256 = certkit.CertFingerprintColonSHA256(cert)
+		result.SHA1 = certkit.CertFingerprintColonSHA1(cert)
+		result.AKI = certkit.CertAKIEmbedded(cert)
 	}
 
 	// Key-cert match check
@@ -91,7 +138,7 @@ func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) 
 			result.Errors = append(result.Errors, fmt.Sprintf("chain validation: %s", err.Error()))
 		}
 		if bundle != nil {
-			result.Chain = buildChainDisplay(bundle)
+			result.Chain = buildChainDisplay(bundle, input.Verbose)
 		}
 	}
 
@@ -111,27 +158,38 @@ func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) 
 }
 
 // buildChainDisplay creates the display chain from a BundleResult.
-func buildChainDisplay(bundle *certkit.BundleResult) []ChainCert {
-	var chain []ChainCert
-	chain = append(chain, ChainCert{
-		Subject: bundle.Leaf.Subject.String(),
-		Expiry:  bundle.Leaf.NotAfter.UTC().Format(time.RFC3339),
-		SKI:     certkit.CertSKIEmbedded(bundle.Leaf),
-	})
-	for _, c := range bundle.Intermediates {
-		chain = append(chain, ChainCert{
+func buildChainDisplay(bundle *certkit.BundleResult, verbose bool) []ChainCert {
+	buildEntry := func(c *x509.Certificate, isRoot bool) ChainCert {
+		cc := ChainCert{
 			Subject: c.Subject.String(),
 			Expiry:  c.NotAfter.UTC().Format(time.RFC3339),
 			SKI:     certkit.CertSKIEmbedded(c),
-		})
+			IsRoot:  isRoot,
+		}
+		if verbose {
+			cc.Issuer = certkit.FormatDN(c.Issuer)
+			cc.Serial = c.SerialNumber.String()
+			cc.NotBefore = c.NotBefore.UTC().Format(time.RFC3339)
+			cc.CertType = certkit.GetCertificateType(c)
+			cc.KeyAlgo = certkit.PublicKeyAlgorithmName(c.PublicKey)
+			cc.KeySize = publicKeySize(c.PublicKey)
+			cc.SigAlg = c.SignatureAlgorithm.String()
+			cc.KeyUsages = certkit.FormatKeyUsage(c.KeyUsage)
+			cc.EKUs = certkit.FormatEKUs(c.ExtKeyUsage)
+			cc.SHA256 = certkit.CertFingerprintColonSHA256(c)
+			cc.SHA1 = certkit.CertFingerprintColonSHA1(c)
+			cc.AKI = certkit.CertAKIEmbedded(c)
+		}
+		return cc
+	}
+
+	var chain []ChainCert
+	chain = append(chain, buildEntry(bundle.Leaf, false))
+	for _, c := range bundle.Intermediates {
+		chain = append(chain, buildEntry(c, false))
 	}
 	for _, c := range bundle.Roots {
-		chain = append(chain, ChainCert{
-			Subject: c.Subject.String(),
-			Expiry:  c.NotAfter.UTC().Format(time.RFC3339),
-			SKI:     certkit.CertSKIEmbedded(c),
-			IsRoot:  true,
-		})
+		chain = append(chain, buildEntry(c, true))
 	}
 	return chain
 }
@@ -275,12 +333,24 @@ func daysUntil(t time.Time) int {
 }
 
 // FormatVerifyResult formats a verify result as human-readable text.
+// When verbose fields are populated (non-empty), they are included in the output.
 func FormatVerifyResult(r *VerifyResult) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Certificate: %s\n", r.Subject)
 
 	if len(r.SANs) > 0 {
 		fmt.Fprintf(&sb, "       SANs: %s\n", strings.Join(r.SANs, ", "))
+	}
+
+	if r.Issuer != "" {
+		fmt.Fprintf(&sb, "     Issuer: %s\n", r.Issuer)
+	}
+	if r.Serial != "" {
+		fmt.Fprintf(&sb, "     Serial: %s\n", r.Serial)
+	}
+
+	if r.NotBefore != "" {
+		fmt.Fprintf(&sb, " Not Before: %s\n", r.NotBefore)
 	}
 
 	notAfter, err := time.Parse(time.RFC3339, r.NotAfter)
@@ -291,7 +361,35 @@ func FormatVerifyResult(r *VerifyResult) string {
 		fmt.Fprintf(&sb, "  Not After: %s\n", r.NotAfter)
 	}
 
+	if r.CertType != "" {
+		fmt.Fprintf(&sb, "       Type: %s\n", r.CertType)
+	}
+	if r.IsCA != nil {
+		fmt.Fprintf(&sb, "         CA: %s\n", boolYesNo(*r.IsCA))
+	}
+	if r.KeyAlgo != "" {
+		fmt.Fprintf(&sb, "        Key: %s %s\n", r.KeyAlgo, r.KeySize)
+	}
+	if r.SigAlg != "" {
+		fmt.Fprintf(&sb, "  Signature: %s\n", r.SigAlg)
+	}
+	if len(r.KeyUsages) > 0 {
+		fmt.Fprintf(&sb, "  Key Usage: %s\n", strings.Join(r.KeyUsages, ", "))
+	}
+	if len(r.EKUs) > 0 {
+		fmt.Fprintf(&sb, "        EKU: %s\n", strings.Join(r.EKUs, ", "))
+	}
+
 	fmt.Fprintf(&sb, "        SKI: %s\n", r.SKI)
+	if r.AKI != "" {
+		fmt.Fprintf(&sb, "        AKI: %s\n", r.AKI)
+	}
+	if r.SHA256 != "" {
+		fmt.Fprintf(&sb, "     SHA-256: %s\n", r.SHA256)
+	}
+	if r.SHA1 != "" {
+		fmt.Fprintf(&sb, "      SHA-1: %s\n", r.SHA1)
+	}
 
 	if r.KeyMatch != nil {
 		if *r.KeyMatch {
@@ -320,6 +418,23 @@ func FormatVerifyResult(r *VerifyResult) string {
 			}
 			fmt.Fprintf(&sb, "  %d: %s  (expires %s)%s\n", i, c.Subject, c.Expiry, tag)
 			fmt.Fprintf(&sb, "     SKI: %s\n", c.SKI)
+			if c.Issuer != "" {
+				fmt.Fprintf(&sb, "     Issuer:    %s\n", c.Issuer)
+				fmt.Fprintf(&sb, "     Serial:    %s\n", c.Serial)
+				fmt.Fprintf(&sb, "     Key:       %s %s\n", c.KeyAlgo, c.KeySize)
+				fmt.Fprintf(&sb, "     Signature: %s\n", c.SigAlg)
+				if len(c.KeyUsages) > 0 {
+					fmt.Fprintf(&sb, "     Key Usage: %s\n", strings.Join(c.KeyUsages, ", "))
+				}
+				if len(c.EKUs) > 0 {
+					fmt.Fprintf(&sb, "     EKU:       %s\n", strings.Join(c.EKUs, ", "))
+				}
+				fmt.Fprintf(&sb, "     SHA-256:   %s\n", c.SHA256)
+				fmt.Fprintf(&sb, "     SHA-1:     %s\n", c.SHA1)
+				if c.AKI != "" {
+					fmt.Fprintf(&sb, "     AKI:       %s\n", c.AKI)
+				}
+			}
 		}
 	}
 
