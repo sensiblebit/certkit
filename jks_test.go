@@ -408,102 +408,130 @@ func TestDecodeJKS_InvalidData(t *testing.T) {
 	}
 }
 
-func TestDecodeJKS_CorruptedCertDER_TrustedCertEntry(t *testing.T) {
-	// WHY: A JKS TrustedCertificateEntry with corrupted cert DER exercises the
-	// `continue` at jks.go:48. The decoder must skip the bad entry and return
-	// an error (since no usable entries remain).
+func TestDecodeJKS_CorruptedCertDER(t *testing.T) {
+	// WHY: Corrupted cert DER in JKS entries must be handled gracefully.
+	// TrustedCertificateEntry corruption exercises the `continue` at jks.go:48
+	// (skip bad entry, return error when no usable entries remain).
+	// PrivateKeyEntry chain corruption exercises the `continue` at jks.go:70
+	// (skip bad chain cert, still return the valid key).
 	t.Parallel()
 
 	password := "changeit"
 
-	ks := keystore.New()
-	if err := ks.SetTrustedCertificateEntry("bad-cert", keystore.TrustedCertificateEntry{
-		CreationTime: time.Now(),
-		Certificate: keystore.Certificate{
-			Type:    "X.509",
-			Content: []byte("not-a-valid-certificate"),
+	// buildResult holds the JKS data and an optional original key for material comparison.
+	type buildResult struct {
+		data        []byte
+		originalKey any // non-nil when the test should verify key material equality
+	}
+
+	tests := []struct {
+		name      string
+		build     func(*testing.T) buildResult
+		wantErr   string // non-empty means expect error containing this substring
+		wantCerts int    // checked only when wantErr is empty
+		wantKeys  int    // checked only when wantErr is empty
+	}{
+		{
+			name: "TrustedCertEntry",
+			build: func(t *testing.T) buildResult {
+				t.Helper()
+				ks := keystore.New()
+				if err := ks.SetTrustedCertificateEntry("bad-cert", keystore.TrustedCertificateEntry{
+					CreationTime: time.Now(),
+					Certificate: keystore.Certificate{
+						Type:    "X.509",
+						Content: []byte("not-a-valid-certificate"),
+					},
+				}); err != nil {
+					t.Fatal(err)
+				}
+				var buf bytes.Buffer
+				if err := ks.Store(&buf, []byte(password)); err != nil {
+					t.Fatal(err)
+				}
+				return buildResult{data: buf.Bytes()}
+			},
+			wantErr: "no usable",
 		},
-	}); err != nil {
-		t.Fatal(err)
-	}
-
-	var buf bytes.Buffer
-	if err := ks.Store(&buf, []byte(password)); err != nil {
-		t.Fatal(err)
-	}
-
-	_, _, err := DecodeJKS(buf.Bytes(), []string{password})
-	if err == nil {
-		t.Error("expected error for JKS with only corrupted cert entries")
-	}
-	if !strings.Contains(err.Error(), "no usable") {
-		t.Errorf("error should mention 'no usable', got: %v", err)
-	}
-}
-
-func TestDecodeJKS_CorruptedCertDER_PrivateKeyChain(t *testing.T) {
-	// WHY: A PrivateKeyEntry with a valid key but corrupted cert DER in its chain
-	// exercises the `continue` at jks.go:70. The decoder must still return the key
-	// even though the chain cert is unparseable.
-	t.Parallel()
-
-	password := "changeit"
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pkcs8Key, err := x509.MarshalPKCS8PrivateKey(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Create a valid leaf cert for the chain
-	tmpl := &x509.Certificate{
-		SerialNumber: randomSerial(t),
-		Subject:      pkix.Name{CommonName: "valid-leaf"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-	}
-	leafDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	ks := keystore.New()
-	if err := ks.SetPrivateKeyEntry("server", keystore.PrivateKeyEntry{
-		CreationTime: time.Now(),
-		PrivateKey:   pkcs8Key,
-		CertificateChain: []keystore.Certificate{
-			{Type: "X.509", Content: leafDER},                    // valid
-			{Type: "X.509", Content: []byte("corrupted-ca-der")}, // bad
+		{
+			name: "PrivateKeyChain",
+			build: func(t *testing.T) buildResult {
+				t.Helper()
+				key, err := rsa.GenerateKey(rand.Reader, 2048)
+				if err != nil {
+					t.Fatal(err)
+				}
+				pkcs8Key, err := x509.MarshalPKCS8PrivateKey(key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				tmpl := &x509.Certificate{
+					SerialNumber: randomSerial(t),
+					Subject:      pkix.Name{CommonName: "valid-leaf"},
+					NotBefore:    time.Now().Add(-time.Hour),
+					NotAfter:     time.Now().Add(24 * time.Hour),
+				}
+				leafDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &key.PublicKey, key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ks := keystore.New()
+				if err := ks.SetPrivateKeyEntry("server", keystore.PrivateKeyEntry{
+					CreationTime: time.Now(),
+					PrivateKey:   pkcs8Key,
+					CertificateChain: []keystore.Certificate{
+						{Type: "X.509", Content: leafDER},                    // valid
+						{Type: "X.509", Content: []byte("corrupted-ca-der")}, // bad
+					},
+				}, []byte(password)); err != nil {
+					t.Fatal(err)
+				}
+				var buf bytes.Buffer
+				if err := ks.Store(&buf, []byte(password)); err != nil {
+					t.Fatal(err)
+				}
+				return buildResult{data: buf.Bytes(), originalKey: key}
+			},
+			wantCerts: 1,
+			wantKeys:  1,
 		},
-	}, []byte(password)); err != nil {
-		t.Fatal(err)
 	}
 
-	var buf bytes.Buffer
-	if err := ks.Store(&buf, []byte(password)); err != nil {
-		t.Fatal(err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := tt.build(t)
 
-	certs, keys, err := DecodeJKS(buf.Bytes(), []string{password})
-	if err != nil {
-		t.Fatalf("DecodeJKS should succeed with valid key + partial chain: %v", err)
-	}
-	if len(keys) != 1 {
-		t.Errorf("expected 1 key, got %d", len(keys))
-	}
-	// Only the valid cert should be returned; the corrupted one is skipped.
-	if len(certs) != 1 {
-		t.Errorf("expected 1 valid cert (corrupted one skipped), got %d", len(certs))
-	}
-
-	decodedRSA, ok := keys[0].(*rsa.PrivateKey)
-	if !ok {
-		t.Fatalf("expected *rsa.PrivateKey, got %T", keys[0])
-	}
-	if !key.Equal(decodedRSA) {
-		t.Error("decoded key does not Equal original")
+			certs, keys, err := DecodeJKS(result.data, []string{password})
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("error should contain %q, got: %v", tt.wantErr, err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("DecodeJKS: %v", err)
+			}
+			if len(certs) != tt.wantCerts {
+				t.Errorf("certs: got %d, want %d", len(certs), tt.wantCerts)
+			}
+			if len(keys) != tt.wantKeys {
+				t.Errorf("keys: got %d, want %d", len(keys), tt.wantKeys)
+			}
+			if result.originalKey != nil && len(keys) > 0 {
+				decodedRSA, ok := keys[0].(*rsa.PrivateKey)
+				if !ok {
+					t.Fatalf("expected *rsa.PrivateKey, got %T", keys[0])
+				}
+				origRSA := result.originalKey.(*rsa.PrivateKey)
+				if !origRSA.Equal(decodedRSA) {
+					t.Error("decoded key does not Equal original")
+				}
+			}
+		})
 	}
 }
 

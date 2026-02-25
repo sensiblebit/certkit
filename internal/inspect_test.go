@@ -787,57 +787,54 @@ func newAIALeaf(t *testing.T, ca testCA, cn string, aiaURL string) testLeaf {
 	return testLeaf{cert: cert, certPEM: certPEM, certDER: certDER, key: key, keyPEM: keyPEM}
 }
 
-func TestResolveInspectAIA_NoCerts(t *testing.T) {
-	// WHY: When results contain no certificates (only keys/CSRs), AIA should
-	// be a no-op because there are no certs to check for unresolved issuers.
-	t.Parallel()
-
-	results := []InspectResult{
-		{Type: "private_key", KeyType: "RSA", KeySize: "2048"},
-		{Type: "csr", CSRSubject: "CN=test.example.com"},
-	}
-
-	fetcher := func(_ context.Context, _ string) ([]byte, error) {
-		panic("fetcher must not be called when there are no certificates")
-	}
-
-	got, warnings := ResolveInspectAIA(context.Background(), results, fetcher)
-
-	if len(warnings) != 0 {
-		t.Errorf("expected 0 warnings, got %v", warnings)
-	}
-	if len(got) != len(results) {
-		t.Errorf("expected %d results, got %d", len(results), len(got))
-	}
-	for i, r := range got {
-		if r.Type != results[i].Type {
-			t.Errorf("result[%d].Type = %q, want %q", i, r.Type, results[i].Type)
-		}
-	}
-}
-
-func TestResolveInspectAIA_AllResolved(t *testing.T) {
-	// WHY: When all certs in results are self-signed (no unresolved issuers),
-	// AIA should not fetch anything because HasUnresolvedIssuers returns false.
+func TestResolveInspectAIA_NoFetchNeeded(t *testing.T) {
+	// WHY: When no AIA fetching is needed — either because results contain no
+	// certificates, or because all issuers are already resolved — the fetcher
+	// must not be called, results must be unchanged, and no warnings emitted.
+	// Consolidated per T-12 — assertion logic is identical across both cases.
 	t.Parallel()
 
 	ca := newRSACA(t)
-	results := []InspectResult{inspectCert(ca.cert)}
 
-	fetcher := func(_ context.Context, _ string) ([]byte, error) {
-		panic("fetcher must not be called when all issuers are resolved")
+	tests := []struct {
+		name    string
+		results []InspectResult
+	}{
+		{
+			name: "no certs (key + CSR only)",
+			results: []InspectResult{
+				{Type: "private_key", KeyType: "RSA", KeySize: "2048"},
+				{Type: "csr", CSRSubject: "CN=test.example.com"},
+			},
+		},
+		{
+			name:    "all resolved (self-signed CA)",
+			results: []InspectResult{inspectCert(ca.cert)},
+		},
 	}
 
-	got, warnings := ResolveInspectAIA(context.Background(), results, fetcher)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	if len(warnings) != 0 {
-		t.Errorf("expected 0 warnings, got %v", warnings)
-	}
-	if len(got) != 1 {
-		t.Errorf("expected 1 result, got %d", len(got))
-	}
-	if got[0].Type != "certificate" {
-		t.Errorf("result[0].Type = %q, want %q", got[0].Type, "certificate")
+			fetcher := func(_ context.Context, _ string) ([]byte, error) {
+				panic("fetcher must not be called when no AIA fetch is needed")
+			}
+
+			got, warnings := ResolveInspectAIA(context.Background(), tt.results, fetcher)
+
+			if len(warnings) != 0 {
+				t.Errorf("expected 0 warnings, got %v", warnings)
+			}
+			if len(got) != len(tt.results) {
+				t.Errorf("expected %d results, got %d", len(tt.results), len(got))
+			}
+			for i, r := range got {
+				if r.Type != tt.results[i].Type {
+					t.Errorf("result[%d].Type = %q, want %q", i, r.Type, tt.results[i].Type)
+				}
+			}
+		})
 	}
 }
 
@@ -945,117 +942,142 @@ func TestResolveInspectAIA_DeduplicatesExisting(t *testing.T) {
 	}
 }
 
-func TestInspectData_CSRWithKeyUsage(t *testing.T) {
-	// WHY: CSR inspection must extract Key Usage from raw ASN.1 extensions
-	// since Go doesn't populate typed fields for CSRs. Without this, users
-	// would not see Key Usage when inspecting a CSR.
+func TestInspectData_CSRExtensions(t *testing.T) {
+	// WHY: CSR inspection must extract Key Usage, Extended Key Usage, and Basic
+	// Constraints from raw ASN.1 extensions since Go doesn't populate typed fields
+	// for CSRs. Without this, users would not see these extensions when inspecting
+	// a CSR. Consolidated per T-12 — all cases follow the same generate-CSR-then-check pattern.
 	t.Parallel()
 
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("generate key: %v", err)
-	}
-
-	// Build Key Usage extension: Digital Signature (bit 0) + Key Encipherment (bit 2)
-	kuBits := asn1.BitString{
-		Bytes:     []byte{0xa0}, // bits 0 and 2 set = 10100000
-		BitLength: 3,
-	}
-	kuValue, err := asn1.Marshal(kuBits)
-	if err != nil {
-		t.Fatalf("marshal key usage: %v", err)
-	}
-
-	csrTemplate := &x509.CertificateRequest{
-		Subject: pkix.Name{CommonName: "ku-csr.example.com"},
-		ExtraExtensions: []pkix.Extension{
-			{
-				Id:    asn1.ObjectIdentifier{2, 5, 29, 15}, // id-ce-keyUsage
-				Value: kuValue,
+	tests := []struct {
+		name       string
+		cn         string
+		oid        asn1.ObjectIdentifier
+		buildValue func(t *testing.T) []byte
+		checkField func(t *testing.T, r *InspectResult)
+	}{
+		{
+			name: "Key Usage",
+			cn:   "ku-csr.example.com",
+			oid:  asn1.ObjectIdentifier{2, 5, 29, 15}, // id-ce-keyUsage
+			buildValue: func(t *testing.T) []byte {
+				t.Helper()
+				// Digital Signature (bit 0) + Key Encipherment (bit 2)
+				kuBits := asn1.BitString{
+					Bytes:     []byte{0xa0}, // bits 0 and 2 set = 10100000
+					BitLength: 3,
+				}
+				v, err := asn1.Marshal(kuBits)
+				if err != nil {
+					t.Fatalf("marshal key usage: %v", err)
+				}
+				return v
+			},
+			checkField: func(t *testing.T, r *InspectResult) {
+				t.Helper()
+				if !slices.Contains(r.KeyUsages, "Digital Signature") {
+					t.Errorf("KeyUsages should contain 'Digital Signature', got %v", r.KeyUsages)
+				}
+				if !slices.Contains(r.KeyUsages, "Key Encipherment") {
+					t.Errorf("KeyUsages should contain 'Key Encipherment', got %v", r.KeyUsages)
+				}
+			},
+		},
+		{
+			name: "Basic Constraints",
+			cn:   "bc-csr.example.com",
+			oid:  asn1.ObjectIdentifier{2, 5, 29, 19}, // id-ce-basicConstraints
+			buildValue: func(t *testing.T) []byte {
+				t.Helper()
+				// BasicConstraints with isCA=true
+				bc := struct {
+					IsCA       bool `asn1:"optional"`
+					MaxPathLen int  `asn1:"optional,default:-1"`
+				}{IsCA: true, MaxPathLen: -1}
+				v, err := asn1.Marshal(bc)
+				if err != nil {
+					t.Fatalf("marshal basic constraints: %v", err)
+				}
+				return v
+			},
+			checkField: func(t *testing.T, r *InspectResult) {
+				t.Helper()
+				if r.IsCA == nil {
+					t.Fatal("IsCA should be set, got nil")
+				}
+				if !*r.IsCA {
+					t.Error("IsCA should be true")
+				}
+			},
+		},
+		{
+			name: "Extended Key Usage",
+			cn:   "eku-csr.example.com",
+			oid:  asn1.ObjectIdentifier{2, 5, 29, 37}, // id-ce-extKeyUsage
+			buildValue: func(t *testing.T) []byte {
+				t.Helper()
+				// ServerAuth + ClientAuth
+				ekuOIDs := []asn1.ObjectIdentifier{
+					{1, 3, 6, 1, 5, 5, 7, 3, 1}, // id-kp-serverAuth
+					{1, 3, 6, 1, 5, 5, 7, 3, 2}, // id-kp-clientAuth
+				}
+				v, err := asn1.Marshal(ekuOIDs)
+				if err != nil {
+					t.Fatalf("marshal EKU: %v", err)
+				}
+				return v
+			},
+			checkField: func(t *testing.T, r *InspectResult) {
+				t.Helper()
+				if !slices.Contains(r.EKUs, "Server Authentication") {
+					t.Errorf("EKUs should contain 'Server Authentication', got %v", r.EKUs)
+				}
+				if !slices.Contains(r.EKUs, "Client Authentication") {
+					t.Errorf("EKUs should contain 'Client Authentication', got %v", r.EKUs)
+				}
 			},
 		},
 	}
 
-	csrDER, err := x509.CreateCertificateRequest(rand.Reader, csrTemplate, key)
-	if err != nil {
-		t.Fatalf("create CSR: %v", err)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
-	results := InspectData(csrPEM, nil)
+			key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				t.Fatalf("generate key: %v", err)
+			}
 
-	var csrResult *InspectResult
-	for i, r := range results {
-		if r.Type == "csr" {
-			csrResult = &results[i]
-			break
-		}
-	}
-	if csrResult == nil {
-		t.Fatal("expected to find a CSR result")
-	}
+			csrTemplate := &x509.CertificateRequest{
+				Subject: pkix.Name{CommonName: tt.cn},
+				ExtraExtensions: []pkix.Extension{
+					{
+						Id:    tt.oid,
+						Value: tt.buildValue(t),
+					},
+				},
+			}
 
-	if !slices.Contains(csrResult.KeyUsages, "Digital Signature") {
-		t.Errorf("KeyUsages should contain 'Digital Signature', got %v", csrResult.KeyUsages)
-	}
-	if !slices.Contains(csrResult.KeyUsages, "Key Encipherment") {
-		t.Errorf("KeyUsages should contain 'Key Encipherment', got %v", csrResult.KeyUsages)
-	}
-}
+			csrDER, err := x509.CreateCertificateRequest(rand.Reader, csrTemplate, key)
+			if err != nil {
+				t.Fatalf("create CSR: %v", err)
+			}
 
-func TestInspectData_CSRWithEKU(t *testing.T) {
-	// WHY: CSR inspection must extract Extended Key Usage from raw ASN.1
-	// extensions since Go doesn't populate typed fields for CSRs.
-	t.Parallel()
+			csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
+			results := InspectData(csrPEM, nil)
 
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatalf("generate key: %v", err)
-	}
+			var csrResult *InspectResult
+			for i, r := range results {
+				if r.Type == "csr" {
+					csrResult = &results[i]
+					break
+				}
+			}
+			if csrResult == nil {
+				t.Fatal("expected to find a CSR result")
+			}
 
-	// Build EKU extension: ServerAuth + ClientAuth
-	ekuOIDs := []asn1.ObjectIdentifier{
-		{1, 3, 6, 1, 5, 5, 7, 3, 1}, // id-kp-serverAuth
-		{1, 3, 6, 1, 5, 5, 7, 3, 2}, // id-kp-clientAuth
-	}
-	ekuValue, err := asn1.Marshal(ekuOIDs)
-	if err != nil {
-		t.Fatalf("marshal EKU: %v", err)
-	}
-
-	csrTemplate := &x509.CertificateRequest{
-		Subject: pkix.Name{CommonName: "eku-csr.example.com"},
-		ExtraExtensions: []pkix.Extension{
-			{
-				Id:    asn1.ObjectIdentifier{2, 5, 29, 37}, // id-ce-extKeyUsage
-				Value: ekuValue,
-			},
-		},
-	}
-
-	csrDER, err := x509.CreateCertificateRequest(rand.Reader, csrTemplate, key)
-	if err != nil {
-		t.Fatalf("create CSR: %v", err)
-	}
-
-	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
-	results := InspectData(csrPEM, nil)
-
-	var csrResult *InspectResult
-	for i, r := range results {
-		if r.Type == "csr" {
-			csrResult = &results[i]
-			break
-		}
-	}
-	if csrResult == nil {
-		t.Fatal("expected to find a CSR result")
-	}
-
-	if !slices.Contains(csrResult.EKUs, "Server Authentication") {
-		t.Errorf("EKUs should contain 'Server Authentication', got %v", csrResult.EKUs)
-	}
-	if !slices.Contains(csrResult.EKUs, "Client Authentication") {
-		t.Errorf("EKUs should contain 'Client Authentication', got %v", csrResult.EKUs)
+			tt.checkField(t, csrResult)
+		})
 	}
 }

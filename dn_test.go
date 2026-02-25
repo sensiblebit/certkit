@@ -649,49 +649,128 @@ func buildSANWithDNSName(t *testing.T, dnsName string) []byte {
 
 // --- FormatDN tests ---
 
-func TestFormatDN_CertificateRoundTrip(t *testing.T) {
-	// WHY: FormatDN replaces Go's hex-encoded emailAddress OID with a human-readable
-	// label. This test exercises the round-trip through a real certificate (create +
-	// parse) to verify that Names is populated correctly and the replacement works
-	// end-to-end, not just with hand-crafted Names slices.
+func TestFormatDN(t *testing.T) {
 	t.Parallel()
 
-	t.Run("emailAddress OID rendered as label via cert round-trip", func(t *testing.T) {
-		t.Parallel()
-		// Create a self-signed cert with emailAddress in the subject so that
-		// parsing populates Names (not just ExtraNames).
-		name := certSubjectWithEmail(t, "info@example.com", "example.com")
-		got := FormatDN(name)
-		if !strings.Contains(got, "emailAddress=info@example.com") {
-			t.Errorf("expected emailAddress=info@example.com in %q", got)
-		}
-		// Verify the raw OID hex is NOT present.
-		if strings.Contains(got, "1.2.840.113549.1.9.1=#") {
-			t.Errorf("raw OID hex should be replaced, got %q", got)
-		}
-	})
+	// Section 1: Hand-crafted pkix.Name inputs — exact string output matching.
+	// WHY: Tests exact FormatDN output for known inputs including emailAddress OID
+	// label replacement, RFC 4514 escaping, and empty-name edge case.
 
-	t.Run("email with special characters is escaped via cert round-trip", func(t *testing.T) {
-		t.Parallel()
-		name := certSubjectWithEmail(t, "user+tag@example.com", "example.com")
-		got := FormatDN(name)
-		// The '+' in the local part must be escaped per RFC 4514.
-		if !strings.Contains(got, "emailAddress=user\\+tag@example.com") {
-			t.Errorf("expected escaped email in %q", got)
-		}
-	})
+	// emailAddress OID (1.2.840.113549.1.9.1)
+	oidEmail := asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 1}
 
-	t.Run("emailAddress and standard attributes coexist via cert round-trip", func(t *testing.T) {
-		t.Parallel()
-		name := certSubjectWithEmail(t, "admin@corp.example.com", "corp.example.com")
-		got := FormatDN(name)
-		if !strings.Contains(got, "emailAddress=admin@corp.example.com") {
-			t.Errorf("missing emailAddress in %q", got)
-		}
-		if !strings.Contains(got, "CN=corp.example.com") {
-			t.Errorf("missing CN in %q", got)
-		}
-	})
+	exactTests := []struct {
+		name string
+		dn   pkix.Name
+		want string
+	}{
+		{
+			name: "standard OIDs only delegates to String",
+			dn: pkix.Name{
+				CommonName:   "example.com",
+				Organization: []string{"Example Inc."},
+				Country:      []string{"US"},
+			},
+			want: "CN=example.com,O=Example Inc.,C=US",
+		},
+		{
+			name: "emailAddress rendered with label",
+			dn: pkix.Name{
+				CommonName:   "acme.com",
+				Organization: []string{"Acme Corp"},
+				Country:      []string{"US"},
+				// Names simulates what the ASN.1 parser populates.
+				Names: []pkix.AttributeTypeAndValue{
+					{Type: asn1.ObjectIdentifier{2, 5, 4, 6}, Value: "US"},
+					{Type: asn1.ObjectIdentifier{2, 5, 4, 10}, Value: "Acme Corp"},
+					{Type: asn1.ObjectIdentifier{2, 5, 4, 3}, Value: "acme.com"},
+					{Type: oidEmail, Value: "admin@acme.com"},
+				},
+			},
+			// Go's String() puts standard OIDs first (RFC 4514 reverse),
+			// then appends extra OIDs at the end.
+			want: "CN=acme.com,O=Acme Corp,C=US,emailAddress=admin@acme.com",
+		},
+		{
+			name: "emailAddress with special characters escaped",
+			dn: pkix.Name{
+				CommonName: "example.com",
+				Names: []pkix.AttributeTypeAndValue{
+					{Type: asn1.ObjectIdentifier{2, 5, 4, 3}, Value: "example.com"},
+					{Type: oidEmail, Value: "user+tag@example.com"},
+				},
+			},
+			want: "CN=example.com,emailAddress=user\\+tag@example.com",
+		},
+		{
+			name: "empty name",
+			dn:   pkix.Name{},
+			want: "",
+		},
+	}
+	for _, tt := range exactTests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := FormatDN(tt.dn)
+			if got != tt.want {
+				t.Errorf("FormatDN() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+
+	// Section 2: Certificate round-trip cases — exercise FormatDN through real
+	// certificate creation and parsing so Names is populated by the ASN.1
+	// parser, not hand-crafted.
+	// WHY: FormatDN replaces Go's hex-encoded emailAddress OID with a human-readable
+	// label. These subtests exercise the round-trip through a real certificate (create +
+	// parse) to verify that Names is populated correctly and the replacement works
+	// end-to-end, not just with hand-crafted Names slices.
+
+	roundTripTests := []struct {
+		name       string
+		email      string
+		cn         string
+		wantSubstr []string // substrings that must appear in the output
+		noSubstr   []string // substrings that must NOT appear in the output
+	}{
+		{
+			name:       "emailAddress OID rendered as label via cert round-trip",
+			email:      "info@example.com",
+			cn:         "example.com",
+			wantSubstr: []string{"emailAddress=info@example.com"},
+			noSubstr:   []string{"1.2.840.113549.1.9.1=#"},
+		},
+		{
+			name:  "email with special characters is escaped via cert round-trip",
+			email: "user+tag@example.com",
+			cn:    "example.com",
+			// The '+' in the local part must be escaped per RFC 4514.
+			wantSubstr: []string{"emailAddress=user\\+tag@example.com"},
+		},
+		{
+			name:       "emailAddress and standard attributes coexist via cert round-trip",
+			email:      "admin@corp.example.com",
+			cn:         "corp.example.com",
+			wantSubstr: []string{"emailAddress=admin@corp.example.com", "CN=corp.example.com"},
+		},
+	}
+	for _, tt := range roundTripTests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			name := certSubjectWithEmail(t, tt.email, tt.cn)
+			got := FormatDN(name)
+			for _, want := range tt.wantSubstr {
+				if !strings.Contains(got, want) {
+					t.Errorf("expected %q in %q", want, got)
+				}
+			}
+			for _, bad := range tt.noSubstr {
+				if strings.Contains(got, bad) {
+					t.Errorf("unexpected %q in %q", bad, got)
+				}
+			}
+		})
+	}
 }
 
 // certSubjectWithEmail creates a self-signed certificate with the given
