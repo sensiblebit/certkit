@@ -468,6 +468,11 @@ function buildCertCard(r) {
 
   const typeBadge = `<span class="badge badge-${escapeHTML(r.cert_type || "leaf")}">${escapeHTML(r.cert_type || "unknown")}</span>`;
   const badges = [typeBadge];
+  if (r.aia_fetched) {
+    badges.push(
+      `<span class="badge badge-aia" title="This certificate was automatically fetched via Authority Information Access (AIA), not from your input file">via aia</span>`,
+    );
+  }
   if (r.expired === true) {
     badges.push(`<span class="badge badge-expired">expired</span>`);
   }
