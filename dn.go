@@ -5,9 +5,22 @@ import (
 	"crypto/x509/pkix"
 	"encoding/asn1"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"log/slog"
+	"net"
+	"net/url"
+	"strconv"
 	"strings"
 )
+
+// ErrUnknownOtherNameType is returned when an OtherName type string is not a
+// recognized label or a valid dotted-decimal OID.
+var ErrUnknownOtherNameType = errors.New("unknown othername type")
+
+// ErrEmptySANExtension is returned when MarshalSANExtension is called with no
+// SAN entries of any type.
+var ErrEmptySANExtension = errors.New("no SAN entries provided")
 
 var extKeyUsageNames = map[x509.ExtKeyUsage]string{
 	x509.ExtKeyUsageAny:                        "Any",
@@ -126,6 +139,334 @@ var otherNameLabels = map[string]string{
 	"2.16.840.1.113733.1.9.7": "Strong-Extranet", // VeriSign SGC
 }
 
+// otherNameOIDs maps well-known OtherName labels to their OIDs.
+// This is the reverse of otherNameLabels for the four string-typed OtherName types.
+var otherNameOIDs = map[string]asn1.ObjectIdentifier{
+	"UPN":             {1, 3, 6, 1, 4, 1, 311, 20, 2, 3},
+	"XMPP":            {1, 3, 6, 1, 5, 5, 7, 8, 5},
+	"SRV":             {1, 3, 6, 1, 5, 5, 7, 8, 7},
+	"SmtpUTF8Mailbox": {1, 3, 6, 1, 5, 5, 7, 8, 9},
+}
+
+// oidSRV is the OID for id-on-dnsSRV, the only well-known OtherName type
+// encoded as IA5String instead of UTF8String.
+var oidSRV = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 8, 7}
+
+// OtherNameSAN represents a single OtherName entry in a Subject Alternative
+// Name extension. OID identifies the type (e.g. UPN, SRV) and Value holds the
+// string representation.
+type OtherNameSAN struct {
+	OID   asn1.ObjectIdentifier
+	Value string
+}
+
+// MarshalSANExtensionInput holds all SAN types for building a complete
+// SubjectAltName extension. Use this when OtherName entries are needed
+// alongside standard SAN types.
+type MarshalSANExtensionInput struct {
+	DNSNames       []string
+	EmailAddresses []string
+	IPAddresses    []net.IP
+	URIs           []*url.URL
+	OtherNames     []OtherNameSAN
+}
+
+// isIA5String reports whether s contains only ASCII characters (bytes 0-127),
+// as required for IA5String-encoded GeneralName fields (rfc822Name, dNSName,
+// uniformResourceIdentifier).
+func isIA5String(s string) bool {
+	for i := range len(s) {
+		if s[i] > 127 {
+			return false
+		}
+	}
+	return true
+}
+
+// MarshalSANExtension builds a complete Subject Alternative Name extension
+// (OID 2.5.29.17) containing all GeneralName types from the input. The
+// returned extension can be used in x509.Certificate.ExtraExtensions or
+// x509.CertificateRequest.ExtraExtensions.
+//
+// When OtherNames are present, callers must nil out the typed SAN fields
+// (DNSNames, IPAddresses, etc.) on the certificate/CSR template to avoid
+// Go's x509 package generating a duplicate SAN extension.
+func MarshalSANExtension(input MarshalSANExtensionInput) (pkix.Extension, error) {
+	var gnBytes []byte
+
+	for _, on := range input.OtherNames {
+		b, err := marshalOtherNameGN(on)
+		if err != nil {
+			return pkix.Extension{}, fmt.Errorf("marshaling othername SAN %q: %w", on.OID, err)
+		}
+		gnBytes = append(gnBytes, b...)
+	}
+
+	for _, email := range input.EmailAddresses {
+		if email == "" {
+			return pkix.Extension{}, fmt.Errorf("marshaling email SAN: empty value")
+		}
+		if !isIA5String(email) {
+			return pkix.Extension{}, fmt.Errorf("marshaling email SAN %q: contains non-ASCII characters", email)
+		}
+		b, err := asn1.Marshal(asn1.RawValue{
+			Class: asn1.ClassContextSpecific,
+			Tag:   1,
+			Bytes: []byte(email),
+		})
+		if err != nil {
+			return pkix.Extension{}, fmt.Errorf("marshaling email SAN: %w", err)
+		}
+		gnBytes = append(gnBytes, b...)
+	}
+
+	for _, dns := range input.DNSNames {
+		if dns == "" {
+			return pkix.Extension{}, fmt.Errorf("marshaling DNS SAN: empty value")
+		}
+		if !isIA5String(dns) {
+			return pkix.Extension{}, fmt.Errorf("marshaling DNS SAN %q: contains non-ASCII characters", dns)
+		}
+		b, err := asn1.Marshal(asn1.RawValue{
+			Class: asn1.ClassContextSpecific,
+			Tag:   2,
+			Bytes: []byte(dns),
+		})
+		if err != nil {
+			return pkix.Extension{}, fmt.Errorf("marshaling DNS SAN: %w", err)
+		}
+		gnBytes = append(gnBytes, b...)
+	}
+
+	for _, ip := range input.IPAddresses {
+		ipBytes := ip.To4()
+		if ipBytes == nil {
+			ipBytes = ip.To16()
+		}
+		if len(ipBytes) != 4 && len(ipBytes) != 16 {
+			return pkix.Extension{}, fmt.Errorf("invalid IP address %v: must be 4 or 16 bytes", ip)
+		}
+		b, err := asn1.Marshal(asn1.RawValue{
+			Class: asn1.ClassContextSpecific,
+			Tag:   7,
+			Bytes: ipBytes,
+		})
+		if err != nil {
+			return pkix.Extension{}, fmt.Errorf("marshaling IP SAN: %w", err)
+		}
+		gnBytes = append(gnBytes, b...)
+	}
+
+	for _, uri := range input.URIs {
+		if uri == nil {
+			return pkix.Extension{}, errors.New("nil URI in SAN input")
+		}
+		uriStr := uri.String()
+		if uriStr == "" {
+			return pkix.Extension{}, fmt.Errorf("marshaling URI SAN: empty value")
+		}
+		if !isIA5String(uriStr) {
+			return pkix.Extension{}, fmt.Errorf("marshaling URI SAN %q: contains non-ASCII characters", uriStr)
+		}
+		b, err := asn1.Marshal(asn1.RawValue{
+			Class: asn1.ClassContextSpecific,
+			Tag:   6,
+			Bytes: []byte(uriStr),
+		})
+		if err != nil {
+			return pkix.Extension{}, fmt.Errorf("marshaling URI SAN: %w", err)
+		}
+		gnBytes = append(gnBytes, b...)
+	}
+
+	if len(gnBytes) == 0 {
+		return pkix.Extension{}, fmt.Errorf("marshaling SAN extension: %w", ErrEmptySANExtension)
+	}
+
+	sanSeq := asn1.RawValue{
+		Tag:        asn1.TagSequence,
+		Class:      asn1.ClassUniversal,
+		IsCompound: true,
+		Bytes:      gnBytes,
+	}
+	sanBytes, err := asn1.Marshal(sanSeq)
+	if err != nil {
+		return pkix.Extension{}, fmt.Errorf("marshaling SAN extension: %w", err)
+	}
+
+	return pkix.Extension{
+		Id:    oidSubjectAltName,
+		Value: sanBytes,
+	}, nil
+}
+
+// ResolveOtherNameOID resolves a human-readable label ("UPN", "SRV") or
+// dotted-decimal OID string ("1.3.6.1.4.1.311.20.2.3") to an
+// asn1.ObjectIdentifier.
+func ResolveOtherNameOID(s string) (asn1.ObjectIdentifier, error) {
+	if s == "" {
+		return nil, fmt.Errorf("%w: empty othername type", ErrUnknownOtherNameType)
+	}
+	if oid, ok := otherNameOIDs[s]; ok {
+		return append(asn1.ObjectIdentifier(nil), oid...), nil
+	}
+	parts := strings.Split(s, ".")
+	if len(parts) < 2 {
+		return nil, fmt.Errorf("%w %q: not a known label or valid OID", ErrUnknownOtherNameType, s)
+	}
+	oid := make(asn1.ObjectIdentifier, 0, len(parts))
+	for _, part := range parts {
+		n, err := strconv.Atoi(part)
+		if err != nil || n < 0 {
+			return nil, fmt.Errorf("%w %q: not a known label or valid OID", ErrUnknownOtherNameType, s)
+		}
+		oid = append(oid, n)
+	}
+	return oid, nil
+}
+
+// otherNameStringTag returns the ASN.1 tag for encoding an OtherName value.
+// SRV (id-on-dnsSRV) uses IA5String; all others use UTF8String.
+func otherNameStringTag(oid asn1.ObjectIdentifier) int {
+	if oid.Equal(oidSRV) {
+		return asn1.TagIA5String
+	}
+	return asn1.TagUTF8String
+}
+
+// marshalOtherNameGN encodes a single OtherName as a GeneralName (context-
+// specific tag 0). The encoding follows RFC 5280:
+//
+//	OtherName ::= SEQUENCE { type-id OID, value [0] EXPLICIT ANY }
+//
+// With IMPLICIT tagging, the outer SEQUENCE tag is replaced by the
+// context-specific tag 0 for the GeneralName CHOICE.
+func marshalOtherNameGN(on OtherNameSAN) ([]byte, error) {
+	oidBytes, err := asn1.Marshal(on.OID)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling othername OID: %w", err)
+	}
+
+	tag := otherNameStringTag(on.OID)
+	if tag == asn1.TagIA5String && !isIA5String(on.Value) {
+		return nil, fmt.Errorf("marshaling othername SRV value %q: contains non-ASCII characters", on.Value)
+	}
+	var valueBytes []byte
+	if tag == asn1.TagIA5String {
+		valueBytes, err = asn1.Marshal(asn1.RawValue{
+			Tag:   asn1.TagIA5String,
+			Class: asn1.ClassUniversal,
+			Bytes: []byte(on.Value),
+		})
+	} else {
+		valueBytes, err = asn1.Marshal(asn1.RawValue{
+			Tag:   tag,
+			Class: asn1.ClassUniversal,
+			Bytes: []byte(on.Value),
+		})
+	}
+	if err != nil {
+		return nil, fmt.Errorf("marshaling othername value: %w", err)
+	}
+
+	explicitBytes, err := asn1.Marshal(asn1.RawValue{
+		Class:      asn1.ClassContextSpecific,
+		Tag:        0,
+		IsCompound: true,
+		Bytes:      valueBytes,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshaling othername explicit wrapper: %w", err)
+	}
+
+	seqContent := append(oidBytes, explicitBytes...)
+
+	gnBytes, err := asn1.Marshal(asn1.RawValue{
+		Class:      asn1.ClassContextSpecific,
+		Tag:        0,
+		IsCompound: true,
+		Bytes:      seqContent,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshaling othername GeneralName: %w", err)
+	}
+	return gnBytes, nil
+}
+
+// parseOtherNameSANEntries extracts structured OtherNameSAN entries from
+// a list of extensions. Unlike ParseOtherNameSANs which returns formatted
+// strings, this returns typed entries suitable for re-encoding.
+func parseOtherNameSANEntries(extensions []pkix.Extension) []OtherNameSAN {
+	for _, ext := range extensions {
+		if !ext.Id.Equal(oidSubjectAltName) {
+			continue
+		}
+		return parseOtherNameEntriesFromSANBytes(ext.Value)
+	}
+	return nil
+}
+
+func parseOtherNameEntriesFromSANBytes(raw []byte) []OtherNameSAN {
+	var entries []OtherNameSAN
+	walkOtherNameSANs(raw, func(oid asn1.ObjectIdentifier, valueBytes []byte) {
+		var strVal string
+		if _, strErr := asn1.Unmarshal(valueBytes, &strVal); strErr != nil {
+			slog.Debug("skipping OtherName entry: string value parse failed", "oid", oid, "error", strErr)
+			return
+		}
+		entries = append(entries, OtherNameSAN{OID: oid, Value: strVal})
+	})
+	return entries
+}
+
+// walkOtherNameSANs iterates over the OtherName GeneralName entries in raw
+// SAN extension bytes and calls fn for each successfully parsed entry. The
+// valueBytes passed to fn are the inner bytes of the [0] EXPLICIT wrapper
+// (i.e. the TLV-encoded string value). This shared walker is used by both
+// parseOtherNameEntriesFromSANBytes (structured extraction) and
+// parseOtherNamesFromSANBytes (display formatting).
+func walkOtherNameSANs(raw []byte, fn func(oid asn1.ObjectIdentifier, valueBytes []byte)) {
+	var seq asn1.RawValue
+	rest, err := asn1.Unmarshal(raw, &seq)
+	if err != nil || len(rest) > 0 {
+		return
+	}
+
+	inner := seq.Bytes
+	for len(inner) > 0 {
+		var gn asn1.RawValue
+		inner, err = asn1.Unmarshal(inner, &gn)
+		if err != nil {
+			break
+		}
+		if gn.Class != asn1.ClassContextSpecific || gn.Tag != 0 {
+			continue
+		}
+
+		content := gn.Bytes
+		var probe asn1.RawValue
+		if _, probeErr := asn1.Unmarshal(gn.Bytes, &probe); probeErr == nil &&
+			probe.Tag == asn1.TagSequence && probe.Class == asn1.ClassUniversal {
+			content = probe.Bytes
+		}
+
+		var oid asn1.ObjectIdentifier
+		oidRest, oidErr := asn1.Unmarshal(content, &oid)
+		if oidErr != nil {
+			slog.Debug("skipping OtherName entry: OID parse failed", "error", oidErr)
+			continue
+		}
+
+		var explicit asn1.RawValue
+		if _, explErr := asn1.Unmarshal(oidRest, &explicit); explErr != nil {
+			slog.Debug("skipping OtherName entry: explicit tag parse failed", "oid", oid, "error", explErr)
+			continue
+		}
+
+		fn(oid, explicit.Bytes)
+	}
+}
+
 // ParseOtherNameSANs extracts SAN entries that Go's x509 package silently
 // drops: OtherName (tag 0), DirectoryName (tag 4), and RegisteredID (tag 8).
 // Returns formatted strings like "UPN:user@example.com" or
@@ -149,7 +490,23 @@ func parseOtherNamesFromSANBytes(raw []byte) []string {
 		return nil
 	}
 
+	// Collect OtherName entries via shared walker.
 	var sans []string
+	walkOtherNameSANs(raw, func(oid asn1.ObjectIdentifier, valueBytes []byte) {
+		label := oid.String()
+		if name, ok := otherNameLabels[label]; ok {
+			label = name
+		}
+		var strVal string
+		if _, strErr := asn1.Unmarshal(valueBytes, &strVal); strErr == nil {
+			sans = append(sans, label+":"+strVal)
+		} else {
+			sans = append(sans, label+":"+hex.EncodeToString(valueBytes))
+		}
+	})
+
+	// Handle DirectoryName (tag 4) and RegisteredID (tag 8) which the
+	// OtherName walker does not cover.
 	inner := seq.Bytes
 	for len(inner) > 0 {
 		var gn asn1.RawValue
@@ -161,11 +518,6 @@ func parseOtherNamesFromSANBytes(raw []byte) []string {
 			continue
 		}
 		switch gn.Tag {
-		case 0: // otherName [0] IMPLICIT SEQUENCE { OID, [0] EXPLICIT ANY }
-			s := formatOtherName(gn.Bytes)
-			if s != "" {
-				sans = append(sans, s)
-			}
 		case 4: // directoryName [4]
 			var name pkix.RDNSequence
 			if _, err := asn1.Unmarshal(gn.Bytes, &name); err == nil {
@@ -173,53 +525,30 @@ func parseOtherNamesFromSANBytes(raw []byte) []string {
 				pn.FillFromRDNSequence(&name)
 				sans = append(sans, "DirName:"+FormatDN(pn))
 			}
-		case 8: // registeredID [8]
+		case 8: // registeredID [8] IMPLICIT OBJECT IDENTIFIER
+			// gn.Bytes contains the raw OID content but gn.FullBytes has a
+			// context-specific tag (0x88) instead of the universal OID tag
+			// (0x06). Re-wrap as a universal OID before unmarshaling.
+			rewrapped, rewrapErr := asn1.Marshal(asn1.RawValue{
+				Class: asn1.ClassUniversal,
+				Tag:   asn1.TagOID,
+				Bytes: gn.Bytes,
+			})
+			if rewrapErr != nil {
+				slog.Debug("skipping registeredID SAN: re-wrap failed", "error", rewrapErr)
+				continue
+			}
 			var oid asn1.ObjectIdentifier
-			if _, err := asn1.Unmarshal(gn.FullBytes, &oid); err == nil {
+			if _, err := asn1.Unmarshal(rewrapped, &oid); err == nil {
 				sans = append(sans, "RegisteredID:"+oid.String())
 			}
 		}
 	}
+
+	if len(sans) == 0 {
+		return nil
+	}
 	return sans
-}
-
-func formatOtherName(data []byte) string {
-	// OtherName ::= SEQUENCE { type-id OID, value [0] EXPLICIT ANY }
-	//
-	// With IMPLICIT tagging (RFC 5280), [0] replaces the SEQUENCE tag so
-	// data starts with the OID directly. Some encoders use EXPLICIT tagging
-	// or wrap in a SEQUENCE, so data may start with a SEQUENCE tag (0x30).
-	content := data
-	var probe asn1.RawValue
-	if _, err := asn1.Unmarshal(data, &probe); err == nil && probe.Tag == asn1.TagSequence && probe.Class == asn1.ClassUniversal {
-		content = probe.Bytes
-	}
-
-	var oid asn1.ObjectIdentifier
-	rest, err := asn1.Unmarshal(content, &oid)
-	if err != nil {
-		return ""
-	}
-
-	label := oid.String()
-	if name, ok := otherNameLabels[label]; ok {
-		label = name
-	}
-
-	// Unwrap the [0] EXPLICIT wrapper to get the inner value.
-	var explicit asn1.RawValue
-	if _, err := asn1.Unmarshal(rest, &explicit); err != nil {
-		return label + ":<unparseable>"
-	}
-
-	// Try common string types (UTF8String, IA5String, PrintableString).
-	var strVal string
-	if _, err := asn1.Unmarshal(explicit.Bytes, &strVal); err == nil {
-		return label + ":" + strVal
-	}
-
-	// Fallback: hex-encode the raw value.
-	return label + ":" + hex.EncodeToString(explicit.Bytes)
 }
 
 // extraOIDLabels maps OIDs not handled by Go's pkix.Name.String() to their

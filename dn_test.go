@@ -7,6 +7,9 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"errors"
+	"net"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -804,4 +807,373 @@ func certSubjectWithEmail(t *testing.T, email, cn string) pkix.Name {
 		t.Fatal(err)
 	}
 	return cert.Subject
+}
+
+// --- ResolveOtherNameOID tests ---
+
+func TestResolveOtherNameOID(t *testing.T) {
+	// WHY: ResolveOtherNameOID is the entry point for user-provided OtherName type
+	// strings; it must correctly map known labels and parse dotted-decimal OIDs,
+	// rejecting malformed input with clear errors.
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		input   string
+		wantOID asn1.ObjectIdentifier
+		wantErr bool
+	}{
+		{
+			name:    "UPN label",
+			input:   "UPN",
+			wantOID: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3},
+		},
+		{
+			name:    "XMPP label",
+			input:   "XMPP",
+			wantOID: asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 8, 5},
+		},
+		{
+			name:    "SRV label",
+			input:   "SRV",
+			wantOID: asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 8, 7},
+		},
+		{
+			name:    "SmtpUTF8Mailbox label",
+			input:   "SmtpUTF8Mailbox",
+			wantOID: asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 8, 9},
+		},
+		{
+			name:    "dotted decimal OID",
+			input:   "1.3.6.1.4.1.311.20.2.3",
+			wantOID: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3},
+		},
+		{
+			name:    "arbitrary dotted OID",
+			input:   "1.2.3.4.5",
+			wantOID: asn1.ObjectIdentifier{1, 2, 3, 4, 5},
+		},
+		{
+			name:    "empty string",
+			input:   "",
+			wantErr: true,
+		},
+		{
+			name:    "unknown label without dots",
+			input:   "BOGUS",
+			wantErr: true,
+		},
+		{
+			name:    "single component OID",
+			input:   "1",
+			wantErr: true,
+		},
+		{
+			name:    "non-numeric OID component",
+			input:   "1.2.abc.4",
+			wantErr: true,
+		},
+		{
+			name:    "negative OID component",
+			input:   "1.2.-3.4",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := ResolveOtherNameOID(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("expected error for input %q, got OID %v", tt.input, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !got.Equal(tt.wantOID) {
+				t.Errorf("got OID %v, want %v", got, tt.wantOID)
+			}
+		})
+	}
+}
+
+// --- MarshalSANExtension tests ---
+
+func TestMarshalSANExtension(t *testing.T) {
+	// WHY: MarshalSANExtension builds the complete SAN extension from all
+	// GeneralName types including OtherName. The encoding must be parseable by
+	// Go's x509 package (for standard types) and by ParseOtherNameSANs (for
+	// OtherName). Incorrect encoding produces RFC 5280 violations.
+	t.Parallel()
+
+	upnOID := asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3}
+	srvOID := asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 8, 7}
+	xmppOID := asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 8, 5}
+	smtpOID := asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 8, 9}
+
+	tests := []struct {
+		name           string
+		input          MarshalSANExtensionInput
+		wantOtherNames []string // expected ParseOtherNameSANs output
+	}{
+		{
+			name: "UPN only",
+			input: MarshalSANExtensionInput{
+				OtherNames: []OtherNameSAN{
+					{OID: upnOID, Value: "user@example.com"},
+				},
+			},
+			wantOtherNames: []string{"UPN:user@example.com"},
+		},
+		{
+			name: "SRV uses IA5String",
+			input: MarshalSANExtensionInput{
+				OtherNames: []OtherNameSAN{
+					{OID: srvOID, Value: "_https.example.com"},
+				},
+			},
+			wantOtherNames: []string{"SRV:_https.example.com"},
+		},
+		{
+			name: "DNS and UPN mixed",
+			input: MarshalSANExtensionInput{
+				DNSNames: []string{"example.com", "www.example.com"},
+				OtherNames: []OtherNameSAN{
+					{OID: upnOID, Value: "admin@example.com"},
+				},
+			},
+			wantOtherNames: []string{"UPN:admin@example.com"},
+		},
+		{
+			name: "all types combined",
+			input: MarshalSANExtensionInput{
+				DNSNames:       []string{"example.com"},
+				EmailAddresses: []string{"admin@example.com"},
+				IPAddresses:    []net.IP{net.ParseIP("10.0.0.1"), net.ParseIP("::1")},
+				URIs:           []*url.URL{mustParseURL(t, "spiffe://example.com/workload")},
+				OtherNames: []OtherNameSAN{
+					{OID: upnOID, Value: "user@corp.example.com"},
+				},
+			},
+			wantOtherNames: []string{"UPN:user@corp.example.com"},
+		},
+		{
+			name: "multiple OtherNames",
+			input: MarshalSANExtensionInput{
+				OtherNames: []OtherNameSAN{
+					{OID: upnOID, Value: "user@example.com"},
+					{OID: xmppOID, Value: "user@xmpp.example.com"},
+					{OID: smtpOID, Value: "user@smtp.example.com"},
+				},
+			},
+			wantOtherNames: []string{
+				"UPN:user@example.com",
+				"XMPP:user@xmpp.example.com",
+				"SmtpUTF8Mailbox:user@smtp.example.com",
+			},
+		},
+		{
+			name: "arbitrary OID defaults to UTF8String",
+			input: MarshalSANExtensionInput{
+				OtherNames: []OtherNameSAN{
+					{OID: asn1.ObjectIdentifier{1, 2, 3, 4, 5}, Value: "custom-value"},
+				},
+			},
+			wantOtherNames: []string{"1.2.3.4.5:custom-value"},
+		},
+		{
+			name: "standard types only (no OtherNames)",
+			input: MarshalSANExtensionInput{
+				DNSNames:    []string{"example.com"},
+				IPAddresses: []net.IP{net.ParseIP("192.168.1.1"), net.ParseIP("2001:db8::1")},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ext, err := MarshalSANExtension(tt.input)
+			if err != nil {
+				t.Fatalf("MarshalSANExtension: %v", err)
+			}
+			if !ext.Id.Equal(asn1.ObjectIdentifier{2, 5, 29, 17}) {
+				t.Errorf("extension OID = %v, want 2.5.29.17", ext.Id)
+			}
+
+			// Create a self-signed cert with this SAN extension to verify
+			// Go's x509 parser can read the standard SAN types.
+			key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			template := &x509.Certificate{
+				SerialNumber:    randomSerial(t),
+				Subject:         pkix.Name{CommonName: "test"},
+				NotBefore:       time.Now().Add(-time.Hour),
+				NotAfter:        time.Now().Add(24 * time.Hour),
+				ExtraExtensions: []pkix.Extension{ext},
+			}
+			certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cert, err := x509.ParseCertificate(certDER)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Verify OtherNames via ParseOtherNameSANs (certkit logic)
+			gotOther := ParseOtherNameSANs(cert.Extensions)
+			if !slices.Equal(gotOther, tt.wantOtherNames) {
+				t.Errorf("OtherNames = %v, want %v", gotOther, tt.wantOtherNames)
+			}
+		})
+	}
+}
+
+func TestMarshalSANExtension_EmptyInput(t *testing.T) {
+	// WHY: An empty SAN extension (valid SEQUENCE with no entries) is technically
+	// valid DER but violates RFC 5280 which requires at least one GeneralName.
+	// MarshalSANExtension must reject empty input with a clear error.
+	t.Parallel()
+
+	_, err := MarshalSANExtension(MarshalSANExtensionInput{})
+	if err == nil {
+		t.Fatal("expected error for empty SAN input, got nil")
+	}
+	if !errors.Is(err, ErrEmptySANExtension) {
+		t.Errorf("error = %v, want errors.Is(err, ErrEmptySANExtension)", err)
+	}
+}
+
+func TestMarshalSANExtension_ValidationErrors(t *testing.T) {
+	// WHY: MarshalSANExtension manually encodes IA5String GeneralNames (email,
+	// DNS, URI). Non-ASCII or empty values would produce invalid DER per RFC 5280.
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input MarshalSANExtensionInput
+	}{
+		{
+			name:  "empty DNS name",
+			input: MarshalSANExtensionInput{DNSNames: []string{""}},
+		},
+		{
+			name:  "non-ASCII DNS name",
+			input: MarshalSANExtensionInput{DNSNames: []string{"ex\xc3\xa4mple.com"}},
+		},
+		{
+			name:  "empty email address",
+			input: MarshalSANExtensionInput{EmailAddresses: []string{""}},
+		},
+		{
+			name:  "non-ASCII email address",
+			input: MarshalSANExtensionInput{EmailAddresses: []string{"us\xc3\xa9r@example.com"}},
+		},
+		{
+			name:  "nil URI in slice",
+			input: MarshalSANExtensionInput{URIs: []*url.URL{nil}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := MarshalSANExtension(tt.input)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+		})
+	}
+}
+
+func TestMarshalSANExtension_CertificateRoundTrip(t *testing.T) {
+	// WHY: End-to-end round-trip through x509.CreateCertificate → ParseCertificate
+	// proves the encoded SAN extension is valid DER and all GeneralName types
+	// survive the encode→decode cycle intact.
+	t.Parallel()
+
+	upnOID := asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3}
+
+	ext, err := MarshalSANExtension(MarshalSANExtensionInput{
+		DNSNames:       []string{"example.com", "www.example.com"},
+		EmailAddresses: []string{"admin@example.com"},
+		IPAddresses:    []net.IP{net.ParseIP("10.0.0.1"), net.ParseIP("::1")},
+		URIs:           []*url.URL{mustParseURL(t, "spiffe://example.com/ns/default")},
+		OtherNames: []OtherNameSAN{
+			{OID: upnOID, Value: "user@corp.example.com"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:    randomSerial(t),
+		Subject:         pkix.Name{CommonName: "round-trip-test"},
+		NotBefore:       time.Now().Add(-time.Hour),
+		NotAfter:        time.Now().Add(24 * time.Hour),
+		ExtraExtensions: []pkix.Extension{ext},
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify standard SAN types survived certkit's DER assembly (T-6 round-trip)
+	wantDNS := []string{"example.com", "www.example.com"}
+	if !slices.Equal(cert.DNSNames, wantDNS) {
+		t.Errorf("DNSNames = %v, want %v", cert.DNSNames, wantDNS)
+	}
+	wantEmails := []string{"admin@example.com"}
+	if !slices.Equal(cert.EmailAddresses, wantEmails) {
+		t.Errorf("EmailAddresses = %v, want %v", cert.EmailAddresses, wantEmails)
+	}
+	wantIPs := []net.IP{net.ParseIP("10.0.0.1").To4(), net.ParseIP("::1")}
+	if len(cert.IPAddresses) != len(wantIPs) {
+		t.Errorf("IPAddresses count = %d, want %d", len(cert.IPAddresses), len(wantIPs))
+	} else {
+		for i, ip := range cert.IPAddresses {
+			if !ip.Equal(wantIPs[i]) {
+				t.Errorf("IPAddresses[%d] = %v, want %v", i, ip, wantIPs[i])
+			}
+		}
+	}
+	wantURIs := []string{"spiffe://example.com/ns/default"}
+	var gotURIs []string
+	for _, u := range cert.URIs {
+		gotURIs = append(gotURIs, u.String())
+	}
+	if !slices.Equal(gotURIs, wantURIs) {
+		t.Errorf("URIs = %v, want %v", gotURIs, wantURIs)
+	}
+
+	// Verify OtherName via ParseOtherNameSANs (certkit logic)
+	otherNames := ParseOtherNameSANs(cert.Extensions)
+	if len(otherNames) != 1 || otherNames[0] != "UPN:user@corp.example.com" {
+		t.Errorf("OtherNames = %v, want [UPN:user@corp.example.com]", otherNames)
+	}
+}
+
+// mustParseURL parses a URL string or fails the test.
+func mustParseURL(t *testing.T, rawURL string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatalf("parsing URL %q: %v", rawURL, err)
+	}
+	return u
 }
