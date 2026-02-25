@@ -1034,6 +1034,21 @@ func TestMarshalSANExtension(t *testing.T) {
 	}
 }
 
+func TestMarshalSANExtension_EmptyInput(t *testing.T) {
+	// WHY: An empty SAN extension (valid SEQUENCE with no entries) is technically
+	// valid DER but violates RFC 5280 which requires at least one GeneralName.
+	// MarshalSANExtension must reject empty input with a clear error.
+	t.Parallel()
+
+	_, err := MarshalSANExtension(MarshalSANExtensionInput{})
+	if err == nil {
+		t.Fatal("expected error for empty SAN input, got nil")
+	}
+	if !strings.Contains(err.Error(), "no SAN entries provided") {
+		t.Errorf("error = %q, want substring %q", err.Error(), "no SAN entries provided")
+	}
+}
+
 func TestMarshalSANExtension_CertificateRoundTrip(t *testing.T) {
 	// WHY: End-to-end round-trip through x509.CreateCertificate → ParseCertificate
 	// proves the encoded SAN extension is valid DER and all GeneralName types
@@ -1085,7 +1100,7 @@ func TestMarshalSANExtension_CertificateRoundTrip(t *testing.T) {
 func TestMarshalSANExtension_mTLSUserCert(t *testing.T) {
 	// WHY: mTLS user identity certificates are the primary use case for OtherName
 	// SAN generation. This test creates a CA-signed leaf with UPN + rfc822Name +
-	// ClientAuth EKU and verifies the full round-trip including chain validation.
+	// ClientAuth EKU and verifies the round-trip preservation of OtherName SANs.
 	t.Parallel()
 
 	upnOID := asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3}

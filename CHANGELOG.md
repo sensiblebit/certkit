@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix `MarshalSANExtension` accepting nil URI entries and invalid IP addresses without validation ([#74])
 - Fix `parseOtherNameEntriesFromSANBytes` silently discarding parse errors without logging (ERR-5) ([#74])
 - Fix error strings in `ResolveOtherNameOID` using capitalized "OtherName" instead of lowercase (ERR-4) ([#74])
+- Fix bare error returns in `MarshalSANExtension` and `marshalOtherNameGN` — wrap with `%w` context per ERR-1 ([#74])
+- Fix `MarshalSANExtension` silently producing empty SAN extension when all input fields are nil/empty ([#74])
 
 ### Changed
 
@@ -39,6 +41,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `TestGenerateCSRFromTemplate_WithOtherNames` table-driven tests including RFC 5280 duplicate SAN check ([#74])
 - Add `TestGenerateCSRFromCSR_PreservesOtherNames` — OtherName survival through CSR regeneration ([#74])
 - Remove stdlib-testing assertions from `TestMarshalSANExtension_mTLSUserCert` (EKU check, chain verification) per T-9 ([#74])
+- Add `TestMarshalSANExtension_EmptyInput` — verifies empty SAN input is rejected with clear error ([#74])
 
 ## [0.8.1] - 2026-02-25
 

@@ -181,7 +181,7 @@ func MarshalSANExtension(input MarshalSANExtensionInput) (pkix.Extension, error)
 	for _, on := range input.OtherNames {
 		b, err := marshalOtherNameGN(on)
 		if err != nil {
-			return pkix.Extension{}, err
+			return pkix.Extension{}, fmt.Errorf("marshaling otherName SAN %q: %w", on.OID, err)
 		}
 		gnBytes = append(gnBytes, b...)
 	}
@@ -242,6 +242,10 @@ func MarshalSANExtension(input MarshalSANExtensionInput) (pkix.Extension, error)
 			return pkix.Extension{}, fmt.Errorf("marshaling URI SAN: %w", err)
 		}
 		gnBytes = append(gnBytes, b...)
+	}
+
+	if len(gnBytes) == 0 {
+		return pkix.Extension{}, fmt.Errorf("marshaling SAN extension: no SAN entries provided")
 	}
 
 	sanSeq := asn1.RawValue{
@@ -339,12 +343,16 @@ func marshalOtherNameGN(on OtherNameSAN) ([]byte, error) {
 
 	seqContent := append(oidBytes, explicitBytes...)
 
-	return asn1.Marshal(asn1.RawValue{
+	gnBytes, err := asn1.Marshal(asn1.RawValue{
 		Class:      asn1.ClassContextSpecific,
 		Tag:        0,
 		IsCompound: true,
 		Bytes:      seqContent,
 	})
+	if err != nil {
+		return nil, fmt.Errorf("marshaling otherName GeneralName: %w", err)
+	}
+	return gnBytes, nil
 }
 
 // parseOtherNameSANEntries extracts structured OtherNameSAN entries from
