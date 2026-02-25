@@ -3,7 +3,9 @@ updates:
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "daily"
+      interval: "weekly"
+      day: "monday"
+      timezone: "Etc/UTC"
     groups:
       actions:
         patterns: ["*"]
@@ -13,13 +15,17 @@ updates:
   - package-ecosystem: "gomod"
     directory: "/"
     schedule:
-      interval: "daily"
+      interval: "weekly"
+      day: "monday"
+      timezone: "Etc/UTC"
     commit-message:
       prefix: "build(deps)"
 
   - package-ecosystem: "npm"
     directory: "/web"
     schedule:
-      interval: "daily"
+      interval: "weekly"
+      day: "monday"
+      timezone: "Etc/UTC"
     commit-message:
       prefix: "build(deps)"
