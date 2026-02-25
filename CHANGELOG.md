@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `OtherNameSAN` and `MarshalSANExtensionInput` types for OtherName SAN generation
 - Add `other_names` field to `CSRTemplate` for mTLS user identity certificate CSRs
 - Add OtherName SAN preservation in `GenerateCSRFromCSR` — OtherName entries survive CSR-to-CSR key rotation
+- Add `aia_fetched` field to inspect results and "via aia" badge in web UI for AIA-fetched certificates ([#73])
 
 ### Tests
 
@@ -690,6 +691,7 @@ Initial release.
 [`55b5c1e`]: https://github.com/sensiblebit/certkit/commit/55b5c1e
 [`8cf81d9`]: https://github.com/sensiblebit/certkit/commit/8cf81d9
 [`3569926`]: https://github.com/sensiblebit/certkit/commit/3569926
+[#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63
 [#58]: https://github.com/sensiblebit/certkit/pull/58
