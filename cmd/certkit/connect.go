@@ -51,13 +51,13 @@ type connectResultJSON struct {
 }
 
 type connectCertJSON struct {
-	Subject     string   `json:"subject"`
-	Issuer      string   `json:"issuer"`
-	NotBefore   string   `json:"not_before"`
-	NotAfter    string   `json:"not_after"`
-	Fingerprint string   `json:"fingerprint_sha256"`
-	Type        string   `json:"type"`
-	DNSNames    []string `json:"dns_names,omitempty"`
+	Subject   string   `json:"subject"`
+	Issuer    string   `json:"issuer"`
+	NotBefore string   `json:"not_before"`
+	NotAfter  string   `json:"not_after"`
+	SHA256    string   `json:"sha256_fingerprint"`
+	CertType  string   `json:"cert_type"`
+	SANs      []string `json:"sans,omitempty"`
 }
 
 func runConnect(cmd *cobra.Command, args []string) error {
@@ -90,13 +90,13 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		}
 		for _, cert := range result.PeerChain {
 			jr.Chain = append(jr.Chain, connectCertJSON{
-				Subject:     certkit.FormatDN(cert.Subject),
-				Issuer:      certkit.FormatDN(cert.Issuer),
-				NotBefore:   cert.NotBefore.UTC().Format(time.RFC3339),
-				NotAfter:    cert.NotAfter.UTC().Format(time.RFC3339),
-				Fingerprint: certkit.CertFingerprint(cert),
-				Type:        certkit.GetCertificateType(cert),
-				DNSNames:    cert.DNSNames,
+				Subject:   certkit.FormatDN(cert.Subject),
+				Issuer:    certkit.FormatDN(cert.Issuer),
+				NotBefore: cert.NotBefore.UTC().Format(time.RFC3339),
+				NotAfter:  cert.NotAfter.UTC().Format(time.RFC3339),
+				SHA256:    certkit.CertFingerprint(cert),
+				CertType:  certkit.GetCertificateType(cert),
+				SANs:      cert.DNSNames,
 			})
 		}
 		data, err := json.MarshalIndent(jr, "", "  ")

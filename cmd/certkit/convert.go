@@ -87,6 +87,11 @@ func runConvert(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no certificates found in %s", args[0])
 	}
 
+	isBinary := convertTo == "p12" || convertTo == "jks" || convertTo == "der" || convertTo == "p7b"
+	if convertOutFile == "" && isBinary {
+		return fmt.Errorf("output format %q is binary; use -o to write to a file", convertTo)
+	}
+
 	output, err := formatConvertOutput(formatConvertInput{
 		contents:  contents,
 		allCerts:  allCerts,
@@ -95,11 +100,6 @@ func runConvert(cmd *cobra.Command, args []string) error {
 	})
 	if err != nil {
 		return fmt.Errorf("formatting output: %w", err)
-	}
-
-	isBinary := convertTo == "p12" || convertTo == "jks" || convertTo == "der" || convertTo == "p7b"
-	if convertOutFile == "" && isBinary {
-		return fmt.Errorf("output format %q is binary; use -o to write to a file", convertTo)
 	}
 
 	if convertOutFile != "" {
