@@ -44,6 +44,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix `connect` command JSON using `CommonName` for subject/issuer while other commands use full DN — now uses `FormatDN` for CLI-4 consistency ([#75])
 - Fix `FormatConnectResult` SANs formatted with `%v` instead of `strings.Join` — now matches other command output style ([#75])
 - Fix custom `contains`/`searchString` test helpers reimplementing `strings.Contains` — replace with stdlib ([#75])
+- Fix `parseHostPort` mis-parsing trailing colon (`host:`) and double-bracketing bare IPv6 (`[::1]`) addresses ([#75])
+- Fix `convert` command error message saying `--p12` instead of referencing the `--to` format flag ([#75])
+- Fix `verify` command nil panic when input file contains only a key and no certificate ([#75])
+- Fix `DiagnoseChain` nil panic when called with nil certificate ([#75])
+- Fix `formatConvertOutput` returning unwrapped errors from PKCS#12, JKS, and PKCS#7 encoding (ERR-1) ([#75])
 
 ### Added
 
@@ -57,7 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `ConnectTLS` library function for TLS connection probing
 - Add `CheckOCSP` library function for OCSP revocation checking
 - Add `ParseCRL`, `CRLContainsCert`, and `CRLInfoFromList` library functions for CRL handling
-- Add `DiagnoseChain` function to `internal` package for chain failure analysis
+- Add chain diagnostic checks (`--diagnose` flag) for `verify` command
 
 ### Tests
 
@@ -75,7 +80,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `TestCreateSelfSigned` and `TestSignCSR` table-driven tests for certificate signing
 - Add `TestSignCSR_ChainVerifies` round-trip chain verification test
 - Add `TestConnectTLS` with mock TLS server for connection probing
-- Add `TestCheckOCSP_MockGoodResponse` and `TestCheckOCSP_MockRevokedResponse` with mock OCSP server
+- Add `TestCheckOCSP_MockResponse` table-driven test with mock OCSP server covering good and revoked responses
 - Add `TestParseCRL`, `TestCRLContainsCert`, and `TestCRLInfoFromList` for CRL handling
 - Add `TestDiagnoseChain` table-driven tests for chain diagnostics
 

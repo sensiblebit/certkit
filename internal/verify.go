@@ -148,7 +148,9 @@ type Diagnosis struct {
 
 // DiagnoseChainInput holds the parameters for chain diagnostics.
 type DiagnoseChainInput struct {
-	Cert       *x509.Certificate
+	// Cert is the leaf certificate to diagnose.
+	Cert *x509.Certificate
+	// ExtraCerts are intermediate certificates provided alongside the leaf.
 	ExtraCerts []*x509.Certificate
 }
 
@@ -156,6 +158,10 @@ type DiagnoseChainInput struct {
 // of diagnostic findings. It checks for expiry, not-yet-valid, self-signed
 // leaf, missing intermediates, and weak signatures.
 func DiagnoseChain(input DiagnoseChainInput) []Diagnosis {
+	if input.Cert == nil {
+		return nil
+	}
+
 	var diags []Diagnosis
 	now := time.Now()
 

@@ -86,7 +86,11 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("loading %s: %w", args[0], err)
 	}
 
-	if !allowExpired && contents.Leaf != nil && time.Now().After(contents.Leaf.NotAfter) {
+	if contents.Leaf == nil {
+		return fmt.Errorf("no certificate found in %s", args[0])
+	}
+
+	if !allowExpired && time.Now().After(contents.Leaf.NotAfter) {
 		return &ValidationError{Message: fmt.Sprintf("certificate expired on %s (use --allow-expired to proceed)", contents.Leaf.NotAfter.UTC().Format(time.RFC3339))}
 	}
 

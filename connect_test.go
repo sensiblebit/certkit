@@ -67,7 +67,10 @@ func TestConnectTLS(t *testing.T) {
 		}
 	}()
 
-	_, portStr, _ := net.SplitHostPort(listener.Addr().String())
+	_, portStr, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatalf("splitting host:port: %v", err)
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

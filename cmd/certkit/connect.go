@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
+	"strings"
 	"time"
 
 	"github.com/sensiblebit/certkit"
@@ -118,14 +119,21 @@ func runConnect(cmd *cobra.Command, args []string) error {
 
 // parseHostPort splits a host[:port] string, defaulting port to "443".
 func parseHostPort(addr string) (string, string, error) {
-	// Try splitting as host:port first
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
-		// No port specified — treat entire string as host
-		return addr, "443", nil
+		// SplitHostPort failed — could be a plain host, bare IPv6, or malformed input.
+		// Trim brackets from bare IPv6 like "[::1]" and default to port 443.
+		trimmed := strings.TrimPrefix(strings.TrimSuffix(addr, "]"), "[")
+		if trimmed == "" {
+			return "", "", fmt.Errorf("empty host in %q", addr)
+		}
+		return trimmed, "443", nil
 	}
 	if host == "" {
 		return "", "", fmt.Errorf("empty host in %q", addr)
+	}
+	if port == "" {
+		return "", "", fmt.Errorf("empty port in %q", addr)
 	}
 	return host, port, nil
 }

@@ -45,6 +45,14 @@ func init() {
 	registerCompletion(convertCmd, completionInput{"key", fileCompletion})
 }
 
+// formatConvertInput holds the parameters for formatConvertOutput.
+type formatConvertInput struct {
+	contents  *internal.ContainerContents
+	allCerts  []*x509.Certificate
+	format    string
+	passwords []string
+}
+
 func runConvert(cmd *cobra.Command, args []string) error {
 	passwords, err := internal.ProcessPasswords(passwordList, passwordFile)
 	if err != nil {
@@ -91,7 +99,7 @@ func runConvert(cmd *cobra.Command, args []string) error {
 
 	isBinary := convertTo == "p12" || convertTo == "jks" || convertTo == "der" || convertTo == "p7b"
 	if convertOutFile == "" && isBinary {
-		return fmt.Errorf("--%s output is binary; use -o to write to a file", convertTo)
+		return fmt.Errorf("output format %q is binary; use -o to write to a file", convertTo)
 	}
 
 	if convertOutFile != "" {
@@ -110,14 +118,6 @@ func runConvert(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
-}
-
-// formatConvertInput holds the parameters for formatConvertOutput.
-type formatConvertInput struct {
-	contents  *internal.ContainerContents
-	allCerts  []*x509.Certificate
-	format    string
-	passwords []string
 }
 
 func formatConvertOutput(input formatConvertInput) ([]byte, error) {
@@ -147,17 +147,29 @@ func formatConvertOutput(input formatConvertInput) ([]byte, error) {
 			return nil, fmt.Errorf("PKCS#12 output requires a private key (use --key)")
 		}
 		pw := bundlePassword(input.passwords)
-		return certkit.EncodePKCS12(input.contents.Key, input.contents.Leaf, input.contents.ExtraCerts, pw)
+		data, err := certkit.EncodePKCS12(input.contents.Key, input.contents.Leaf, input.contents.ExtraCerts, pw)
+		if err != nil {
+			return nil, fmt.Errorf("encoding PKCS#12: %w", err)
+		}
+		return data, nil
 
 	case "jks":
 		if input.contents.Key == nil {
 			return nil, fmt.Errorf("JKS output requires a private key (use --key)")
 		}
 		pw := bundlePassword(input.passwords)
-		return certkit.EncodeJKS(input.contents.Key, input.contents.Leaf, input.contents.ExtraCerts, pw)
+		data, err := certkit.EncodeJKS(input.contents.Key, input.contents.Leaf, input.contents.ExtraCerts, pw)
+		if err != nil {
+			return nil, fmt.Errorf("encoding JKS: %w", err)
+		}
+		return data, nil
 
 	case "p7b":
-		return certkit.EncodePKCS7(input.allCerts)
+		data, err := certkit.EncodePKCS7(input.allCerts)
+		if err != nil {
+			return nil, fmt.Errorf("encoding PKCS#7: %w", err)
+		}
+		return data, nil
 
 	default:
 		return nil, fmt.Errorf("unsupported output format %q (use pem, der, p12, jks, or p7b)", input.format)

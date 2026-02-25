@@ -17,96 +17,10 @@ import (
 	"golang.org/x/crypto/ocsp"
 )
 
-func TestCheckOCSP_MockGoodResponse(t *testing.T) {
+func TestCheckOCSP_MockResponse(t *testing.T) {
 	t.Parallel()
 
-	// Create CA
-	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	caTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "OCSP Test CA"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-	}
-	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ca, err := x509.ParseCertificate(caDER)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Create mock OCSP server
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := ocsp.Response{
-			Status:       ocsp.Good,
-			SerialNumber: big.NewInt(100),
-			ThisUpdate:   time.Now().Add(-time.Hour),
-			NextUpdate:   time.Now().Add(23 * time.Hour),
-		}
-		respBytes, err := ocsp.CreateResponse(ca, ca, resp, caKey)
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		w.Header().Set("Content-Type", "application/ocsp-response")
-		_, _ = w.Write(respBytes)
-	}))
-	defer server.Close()
-
-	// Create leaf with OCSP URL pointing to our mock server
-	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leafTemplate := &x509.Certificate{
-		SerialNumber: big.NewInt(100),
-		Subject:      pkix.Name{CommonName: "ocsp-test.example.com"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		OCSPServer:   []string{server.URL},
-	}
-	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, ca, &leafKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leaf, err := x509.ParseCertificate(leafDER)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	result, err := CheckOCSP(ctx, CheckOCSPInput{
-		Cert:   leaf,
-		Issuer: ca,
-	})
-	if err != nil {
-		t.Fatalf("CheckOCSP failed: %v", err)
-	}
-
-	if result.Status != "good" {
-		t.Errorf("status = %q, want %q", result.Status, "good")
-	}
-	if result.RevokedAt != nil {
-		t.Error("RevokedAt should be nil for good status")
-	}
-	if result.ResponderURL != server.URL {
-		t.Errorf("ResponderURL = %q, want %q", result.ResponderURL, server.URL)
-	}
-}
-
-func TestCheckOCSP_MockRevokedResponse(t *testing.T) {
-	t.Parallel()
-
+	// Shared CA setup
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -131,67 +45,109 @@ func TestCheckOCSP_MockRevokedResponse(t *testing.T) {
 
 	revokedTime := time.Now().Add(-12 * time.Hour)
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := ocsp.Response{
-			Status:           ocsp.Revoked,
-			SerialNumber:     big.NewInt(200),
-			ThisUpdate:       time.Now().Add(-time.Hour),
-			NextUpdate:       time.Now().Add(23 * time.Hour),
-			RevokedAt:        revokedTime,
-			RevocationReason: ocsp.KeyCompromise,
-		}
-		respBytes, err := ocsp.CreateResponse(ca, ca, resp, caKey)
-		if err != nil {
-			http.Error(w, err.Error(), 500)
-			return
-		}
-		w.Header().Set("Content-Type", "application/ocsp-response")
-		_, _ = w.Write(respBytes)
-	}))
-	defer server.Close()
-
-	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leafTemplate := &x509.Certificate{
-		SerialNumber: big.NewInt(200),
-		Subject:      pkix.Name{CommonName: "revoked.example.com"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		OCSPServer:   []string{server.URL},
-	}
-	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, ca, &leafKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leaf, err := x509.ParseCertificate(leafDER)
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name             string
+		ocspStatus       int
+		serial           int64
+		revokedAt        time.Time
+		revocationReason int
+		wantStatus       string
+		wantRevokedAt    bool
+		wantReason       string
+	}{
+		{
+			name:       "good response",
+			ocspStatus: ocsp.Good,
+			serial:     100,
+			wantStatus: "good",
+		},
+		{
+			name:             "revoked response",
+			ocspStatus:       ocsp.Revoked,
+			serial:           200,
+			revokedAt:        revokedTime,
+			revocationReason: ocsp.KeyCompromise,
+			wantStatus:       "revoked",
+			wantRevokedAt:    true,
+			wantReason:       "key compromise",
+		},
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	result, err := CheckOCSP(ctx, CheckOCSPInput{
-		Cert:   leaf,
-		Issuer: ca,
-	})
-	if err != nil {
-		t.Fatalf("CheckOCSP failed: %v", err)
-	}
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				resp := ocsp.Response{
+					Status:           tc.ocspStatus,
+					SerialNumber:     big.NewInt(tc.serial),
+					ThisUpdate:       time.Now().Add(-time.Hour),
+					NextUpdate:       time.Now().Add(23 * time.Hour),
+					RevokedAt:        tc.revokedAt,
+					RevocationReason: tc.revocationReason,
+				}
+				respBytes, err := ocsp.CreateResponse(ca, ca, resp, caKey)
+				if err != nil {
+					http.Error(w, err.Error(), 500)
+					return
+				}
+				w.Header().Set("Content-Type", "application/ocsp-response")
+				_, _ = w.Write(respBytes)
+			}))
+			defer server.Close()
 
-	if result.Status != "revoked" {
-		t.Errorf("status = %q, want %q", result.Status, "revoked")
-	}
-	if result.RevokedAt == nil {
-		t.Fatal("RevokedAt should be set for revoked status")
-	}
-	if result.RevocationReason == nil {
-		t.Fatal("RevocationReason should be set for revoked status")
-	}
-	if *result.RevocationReason != "key compromise" {
-		t.Errorf("reason = %q, want %q", *result.RevocationReason, "key compromise")
+			leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			leafTemplate := &x509.Certificate{
+				SerialNumber: big.NewInt(tc.serial),
+				Subject:      pkix.Name{CommonName: "ocsp-test.example.com"},
+				NotBefore:    time.Now().Add(-time.Hour),
+				NotAfter:     time.Now().Add(24 * time.Hour),
+				OCSPServer:   []string{server.URL},
+			}
+			leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, ca, &leafKey.PublicKey, caKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			leaf, err := x509.ParseCertificate(leafDER)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			result, err := CheckOCSP(ctx, CheckOCSPInput{
+				Cert:   leaf,
+				Issuer: ca,
+			})
+			if err != nil {
+				t.Fatalf("CheckOCSP failed: %v", err)
+			}
+
+			if result.Status != tc.wantStatus {
+				t.Errorf("status = %q, want %q", result.Status, tc.wantStatus)
+			}
+			if tc.wantRevokedAt && result.RevokedAt == nil {
+				t.Fatal("RevokedAt should be set")
+			}
+			if !tc.wantRevokedAt && result.RevokedAt != nil {
+				t.Error("RevokedAt should be nil")
+			}
+			if tc.wantReason != "" {
+				if result.RevocationReason == nil {
+					t.Fatal("RevocationReason should be set")
+				}
+				if *result.RevocationReason != tc.wantReason {
+					t.Errorf("reason = %q, want %q", *result.RevocationReason, tc.wantReason)
+				}
+			}
+			if result.ResponderURL != server.URL {
+				t.Errorf("ResponderURL = %q, want %q", result.ResponderURL, server.URL)
+			}
+		})
 	}
 }
 
