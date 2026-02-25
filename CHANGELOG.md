@@ -32,10 +32,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix WASM `certkitInspect` missing timeout and panic recovery — add 30s context timeout and `recover()` to prevent unhandled goroutine panics ([`2b8cb8c`])
 - Fix `showStatus` style leak in web UI — error-red text color persisted after a subsequent processing status update ([`2b8cb8c`])
 - Fix `ekuOIDNames` missing Microsoft Server Gated Crypto and Netscape Server Gated Crypto OIDs — CSR EKU display now matches certificate EKU display ([`2b8cb8c`])
+- Fix `SanitizeFileName` only replacing `*` — now sanitizes all filesystem-unsafe characters (`/`, `\`, `:`, `<`, `>`, `"`, `|`, `?`) to prevent path traversal from cert CNs ([`84c4edf`])
+- Fix `escapeHTML(0)` in web UI returning empty string — falsy guard now correctly handles numeric zero ([`84c4edf`])
 - Fix AIA `progressTotal` double-counting certs whose issuer fetch fails — the same cert appeared in both `processed` and `queue` sets, inflating the progress bar total ([#64])
 
 ### Tests
 
+- Add `RunValidation` tests — valid leaf with matching key, expired cert, nonexistent SKI, nil SANs conversion
+- Add `CheckTrustChain` success path test — valid chain to trusted root
+- Consolidate `TestFormatDN` from two files into single table-driven test in `dn_test.go`
+- Consolidate `TestInspectData_CSRWithKeyUsage` and `CSRWithEKU` into table-driven `TestInspectData_CSRExtensions`
+- Consolidate `TestResolveInspectAIA` no-fetch subtests into table-driven `TestResolveInspectAIA_NoFetchNeeded`
+- Consolidate `TestDecodeJKS_CorruptedCertDER` variants into single table-driven test
+- Consolidate 3 unsupported key type tests into single `TestUnsupportedKeyType_Errors`
+- Consolidate `isAllowedDomain` tests into `it.each` table (49 cases)
+- Consolidate rejected extension tests into `it.each` table
+- Consolidate `formatDate`/`escapeHTML` falsy tests into `it.each`
 - Add tests for all `dn.go` exported functions: `FormatEKUs`, `FormatEKUOIDs`, `FormatKeyUsage`, `FormatKeyUsageBitString`, `ParseOtherNameSANs`, and `FormatDN` certificate round-trip (31 test cases) ([`2b8cb8c`])
 - Add tests for `ResolveInspectAIA` — no-certs passthrough, all-resolved passthrough, intermediate fetching, fetcher errors, and deduplication ([`2b8cb8c`])
 - Add tests for CSR extension parsing — Key Usage and Extended Key Usage extraction from raw ASN.1 extensions ([`2b8cb8c`])
@@ -595,6 +607,7 @@ Initial release.
 [0.1.1]: https://github.com/sensiblebit/certkit/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/sensiblebit/certkit/releases/tag/v0.1.0
 
+[`84c4edf`]: https://github.com/sensiblebit/certkit/commit/84c4edf
 [`2b8cb8c`]: https://github.com/sensiblebit/certkit/commit/2b8cb8c
 [`392878a`]: https://github.com/sensiblebit/certkit/commit/392878a
 [`e70e8e5`]: https://github.com/sensiblebit/certkit/commit/e70e8e5

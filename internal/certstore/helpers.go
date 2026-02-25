@@ -110,8 +110,22 @@ func FormatCN(cert *x509.Certificate) string {
 	return "unknown"
 }
 
-// SanitizeFileName replaces wildcards and other unsafe characters for file
-// and ZIP entry paths.
+// unsafeFileNameReplacer replaces filesystem-unsafe characters with underscores.
+// Covers: / \ : < > " | ? *
+var unsafeFileNameReplacer = strings.NewReplacer(
+	"/", "_",
+	`\`, "_",
+	":", "_",
+	"<", "_",
+	">", "_",
+	`"`, "_",
+	"|", "_",
+	"?", "_",
+	"*", "_",
+)
+
+// SanitizeFileName replaces wildcards and other filesystem-unsafe characters
+// for file and ZIP entry paths.
 func SanitizeFileName(name string) string {
-	return strings.ReplaceAll(name, "*", "_")
+	return unsafeFileNameReplacer.Replace(name)
 }

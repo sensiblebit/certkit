@@ -182,7 +182,8 @@ func TestFormatCN(t *testing.T) {
 
 func TestSanitizeFileName(t *testing.T) {
 	// WHY: SanitizeFileName is used in export paths to produce filesystem-safe
-	// names from certificate CNs; wildcard asterisks must become underscores.
+	// names from certificate CNs; all filesystem-unsafe characters must become
+	// underscores to prevent path traversal and invalid filenames.
 	t.Parallel()
 
 	tests := []struct {
@@ -194,6 +195,14 @@ func TestSanitizeFileName(t *testing.T) {
 		{"no wildcard", "example.com", "example.com"},
 		{"multiple wildcards", "*.*.example.com", "_._.example.com"},
 		{"empty string", "", ""},
+		{"forward slash", "path/traversal", "path_traversal"},
+		{"backslash", `back\slash`, "back_slash"},
+		{"colon", "colon:value", "colon_value"},
+		{"angle brackets", "less<greater>", "less_greater_"},
+		{"pipe", "pipe|char", "pipe_char"},
+		{"question mark", "question?", "question_"},
+		{"double quote", `quote"mark`, "quote_mark"},
+		{"multiple unsafe chars", `all*unsafe/chars\here`, "all_unsafe_chars_here"},
 	}
 
 	for _, tt := range tests {

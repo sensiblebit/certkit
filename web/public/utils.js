@@ -17,10 +17,10 @@ export function formatDate(isoString) {
 /**
  * Escape a string for safe insertion into HTML.
  * Uses DOM textContent/innerHTML round-trip to handle all entities.
- * Returns "" for falsy input.
+ * Returns "" for null, undefined, or empty string.
  */
 export function escapeHTML(str) {
-  if (!str) return "";
+  if (str == null || str === "") return "";
   const div = document.createElement("div");
   div.textContent = str;
   return div.innerHTML;

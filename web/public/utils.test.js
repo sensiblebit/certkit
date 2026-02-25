@@ -14,16 +14,13 @@ describe("formatDate", () => {
     expect(result).toContain("15");
   });
 
-  it("returns em-dash for null", () => {
-    expect(formatDate(null)).toBe("\u2014");
+  it.each([null, undefined, ""])("returns em-dash for %s", (input) => {
+    expect(formatDate(input)).toBe("\u2014");
   });
 
-  it("returns em-dash for undefined", () => {
-    expect(formatDate(undefined)).toBe("\u2014");
-  });
-
-  it("returns em-dash for empty string", () => {
-    expect(formatDate("")).toBe("\u2014");
+  it("returns Invalid Date string for garbage input", () => {
+    const result = formatDate("not-a-date");
+    expect(result).toContain("Invalid");
   });
 
   it("handles date-only ISO string", () => {
@@ -59,16 +56,12 @@ describe("escapeHTML", () => {
     expect(escapeHTML("hello world")).toBe("hello world");
   });
 
-  it("returns empty string for null", () => {
-    expect(escapeHTML(null)).toBe("");
+  it.each([null, undefined, ""])("returns empty string for %s", (input) => {
+    expect(escapeHTML(input)).toBe("");
   });
 
-  it("returns empty string for undefined", () => {
-    expect(escapeHTML(undefined)).toBe("");
-  });
-
-  it("returns empty string for empty string", () => {
-    expect(escapeHTML("")).toBe("");
+  it("handles numeric zero without treating as falsy", () => {
+    expect(escapeHTML(0)).toBe("0");
   });
 
   it("handles mixed special characters", () => {

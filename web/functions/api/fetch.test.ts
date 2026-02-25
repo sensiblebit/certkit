@@ -45,124 +45,101 @@ async function errorMsg(resp: Response): Promise<string> {
 // ---------------------------------------------------------------------------
 
 describe("isAllowedDomain", () => {
-  it("matches exact domain", () => {
-    expect(isAllowedDomain("cacerts.digicert.com")).toBe(true);
-  });
+  it.each([
+    // Exact domain match
+    ["cacerts.digicert.com", true],
 
-  it("matches subdomain via suffix", () => {
-    expect(isAllowedDomain("crl.disa.mil")).toBe(true);
-    expect(isAllowedDomain("crl.nit.disa.mil")).toBe(true);
-    expect(isAllowedDomain("crl.gds.nit.disa.mil")).toBe(true);
-  });
+    // Subdomain via suffix
+    ["crl.disa.mil", true],
+    ["crl.nit.disa.mil", true],
+    ["crl.gds.nit.disa.mil", true],
 
-  it("is case-insensitive", () => {
-    expect(isAllowedDomain("CACERTS.DIGICERT.COM")).toBe(true);
-    expect(isAllowedDomain("CRL.DISA.MIL")).toBe(true);
-  });
+    // Case-insensitive
+    ["CACERTS.DIGICERT.COM", true],
+    ["CRL.DISA.MIL", true],
 
-  it("rejects non-matching domain", () => {
-    expect(isAllowedDomain("evil.com")).toBe(false);
-    expect(isAllowedDomain("example.com")).toBe(false);
-  });
+    // managed.entrust.com suffix
+    ["sspweb.managed.entrust.com", true],
+    ["rootweb.managed.entrust.com", true],
+    ["managed.entrust.com", true],
 
-  it("rejects partial suffix that is not a subdomain boundary", () => {
-    // "notdisa.mil" ends with "disa.mil" as a string but is not a subdomain.
-    expect(isAllowedDomain("notdisa.mil")).toBe(false);
-    expect(isAllowedDomain("fakedigicert.com")).toBe(false);
-  });
+    // fpki.gov subdomains
+    ["repo.fpki.gov", true],
+    ["http.fpki.gov", true],
+    ["cite.fpki.gov", true],
+    ["fpki.gov", true],
 
-  it("matches suffix entries like managed.entrust.com", () => {
-    expect(isAllowedDomain("sspweb.managed.entrust.com")).toBe(true);
-    expect(isAllowedDomain("rootweb.managed.entrust.com")).toBe(true);
-    expect(isAllowedDomain("managed.entrust.com")).toBe(true);
-  });
+    // amazontrust.com suffix
+    ["crt.rootca1.amazontrust.com", true],
+    ["crt.rootca4.amazontrust.com", true],
+    ["crl.rootg2.amazontrust.com", true],
+    ["eue2m1.crt.root.eu.amazontrust.com", true],
 
-  it("matches fpki.gov subdomains (repo, http, cite)", () => {
-    expect(isAllowedDomain("repo.fpki.gov")).toBe(true);
-    expect(isAllowedDomain("http.fpki.gov")).toBe(true);
-    expect(isAllowedDomain("cite.fpki.gov")).toBe(true);
-    expect(isAllowedDomain("fpki.gov")).toBe(true);
-  });
+    // amznts.eu suffix (Amazon EU short domain)
+    ["eue2m1.crt.root.amznts.eu", true],
+    ["eur2m1.crt.root.amznts.eu", true],
 
-  it("matches amazontrust.com suffix (consolidates rootca1-4, rootg2, sca, eu)", () => {
-    expect(isAllowedDomain("crt.rootca1.amazontrust.com")).toBe(true);
-    expect(isAllowedDomain("crt.rootca4.amazontrust.com")).toBe(true);
-    expect(isAllowedDomain("crl.rootg2.amazontrust.com")).toBe(true);
-    expect(isAllowedDomain("eue2m1.crt.root.eu.amazontrust.com")).toBe(true);
-  });
+    // microsoft.com suffix
+    ["www.microsoft.com", true],
+    ["caissuers.microsoft.com", true],
+    ["pkiops.microsoft.com", true],
 
-  it("matches amznts.eu suffix (Amazon EU short domain)", () => {
-    expect(isAllowedDomain("eue2m1.crt.root.amznts.eu")).toBe(true);
-    expect(isAllowedDomain("eur2m1.crt.root.amznts.eu")).toBe(true);
-  });
+    // e-szigno.hu suffix (Hungarian CA)
+    ["www.e-szigno.hu", true],
+    ["rootca2017-ca1.e-szigno.hu", true],
+    ["tlsrootca2023-ca.e-szigno.hu", true],
+    ["esmimerootca2024-ca.e-szigno.hu", true],
 
-  it("matches microsoft.com suffix (www, caissuers, pkiops)", () => {
-    expect(isAllowedDomain("www.microsoft.com")).toBe(true);
-    expect(isAllowedDomain("caissuers.microsoft.com")).toBe(true);
-    expect(isAllowedDomain("pkiops.microsoft.com")).toBe(true);
-  });
+    // telesec.de suffix (T-Systems)
+    ["grcl2.crt.telesec.de", true],
+    ["pki0336.telesec.de", true],
+    ["grcl3g2.pki.telesec.de", true],
+    ["telesec.de", true],
 
-  it("matches e-szigno.hu suffix (Hungarian CA, many subdomains)", () => {
-    expect(isAllowedDomain("www.e-szigno.hu")).toBe(true);
-    expect(isAllowedDomain("rootca2017-ca1.e-szigno.hu")).toBe(true);
-    expect(isAllowedDomain("tlsrootca2023-ca.e-szigno.hu")).toBe(true);
-    expect(isAllowedDomain("esmimerootca2024-ca.e-szigno.hu")).toBe(true);
-  });
+    // certum.pl suffix (Asseco, Poland)
+    ["repository.certum.pl", true],
+    ["subca.repository.certum.pl", true],
+    ["sslcom.repository.certum.pl", true],
 
-  it("matches telesec.de suffix (T-Systems, many subdomains)", () => {
-    expect(isAllowedDomain("grcl2.crt.telesec.de")).toBe(true);
-    expect(isAllowedDomain("pki0336.telesec.de")).toBe(true);
-    expect(isAllowedDomain("grcl3g2.pki.telesec.de")).toBe(true);
-    expect(isAllowedDomain("telesec.de")).toBe(true);
-  });
+    // netlock.hu suffix (Hungary)
+    ["aia1.netlock.hu", true],
+    ["aia2.netlock.hu", true],
+    ["aia3.netlock.hu", true],
 
-  it("matches certum.pl suffix (Asseco, Poland)", () => {
-    expect(isAllowedDomain("repository.certum.pl")).toBe(true);
-    expect(isAllowedDomain("subca.repository.certum.pl")).toBe(true);
-    expect(isAllowedDomain("sslcom.repository.certum.pl")).toBe(true);
-  });
+    // harica.gr suffix (Greece)
+    ["repo.harica.gr", true],
+    ["crt.harica.gr", true],
+    ["www.harica.gr", true],
 
-  it("matches netlock.hu suffix (Hungary)", () => {
-    expect(isAllowedDomain("aia1.netlock.hu")).toBe(true);
-    expect(isAllowedDomain("aia2.netlock.hu")).toBe(true);
-    expect(isAllowedDomain("aia3.netlock.hu")).toBe(true);
-  });
+    // secomtrust.net suffix (Japan)
+    ["repository.secomtrust.net", true],
+    ["repo2.secomtrust.net", true],
 
-  it("matches harica.gr suffix (Greece)", () => {
-    expect(isAllowedDomain("repo.harica.gr")).toBe(true);
-    expect(isAllowedDomain("crt.harica.gr")).toBe(true);
-    expect(isAllowedDomain("www.harica.gr")).toBe(true);
-  });
+    // sheca.com suffix (Shanghai CA, China)
+    ["certs.global.sheca.com", true],
+    ["certs.sheca.com", true],
+    ["ldap2.sheca.com", true],
 
-  it("matches secomtrust.net suffix (Japan)", () => {
-    expect(isAllowedDomain("repository.secomtrust.net")).toBe(true);
-    expect(isAllowedDomain("repo2.secomtrust.net")).toBe(true);
-  });
+    // Exact domain entries (various CAs)
+    ["cert.ssl.com", true],
+    ["www.ssl.com", true],
+    ["cps.trust.telia.com", true],
+    ["repository.emsign.com", true],
+    ["cacert.actalis.it", true],
+    ["www.d-trust.net", true],
+    ["cert.pkioverheid.nl", true],
+    ["public.wisekey.com", true],
+    ["rca.navercloudtrust.com", true],
 
-  it("matches sheca.com suffix (Shanghai CA, China)", () => {
-    expect(isAllowedDomain("certs.global.sheca.com")).toBe(true);
-    expect(isAllowedDomain("certs.sheca.com")).toBe(true);
-    expect(isAllowedDomain("ldap2.sheca.com")).toBe(true);
-  });
+    // Rejected: non-matching domains
+    ["evil.com", false],
+    ["example.com", false],
 
-  it("matches new exact domain entries", () => {
-    // SSL.com
-    expect(isAllowedDomain("cert.ssl.com")).toBe(true);
-    expect(isAllowedDomain("www.ssl.com")).toBe(true);
-    // Telia
-    expect(isAllowedDomain("cps.trust.telia.com")).toBe(true);
-    // emSign
-    expect(isAllowedDomain("repository.emsign.com")).toBe(true);
-    // Actalis
-    expect(isAllowedDomain("cacert.actalis.it")).toBe(true);
-    // D-TRUST
-    expect(isAllowedDomain("www.d-trust.net")).toBe(true);
-    // PKIoverheid
-    expect(isAllowedDomain("cert.pkioverheid.nl")).toBe(true);
-    // WiseKey
-    expect(isAllowedDomain("public.wisekey.com")).toBe(true);
-    // Naver
-    expect(isAllowedDomain("rca.navercloudtrust.com")).toBe(true);
+    // Rejected: partial suffix that is not a subdomain boundary
+    ["notdisa.mil", false],
+    ["fakedigicert.com", false],
+  ])("isAllowedDomain(%s) returns %s", (domain, expected) => {
+    expect(isAllowedDomain(domain)).toBe(expected);
   });
 });
 
@@ -377,25 +354,15 @@ describe("path validation", () => {
     vi.restoreAllMocks();
   });
 
-  it("rejects .exe extension", async () => {
-    const resp = await callGet("https://cacerts.digicert.com/file.exe");
+  it.each([
+    [".exe", "https://cacerts.digicert.com/file.exe"],
+    [".js", "https://cacerts.digicert.com/script.js"],
+    [".html", "https://cacerts.digicert.com/page.html"],
+    ["no extension", "https://cacerts.digicert.com/noext"],
+  ])("rejects %s extension", async (_ext, url) => {
+    const resp = await callGet(url);
     expect(resp.status).toBe(403);
     expect(await errorMsg(resp)).toMatch(/does not look like a certificate/);
-  });
-
-  it("rejects .js extension", async () => {
-    const resp = await callGet("https://cacerts.digicert.com/script.js");
-    expect(resp.status).toBe(403);
-  });
-
-  it("rejects .html extension", async () => {
-    const resp = await callGet("https://cacerts.digicert.com/page.html");
-    expect(resp.status).toBe(403);
-  });
-
-  it("rejects extensionless path", async () => {
-    const resp = await callGet("https://cacerts.digicert.com/noext");
-    expect(resp.status).toBe(403);
   });
 });
 
