@@ -10,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"math/big"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -165,21 +166,8 @@ func TestFormatConnectResult(t *testing.T) {
 
 	// Check key sections are present
 	for _, want := range []string{"Host:", "Protocol:", "Cipher Suite:", "Server Name:", "Verify:", "Certificate chain", "test.example.com"} {
-		if !contains(output, want) {
+		if !strings.Contains(output, want) {
 			t.Errorf("output missing %q", want)
 		}
 	}
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && searchString(s, substr)
-}
-
-func searchString(s, substr string) bool {
-	for i := range len(s) - len(substr) + 1 {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

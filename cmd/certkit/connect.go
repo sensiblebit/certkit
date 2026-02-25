@@ -89,8 +89,8 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		}
 		for _, cert := range result.PeerChain {
 			jr.Chain = append(jr.Chain, connectCertJSON{
-				Subject:     cert.Subject.CommonName,
-				Issuer:      cert.Issuer.CommonName,
+				Subject:     certkit.FormatDN(cert.Subject),
+				Issuer:      certkit.FormatDN(cert.Issuer),
 				NotBefore:   cert.NotBefore.UTC().Format(time.RFC3339),
 				NotAfter:    cert.NotAfter.UTC().Format(time.RFC3339),
 				Fingerprint: certkit.CertFingerprint(cert),

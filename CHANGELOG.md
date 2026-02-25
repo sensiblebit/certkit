@@ -41,6 +41,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix unused `DiagnoseChainInput.TrustStore` field — remove dead field and fix self-signed diagnostic message ([#75])
 - Fix misleading `issuer` variable name in `ocsp` command — rename to `ocspInput` to match its `*CheckOCSPInput` type ([#75])
 - Fix `formatConvertOutput` taking 4 positional args — extract into `formatConvertInput` struct (CS-5) ([#75])
+- Fix `connect` command JSON using `CommonName` for subject/issuer while other commands use full DN — now uses `FormatDN` for CLI-4 consistency ([#75])
+- Fix `FormatConnectResult` SANs formatted with `%v` instead of `strings.Join` — now matches other command output style ([#75])
+- Fix custom `contains`/`searchString` test helpers reimplementing `strings.Contains` — replace with stdlib ([#75])
 
 ### Added
 

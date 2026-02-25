@@ -10,6 +10,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -240,7 +241,7 @@ func TestFormatOCSPResult(t *testing.T) {
 		t.Fatal("FormatOCSPResult returned empty string")
 	}
 	for _, want := range []string{"Serial:", "Status:", "Responder:", "This Update:", "Next Update:"} {
-		if !contains(output, want) {
+		if !strings.Contains(output, want) {
 			t.Errorf("output missing %q", want)
 		}
 	}

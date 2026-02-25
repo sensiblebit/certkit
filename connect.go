@@ -150,13 +150,13 @@ func FormatConnectResult(r *ConnectResult) string {
 			expired = " [EXPIRED]"
 		}
 		certType := GetCertificateType(cert)
-		out.WriteString(fmt.Sprintf("  %d: %s (%s)%s\n", i, cert.Subject.CommonName, certType, expired))
-		out.WriteString(fmt.Sprintf("     Issuer:      %s\n", cert.Issuer.CommonName))
+		out.WriteString(fmt.Sprintf("  %d: %s (%s)%s\n", i, FormatDN(cert.Subject), certType, expired))
+		out.WriteString(fmt.Sprintf("     Issuer:      %s\n", FormatDN(cert.Issuer)))
 		out.WriteString(fmt.Sprintf("     Not Before:  %s\n", cert.NotBefore.UTC().Format(time.RFC3339)))
 		out.WriteString(fmt.Sprintf("     Not After:   %s\n", cert.NotAfter.UTC().Format(time.RFC3339)))
 		out.WriteString(fmt.Sprintf("     Fingerprint: %s\n", CertFingerprint(cert)))
 		if len(cert.DNSNames) > 0 {
-			out.WriteString(fmt.Sprintf("     SANs:        %v\n", cert.DNSNames))
+			out.WriteString(fmt.Sprintf("     SANs:        %s\n", strings.Join(cert.DNSNames, ", ")))
 		}
 	}
 
