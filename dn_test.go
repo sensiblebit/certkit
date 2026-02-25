@@ -1090,6 +1090,34 @@ func TestMarshalSANExtension_CertificateRoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// Verify standard SAN types survived certkit's DER assembly (T-6 round-trip)
+	wantDNS := []string{"example.com", "www.example.com"}
+	if !slices.Equal(cert.DNSNames, wantDNS) {
+		t.Errorf("DNSNames = %v, want %v", cert.DNSNames, wantDNS)
+	}
+	wantEmails := []string{"admin@example.com"}
+	if !slices.Equal(cert.EmailAddresses, wantEmails) {
+		t.Errorf("EmailAddresses = %v, want %v", cert.EmailAddresses, wantEmails)
+	}
+	wantIPs := []net.IP{net.ParseIP("10.0.0.1").To4(), net.ParseIP("::1")}
+	if len(cert.IPAddresses) != len(wantIPs) {
+		t.Errorf("IPAddresses count = %d, want %d", len(cert.IPAddresses), len(wantIPs))
+	} else {
+		for i, ip := range cert.IPAddresses {
+			if !ip.Equal(wantIPs[i]) {
+				t.Errorf("IPAddresses[%d] = %v, want %v", i, ip, wantIPs[i])
+			}
+		}
+	}
+	wantURIs := []string{"spiffe://example.com/ns/default"}
+	var gotURIs []string
+	for _, u := range cert.URIs {
+		gotURIs = append(gotURIs, u.String())
+	}
+	if !slices.Equal(gotURIs, wantURIs) {
+		t.Errorf("URIs = %v, want %v", gotURIs, wantURIs)
+	}
+
 	// Verify OtherName via ParseOtherNameSANs (certkit logic)
 	otherNames := ParseOtherNameSANs(cert.Extensions)
 	if len(otherNames) != 1 || otherNames[0] != "UPN:user@corp.example.com" {

@@ -193,8 +193,8 @@ func GenerateCSRFromTemplate(tmpl *CSRTemplate, signer crypto.Signer) (string, e
 }
 
 // GenerateCSRFromCSR creates a new CSR using an existing CSR as template,
-// signed by the provided key. OtherName SAN entries from the source CSR
-// are preserved by rebuilding the full SAN extension.
+// signed by the provided key. String-typed OtherName SAN entries from the
+// source CSR are preserved; binary-typed OtherNames are silently skipped.
 func GenerateCSRFromCSR(source *x509.CertificateRequest, signer crypto.Signer) (string, error) {
 	csrTemplate := &x509.CertificateRequest{
 		Subject: source.Subject,

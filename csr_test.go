@@ -937,19 +937,6 @@ func TestGenerateCSRFromCSR_PreservesOtherNames(t *testing.T) {
 	if newCSR.Subject.CommonName != srcCSR.Subject.CommonName {
 		t.Errorf("CN = %q, want %q", newCSR.Subject.CommonName, srcCSR.Subject.CommonName)
 	}
-
-	// Verify key was rotated
-	srcPub, ok := srcCSR.PublicKey.(*ecdsa.PublicKey)
-	if !ok {
-		t.Fatalf("expected source *ecdsa.PublicKey, got %T", srcCSR.PublicKey)
-	}
-	newPub, ok := newCSR.PublicKey.(*ecdsa.PublicKey)
-	if !ok {
-		t.Fatalf("expected new *ecdsa.PublicKey, got %T", newCSR.PublicKey)
-	}
-	if srcPub.Equal(newPub) {
-		t.Error("new CSR should have a different public key than source")
-	}
 }
 
 func TestGenerateCSRFromCSR_WithoutOtherNames_Unchanged(t *testing.T) {

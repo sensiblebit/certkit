@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Refactor OtherName SAN parsing to share common walker between `parseOtherNamesFromSANBytes` and `parseOtherNameEntriesFromSANBytes` ([#74])
+- Clarify `GenerateCSRFromCSR` doc comment — only string-typed OtherNames are preserved; binary-typed are silently skipped ([#74])
 
 ### Tests
 
@@ -42,6 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `TestGenerateCSRFromCSR_PreservesOtherNames` — OtherName survival through CSR regeneration ([#74])
 - Remove stdlib-testing assertions from `TestMarshalSANExtension_mTLSUserCert` (EKU check, chain verification) per T-9 ([#74])
 - Add `TestMarshalSANExtension_EmptyInput` — verifies empty SAN input is rejected with clear error ([#74])
+- Add standard SAN type assertions to `TestMarshalSANExtension_CertificateRoundTrip` — DNS, email, IP, URI round-trip per T-6 ([#74])
+- Remove T-9-violating key rotation assertion from `TestGenerateCSRFromCSR_PreservesOtherNames` ([#74])
 
 ## [0.8.1] - 2026-02-25
 
