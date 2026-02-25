@@ -118,7 +118,19 @@ func runConnect(cmd *cobra.Command, args []string) error {
 }
 
 // parseHostPort splits a host[:port] string, defaulting port to "443".
+// Accepts bare hosts, host:port, and URLs (https://host[:port][/path]).
 func parseHostPort(addr string) (string, string, error) {
+	// Strip scheme if present (e.g., "https://host:port/path" → "host:port")
+	if after, ok := strings.CutPrefix(addr, "https://"); ok {
+		addr = after
+	} else if after, ok := strings.CutPrefix(addr, "http://"); ok {
+		addr = after
+	}
+	// Strip path (e.g., "host:443/path" → "host:443")
+	if i := strings.Index(addr, "/"); i >= 0 {
+		addr = addr[:i]
+	}
+
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
 		// SplitHostPort failed — could be a plain host, bare IPv6, or malformed input.
