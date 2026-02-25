@@ -38,13 +38,15 @@ func FormatEKUs(ekus []x509.ExtKeyUsage) []string {
 // Used for parsing EKU from raw ASN.1 extensions (e.g. in CSRs where Go
 // does not populate typed fields).
 var ekuOIDNames = map[string]string{
-	"1.3.6.1.5.5.7.3.1": "Server Authentication",
-	"1.3.6.1.5.5.7.3.2": "Client Authentication",
-	"1.3.6.1.5.5.7.3.3": "Code Signing",
-	"1.3.6.1.5.5.7.3.4": "Email Protection",
-	"1.3.6.1.5.5.7.3.8": "Time Stamping",
-	"1.3.6.1.5.5.7.3.9": "OCSP Signing",
-	"2.5.29.37.0":       "Any",
+	"1.3.6.1.5.5.7.3.1":      "Server Authentication",
+	"1.3.6.1.5.5.7.3.2":      "Client Authentication",
+	"1.3.6.1.5.5.7.3.3":      "Code Signing",
+	"1.3.6.1.5.5.7.3.4":      "Email Protection",
+	"1.3.6.1.5.5.7.3.8":      "Time Stamping",
+	"1.3.6.1.5.5.7.3.9":      "OCSP Signing",
+	"1.3.6.1.4.1.311.10.3.3": "Microsoft Server Gated Crypto",
+	"2.16.840.1.113730.4.1":  "Netscape Server Gated Crypto",
+	"2.5.29.37.0":            "Any",
 }
 
 // FormatEKUOIDs returns human-readable names for EKU OIDs extracted from
