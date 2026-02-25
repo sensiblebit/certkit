@@ -5,8 +5,11 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"strings"
 	"syscall/js"
+	"time"
 
 	"github.com/sensiblebit/certkit"
 	"github.com/sensiblebit/certkit/internal"
@@ -38,6 +41,12 @@ func inspectFiles(_ js.Value, args []js.Value) any {
 		resolve := promiseArgs[0]
 		reject := promiseArgs[1]
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					reject.Invoke(js.Global().Get("Error").New(fmt.Sprintf("internal error: %v", r)))
+				}
+			}()
+
 			var allResults []internal.InspectResult
 			for i := range length {
 				file := filesArg.Index(i)
@@ -55,14 +64,16 @@ func inspectFiles(_ js.Value, args []js.Value) any {
 			}
 
 			// Resolve missing intermediates via AIA before trust annotation.
-			ctx := context.Background()
-			allResults, _ = internal.ResolveInspectAIA(ctx, allResults, jsFetchURL)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			allResults, aiaWarnings := internal.ResolveInspectAIA(ctx, allResults, jsFetchURL)
+			for _, w := range aiaWarnings {
+				slog.Warn("AIA resolution", "warning", w)
+			}
 
 			// Annotate trust for certificates.
 			if err := internal.AnnotateInspectTrust(allResults); err != nil {
-				// Non-fatal: trust annotation failure just means
-				// Expired/Trusted fields won't be set.
-				_ = err
+				slog.Debug("trust annotation failed", "error", err)
 			}
 
 			jsonBytes, err := json.Marshal(allResults)
@@ -74,6 +85,7 @@ func inspectFiles(_ js.Value, args []js.Value) any {
 		}()
 		return nil
 	})
+	// Promise.New calls the executor synchronously; release immediately after.
 	p := js.Global().Get("Promise").New(handler)
 	handler.Release()
 	return p

@@ -29,7 +29,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fix WASM `certkitInspect` missing timeout and panic recovery — add 30s context timeout and `recover()` to prevent unhandled goroutine panics ([`2b8cb8c`])
+- Fix `showStatus` style leak in web UI — error-red text color persisted after a subsequent processing status update ([`2b8cb8c`])
+- Fix `ekuOIDNames` missing Microsoft Server Gated Crypto and Netscape Server Gated Crypto OIDs — CSR EKU display now matches certificate EKU display ([`2b8cb8c`])
 - Fix AIA `progressTotal` double-counting certs whose issuer fetch fails — the same cert appeared in both `processed` and `queue` sets, inflating the progress bar total ([#64])
+
+### Tests
+
+- Add tests for all `dn.go` exported functions: `FormatEKUs`, `FormatEKUOIDs`, `FormatKeyUsage`, `FormatKeyUsageBitString`, `ParseOtherNameSANs`, and `FormatDN` certificate round-trip (31 test cases) ([`2b8cb8c`])
+- Add tests for `ResolveInspectAIA` — no-certs passthrough, all-resolved passthrough, intermediate fetching, fetcher errors, and deduplication ([`2b8cb8c`])
+- Add tests for CSR extension parsing — Key Usage and Extended Key Usage extraction from raw ASN.1 extensions ([`2b8cb8c`])
 
 ## [0.8.0] - 2026-02-22
 
@@ -586,6 +595,7 @@ Initial release.
 [0.1.1]: https://github.com/sensiblebit/certkit/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/sensiblebit/certkit/releases/tag/v0.1.0
 
+[`2b8cb8c`]: https://github.com/sensiblebit/certkit/commit/2b8cb8c
 [`392878a`]: https://github.com/sensiblebit/certkit/commit/392878a
 [`e70e8e5`]: https://github.com/sensiblebit/certkit/commit/e70e8e5
 [`0fa55af`]: https://github.com/sensiblebit/certkit/commit/0fa55af

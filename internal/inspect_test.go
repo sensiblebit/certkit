@@ -1,14 +1,19 @@
 package internal
 
 import (
+	"context"
 	"crypto"
+	"crypto/ecdsa"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"net"
 	"os"
 	"path/filepath"
@@ -740,5 +745,317 @@ func TestFormatInspectResults_Text(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// newAIALeaf creates a leaf certificate signed by the given CA with an AIA
+// IssuingCertificateURL set to the provided URL.
+func newAIALeaf(t *testing.T, ca testCA, cn string, aiaURL string) testLeaf {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate AIA leaf key: %v", err)
+	}
+
+	tmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: cn},
+		DNSNames:              []string{cn},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		IssuingCertificateURL: []string{aiaURL},
+		AuthorityKeyId:        ca.cert.SubjectKeyId,
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, ca.cert, &key.PublicKey, ca.key)
+	if err != nil {
+		t.Fatalf("create AIA leaf cert: %v", err)
+	}
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatalf("parse AIA leaf cert: %v", err)
+	}
+
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+	ecBytes, err := x509.MarshalECPrivateKey(key)
+	if err != nil {
+		t.Fatalf("marshal AIA leaf key: %v", err)
+	}
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: ecBytes})
+
+	return testLeaf{cert: cert, certPEM: certPEM, certDER: certDER, key: key, keyPEM: keyPEM}
+}
+
+func TestResolveInspectAIA_NoCerts(t *testing.T) {
+	// WHY: When results contain no certificates (only keys/CSRs), AIA should
+	// be a no-op because there are no certs to check for unresolved issuers.
+	t.Parallel()
+
+	results := []InspectResult{
+		{Type: "private_key", KeyType: "RSA", KeySize: "2048"},
+		{Type: "csr", CSRSubject: "CN=test.example.com"},
+	}
+
+	fetcher := func(_ context.Context, _ string) ([]byte, error) {
+		panic("fetcher must not be called when there are no certificates")
+	}
+
+	got, warnings := ResolveInspectAIA(context.Background(), results, fetcher)
+
+	if len(warnings) != 0 {
+		t.Errorf("expected 0 warnings, got %v", warnings)
+	}
+	if len(got) != len(results) {
+		t.Errorf("expected %d results, got %d", len(results), len(got))
+	}
+	for i, r := range got {
+		if r.Type != results[i].Type {
+			t.Errorf("result[%d].Type = %q, want %q", i, r.Type, results[i].Type)
+		}
+	}
+}
+
+func TestResolveInspectAIA_AllResolved(t *testing.T) {
+	// WHY: When all certs in results are self-signed (no unresolved issuers),
+	// AIA should not fetch anything because HasUnresolvedIssuers returns false.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	results := []InspectResult{inspectCert(ca.cert)}
+
+	fetcher := func(_ context.Context, _ string) ([]byte, error) {
+		panic("fetcher must not be called when all issuers are resolved")
+	}
+
+	got, warnings := ResolveInspectAIA(context.Background(), results, fetcher)
+
+	if len(warnings) != 0 {
+		t.Errorf("expected 0 warnings, got %v", warnings)
+	}
+	if len(got) != 1 {
+		t.Errorf("expected 1 result, got %d", len(got))
+	}
+	if got[0].Type != "certificate" {
+		t.Errorf("result[0].Type = %q, want %q", got[0].Type, "certificate")
+	}
+}
+
+func TestResolveInspectAIA_FetchesIntermediate(t *testing.T) {
+	// WHY: When a leaf cert has an AIA URL pointing to its issuer,
+	// ResolveInspectAIA should fetch the intermediate and add it to results.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newAIALeaf(t, ca, "aia-fetch.example.com", "http://example.com/ca.crt")
+
+	results := []InspectResult{inspectCert(leaf.cert)}
+
+	fetcher := func(_ context.Context, url string) ([]byte, error) {
+		if url == "http://example.com/ca.crt" {
+			return ca.certDER, nil
+		}
+		return nil, fmt.Errorf("unexpected URL: %s", url)
+	}
+
+	got, warnings := ResolveInspectAIA(context.Background(), results, fetcher)
+
+	if len(warnings) != 0 {
+		t.Errorf("expected 0 warnings, got %v", warnings)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 results (leaf + fetched CA), got %d", len(got))
+	}
+
+	// Verify both leaf and CA are present.
+	var foundLeaf, foundCA bool
+	for _, r := range got {
+		if r.Type == "certificate" && strings.Contains(r.Subject, "aia-fetch.example.com") {
+			foundLeaf = true
+		}
+		if r.Type == "certificate" && strings.Contains(r.Subject, "Test RSA Root CA") {
+			foundCA = true
+		}
+	}
+	if !foundLeaf {
+		t.Error("expected to find leaf certificate in results")
+	}
+	if !foundCA {
+		t.Error("expected to find CA certificate fetched via AIA in results")
+	}
+}
+
+func TestResolveInspectAIA_FetcherError(t *testing.T) {
+	// WHY: When the AIA fetcher returns an error, it should produce a
+	// warning, not fail. The original results should remain unchanged.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newAIALeaf(t, ca, "aia-error.example.com", "http://example.com/ca.crt")
+
+	results := []InspectResult{inspectCert(leaf.cert)}
+
+	fetcher := func(_ context.Context, _ string) ([]byte, error) {
+		return nil, fmt.Errorf("connection refused")
+	}
+
+	got, warnings := ResolveInspectAIA(context.Background(), results, fetcher)
+
+	if len(warnings) == 0 {
+		t.Error("expected at least one warning from fetcher error")
+	}
+	// Original results should be unchanged — no new certs added.
+	if len(got) != 1 {
+		t.Errorf("expected 1 result (original leaf only), got %d", len(got))
+	}
+	if got[0].Type != "certificate" || !strings.Contains(got[0].Subject, "aia-error.example.com") {
+		t.Errorf("original leaf result should be preserved, got %+v", got[0])
+	}
+}
+
+func TestResolveInspectAIA_DeduplicatesExisting(t *testing.T) {
+	// WHY: If the AIA-fetched cert is already in the results, it must not
+	// be duplicated. The result count should remain the same.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newAIALeaf(t, ca, "aia-dedup.example.com", "http://example.com/ca.crt")
+
+	// Both CA and leaf are already in results.
+	results := []InspectResult{
+		inspectCert(leaf.cert),
+		inspectCert(ca.cert),
+	}
+
+	fetcher := func(_ context.Context, url string) ([]byte, error) {
+		if url == "http://example.com/ca.crt" {
+			return ca.certDER, nil
+		}
+		return nil, fmt.Errorf("unexpected URL: %s", url)
+	}
+
+	got, warnings := ResolveInspectAIA(context.Background(), results, fetcher)
+
+	if len(warnings) != 0 {
+		t.Errorf("expected 0 warnings, got %v", warnings)
+	}
+	// No new certs should be added — CA is already present.
+	if len(got) != 2 {
+		t.Errorf("expected 2 results (no duplicates), got %d", len(got))
+	}
+}
+
+func TestInspectData_CSRWithKeyUsage(t *testing.T) {
+	// WHY: CSR inspection must extract Key Usage from raw ASN.1 extensions
+	// since Go doesn't populate typed fields for CSRs. Without this, users
+	// would not see Key Usage when inspecting a CSR.
+	t.Parallel()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	// Build Key Usage extension: Digital Signature (bit 0) + Key Encipherment (bit 2)
+	kuBits := asn1.BitString{
+		Bytes:     []byte{0xa0}, // bits 0 and 2 set = 10100000
+		BitLength: 3,
+	}
+	kuValue, err := asn1.Marshal(kuBits)
+	if err != nil {
+		t.Fatalf("marshal key usage: %v", err)
+	}
+
+	csrTemplate := &x509.CertificateRequest{
+		Subject: pkix.Name{CommonName: "ku-csr.example.com"},
+		ExtraExtensions: []pkix.Extension{
+			{
+				Id:    asn1.ObjectIdentifier{2, 5, 29, 15}, // id-ce-keyUsage
+				Value: kuValue,
+			},
+		},
+	}
+
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, csrTemplate, key)
+	if err != nil {
+		t.Fatalf("create CSR: %v", err)
+	}
+
+	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
+	results := InspectData(csrPEM, nil)
+
+	var csrResult *InspectResult
+	for i, r := range results {
+		if r.Type == "csr" {
+			csrResult = &results[i]
+			break
+		}
+	}
+	if csrResult == nil {
+		t.Fatal("expected to find a CSR result")
+	}
+
+	if !slices.Contains(csrResult.KeyUsages, "Digital Signature") {
+		t.Errorf("KeyUsages should contain 'Digital Signature', got %v", csrResult.KeyUsages)
+	}
+	if !slices.Contains(csrResult.KeyUsages, "Key Encipherment") {
+		t.Errorf("KeyUsages should contain 'Key Encipherment', got %v", csrResult.KeyUsages)
+	}
+}
+
+func TestInspectData_CSRWithEKU(t *testing.T) {
+	// WHY: CSR inspection must extract Extended Key Usage from raw ASN.1
+	// extensions since Go doesn't populate typed fields for CSRs.
+	t.Parallel()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	// Build EKU extension: ServerAuth + ClientAuth
+	ekuOIDs := []asn1.ObjectIdentifier{
+		{1, 3, 6, 1, 5, 5, 7, 3, 1}, // id-kp-serverAuth
+		{1, 3, 6, 1, 5, 5, 7, 3, 2}, // id-kp-clientAuth
+	}
+	ekuValue, err := asn1.Marshal(ekuOIDs)
+	if err != nil {
+		t.Fatalf("marshal EKU: %v", err)
+	}
+
+	csrTemplate := &x509.CertificateRequest{
+		Subject: pkix.Name{CommonName: "eku-csr.example.com"},
+		ExtraExtensions: []pkix.Extension{
+			{
+				Id:    asn1.ObjectIdentifier{2, 5, 29, 37}, // id-ce-extKeyUsage
+				Value: ekuValue,
+			},
+		},
+	}
+
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, csrTemplate, key)
+	if err != nil {
+		t.Fatalf("create CSR: %v", err)
+	}
+
+	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
+	results := InspectData(csrPEM, nil)
+
+	var csrResult *InspectResult
+	for i, r := range results {
+		if r.Type == "csr" {
+			csrResult = &results[i]
+			break
+		}
+	}
+	if csrResult == nil {
+		t.Fatal("expected to find a CSR result")
+	}
+
+	if !slices.Contains(csrResult.EKUs, "Server Authentication") {
+		t.Errorf("EKUs should contain 'Server Authentication', got %v", csrResult.EKUs)
+	}
+	if !slices.Contains(csrResult.EKUs, "Client Authentication") {
+		t.Errorf("EKUs should contain 'Client Authentication', got %v", csrResult.EKUs)
 	}
 }

@@ -1230,9 +1230,9 @@ function showStatus(message, isError = false, isProcessing = false) {
   progressContainer.hidden = true;
   progressFill.style.width = "0%";
   progressFill.setAttribute("aria-valuenow", "0");
+  statusBar.style.color = "";
   if (isError) statusBar.style.color = "var(--danger)";
   else if (isProcessing) statusBar.classList.add("processing");
-  else statusBar.style.color = "";
 }
 
 function hideStatus() {

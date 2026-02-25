@@ -1,0 +1,728 @@
+package certkit
+
+import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/asn1"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+)
+
+// --- FormatEKUs tests ---
+
+func TestFormatEKUs(t *testing.T) {
+	// WHY: FormatEKUs maps typed ExtKeyUsage values to display names; wrong mapping
+	// silently mislabels certificate capabilities in inspect/scan output.
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		ekus []x509.ExtKeyUsage
+		want []string
+	}{
+		{
+			name: "known EKUs",
+			ekus: []x509.ExtKeyUsage{
+				x509.ExtKeyUsageServerAuth,
+				x509.ExtKeyUsageClientAuth,
+				x509.ExtKeyUsageCodeSigning,
+			},
+			want: []string{"Server Authentication", "Client Authentication", "Code Signing"},
+		},
+		{
+			name: "all known EKUs",
+			ekus: []x509.ExtKeyUsage{
+				x509.ExtKeyUsageAny,
+				x509.ExtKeyUsageServerAuth,
+				x509.ExtKeyUsageClientAuth,
+				x509.ExtKeyUsageCodeSigning,
+				x509.ExtKeyUsageEmailProtection,
+				x509.ExtKeyUsageTimeStamping,
+				x509.ExtKeyUsageOCSPSigning,
+				x509.ExtKeyUsageMicrosoftServerGatedCrypto,
+				x509.ExtKeyUsageNetscapeServerGatedCrypto,
+			},
+			want: []string{
+				"Any",
+				"Server Authentication",
+				"Client Authentication",
+				"Code Signing",
+				"Email Protection",
+				"Time Stamping",
+				"OCSP Signing",
+				"Microsoft Server Gated Crypto",
+				"Netscape Server Gated Crypto",
+			},
+		},
+		{
+			name: "unknown EKU value",
+			ekus: []x509.ExtKeyUsage{x509.ExtKeyUsage(9999)},
+			want: []string{"Unknown (9999)"},
+		},
+		{
+			name: "empty input",
+			ekus: nil,
+			want: nil,
+		},
+		{
+			name: "mixed known and unknown",
+			ekus: []x509.ExtKeyUsage{
+				x509.ExtKeyUsageServerAuth,
+				x509.ExtKeyUsage(42),
+				x509.ExtKeyUsageOCSPSigning,
+			},
+			want: []string{"Server Authentication", "Unknown (42)", "OCSP Signing"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := FormatEKUs(tt.ekus)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("FormatEKUs(%v) = %v, want %v", tt.ekus, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- FormatEKUOIDs tests ---
+
+func TestFormatEKUOIDs(t *testing.T) {
+	// WHY: FormatEKUOIDs parses raw ASN.1 EKU extension bytes from CSRs where Go
+	// doesn't populate typed fields; incorrect parsing silently drops EKU info.
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		raw  []byte
+		want []string
+	}{
+		{
+			name: "known OIDs",
+			raw: mustMarshalOIDs(t,
+				asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 3, 1}, // serverAuth
+				asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 3, 2}, // clientAuth
+			),
+			want: []string{"Server Authentication", "Client Authentication"},
+		},
+		{
+			name: "unknown OID falls back to string",
+			raw: mustMarshalOIDs(t,
+				asn1.ObjectIdentifier{1, 2, 3, 4, 5, 6, 7},
+			),
+			want: []string{"1.2.3.4.5.6.7"},
+		},
+		{
+			name: "mixed known and unknown",
+			raw: mustMarshalOIDs(t,
+				asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 3, 3}, // codeSigning
+				asn1.ObjectIdentifier{1, 2, 99, 99},
+			),
+			want: []string{"Code Signing", "1.2.99.99"},
+		},
+		{
+			name: "invalid ASN.1 returns nil",
+			raw:  []byte{0xFF, 0xFF, 0xFF},
+			want: nil,
+		},
+		{
+			name: "empty sequence returns nil",
+			raw:  mustMarshalOIDs(t),
+			want: nil,
+		},
+		{
+			name: "all known OIDs",
+			raw: mustMarshalOIDs(t,
+				asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 3, 1},       // serverAuth
+				asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 3, 2},       // clientAuth
+				asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 3, 3},       // codeSigning
+				asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 3, 4},       // emailProtection
+				asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 3, 8},       // timeStamping
+				asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 3, 9},       // ocspSigning
+				asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 10, 3, 3}, // microsoftSGC
+				asn1.ObjectIdentifier{2, 16, 840, 1, 113730, 4, 1},     // netscapeSGC
+				asn1.ObjectIdentifier{2, 5, 29, 37, 0},                 // anyExtendedKeyUsage
+			),
+			want: []string{
+				"Server Authentication",
+				"Client Authentication",
+				"Code Signing",
+				"Email Protection",
+				"Time Stamping",
+				"OCSP Signing",
+				"Microsoft Server Gated Crypto",
+				"Netscape Server Gated Crypto",
+				"Any",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := FormatEKUOIDs(tt.raw)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("FormatEKUOIDs() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+// mustMarshalOIDs marshals a SEQUENCE OF OID for FormatEKUOIDs test input.
+func mustMarshalOIDs(t *testing.T, oids ...asn1.ObjectIdentifier) []byte {
+	t.Helper()
+	raw, err := asn1.Marshal(oids)
+	if err != nil {
+		t.Fatalf("marshal OIDs: %v", err)
+	}
+	return raw
+}
+
+// --- FormatKeyUsage tests ---
+
+func TestFormatKeyUsage(t *testing.T) {
+	// WHY: FormatKeyUsage maps KeyUsage bitmask to names; bit-order mistakes
+	// produce wrong labels (e.g. calling CertSign "Key Encipherment").
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		ku   x509.KeyUsage
+		want []string
+	}{
+		{
+			name: "single bit DigitalSignature",
+			ku:   x509.KeyUsageDigitalSignature,
+			want: []string{"Digital Signature"},
+		},
+		{
+			name: "single bit CertSign",
+			ku:   x509.KeyUsageCertSign,
+			want: []string{"Certificate Sign"},
+		},
+		{
+			name: "CA typical: CertSign and CRLSign",
+			ku:   x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+			want: []string{"Certificate Sign", "CRL Sign"},
+		},
+		{
+			name: "leaf typical: DigitalSignature and KeyEncipherment",
+			ku:   x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+			want: []string{"Digital Signature", "Key Encipherment"},
+		},
+		{
+			name: "all nine bits set",
+			ku: x509.KeyUsageDigitalSignature | x509.KeyUsageContentCommitment |
+				x509.KeyUsageKeyEncipherment | x509.KeyUsageDataEncipherment |
+				x509.KeyUsageKeyAgreement | x509.KeyUsageCertSign |
+				x509.KeyUsageCRLSign | x509.KeyUsageEncipherOnly |
+				x509.KeyUsageDecipherOnly,
+			want: []string{
+				"Digital Signature",
+				"Content Commitment",
+				"Key Encipherment",
+				"Data Encipherment",
+				"Key Agreement",
+				"Certificate Sign",
+				"CRL Sign",
+				"Encipher Only",
+				"Decipher Only",
+			},
+		},
+		{
+			name: "zero value returns nil",
+			ku:   0,
+			want: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := FormatKeyUsage(tt.ku)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("FormatKeyUsage(%d) = %v, want %v", tt.ku, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- FormatKeyUsageBitString tests ---
+
+func TestFormatKeyUsageBitString(t *testing.T) {
+	// WHY: FormatKeyUsageBitString parses raw ASN.1 BIT STRING from CSR extensions;
+	// bit-order mismatch between ASN.1 BIT STRING and Go's KeyUsage would produce
+	// silently wrong output.
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		raw  []byte
+		want []string
+	}{
+		{
+			name: "DigitalSignature only",
+			raw:  mustMarshalKeyUsageBitString(t, x509.KeyUsageDigitalSignature),
+			want: []string{"Digital Signature"},
+		},
+		{
+			name: "CertSign and CRLSign",
+			raw:  mustMarshalKeyUsageBitString(t, x509.KeyUsageCertSign|x509.KeyUsageCRLSign),
+			want: []string{"Certificate Sign", "CRL Sign"},
+		},
+		{
+			name: "all nine bits",
+			raw: mustMarshalKeyUsageBitString(t,
+				x509.KeyUsageDigitalSignature|x509.KeyUsageContentCommitment|
+					x509.KeyUsageKeyEncipherment|x509.KeyUsageDataEncipherment|
+					x509.KeyUsageKeyAgreement|x509.KeyUsageCertSign|
+					x509.KeyUsageCRLSign|x509.KeyUsageEncipherOnly|
+					x509.KeyUsageDecipherOnly),
+			want: []string{
+				"Digital Signature",
+				"Content Commitment",
+				"Key Encipherment",
+				"Data Encipherment",
+				"Key Agreement",
+				"Certificate Sign",
+				"CRL Sign",
+				"Encipher Only",
+				"Decipher Only",
+			},
+		},
+		{
+			name: "invalid ASN.1 returns nil",
+			raw:  []byte{0xFF, 0xFF},
+			want: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := FormatKeyUsageBitString(tt.raw)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("FormatKeyUsageBitString() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestFormatKeyUsageBitString_RoundTripsWithFormatKeyUsage(t *testing.T) {
+	// WHY: FormatKeyUsageBitString must produce identical output to FormatKeyUsage
+	// for the same logical key usage value; a mismatch means the ASN.1 BIT STRING
+	// bit-order mapping diverges from Go's KeyUsage constants.
+	t.Parallel()
+
+	usages := []x509.KeyUsage{
+		x509.KeyUsageDigitalSignature,
+		x509.KeyUsageContentCommitment,
+		x509.KeyUsageKeyEncipherment,
+		x509.KeyUsageDataEncipherment,
+		x509.KeyUsageKeyAgreement,
+		x509.KeyUsageCertSign,
+		x509.KeyUsageCRLSign,
+		x509.KeyUsageEncipherOnly,
+		x509.KeyUsageDecipherOnly,
+		x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+
+	for _, ku := range usages {
+		raw := mustMarshalKeyUsageBitString(t, ku)
+		fromBitString := FormatKeyUsageBitString(raw)
+		fromTyped := FormatKeyUsage(ku)
+		if !slices.Equal(fromBitString, fromTyped) {
+			t.Errorf("round-trip mismatch for KeyUsage %d:\n  BitString: %v\n  Typed:     %v", ku, fromBitString, fromTyped)
+		}
+	}
+}
+
+// mustMarshalKeyUsageBitString builds a raw ASN.1 BIT STRING encoding for the
+// given x509.KeyUsage bitmask, matching the encoding that crypto/x509 produces
+// in the KeyUsage extension.
+func mustMarshalKeyUsageBitString(t *testing.T, ku x509.KeyUsage) []byte {
+	t.Helper()
+	// Build a BitString with 9 bits (the number of defined key usage bits).
+	// Go's x509 package stores bit i of KeyUsage as bit i in the BIT STRING.
+	bs := asn1.BitString{
+		Bytes:     make([]byte, 2),
+		BitLength: 9,
+	}
+	for i := range 9 {
+		if ku&(1<<uint(i)) != 0 {
+			// ASN.1 BIT STRING bit numbering: bit 0 is the MSB of byte 0.
+			byteIdx := i / 8
+			bitIdx := 7 - (i % 8)
+			bs.Bytes[byteIdx] |= 1 << uint(bitIdx)
+		}
+	}
+	raw, err := asn1.Marshal(bs)
+	if err != nil {
+		t.Fatalf("marshal BitString: %v", err)
+	}
+	return raw
+}
+
+// --- ParseOtherNameSANs tests ---
+
+func TestParseOtherNameSANs(t *testing.T) {
+	// WHY: ParseOtherNameSANs recovers SAN entries that Go silently drops
+	// (OtherName, DirName, RegisteredID); failure to parse means critical
+	// identity info (like UPN) is invisible in inspect output.
+	t.Parallel()
+
+	t.Run("OtherName with UPN", func(t *testing.T) {
+		t.Parallel()
+		sanBytes := buildSANWithOtherName(t,
+			asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3}, // UPN OID
+			"user@example.com",
+		)
+		exts := []pkix.Extension{{
+			Id:    asn1.ObjectIdentifier{2, 5, 29, 17},
+			Value: sanBytes,
+		}}
+		got := ParseOtherNameSANs(exts)
+		if len(got) != 1 {
+			t.Fatalf("expected 1 result, got %d: %v", len(got), got)
+		}
+		if got[0] != "UPN:user@example.com" {
+			t.Errorf("got %q, want %q", got[0], "UPN:user@example.com")
+		}
+	})
+
+	t.Run("OtherName with unknown OID falls back to OID string", func(t *testing.T) {
+		t.Parallel()
+		sanBytes := buildSANWithOtherName(t,
+			asn1.ObjectIdentifier{1, 2, 3, 4, 5},
+			"some-value",
+		)
+		exts := []pkix.Extension{{
+			Id:    asn1.ObjectIdentifier{2, 5, 29, 17},
+			Value: sanBytes,
+		}}
+		got := ParseOtherNameSANs(exts)
+		if len(got) != 1 {
+			t.Fatalf("expected 1 result, got %d: %v", len(got), got)
+		}
+		if got[0] != "1.2.3.4.5:some-value" {
+			t.Errorf("got %q, want %q", got[0], "1.2.3.4.5:some-value")
+		}
+	})
+
+	t.Run("DirectoryName", func(t *testing.T) {
+		t.Parallel()
+		sanBytes := buildSANWithDirectoryName(t, pkix.Name{CommonName: "test-dir"})
+		exts := []pkix.Extension{{
+			Id:    asn1.ObjectIdentifier{2, 5, 29, 17},
+			Value: sanBytes,
+		}}
+		got := ParseOtherNameSANs(exts)
+		if len(got) != 1 {
+			t.Fatalf("expected 1 result, got %d: %v", len(got), got)
+		}
+		if !strings.HasPrefix(got[0], "DirName:") {
+			t.Errorf("expected DirName: prefix, got %q", got[0])
+		}
+		if !strings.Contains(got[0], "test-dir") {
+			t.Errorf("expected CN=test-dir in output, got %q", got[0])
+		}
+	})
+
+	t.Run("no SAN extension returns nil", func(t *testing.T) {
+		t.Parallel()
+		exts := []pkix.Extension{{
+			Id:    asn1.ObjectIdentifier{2, 5, 29, 19}, // basicConstraints, not SAN
+			Value: []byte{0x30, 0x00},
+		}}
+		got := ParseOtherNameSANs(exts)
+		if got != nil {
+			t.Errorf("expected nil, got %v", got)
+		}
+	})
+
+	t.Run("nil extensions returns nil", func(t *testing.T) {
+		t.Parallel()
+		got := ParseOtherNameSANs(nil)
+		if got != nil {
+			t.Errorf("expected nil, got %v", got)
+		}
+	})
+
+	t.Run("SAN with only dNSName returns nil", func(t *testing.T) {
+		t.Parallel()
+		// Build a SAN extension containing only a dNSName (tag 2), which
+		// ParseOtherNameSANs should ignore.
+		sanBytes := buildSANWithDNSName(t, "example.com")
+		exts := []pkix.Extension{{
+			Id:    asn1.ObjectIdentifier{2, 5, 29, 17},
+			Value: sanBytes,
+		}}
+		got := ParseOtherNameSANs(exts)
+		if got != nil {
+			t.Errorf("expected nil for dNSName-only SAN, got %v", got)
+		}
+	})
+
+	t.Run("invalid SAN bytes returns nil", func(t *testing.T) {
+		t.Parallel()
+		exts := []pkix.Extension{{
+			Id:    asn1.ObjectIdentifier{2, 5, 29, 17},
+			Value: []byte{0xFF, 0xFF, 0xFF},
+		}}
+		got := ParseOtherNameSANs(exts)
+		if got != nil {
+			t.Errorf("expected nil for invalid bytes, got %v", got)
+		}
+	})
+}
+
+func TestParseOtherNameSANs_FromCertificate(t *testing.T) {
+	// WHY: End-to-end test using a real certificate with OtherName SAN to verify
+	// ParseOtherNameSANs works with actual x509.Certificate.Extensions, not just
+	// hand-crafted extension slices.
+	t.Parallel()
+
+	upnOID := asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3}
+	sanBytes := buildSANWithOtherName(t, upnOID, "admin@corp.example.com")
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: randomSerial(t),
+		Subject:      pkix.Name{CommonName: "test"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		ExtraExtensions: []pkix.Extension{{
+			Id:    asn1.ObjectIdentifier{2, 5, 29, 17},
+			Value: sanBytes,
+		}},
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := ParseOtherNameSANs(cert.Extensions)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 result, got %d: %v", len(got), got)
+	}
+	if got[0] != "UPN:admin@corp.example.com" {
+		t.Errorf("got %q, want %q", got[0], "UPN:admin@corp.example.com")
+	}
+}
+
+// buildSANWithOtherName constructs raw SAN extension bytes containing a single
+// OtherName GeneralName with the given OID and UTF8String value.
+func buildSANWithOtherName(t *testing.T, oid asn1.ObjectIdentifier, value string) []byte {
+	t.Helper()
+
+	// OtherName ::= SEQUENCE { type-id OID, value [0] EXPLICIT ANY }
+	oidBytes, err := asn1.Marshal(oid)
+	if err != nil {
+		t.Fatalf("marshal OID: %v", err)
+	}
+	// The value is a UTF8String wrapped in [0] EXPLICIT.
+	utf8Bytes, err := asn1.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal UTF8String: %v", err)
+	}
+	// Wrap in [0] EXPLICIT (context-specific, constructed, tag 0)
+	explicitWrapper := asn1.RawValue{
+		Class:      asn1.ClassContextSpecific,
+		Tag:        0,
+		IsCompound: true,
+		Bytes:      utf8Bytes,
+	}
+	explicitBytes, err := asn1.Marshal(explicitWrapper)
+	if err != nil {
+		t.Fatalf("marshal explicit wrapper: %v", err)
+	}
+	// Build the SEQUENCE content: OID + [0] EXPLICIT value
+	seqContent := append(oidBytes, explicitBytes...)
+
+	// OtherName is GeneralName tag 0, context-specific, constructed (IMPLICIT
+	// replaces the SEQUENCE tag). The content is the SEQUENCE body directly.
+	otherNameGN := asn1.RawValue{
+		Class:      asn1.ClassContextSpecific,
+		Tag:        0,
+		IsCompound: true,
+		Bytes:      seqContent,
+	}
+	gnBytes, err := asn1.Marshal(otherNameGN)
+	if err != nil {
+		t.Fatalf("marshal OtherName GN: %v", err)
+	}
+
+	// Wrap in outer SEQUENCE (SAN is SEQUENCE OF GeneralName)
+	sanSeq := asn1.RawValue{
+		Tag:        asn1.TagSequence,
+		Class:      asn1.ClassUniversal,
+		IsCompound: true,
+		Bytes:      gnBytes,
+	}
+	sanBytes, err := asn1.Marshal(sanSeq)
+	if err != nil {
+		t.Fatalf("marshal SAN SEQUENCE: %v", err)
+	}
+	return sanBytes
+}
+
+// buildSANWithDirectoryName constructs raw SAN extension bytes containing a
+// single DirectoryName GeneralName (context-specific tag 4).
+func buildSANWithDirectoryName(t *testing.T, name pkix.Name) []byte {
+	t.Helper()
+
+	rdnSeq := name.ToRDNSequence()
+	rdnBytes, err := asn1.Marshal(rdnSeq)
+	if err != nil {
+		t.Fatalf("marshal RDNSequence: %v", err)
+	}
+
+	// DirectoryName is GeneralName [4] IMPLICIT Name. With IMPLICIT tagging
+	// the outer SEQUENCE tag of the RDNSequence is replaced by the
+	// context-specific tag 4, but gn.Bytes still contains the full
+	// DER-encoded RDNSequence (because parseOtherNamesFromSANBytes calls
+	// asn1.Unmarshal(gn.Bytes, &name) which needs complete TLV).
+	dirNameGN := asn1.RawValue{
+		Class:      asn1.ClassContextSpecific,
+		Tag:        4,
+		IsCompound: true,
+		Bytes:      rdnBytes,
+	}
+	gnBytes, err := asn1.Marshal(dirNameGN)
+	if err != nil {
+		t.Fatalf("marshal DirName GN: %v", err)
+	}
+
+	sanSeq := asn1.RawValue{
+		Tag:        asn1.TagSequence,
+		Class:      asn1.ClassUniversal,
+		IsCompound: true,
+		Bytes:      gnBytes,
+	}
+	sanBytes, err := asn1.Marshal(sanSeq)
+	if err != nil {
+		t.Fatalf("marshal SAN SEQUENCE: %v", err)
+	}
+	return sanBytes
+}
+
+// buildSANWithDNSName constructs raw SAN extension bytes containing a single
+// dNSName GeneralName (context-specific tag 2).
+func buildSANWithDNSName(t *testing.T, dnsName string) []byte {
+	t.Helper()
+
+	dnsGN := asn1.RawValue{
+		Class: asn1.ClassContextSpecific,
+		Tag:   2,
+		Bytes: []byte(dnsName),
+	}
+	gnBytes, err := asn1.Marshal(dnsGN)
+	if err != nil {
+		t.Fatalf("marshal dNSName GN: %v", err)
+	}
+
+	sanSeq := asn1.RawValue{
+		Tag:        asn1.TagSequence,
+		Class:      asn1.ClassUniversal,
+		IsCompound: true,
+		Bytes:      gnBytes,
+	}
+	sanBytes, err := asn1.Marshal(sanSeq)
+	if err != nil {
+		t.Fatalf("marshal SAN SEQUENCE: %v", err)
+	}
+	return sanBytes
+}
+
+// --- FormatDN tests ---
+
+func TestFormatDN_CertificateRoundTrip(t *testing.T) {
+	// WHY: FormatDN replaces Go's hex-encoded emailAddress OID with a human-readable
+	// label. This test exercises the round-trip through a real certificate (create +
+	// parse) to verify that Names is populated correctly and the replacement works
+	// end-to-end, not just with hand-crafted Names slices.
+	t.Parallel()
+
+	t.Run("emailAddress OID rendered as label via cert round-trip", func(t *testing.T) {
+		t.Parallel()
+		// Create a self-signed cert with emailAddress in the subject so that
+		// parsing populates Names (not just ExtraNames).
+		name := certSubjectWithEmail(t, "info@example.com", "example.com")
+		got := FormatDN(name)
+		if !strings.Contains(got, "emailAddress=info@example.com") {
+			t.Errorf("expected emailAddress=info@example.com in %q", got)
+		}
+		// Verify the raw OID hex is NOT present.
+		if strings.Contains(got, "1.2.840.113549.1.9.1=#") {
+			t.Errorf("raw OID hex should be replaced, got %q", got)
+		}
+	})
+
+	t.Run("email with special characters is escaped via cert round-trip", func(t *testing.T) {
+		t.Parallel()
+		name := certSubjectWithEmail(t, "user+tag@example.com", "example.com")
+		got := FormatDN(name)
+		// The '+' in the local part must be escaped per RFC 4514.
+		if !strings.Contains(got, "emailAddress=user\\+tag@example.com") {
+			t.Errorf("expected escaped email in %q", got)
+		}
+	})
+
+	t.Run("emailAddress and standard attributes coexist via cert round-trip", func(t *testing.T) {
+		t.Parallel()
+		name := certSubjectWithEmail(t, "admin@corp.example.com", "corp.example.com")
+		got := FormatDN(name)
+		if !strings.Contains(got, "emailAddress=admin@corp.example.com") {
+			t.Errorf("missing emailAddress in %q", got)
+		}
+		if !strings.Contains(got, "CN=corp.example.com") {
+			t.Errorf("missing CN in %q", got)
+		}
+	})
+}
+
+// certSubjectWithEmail creates a self-signed certificate with the given
+// emailAddress in the subject and returns the parsed pkix.Name (which has
+// the emailAddress in Names, as FormatDN expects).
+func certSubjectWithEmail(t *testing.T, email, cn string) pkix.Name {
+	t.Helper()
+
+	emailOID := asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 1}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: randomSerial(t),
+		Subject: pkix.Name{
+			CommonName: cn,
+			ExtraNames: []pkix.AttributeTypeAndValue{
+				{Type: emailOID, Value: email},
+			},
+		},
+		NotBefore: time.Now().Add(-time.Hour),
+		NotAfter:  time.Now().Add(24 * time.Hour),
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cert.Subject
+}
