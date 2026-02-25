@@ -62,7 +62,7 @@ type connectCertJSON struct {
 func runConnect(cmd *cobra.Command, args []string) error {
 	host, port, err := parseHostPort(args[0])
 	if err != nil {
-		return err
+		return fmt.Errorf("parsing address %q: %w", args[0], err)
 	}
 
 	ctx, cancel := context.WithTimeout(cmd.Context(), 10*time.Second)

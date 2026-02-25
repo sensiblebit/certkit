@@ -120,6 +120,14 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("verifying certificate: %w", err)
 	}
 
+	// Compute diagnoses before output so JSON emits a single object
+	if verifyDiagnose && len(result.Errors) > 0 {
+		result.Diagnoses = internal.DiagnoseChain(internal.DiagnoseChainInput{
+			Cert:       contents.Leaf,
+			ExtraCerts: contents.ExtraCerts,
+		})
+	}
+
 	switch verifyFormat {
 	case "json":
 		data, err := json.MarshalIndent(result, "", "  ")
@@ -129,28 +137,14 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		fmt.Println(string(data))
 	case "text":
 		fmt.Print(internal.FormatVerifyResult(result))
+		if len(result.Diagnoses) > 0 {
+			fmt.Print(internal.FormatDiagnoses(result.Diagnoses))
+		}
 	default:
 		return fmt.Errorf("unsupported output format %q (use text or json)", verifyFormat)
 	}
 
 	if len(result.Errors) > 0 {
-		if verifyDiagnose {
-			diags := internal.DiagnoseChain(internal.DiagnoseChainInput{
-				Cert:       contents.Leaf,
-				ExtraCerts: contents.ExtraCerts,
-				TrustStore: verifyTrustStore,
-			})
-			switch verifyFormat {
-			case "json":
-				data, err := json.MarshalIndent(diags, "", "  ")
-				if err != nil {
-					return fmt.Errorf("marshaling diagnostics JSON: %w", err)
-				}
-				fmt.Println(string(data))
-			case "text":
-				fmt.Print(internal.FormatDiagnoses(diags))
-			}
-		}
 		return &ValidationError{Message: "verification failed"}
 	}
 	return nil

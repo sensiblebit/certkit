@@ -139,7 +139,7 @@ func runSignSelfSigned(_ *cobra.Command, _ []string) error {
 		IsCA:    selfSignedIsCA,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("creating self-signed certificate: %w", err)
 	}
 
 	certPEM := certkit.CertToPEM(cert)
@@ -212,7 +212,7 @@ func runSignCSR(_ *cobra.Command, args []string) error {
 		CopySANs: signCSRCopySAN,
 	})
 	if err != nil {
-		return err
+		return fmt.Errorf("signing CSR: %w", err)
 	}
 
 	certPEM := certkit.CertToPEM(cert)

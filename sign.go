@@ -18,7 +18,7 @@ type SelfSignedInput struct {
 	Subject pkix.Name
 	// Days is the validity period in days (default: 3650).
 	Days int
-	// IsCA sets the CA basic constraint. Defaults to true.
+	// IsCA sets the CA basic constraint.
 	IsCA bool
 }
 
@@ -79,7 +79,7 @@ type SignCSRInput struct {
 	// Days is the validity period in days (default: 365).
 	Days int
 	// CopySANs copies DNS names, IP addresses, email addresses, and URIs
-	// from the CSR to the issued certificate. Defaults to true.
+	// from the CSR to the issued certificate.
 	CopySANs bool
 }
 

@@ -51,7 +51,7 @@ func runCRL(cmd *cobra.Command, args []string) error {
 	if strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://") {
 		data, err = fetchCRL(cmd, source)
 		if err != nil {
-			return err
+			return fmt.Errorf("fetching CRL: %w", err)
 		}
 	} else {
 		data, err = os.ReadFile(source)

@@ -34,6 +34,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix `marshalOtherNameGN` accepting non-ASCII SRV OtherName values — validate IA5String before encoding ([#74])
 - Fix `ResolveOtherNameOID` returning mutable reference to global `otherNameOIDs` map — return a defensive copy ([#74])
 - Fix camelCase `otherName` in error strings — use lowercase `othername` per ERR-4 ([#74])
+- Fix bare `return err` without context wrapping (ERR-1) in `sign`, `convert`, `crl`, and `connect` commands ([#75])
+- Fix `verify --diagnose --format json` emitting two JSON objects to stdout — diagnoses are now embedded in the verify result (CLI-7) ([#75])
+- Fix `CRLInfo` and `OCSPResult` time fields marshaling as RFC3339Nano instead of RFC3339 — change to pre-formatted strings (CLI-5) ([#75])
+- Fix misleading "Defaults to true" doc comments on `SelfSignedInput.IsCA` and `SignCSRInput.CopySANs` — Go zero value is false; the CLI sets defaults ([#75])
+- Fix unused `DiagnoseChainInput.TrustStore` field — remove dead field and fix self-signed diagnostic message ([#75])
+- Fix misleading `issuer` variable name in `ocsp` command — rename to `ocspInput` to match its `*CheckOCSPInput` type ([#75])
+- Fix `formatConvertOutput` taking 4 positional args — extract into `formatConvertInput` struct (CS-5) ([#75])
 
 ### Added
 
@@ -731,6 +738,7 @@ Initial release.
 [`8cf81d9`]: https://github.com/sensiblebit/certkit/commit/8cf81d9
 [`3569926`]: https://github.com/sensiblebit/certkit/commit/3569926
 [#74]: https://github.com/sensiblebit/certkit/pull/74
+[#75]: https://github.com/sensiblebit/certkit/pull/75
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63

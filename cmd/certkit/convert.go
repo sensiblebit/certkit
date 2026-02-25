@@ -79,9 +79,14 @@ func runConvert(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no certificates found in %s", args[0])
 	}
 
-	output, err := formatConvertOutput(contents, allCerts, convertTo, passwords)
+	output, err := formatConvertOutput(formatConvertInput{
+		contents:  contents,
+		allCerts:  allCerts,
+		format:    convertTo,
+		passwords: passwords,
+	})
 	if err != nil {
-		return err
+		return fmt.Errorf("formatting output: %w", err)
 	}
 
 	isBinary := convertTo == "p12" || convertTo == "jks" || convertTo == "der" || convertTo == "p7b"
@@ -107,15 +112,23 @@ func runConvert(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-func formatConvertOutput(contents *internal.ContainerContents, allCerts []*x509.Certificate, format string, passwords []string) ([]byte, error) {
-	switch format {
+// formatConvertInput holds the parameters for formatConvertOutput.
+type formatConvertInput struct {
+	contents  *internal.ContainerContents
+	allCerts  []*x509.Certificate
+	format    string
+	passwords []string
+}
+
+func formatConvertOutput(input formatConvertInput) ([]byte, error) {
+	switch input.format {
 	case "pem":
 		var out []byte
-		for _, c := range allCerts {
+		for _, c := range input.allCerts {
 			out = append(out, []byte(certkit.CertToPEM(c))...)
 		}
-		if contents.Key != nil {
-			keyPEM, err := certkit.MarshalPrivateKeyToPEM(contents.Key)
+		if input.contents.Key != nil {
+			keyPEM, err := certkit.MarshalPrivateKeyToPEM(input.contents.Key)
 			if err != nil {
 				return nil, fmt.Errorf("encoding private key: %w", err)
 			}
@@ -124,29 +137,29 @@ func formatConvertOutput(contents *internal.ContainerContents, allCerts []*x509.
 		return out, nil
 
 	case "der":
-		if len(allCerts) > 1 {
-			return nil, fmt.Errorf("DER format supports only a single certificate; input contains %d (use p7b for multiple)", len(allCerts))
+		if len(input.allCerts) > 1 {
+			return nil, fmt.Errorf("DER format supports only a single certificate; input contains %d (use p7b for multiple)", len(input.allCerts))
 		}
-		return allCerts[0].Raw, nil
+		return input.allCerts[0].Raw, nil
 
 	case "p12":
-		if contents.Key == nil {
+		if input.contents.Key == nil {
 			return nil, fmt.Errorf("PKCS#12 output requires a private key (use --key)")
 		}
-		pw := bundlePassword(passwords)
-		return certkit.EncodePKCS12(contents.Key, contents.Leaf, contents.ExtraCerts, pw)
+		pw := bundlePassword(input.passwords)
+		return certkit.EncodePKCS12(input.contents.Key, input.contents.Leaf, input.contents.ExtraCerts, pw)
 
 	case "jks":
-		if contents.Key == nil {
+		if input.contents.Key == nil {
 			return nil, fmt.Errorf("JKS output requires a private key (use --key)")
 		}
-		pw := bundlePassword(passwords)
-		return certkit.EncodeJKS(contents.Key, contents.Leaf, contents.ExtraCerts, pw)
+		pw := bundlePassword(input.passwords)
+		return certkit.EncodeJKS(input.contents.Key, input.contents.Leaf, input.contents.ExtraCerts, pw)
 
 	case "p7b":
-		return certkit.EncodePKCS7(allCerts)
+		return certkit.EncodePKCS7(input.allCerts)
 
 	default:
-		return nil, fmt.Errorf("unsupported output format %q (use pem, der, p12, jks, or p7b)", format)
+		return nil, fmt.Errorf("unsupported output format %q (use pem, der, p12, jks, or p7b)", input.format)
 	}
 }

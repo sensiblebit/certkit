@@ -440,7 +440,6 @@ func TestDiagnoseChain(t *testing.T) {
 			input: DiagnoseChainInput{
 				Cert:       newRSALeaf(t, ca, "valid.example.com", []string{"valid.example.com"}, nil).cert,
 				ExtraCerts: []*x509.Certificate{ca.cert},
-				TrustStore: "custom",
 			},
 			wantChecks: map[string]string{
 				"expired": "pass",
@@ -451,7 +450,6 @@ func TestDiagnoseChain(t *testing.T) {
 			input: DiagnoseChainInput{
 				Cert:       newExpiredLeaf(t, ca).cert,
 				ExtraCerts: []*x509.Certificate{ca.cert},
-				TrustStore: "custom",
 			},
 			wantChecks: map[string]string{
 				"expired": "fail",

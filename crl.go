@@ -11,10 +11,10 @@ import (
 type CRLInfo struct {
 	// Issuer is the CRL issuer distinguished name.
 	Issuer string `json:"issuer"`
-	// ThisUpdate is when the CRL was generated.
-	ThisUpdate time.Time `json:"this_update"`
-	// NextUpdate is when the CRL expires.
-	NextUpdate time.Time `json:"next_update"`
+	// ThisUpdate is when the CRL was generated (RFC 3339).
+	ThisUpdate string `json:"this_update"`
+	// NextUpdate is when the CRL expires (RFC 3339).
+	NextUpdate string `json:"next_update"`
 	// NumEntries is the number of revoked certificate entries.
 	NumEntries int `json:"num_entries"`
 	// SignatureAlgorithm is the algorithm used to sign the CRL.
@@ -51,8 +51,8 @@ func CRLContainsCert(crl *x509.RevocationList, cert *x509.Certificate) bool {
 func CRLInfoFromList(crl *x509.RevocationList) *CRLInfo {
 	return &CRLInfo{
 		Issuer:             FormatDN(crl.Issuer),
-		ThisUpdate:         crl.ThisUpdate,
-		NextUpdate:         crl.NextUpdate,
+		ThisUpdate:         crl.ThisUpdate.UTC().Format(time.RFC3339),
+		NextUpdate:         crl.NextUpdate.UTC().Format(time.RFC3339),
 		NumEntries:         len(crl.RevokedCertificateEntries),
 		SignatureAlgorithm: crl.SignatureAlgorithm.String(),
 	}
@@ -62,8 +62,8 @@ func CRLInfoFromList(crl *x509.RevocationList) *CRLInfo {
 func FormatCRLInfo(info *CRLInfo) string {
 	var out string
 	out += fmt.Sprintf("Issuer:     %s\n", info.Issuer)
-	out += fmt.Sprintf("This Update: %s\n", info.ThisUpdate.UTC().Format(time.RFC3339))
-	out += fmt.Sprintf("Next Update: %s\n", info.NextUpdate.UTC().Format(time.RFC3339))
+	out += fmt.Sprintf("This Update: %s\n", info.ThisUpdate)
+	out += fmt.Sprintf("Next Update: %s\n", info.NextUpdate)
 	out += fmt.Sprintf("Entries:     %d\n", info.NumEntries)
 	out += fmt.Sprintf("Signature:   %s\n", info.SignatureAlgorithm)
 	return out

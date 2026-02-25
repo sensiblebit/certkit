@@ -56,7 +56,7 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 	}
 
 	// Resolve issuer: explicit flag > extra certs from container
-	var issuer *certkit.CheckOCSPInput
+	var ocspInput *certkit.CheckOCSPInput
 	if ocspIssuerPath != "" {
 		issuerData, err := os.ReadFile(ocspIssuerPath)
 		if err != nil {
@@ -66,13 +66,13 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("parsing issuer certificate: %w", err)
 		}
-		issuer = &certkit.CheckOCSPInput{
+		ocspInput = &certkit.CheckOCSPInput{
 			Cert:   contents.Leaf,
 			Issuer: issuerCert,
 		}
 	} else if len(contents.ExtraCerts) > 0 {
 		// Use first extra cert as issuer (typically the immediate issuer)
-		issuer = &certkit.CheckOCSPInput{
+		ocspInput = &certkit.CheckOCSPInput{
 			Cert:   contents.Leaf,
 			Issuer: contents.ExtraCerts[0],
 		}
@@ -80,7 +80,7 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no issuer certificate found; use --issuer to provide one")
 	}
 
-	result, err := certkit.CheckOCSP(cmd.Context(), *issuer)
+	result, err := certkit.CheckOCSP(cmd.Context(), *ocspInput)
 	if err != nil {
 		return fmt.Errorf("checking OCSP: %w", err)
 	}

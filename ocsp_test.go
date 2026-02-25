@@ -232,8 +232,8 @@ func TestFormatOCSPResult(t *testing.T) {
 		Status:       "good",
 		SerialNumber: "64",
 		ResponderURL: "http://ocsp.example.com",
-		ThisUpdate:   now,
-		NextUpdate:   now.Add(24 * time.Hour),
+		ThisUpdate:   now.UTC().Format(time.RFC3339),
+		NextUpdate:   now.Add(24 * time.Hour).UTC().Format(time.RFC3339),
 	}
 	output := FormatOCSPResult(result)
 	if output == "" {

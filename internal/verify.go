@@ -48,6 +48,7 @@ type VerifyResult struct {
 	Expiry      *bool       `json:"expires_within,omitempty"`
 	ExpiryInfo  string      `json:"expiry_info,omitempty"`
 	Errors      []string    `json:"errors,omitempty"`
+	Diagnoses   []Diagnosis `json:"diagnoses,omitempty"`
 }
 
 // VerifyCert verifies a certificate with optional key matching, chain validation, and expiry checking.
@@ -149,7 +150,6 @@ type Diagnosis struct {
 type DiagnoseChainInput struct {
 	Cert       *x509.Certificate
 	ExtraCerts []*x509.Certificate
-	TrustStore string
 }
 
 // DiagnoseChain analyzes why chain verification might fail, returning a list
@@ -188,7 +188,7 @@ func DiagnoseChain(input DiagnoseChainInput) []Diagnosis {
 		diags = append(diags, Diagnosis{
 			Check:  "self-signed",
 			Status: "warn",
-			Detail: "leaf certificate is self-signed and not in the trust store",
+			Detail: "leaf certificate is self-signed",
 		})
 	}
 

@@ -28,12 +28,12 @@ type OCSPResult struct {
 	SerialNumber string `json:"serial_number"`
 	// ResponderURL is the OCSP responder that was queried.
 	ResponderURL string `json:"responder_url"`
-	// ThisUpdate is when the OCSP response was generated.
-	ThisUpdate time.Time `json:"this_update"`
-	// NextUpdate is when the OCSP response expires.
-	NextUpdate time.Time `json:"next_update"`
-	// RevokedAt is the revocation time (only set when Status is "revoked").
-	RevokedAt *time.Time `json:"revoked_at,omitempty"`
+	// ThisUpdate is when the OCSP response was generated (RFC 3339).
+	ThisUpdate string `json:"this_update"`
+	// NextUpdate is when the OCSP response expires (RFC 3339).
+	NextUpdate string `json:"next_update"`
+	// RevokedAt is the revocation time in RFC 3339 (only set when Status is "revoked").
+	RevokedAt *string `json:"revoked_at,omitempty"`
 	// RevocationReason is the reason code (only set when Status is "revoked").
 	RevocationReason *string `json:"revocation_reason,omitempty"`
 }
@@ -89,8 +89,8 @@ func CheckOCSP(ctx context.Context, input CheckOCSPInput) (*OCSPResult, error) {
 	result := &OCSPResult{
 		SerialNumber: input.Cert.SerialNumber.Text(16),
 		ResponderURL: responderURL,
-		ThisUpdate:   resp.ThisUpdate,
-		NextUpdate:   resp.NextUpdate,
+		ThisUpdate:   resp.ThisUpdate.UTC().Format(time.RFC3339),
+		NextUpdate:   resp.NextUpdate.UTC().Format(time.RFC3339),
 	}
 
 	switch resp.Status {
@@ -98,7 +98,7 @@ func CheckOCSP(ctx context.Context, input CheckOCSPInput) (*OCSPResult, error) {
 		result.Status = "good"
 	case ocsp.Revoked:
 		result.Status = "revoked"
-		revokedAt := resp.RevokedAt
+		revokedAt := resp.RevokedAt.UTC().Format(time.RFC3339)
 		result.RevokedAt = &revokedAt
 		reason := ocspRevocationReason(resp.RevocationReason)
 		result.RevocationReason = &reason
@@ -135,10 +135,10 @@ func FormatOCSPResult(r *OCSPResult) string {
 	out += fmt.Sprintf("Serial:       %s\n", r.SerialNumber)
 	out += fmt.Sprintf("Status:       %s\n", r.Status)
 	out += fmt.Sprintf("Responder:    %s\n", r.ResponderURL)
-	out += fmt.Sprintf("This Update:  %s\n", r.ThisUpdate.UTC().Format(time.RFC3339))
-	out += fmt.Sprintf("Next Update:  %s\n", r.NextUpdate.UTC().Format(time.RFC3339))
+	out += fmt.Sprintf("This Update:  %s\n", r.ThisUpdate)
+	out += fmt.Sprintf("Next Update:  %s\n", r.NextUpdate)
 	if r.RevokedAt != nil {
-		out += fmt.Sprintf("Revoked At:   %s\n", r.RevokedAt.UTC().Format(time.RFC3339))
+		out += fmt.Sprintf("Revoked At:   %s\n", *r.RevokedAt)
 	}
 	if r.RevocationReason != nil {
 		out += fmt.Sprintf("Reason:       %s\n", *r.RevocationReason)
