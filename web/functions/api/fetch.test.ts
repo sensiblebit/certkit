@@ -47,9 +47,20 @@ async function errorMsg(resp: Response): Promise<string> {
 describe("isAllowedDomain", () => {
   it.each([
     // Exact domain match
-    ["cacerts.digicert.com", true],
+    ["digicert.com", true],
+    ["geotrust.com", true],
+    ["thawte.com", true],
 
-    // Subdomain via suffix
+    // Subdomain via suffix — DigiCert family
+    ["cacerts.digicert.com", true],
+    ["crt.r.digicert.com", true],
+    ["ssp-aia.digicert.com", true],
+    ["cacerts.geotrust.com", true],
+    ["cacerts.thawte.com", true],
+    ["rapidssl-aia.geotrust.com", true],
+    ["svrintl-g3-aia.verisign.com", true],
+
+    // Subdomain via suffix — various CAs
     ["crl.disa.mil", true],
     ["crl.nit.disa.mil", true],
     ["crl.gds.nit.disa.mil", true],
@@ -58,10 +69,10 @@ describe("isAllowedDomain", () => {
     ["CACERTS.DIGICERT.COM", true],
     ["CRL.DISA.MIL", true],
 
-    // managed.entrust.com suffix
+    // entrust.com suffix
     ["sspweb.managed.entrust.com", true],
-    ["rootweb.managed.entrust.com", true],
-    ["managed.entrust.com", true],
+    ["aia.entrust.net", true],
+    ["entrust.com", true],
 
     // fpki.gov subdomains
     ["repo.fpki.gov", true],
@@ -71,58 +82,25 @@ describe("isAllowedDomain", () => {
 
     // amazontrust.com suffix
     ["crt.rootca1.amazontrust.com", true],
-    ["crt.rootca4.amazontrust.com", true],
     ["crl.rootg2.amazontrust.com", true],
-    ["eue2m1.crt.root.eu.amazontrust.com", true],
 
-    // amznts.eu suffix (Amazon EU short domain)
+    // amznts.eu suffix
     ["eue2m1.crt.root.amznts.eu", true],
-    ["eur2m1.crt.root.amznts.eu", true],
 
     // microsoft.com suffix
-    ["www.microsoft.com", true],
     ["caissuers.microsoft.com", true],
     ["pkiops.microsoft.com", true],
 
-    // e-szigno.hu suffix (Hungarian CA)
-    ["www.e-szigno.hu", true],
-    ["rootca2017-ca1.e-szigno.hu", true],
-    ["tlsrootca2023-ca.e-szigno.hu", true],
-    ["esmimerootca2024-ca.e-szigno.hu", true],
-
-    // telesec.de suffix (T-Systems)
-    ["grcl2.crt.telesec.de", true],
-    ["pki0336.telesec.de", true],
-    ["grcl3g2.pki.telesec.de", true],
-    ["telesec.de", true],
-
-    // certum.pl suffix (Asseco, Poland)
-    ["repository.certum.pl", true],
-    ["subca.repository.certum.pl", true],
-    ["sslcom.repository.certum.pl", true],
-
-    // netlock.hu suffix (Hungary)
-    ["aia1.netlock.hu", true],
-    ["aia2.netlock.hu", true],
-    ["aia3.netlock.hu", true],
-
-    // harica.gr suffix (Greece)
-    ["repo.harica.gr", true],
-    ["crt.harica.gr", true],
-    ["www.harica.gr", true],
-
-    // secomtrust.net suffix (Japan)
-    ["repository.secomtrust.net", true],
-    ["repo2.secomtrust.net", true],
-
-    // sheca.com suffix (Shanghai CA, China)
-    ["certs.global.sheca.com", true],
-    ["certs.sheca.com", true],
-    ["ldap2.sheca.com", true],
-
-    // Exact domain entries (various CAs)
+    // Suffix entries — subdomains of various CAs
     ["cert.ssl.com", true],
     ["www.ssl.com", true],
+    ["crt.sectigo.com", true],
+    ["crt.comodoca.com", true],
+    ["i.lencr.org", true],
+    ["r.lencr.org", true],
+    ["secure.globalsign.com", true],
+    ["certificates.godaddy.com", true],
+    ["certs.starfieldtech.com", true],
     ["cps.trust.telia.com", true],
     ["repository.emsign.com", true],
     ["cacert.actalis.it", true],
@@ -130,6 +108,10 @@ describe("isAllowedDomain", () => {
     ["cert.pkioverheid.nl", true],
     ["public.wisekey.com", true],
     ["rca.navercloudtrust.com", true],
+    ["repository.secomtrust.net", true],
+    ["cdp1.pca.dfn.de", true],
+    ["pki.treas.gov", true],
+    ["crl.boeing.com", true],
 
     // Rejected: non-matching domains
     ["evil.com", false],

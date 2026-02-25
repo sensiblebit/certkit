@@ -33,301 +33,265 @@ function corsHeaders(origin: string | null): Record<string, string> {
 // (e.g., "amazontrust.com") match any subdomain.
 const ALLOWED_DOMAINS: string[] = [
   // ── Major Commercial CAs ──
+  // Suffix entries match the domain itself and all subdomains.
+  // The file extension check (.crt, .cer, .der, .pem, .p7b, .p7c, .crl)
+  // provides a strong secondary filter against non-certificate requests.
 
   // DigiCert (includes Thawte, GeoTrust, RapidSSL, VeriSign, Symantec)
-  "cacerts.digicert.com",
-  "cacerts.digicert.cn", // DigiCert China
-  "crt.r.digicert.com",
-  "ssp-aia.digicert.com",
-  "ssp-crl.digicert.com",
-  "ssp-sia.digicert.com",
-  "onsite-crl.pki.digicert.com",
-  "svrintl-g3-aia.verisign.com",
-  "rapidssl-aia.geotrust.com",
-  "symauth.com", // suffix: pki-crl, tscp-crl, tscp-aia, tscp-sia subdomains
+  "digicert.com",
+  "digicert.cn",
+  "verisign.com",
+  "geotrust.com",
+  "thawte.com",
+  "symauth.com",
 
   // Sectigo / Comodo / USERTrust
-  "crt.sectigo.com",
-  "crt.comodoca.com",
-  "crt.comodo.net",
-  "crt.usertrust.com",
-  "crt.trust-provider.com",
+  "sectigo.com",
+  "comodoca.com",
+  "comodo.net",
+  "usertrust.com",
+  "trust-provider.com",
 
   // Let's Encrypt / ISRG
   "letsencrypt.org",
-  "i.lencr.org",
-  "r.lencr.org",
-  "x.lencr.org",
+  "lencr.org",
 
   // GlobalSign
-  "secure.globalsign.com",
+  "globalsign.com",
 
   // GoDaddy / Starfield
-  "certificates.godaddy.com",
-  "certs.godaddy.com",
-  "certificates.starfieldtech.com",
-  "certs.starfieldtech.com",
+  "godaddy.com",
+  "starfieldtech.com",
 
   // Entrust
-  "aia.entrust.net",
-  "managed.entrust.com", // suffix: Entrust Federal SSP subdomains
+  "entrust.net",
+  "entrust.com",
 
-  // Amazon Trust Services — suffix covers crt.rootca1-4, crt.rootg2,
-  // crt.sca0a, crt.sca1b, crl.rootca1, crl.rootg2, and EU subdomains.
+  // Amazon Trust Services
   "amazontrust.com",
-  "amznts.eu", // suffix: eue2m1/eue3m1/eur2m1.crt.root.amznts.eu
+  "amznts.eu",
 
   // Google Trust Services
   "pki.goog",
-  "i.pki.goog",
 
-  // Microsoft — suffix covers www, caissuers, pkiops subdomains.
+  // Microsoft
   "microsoft.com",
 
   // Cloudflare
-  "cacerts.cloudflare.com",
+  "cloudflare.com",
 
   // Apple
-  "certs.apple.com",
+  "apple.com",
 
   // SSL.com
-  "cert.ssl.com",
-  "www.ssl.com",
-  "crt.sslcom.cn", // SSL.com China
-  "x.ss2.us",
+  "ssl.com",
+  "sslcom.cn",
+  "ss2.us",
 
   // Certum (Asseco / Unizeto, Poland)
-  // suffix: repository, subca.repository, sslcom.repository,
-  // trustasia.repository, cdp.elektronicznypodpis subdomains.
   "certum.pl",
   "elektronicznypodpis.pl",
 
   // HARICA (Hellenic Academic and Research Institutions CA, Greece)
-  "harica.gr", // suffix: repo, crt, www subdomains
+  "harica.gr",
 
   // IdenTrust
-  "apps.identrust.com",
-  "validation.identrust.com",
+  "identrust.com",
 
   // Buypass (Norway)
-  "crt.buypass.no",
+  "buypass.no",
 
-  // SwissSign — suffix covers aia.swisssign.net and bare domain.
+  // SwissSign
   "swisssign.net",
-  "swisssign.ch", // aia.swisssign.ch
+  "swisssign.ch",
 
   // QuoVadis (DigiCert subsidiary)
-  "trust.quovadisglobal.com",
+  "quovadisglobal.com",
 
   // Telia / TeliaSonera (Finland/Nordics)
-  "cps.trust.telia.com",
-  "repository.trust.teliasonera.com",
-  "ca.trust.teliasonera.com",
+  "telia.com",
+  "teliasonera.com",
 
   // Trustwave / SecureTrust
-  "ssl.trustwave.com",
-  "certs.securetrust.com",
-  "certs.sslsecuretrust.com",
+  "trustwave.com",
+  "securetrust.com",
+  "sslsecuretrust.com",
 
   // D-TRUST (Bundesdruckerei, Germany)
-  "www.d-trust.net",
+  "d-trust.net",
 
-  // T-Systems / Deutsche Telekom — suffix covers grcl2.crt, grcl3.crt,
-  // tssmer21.crt, tssmrr23.crt, tstlser20.crt, tstlsrr23.crt, pki,
-  // pki0336, grcl2g2.pki, grcl3g2.pki, grcl2 subdomains.
+  // T-Systems / Deutsche Telekom
   "telesec.de",
-  "telekom.de", // suffix: crt-cpki, corporate-pki subdomains
+  "telekom.de",
 
   // DFN-Verein (German Research Network)
-  "cdp1.pca.dfn.de",
-  "cdp2.pca.dfn.de",
+  "dfn.de",
 
   // Atos (France)
-  "pki.atos.net",
+  "atos.net",
 
   // emSign (eMudhra, India)
-  "repository.emsign.com",
+  "emsign.com",
 
   // Actalis (Italy)
-  "cacert.actalis.it",
+  "actalis.it",
 
   // SECOM Trust Systems (Japan)
-  "secomtrust.net", // suffix: repository, repo2 subdomains
+  "secomtrust.net",
 
   // Cybertrust Japan
-  "rtcrl.cybertrust.ne.jp",
+  "cybertrust.ne.jp",
 
   // TWCA (Taiwan)
-  "sslserver.twca.com.tw",
+  "twca.com.tw",
   "epki.com.tw",
 
   // Chunghwa Telecom (Taiwan)
-  "eca.hinet.net",
+  "hinet.net",
 
   // WiseKey / OISTE (Switzerland)
-  "public.wisekey.com",
+  "wisekey.com",
 
   // AffirmTrust (now Entrust)
-  "ocsp.affirmtrust.com",
+  "affirmtrust.com",
 
-  // NetLock (Hungary) — suffix covers aia1, aia2, aia3 subdomains.
+  // NetLock (Hungary)
   "netlock.hu",
 
-  // Microsec / e-Szigno (Hungary) — suffix covers rootca2009-ca1-3,
-  // rootca2017-ca1-3, tlsrootca2023-ca, tlsrootca2025-ca,
-  // etlsrootca2024-ca, esmimerootca2024-ca, www subdomains.
+  // Microsec / e-Szigno (Hungary)
   "e-szigno.hu",
 
   // Certigna / Dhimyotis (France)
-  "autorite.certigna.fr",
-  "cert.certigna.com",
-  "autorite.dhimyotis.com",
+  "certigna.fr",
+  "certigna.com",
+  "dhimyotis.com",
 
   // Firmaprofesional (Spain)
-  "crl.firmaprofesional.com",
+  "firmaprofesional.com",
 
   // FNMT (Fabrica Nacional de Moneda y Timbre, Spain)
-  "www.cert.fnmt.es",
+  "fnmt.es",
 
-  // ACCV (Agencia de Tecnologia y Certificacion Electronica, Spain)
-  "www.accv.es",
+  // ACCV (Spain)
+  "accv.es",
 
   // ANF AC (Spain)
-  "www.anf.es",
+  "anf.es",
 
   // CertSign (Romania)
-  "certsign.ro", // suffix: www, pkipro subdomains
+  "certsign.ro",
 
   // Disig (Slovakia)
-  "disig.sk", // suffix: www, cdp subdomains
+  "disig.sk",
 
   // DigitalSign (Portugal)
-  "digitalsign.pt", // suffix: root-ecdsa, root-rsa subdomains
+  "digitalsign.pt",
 
-  // Certainly (Formerly SSC, Denmark)
-  "certainly.com", // suffix: root-e1, root-r1 subdomains
+  // Certainly (Denmark)
+  "certainly.com",
 
   // GlobalTrust (Austria)
-  "service.globaltrust.eu",
+  "globaltrust.eu",
 
   // PKIoverheid (Netherlands)
-  "cert.pkioverheid.nl",
+  "pkioverheid.nl",
 
   // Naver Cloud Trust (South Korea)
-  "rca.navercloudtrust.com",
-  "rca.navercorp.com",
+  "navercloudtrust.com",
+  "navercorp.com",
 
   // GDCA (Guangdong CA, China)
-  "www.gdca.com.cn",
+  "gdca.com.cn",
 
   // CFCA (China Financial CA)
-  "gtc.cfca.com.cn",
+  "cfca.com.cn",
 
   // BJCA (Beijing CA, China)
-  "repo.bjca.cn",
+  "bjca.cn",
 
   // Shanghai Electronic CA (SHECA, China)
-  "sheca.com", // suffix: certs.global, certs, ldap2 subdomains
+  "sheca.com",
 
   // iTrusChina
-  "wtca-cafiles.itrus.com.cn",
+  "itrus.com.cn",
 
   // TrustAsia (WoTrus subsidiary, China)
-  "ica.wt.trustasia.com",
-  "ica.oem.trustca.net",
+  "trustasia.com",
+  "trustca.net",
 
   // LiteSSL (Asseco/Certum white-label)
-  "ica.litessl.com",
-  "ica-pro.litessl.com",
+  "litessl.com",
 
   // E-Tugra (Turkey)
-  "www.e-tugra.com",
+  "e-tugra.com",
 
   // KAMUSM (Turkey)
-  "depo.kamusm.gov.tr",
+  "kamusm.gov.tr",
 
   // TunTrust (Tunisia)
-  "www.tuntrust.tn",
+  "tuntrust.tn",
 
   // Hong Kong Post
-  "www1.hongkongpost.gov.hk",
+  "hongkongpost.gov.hk",
 
   // Hongkong eCert (HKSAR Government)
-  "www1.ecert.gov.hk",
+  "ecert.gov.hk",
 
   // LawTrust (South Africa)
-  "www.lawtrust.co.za",
+  "lawtrust.co.za",
 
   // Hungarian Government PKI
-  "aia.kgyhsz.gov.hu",
+  "kgyhsz.gov.hu",
 
   // Siemens (corporate PKI)
-  "ah.siemens.com",
+  "siemens.com",
 
   // E.ON / Uniper (corporate PKI)
-  "pki.intranet.eon.com",
-  "pki.intranet.uniper.energy",
-  "pkicdp.uniperapps.com",
+  "eon.com",
+  "uniper.energy",
+  "uniperapps.com",
 
   // ── US Federal PKI (.gov / .mil) ──
 
-  // FPKI repository and test infra (GSA) — suffix covers repo.fpki.gov,
-  // http.fpki.gov, cite.fpki.gov (conformance test environment).
   "fpki.gov",
-  // US DoD PKI (DISA) — suffix covers crl.disa.mil, crl.nit.disa.mil,
-  // crl.gds.disa.mil, crl.gds.nit.disa.mil, and future subdomains.
   "disa.mil",
-  // US Treasury PKI SSP (serves DHS, VA, NASA, SSA, Treasury OCIO)
-  "pki.treas.gov",
-  "pki.treasury.gov",
-  // US Department of State
-  "crls.pki.state.gov",
-  // US Patent and Trademark Office
-  "ipki.uspto.gov",
-  // US Department of Veterans Affairs
-  "crl.pki.va.gov",
+  "treas.gov",
+  "treasury.gov",
+  "state.gov",
+  "uspto.gov",
+  "va.gov",
 
   // ── FPKI Shared Service Providers ──
 
   // WidePoint / ORC PKI
-  "crl-server.orc.com",
-  "eva.orc.com",
-  "eca.orc.com",
-  "crl.xca.xpki.com",
+  "orc.com",
+  "xpki.com",
 
   // ── FPKI Bridge Participants ──
 
-  // CertiPath Bridge — suffix covers crl. and aia. subdomains.
   "certipath.com",
-  // Defense contractors
-  "crl.boeing.com",
-  "crl.external.lmco.com",
-  "certdata.northropgrumman.com",
-  "pki.rtx.com",
-  // Exostar
-  "www.fis.evincible.com",
-  // Carillon (Canadian FPKI bridge partner)
-  "pub.carillon.ca",
-  "pub.carillonfedserv.com",
-  // STRAC / Foundation for Trusted Identity
-  "pki.strac.org",
-  "pki.fti.org",
-  // DirectTrust SAFE Identity Bridge — suffix covers crl. and aia.
+  "boeing.com",
+  "lmco.com",
+  "northropgrumman.com",
+  "rtx.com",
+  "evincible.com",
+  "carillon.ca",
+  "carillonfedserv.com",
+  "strac.org",
+  "fti.org",
   "makeidentitysafe.com",
-  // Verizon SSP
-  "sia1.ssp-strong-id.net",
-  // DocuSign Federal
-  "crl.dsf.docusign.net",
+  "ssp-strong-id.net",
+  "docusign.net",
 
   // ── Non-US Government PKI ──
 
   // Swiss Federal PKI
-  "www.pki.admin.ch",
+  "admin.ch",
   // Bavarian State PKI
-  "www.pki.bayern.de",
+  "bayern.de",
   // TBS Internet
-  "crt.tbs-internet.com",
-  "crt.tbs-x509.com",
+  "tbs-internet.com",
+  "tbs-x509.com",
 ];
 
 export function isAllowedDomain(hostname: string): boolean {
