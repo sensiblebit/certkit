@@ -51,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix `formatConvertOutput` returning unwrapped errors from PKCS#12, JKS, and PKCS#7 encoding (ERR-1) ([#75])
 - Fix `connect` command JSON using `fingerprint_sha256`, `type`, and `dns_names` field names instead of codebase-standard `sha256_fingerprint`, `cert_type`, and `sans` (CLI-4) ([#75])
 - Fix `convert` command performing encoding before checking if `-o` is required for binary formats — binary format error is now returned immediately ([#75])
+- Fix `crl --check` verdict written to stderr instead of stdout (CLI-1) and absent from JSON output (CLI-3) — check result now included as `check_result` in JSON and printed to stdout in text mode ([#75])
 
 ### Added
 

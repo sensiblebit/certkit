@@ -42,6 +42,18 @@ func init() {
 	registerCompletion(crlCmd, completionInput{"format", fixedCompletion("text", "json")})
 }
 
+// crlCheckResult holds the result of a --check lookup.
+type crlCheckResult struct {
+	Serial  string `json:"serial"`
+	Revoked bool   `json:"revoked"`
+}
+
+// crlOutputJSON wraps CRLInfo with an optional check result for JSON output.
+type crlOutputJSON struct {
+	*certkit.CRLInfo
+	CheckResult *crlCheckResult `json:"check_result,omitempty"`
+}
+
 func runCRL(cmd *cobra.Command, args []string) error {
 	source := args[0]
 
@@ -67,19 +79,8 @@ func runCRL(cmd *cobra.Command, args []string) error {
 
 	info := certkit.CRLInfoFromList(crl)
 
-	switch crlFormat {
-	case "json":
-		jsonData, err := json.MarshalIndent(info, "", "  ")
-		if err != nil {
-			return fmt.Errorf("marshaling JSON: %w", err)
-		}
-		fmt.Println(string(jsonData))
-	case "text":
-		fmt.Print(certkit.FormatCRLInfo(info))
-	default:
-		return fmt.Errorf("unsupported output format %q (use text or json)", crlFormat)
-	}
-
+	// Run --check before output so results are included in JSON
+	var checkResult *crlCheckResult
 	if crlCheckPath != "" {
 		passwords, err := internal.ProcessPasswords(passwordList, passwordFile)
 		if err != nil {
@@ -92,12 +93,35 @@ func runCRL(cmd *cobra.Command, args []string) error {
 		if contents.Leaf == nil {
 			return fmt.Errorf("no certificate found in %s", crlCheckPath)
 		}
-
-		if certkit.CRLContainsCert(crl, contents.Leaf) {
-			fmt.Fprintf(os.Stderr, "Certificate serial %s is REVOKED in this CRL\n", contents.Leaf.SerialNumber.Text(16))
-			return &ValidationError{Message: "certificate is revoked"}
+		checkResult = &crlCheckResult{
+			Serial:  contents.Leaf.SerialNumber.Text(16),
+			Revoked: certkit.CRLContainsCert(crl, contents.Leaf),
 		}
-		fmt.Fprintf(os.Stderr, "Certificate serial %s is NOT in this CRL\n", contents.Leaf.SerialNumber.Text(16))
+	}
+
+	switch crlFormat {
+	case "json":
+		output := crlOutputJSON{CRLInfo: info, CheckResult: checkResult}
+		jsonData, err := json.MarshalIndent(output, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshaling JSON: %w", err)
+		}
+		fmt.Println(string(jsonData))
+	case "text":
+		fmt.Print(certkit.FormatCRLInfo(info))
+		if checkResult != nil {
+			if checkResult.Revoked {
+				fmt.Printf("Certificate serial %s is REVOKED in this CRL\n", checkResult.Serial)
+			} else {
+				fmt.Printf("Certificate serial %s is NOT in this CRL\n", checkResult.Serial)
+			}
+		}
+	default:
+		return fmt.Errorf("unsupported output format %q (use text or json)", crlFormat)
+	}
+
+	if checkResult != nil && checkResult.Revoked {
+		return &ValidationError{Message: "certificate is revoked"}
 	}
 
 	return nil
