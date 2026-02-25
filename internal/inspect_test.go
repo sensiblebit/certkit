@@ -864,14 +864,20 @@ func TestResolveInspectAIA_FetchesIntermediate(t *testing.T) {
 		t.Fatalf("expected 2 results (leaf + fetched CA), got %d", len(got))
 	}
 
-	// Verify both leaf and CA are present.
+	// Verify both leaf and CA are present with correct AIAFetched flags.
 	var foundLeaf, foundCA bool
 	for _, r := range got {
 		if r.Type == "certificate" && strings.Contains(r.Subject, "aia-fetch.example.com") {
 			foundLeaf = true
+			if r.AIAFetched {
+				t.Error("leaf certificate should not be marked as AIA-fetched")
+			}
 		}
 		if r.Type == "certificate" && strings.Contains(r.Subject, "Test RSA Root CA") {
 			foundCA = true
+			if !r.AIAFetched {
+				t.Error("CA certificate fetched via AIA should be marked as AIA-fetched")
+			}
 		}
 	}
 	if !foundLeaf {

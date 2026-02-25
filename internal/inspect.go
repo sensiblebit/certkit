@@ -44,6 +44,9 @@ type InspectResult struct {
 	SigAlg    string   `json:"signature_algorithm,omitempty"`
 	KeyType   string   `json:"key_type,omitempty"`
 
+	// AIAFetched indicates the certificate was resolved via AIA, not from user input.
+	AIAFetched bool `json:"aia_fetched,omitempty"`
+
 	// CSR-specific fields. Populated only when Type == "csr".
 	CSRSubject string `json:"csr_subject,omitempty"`
 
@@ -336,7 +339,9 @@ func ResolveInspectAIA(ctx context.Context, results []InspectResult, fetch certs
 		if existing[fp] {
 			continue
 		}
-		results = append(results, inspectCert(rec.Cert))
+		r := inspectCert(rec.Cert)
+		r.AIAFetched = true
+		results = append(results, r)
 	}
 
 	return results, warnings

@@ -763,6 +763,11 @@ tr:hover td {
   background: color-mix(in srgb, var(--danger) 15%, transparent);
   color: var(--danger);
 }
+.badge-aia {
+  background: color-mix(in srgb, #9b59b6 18%, transparent);
+  color: #b07cc6;
+  cursor: help;
+}
 
 #keys-section {
   margin-top: 0;
