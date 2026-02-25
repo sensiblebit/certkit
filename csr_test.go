@@ -6,7 +6,9 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/pem"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -609,6 +611,390 @@ func verifyCSRFields(t *testing.T, csrPEM string, leaf *x509.Certificate) {
 	for i, got := range csr.URIs {
 		if got.String() != leaf.URIs[i].String() {
 			t.Errorf("URIs[%d] = %q, want %q", i, got, leaf.URIs[i])
+		}
+	}
+}
+
+// --- ParseCSRTemplate with OtherNames tests ---
+
+func TestParseCSRTemplate_WithOtherNames(t *testing.T) {
+	// WHY: OtherNames in JSON templates drive mTLS user cert CSR generation.
+	// The JSON must parse correctly into CSRTemplateOtherName entries, and
+	// templates without other_names must remain backward compatible.
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		json       string
+		wantCount  int
+		wantTypes  []string
+		wantValues []string
+		wantErr    bool
+	}{
+		{
+			name: "UPN and SRV",
+			json: `{
+				"subject": {"common_name": "user@example.com"},
+				"hosts": ["example.com"],
+				"other_names": [
+					{"type": "UPN", "value": "user@example.com"},
+					{"type": "SRV", "value": "_https.example.com"}
+				]
+			}`,
+			wantCount:  2,
+			wantTypes:  []string{"UPN", "SRV"},
+			wantValues: []string{"user@example.com", "_https.example.com"},
+		},
+		{
+			name: "dotted OID type",
+			json: `{
+				"subject": {"common_name": "test"},
+				"hosts": [],
+				"other_names": [
+					{"type": "1.2.3.4.5", "value": "custom"}
+				]
+			}`,
+			wantCount:  1,
+			wantTypes:  []string{"1.2.3.4.5"},
+			wantValues: []string{"custom"},
+		},
+		{
+			name: "no other_names field (backward compat)",
+			json: `{
+				"subject": {"common_name": "example.com"},
+				"hosts": ["example.com"]
+			}`,
+			wantCount: 0,
+		},
+		{
+			name: "empty other_names array",
+			json: `{
+				"subject": {"common_name": "example.com"},
+				"hosts": ["example.com"],
+				"other_names": []
+			}`,
+			wantCount: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			tmpl, err := ParseCSRTemplate([]byte(tt.json))
+			if tt.wantErr {
+				if err == nil {
+					t.Error("expected error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(tmpl.OtherNames) != tt.wantCount {
+				t.Fatalf("OtherNames count = %d, want %d", len(tmpl.OtherNames), tt.wantCount)
+			}
+			for i, on := range tmpl.OtherNames {
+				if i < len(tt.wantTypes) && on.Type != tt.wantTypes[i] {
+					t.Errorf("OtherNames[%d].Type = %q, want %q", i, on.Type, tt.wantTypes[i])
+				}
+				if i < len(tt.wantValues) && on.Value != tt.wantValues[i] {
+					t.Errorf("OtherNames[%d].Value = %q, want %q", i, on.Value, tt.wantValues[i])
+				}
+			}
+		})
+	}
+}
+
+// --- GenerateCSRFromTemplate with OtherNames tests ---
+
+func TestGenerateCSRFromTemplate_WithOtherNames(t *testing.T) {
+	// WHY: GenerateCSRFromTemplate must encode OtherName SANs into the CSR's SAN
+	// extension alongside standard SAN types without producing duplicate SAN
+	// extensions (RFC 5280 violation). Each subtest verifies a different combination
+	// of OtherNames and standard SANs.
+	t.Parallel()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name           string
+		tmpl           *CSRTemplate
+		wantOtherNames []string // ParseOtherNameSANs output
+		wantDNS        []string
+		wantEmails     []string
+		wantIPStrs     []string
+	}{
+		{
+			name: "UPN only",
+			tmpl: &CSRTemplate{
+				Subject: CSRSubject{CommonName: "user@corp.example.com"},
+				OtherNames: []CSRTemplateOtherName{
+					{Type: "UPN", Value: "user@corp.example.com"},
+				},
+			},
+			wantOtherNames: []string{"UPN:user@corp.example.com"},
+		},
+		{
+			name: "UPN with DNS",
+			tmpl: &CSRTemplate{
+				Subject: CSRSubject{CommonName: "user@corp.example.com"},
+				Hosts:   []string{"example.com", "www.example.com"},
+				OtherNames: []CSRTemplateOtherName{
+					{Type: "UPN", Value: "user@corp.example.com"},
+				},
+			},
+			wantOtherNames: []string{"UPN:user@corp.example.com"},
+			wantDNS:        []string{"example.com", "www.example.com"},
+		},
+		{
+			name: "UPN with email and DNS",
+			tmpl: &CSRTemplate{
+				Subject: CSRSubject{CommonName: "user@corp.example.com"},
+				Hosts:   []string{"example.com", "user@corp.example.com"},
+				OtherNames: []CSRTemplateOtherName{
+					{Type: "UPN", Value: "user@corp.example.com"},
+				},
+			},
+			wantOtherNames: []string{"UPN:user@corp.example.com"},
+			wantDNS:        []string{"example.com"},
+			wantEmails:     []string{"user@corp.example.com"},
+		},
+		{
+			name: "multiple OtherNames",
+			tmpl: &CSRTemplate{
+				Subject: CSRSubject{CommonName: "multi-san"},
+				OtherNames: []CSRTemplateOtherName{
+					{Type: "UPN", Value: "user@example.com"},
+					{Type: "SRV", Value: "_https.example.com"},
+				},
+			},
+			wantOtherNames: []string{
+				"UPN:user@example.com",
+				"SRV:_https.example.com",
+			},
+		},
+		{
+			name: "empty OtherNames backward compat",
+			tmpl: &CSRTemplate{
+				Subject:    CSRSubject{CommonName: "example.com"},
+				Hosts:      []string{"example.com", "10.0.0.1"},
+				OtherNames: nil,
+			},
+			wantDNS:    []string{"example.com"},
+			wantIPStrs: []string{"10.0.0.1"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			csrPEM, err := GenerateCSRFromTemplate(tt.tmpl, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			csr, err := ParsePEMCertificateRequest([]byte(csrPEM))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Verify CN preserved
+			if csr.Subject.CommonName != tt.tmpl.Subject.CommonName {
+				t.Errorf("CN = %q, want %q", csr.Subject.CommonName, tt.tmpl.Subject.CommonName)
+			}
+
+			// Verify OtherNames
+			gotOther := ParseOtherNameSANs(csr.Extensions)
+			if !slices.Equal(gotOther, tt.wantOtherNames) {
+				t.Errorf("OtherNames = %v, want %v", gotOther, tt.wantOtherNames)
+			}
+
+			// Verify DNS names
+			if !slices.Equal(csr.DNSNames, tt.wantDNS) {
+				t.Errorf("DNSNames = %v, want %v", csr.DNSNames, tt.wantDNS)
+			}
+
+			// Verify emails
+			if !slices.Equal(csr.EmailAddresses, tt.wantEmails) {
+				t.Errorf("EmailAddresses = %v, want %v", csr.EmailAddresses, tt.wantEmails)
+			}
+
+			// Verify IPs
+			var gotIPs []string
+			for _, ip := range csr.IPAddresses {
+				gotIPs = append(gotIPs, ip.String())
+			}
+			if !slices.Equal(gotIPs, tt.wantIPStrs) {
+				t.Errorf("IPAddresses = %v, want %v", gotIPs, tt.wantIPStrs)
+			}
+
+			// Verify no duplicate SAN extensions (RFC 5280 compliance)
+			sanOID := asn1.ObjectIdentifier{2, 5, 29, 17}
+			sanCount := 0
+			for _, ext := range csr.Extensions {
+				if ext.Id.Equal(sanOID) {
+					sanCount++
+				}
+			}
+			if sanCount > 1 {
+				t.Errorf("found %d SAN extensions, want at most 1 (RFC 5280 violation)", sanCount)
+			}
+		})
+	}
+}
+
+func TestGenerateCSRFromTemplate_InvalidOtherNameType(t *testing.T) {
+	// WHY: Invalid OtherName type strings must produce clear errors rather than
+	// silently generating malformed CSRs.
+	t.Parallel()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &CSRTemplate{
+		Subject: CSRSubject{CommonName: "test"},
+		OtherNames: []CSRTemplateOtherName{
+			{Type: "BOGUS", Value: "value"},
+		},
+	}
+	_, err = GenerateCSRFromTemplate(tmpl, key)
+	if err == nil {
+		t.Error("expected error for invalid OtherName type")
+	}
+	if !strings.Contains(err.Error(), "resolving OtherName type") {
+		t.Errorf("error should mention resolving OtherName type, got: %v", err)
+	}
+}
+
+// --- GenerateCSRFromCSR preserves OtherNames tests ---
+
+func TestGenerateCSRFromCSR_PreservesOtherNames(t *testing.T) {
+	// WHY: CSR-to-CSR regeneration (key rotation) must preserve OtherName SANs.
+	// Dropping them would break mTLS user cert renewals that rely on UPN.
+	t.Parallel()
+
+	srcKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create source CSR with OtherNames via template
+	tmpl := &CSRTemplate{
+		Subject: CSRSubject{CommonName: "alice@corp.example.com"},
+		Hosts:   []string{"example.com", "alice@corp.example.com"},
+		OtherNames: []CSRTemplateOtherName{
+			{Type: "UPN", Value: "alice@corp.example.com"},
+			{Type: "SRV", Value: "_https.corp.example.com"},
+		},
+	}
+	srcCSRPEM, err := GenerateCSRFromTemplate(tmpl, srcKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	srcCSR, err := ParsePEMCertificateRequest([]byte(srcCSRPEM))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify source has OtherNames
+	srcOtherNames := ParseOtherNameSANs(srcCSR.Extensions)
+	if len(srcOtherNames) != 2 {
+		t.Fatalf("source OtherNames count = %d, want 2", len(srcOtherNames))
+	}
+
+	// Regenerate with new key
+	newKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newCSRPEM, err := GenerateCSRFromCSR(srcCSR, newKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newCSR, err := ParsePEMCertificateRequest([]byte(newCSRPEM))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify OtherNames survived
+	newOtherNames := ParseOtherNameSANs(newCSR.Extensions)
+	if !slices.Equal(newOtherNames, srcOtherNames) {
+		t.Errorf("OtherNames = %v, want %v", newOtherNames, srcOtherNames)
+	}
+
+	// Verify standard SANs survived
+	if !slices.Equal(newCSR.DNSNames, srcCSR.DNSNames) {
+		t.Errorf("DNSNames = %v, want %v", newCSR.DNSNames, srcCSR.DNSNames)
+	}
+	if !slices.Equal(newCSR.EmailAddresses, srcCSR.EmailAddresses) {
+		t.Errorf("EmailAddresses = %v, want %v", newCSR.EmailAddresses, srcCSR.EmailAddresses)
+	}
+
+	// Verify subject preserved
+	if newCSR.Subject.CommonName != srcCSR.Subject.CommonName {
+		t.Errorf("CN = %q, want %q", newCSR.Subject.CommonName, srcCSR.Subject.CommonName)
+	}
+
+	// Verify key was rotated
+	srcPub, ok := srcCSR.PublicKey.(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatalf("expected source *ecdsa.PublicKey, got %T", srcCSR.PublicKey)
+	}
+	newPub, ok := newCSR.PublicKey.(*ecdsa.PublicKey)
+	if !ok {
+		t.Fatalf("expected new *ecdsa.PublicKey, got %T", newCSR.PublicKey)
+	}
+	if srcPub.Equal(newPub) {
+		t.Error("new CSR should have a different public key than source")
+	}
+}
+
+func TestGenerateCSRFromCSR_WithoutOtherNames_Unchanged(t *testing.T) {
+	// WHY: GenerateCSRFromCSR must remain backward compatible — CSRs without
+	// OtherNames should work identically to before.
+	t.Parallel()
+
+	srcKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, _ := generateLeafWithSANs(t)
+	srcCSRPEM, _, err := GenerateCSR(leaf, srcKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _ := pem.Decode([]byte(srcCSRPEM))
+	srcCSR, err := x509.ParseCertificateRequest(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	newKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newCSRPEM, err := GenerateCSRFromCSR(srcCSR, newKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	newCSR, err := ParsePEMCertificateRequest([]byte(newCSRPEM))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !slices.Equal(newCSR.DNSNames, srcCSR.DNSNames) {
+		t.Errorf("DNSNames = %v, want %v", newCSR.DNSNames, srcCSR.DNSNames)
+	}
+	if len(newCSR.IPAddresses) != len(srcCSR.IPAddresses) {
+		t.Fatalf("IPAddresses count = %d, want %d", len(newCSR.IPAddresses), len(srcCSR.IPAddresses))
+	}
+	for i, ip := range newCSR.IPAddresses {
+		if !ip.Equal(srcCSR.IPAddresses[i]) {
+			t.Errorf("IPAddresses[%d] = %v, want %v", i, ip, srcCSR.IPAddresses[i])
 		}
 	}
 }

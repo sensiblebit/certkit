@@ -7,6 +7,8 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"net"
+	"net/url"
 	"slices"
 	"strings"
 	"testing"
@@ -804,4 +806,440 @@ func certSubjectWithEmail(t *testing.T, email, cn string) pkix.Name {
 		t.Fatal(err)
 	}
 	return cert.Subject
+}
+
+// --- ResolveOtherNameOID tests ---
+
+func TestResolveOtherNameOID(t *testing.T) {
+	// WHY: ResolveOtherNameOID is the entry point for user-provided OtherName type
+	// strings; it must correctly map known labels and parse dotted-decimal OIDs,
+	// rejecting malformed input with clear errors.
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		input   string
+		wantOID asn1.ObjectIdentifier
+		wantErr bool
+	}{
+		{
+			name:    "UPN label",
+			input:   "UPN",
+			wantOID: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3},
+		},
+		{
+			name:    "XMPP label",
+			input:   "XMPP",
+			wantOID: asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 8, 5},
+		},
+		{
+			name:    "SRV label",
+			input:   "SRV",
+			wantOID: asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 8, 7},
+		},
+		{
+			name:    "SmtpUTF8Mailbox label",
+			input:   "SmtpUTF8Mailbox",
+			wantOID: asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 8, 9},
+		},
+		{
+			name:    "dotted decimal OID",
+			input:   "1.3.6.1.4.1.311.20.2.3",
+			wantOID: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3},
+		},
+		{
+			name:    "arbitrary dotted OID",
+			input:   "1.2.3.4.5",
+			wantOID: asn1.ObjectIdentifier{1, 2, 3, 4, 5},
+		},
+		{
+			name:    "empty string",
+			input:   "",
+			wantErr: true,
+		},
+		{
+			name:    "unknown label without dots",
+			input:   "BOGUS",
+			wantErr: true,
+		},
+		{
+			name:    "single component OID",
+			input:   "1",
+			wantErr: true,
+		},
+		{
+			name:    "non-numeric OID component",
+			input:   "1.2.abc.4",
+			wantErr: true,
+		},
+		{
+			name:    "negative OID component",
+			input:   "1.2.-3.4",
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := ResolveOtherNameOID(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("expected error for input %q, got OID %v", tt.input, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if !got.Equal(tt.wantOID) {
+				t.Errorf("got OID %v, want %v", got, tt.wantOID)
+			}
+		})
+	}
+}
+
+// --- MarshalSANExtension tests ---
+
+func TestMarshalSANExtension(t *testing.T) {
+	// WHY: MarshalSANExtension builds the complete SAN extension from all
+	// GeneralName types including OtherName. The encoding must be parseable by
+	// Go's x509 package (for standard types) and by ParseOtherNameSANs (for
+	// OtherName). Incorrect encoding produces RFC 5280 violations.
+	t.Parallel()
+
+	upnOID := asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3}
+	srvOID := asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 8, 7}
+	xmppOID := asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 8, 5}
+	smtpOID := asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 8, 9}
+
+	tests := []struct {
+		name           string
+		input          MarshalSANExtensionInput
+		wantOtherNames []string // expected ParseOtherNameSANs output
+		wantDNS        []string
+		wantEmails     []string
+		wantIPStrs     []string
+		wantURIStrs    []string
+	}{
+		{
+			name: "UPN only",
+			input: MarshalSANExtensionInput{
+				OtherNames: []OtherNameSAN{
+					{OID: upnOID, Value: "user@example.com"},
+				},
+			},
+			wantOtherNames: []string{"UPN:user@example.com"},
+		},
+		{
+			name: "SRV uses IA5String",
+			input: MarshalSANExtensionInput{
+				OtherNames: []OtherNameSAN{
+					{OID: srvOID, Value: "_https.example.com"},
+				},
+			},
+			wantOtherNames: []string{"SRV:_https.example.com"},
+		},
+		{
+			name: "DNS and UPN mixed",
+			input: MarshalSANExtensionInput{
+				DNSNames: []string{"example.com", "www.example.com"},
+				OtherNames: []OtherNameSAN{
+					{OID: upnOID, Value: "admin@example.com"},
+				},
+			},
+			wantOtherNames: []string{"UPN:admin@example.com"},
+			wantDNS:        []string{"example.com", "www.example.com"},
+		},
+		{
+			name: "all types combined",
+			input: MarshalSANExtensionInput{
+				DNSNames:       []string{"example.com"},
+				EmailAddresses: []string{"admin@example.com"},
+				IPAddresses:    []net.IP{net.ParseIP("10.0.0.1"), net.ParseIP("::1")},
+				URIs:           []*url.URL{mustParseURL(t, "spiffe://example.com/workload")},
+				OtherNames: []OtherNameSAN{
+					{OID: upnOID, Value: "user@corp.example.com"},
+				},
+			},
+			wantOtherNames: []string{"UPN:user@corp.example.com"},
+			wantDNS:        []string{"example.com"},
+			wantEmails:     []string{"admin@example.com"},
+			wantIPStrs:     []string{"10.0.0.1", "::1"},
+			wantURIStrs:    []string{"spiffe://example.com/workload"},
+		},
+		{
+			name: "multiple OtherNames",
+			input: MarshalSANExtensionInput{
+				OtherNames: []OtherNameSAN{
+					{OID: upnOID, Value: "user@example.com"},
+					{OID: xmppOID, Value: "user@xmpp.example.com"},
+					{OID: smtpOID, Value: "user@smtp.example.com"},
+				},
+			},
+			wantOtherNames: []string{
+				"UPN:user@example.com",
+				"XMPP:user@xmpp.example.com",
+				"SmtpUTF8Mailbox:user@smtp.example.com",
+			},
+		},
+		{
+			name: "arbitrary OID defaults to UTF8String",
+			input: MarshalSANExtensionInput{
+				OtherNames: []OtherNameSAN{
+					{OID: asn1.ObjectIdentifier{1, 2, 3, 4, 5}, Value: "custom-value"},
+				},
+			},
+			wantOtherNames: []string{"1.2.3.4.5:custom-value"},
+		},
+		{
+			name: "IPv4 and IPv6",
+			input: MarshalSANExtensionInput{
+				IPAddresses: []net.IP{net.ParseIP("192.168.1.1"), net.ParseIP("2001:db8::1")},
+			},
+			wantIPStrs: []string{"192.168.1.1", "2001:db8::1"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			ext, err := MarshalSANExtension(tt.input)
+			if err != nil {
+				t.Fatalf("MarshalSANExtension: %v", err)
+			}
+			if !ext.Id.Equal(asn1.ObjectIdentifier{2, 5, 29, 17}) {
+				t.Errorf("extension OID = %v, want 2.5.29.17", ext.Id)
+			}
+
+			// Create a self-signed cert with this SAN extension to verify
+			// Go's x509 parser can read the standard SAN types.
+			key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			template := &x509.Certificate{
+				SerialNumber:    randomSerial(t),
+				Subject:         pkix.Name{CommonName: "test"},
+				NotBefore:       time.Now().Add(-time.Hour),
+				NotAfter:        time.Now().Add(24 * time.Hour),
+				ExtraExtensions: []pkix.Extension{ext},
+			}
+			certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cert, err := x509.ParseCertificate(certDER)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Verify OtherNames via ParseOtherNameSANs
+			gotOther := ParseOtherNameSANs(cert.Extensions)
+			if !slices.Equal(gotOther, tt.wantOtherNames) {
+				t.Errorf("OtherNames = %v, want %v", gotOther, tt.wantOtherNames)
+			}
+
+			// Verify DNS names
+			if !slices.Equal(cert.DNSNames, tt.wantDNS) {
+				t.Errorf("DNSNames = %v, want %v", cert.DNSNames, tt.wantDNS)
+			}
+
+			// Verify email addresses
+			if !slices.Equal(cert.EmailAddresses, tt.wantEmails) {
+				t.Errorf("EmailAddresses = %v, want %v", cert.EmailAddresses, tt.wantEmails)
+			}
+
+			// Verify IP addresses
+			var gotIPs []string
+			for _, ip := range cert.IPAddresses {
+				gotIPs = append(gotIPs, ip.String())
+			}
+			if !slices.Equal(gotIPs, tt.wantIPStrs) {
+				t.Errorf("IPAddresses = %v, want %v", gotIPs, tt.wantIPStrs)
+			}
+
+			// Verify URIs
+			var gotURIs []string
+			for _, uri := range cert.URIs {
+				gotURIs = append(gotURIs, uri.String())
+			}
+			if !slices.Equal(gotURIs, tt.wantURIStrs) {
+				t.Errorf("URIs = %v, want %v", gotURIs, tt.wantURIStrs)
+			}
+		})
+	}
+}
+
+func TestMarshalSANExtension_CertificateRoundTrip(t *testing.T) {
+	// WHY: End-to-end round-trip through x509.CreateCertificate → ParseCertificate
+	// proves the encoded SAN extension is valid DER and all GeneralName types
+	// survive the encode→decode cycle intact.
+	t.Parallel()
+
+	upnOID := asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3}
+
+	ext, err := MarshalSANExtension(MarshalSANExtensionInput{
+		DNSNames:       []string{"example.com", "www.example.com"},
+		EmailAddresses: []string{"admin@example.com"},
+		IPAddresses:    []net.IP{net.ParseIP("10.0.0.1"), net.ParseIP("::1")},
+		URIs:           []*url.URL{mustParseURL(t, "spiffe://example.com/ns/default")},
+		OtherNames: []OtherNameSAN{
+			{OID: upnOID, Value: "user@corp.example.com"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:    randomSerial(t),
+		Subject:         pkix.Name{CommonName: "round-trip-test"},
+		NotBefore:       time.Now().Add(-time.Hour),
+		NotAfter:        time.Now().Add(24 * time.Hour),
+		ExtraExtensions: []pkix.Extension{ext},
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify standard SAN types
+	wantDNS := []string{"example.com", "www.example.com"}
+	if !slices.Equal(cert.DNSNames, wantDNS) {
+		t.Errorf("DNSNames = %v, want %v", cert.DNSNames, wantDNS)
+	}
+	wantEmail := []string{"admin@example.com"}
+	if !slices.Equal(cert.EmailAddresses, wantEmail) {
+		t.Errorf("EmailAddresses = %v, want %v", cert.EmailAddresses, wantEmail)
+	}
+	if len(cert.IPAddresses) != 2 {
+		t.Fatalf("IPAddresses count = %d, want 2", len(cert.IPAddresses))
+	}
+	if cert.IPAddresses[0].String() != "10.0.0.1" {
+		t.Errorf("IPAddresses[0] = %v, want 10.0.0.1", cert.IPAddresses[0])
+	}
+	if cert.IPAddresses[1].String() != "::1" {
+		t.Errorf("IPAddresses[1] = %v, want ::1", cert.IPAddresses[1])
+	}
+	if len(cert.URIs) != 1 || cert.URIs[0].String() != "spiffe://example.com/ns/default" {
+		t.Errorf("URIs = %v, want [spiffe://example.com/ns/default]", cert.URIs)
+	}
+
+	// Verify OtherName via ParseOtherNameSANs
+	otherNames := ParseOtherNameSANs(cert.Extensions)
+	if len(otherNames) != 1 || otherNames[0] != "UPN:user@corp.example.com" {
+		t.Errorf("OtherNames = %v, want [UPN:user@corp.example.com]", otherNames)
+	}
+}
+
+func TestMarshalSANExtension_mTLSUserCert(t *testing.T) {
+	// WHY: mTLS user identity certificates are the primary use case for OtherName
+	// SAN generation. This test creates a CA-signed leaf with UPN + rfc822Name +
+	// ClientAuth EKU and verifies the full round-trip including chain validation.
+	t.Parallel()
+
+	upnOID := asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3}
+
+	// Create a self-signed CA
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caTemplate := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "mTLS Test CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Build SAN extension with UPN + email
+	sanExt, err := MarshalSANExtension(MarshalSANExtensionInput{
+		EmailAddresses: []string{"alice@corp.example.com"},
+		OtherNames: []OtherNameSAN{
+			{OID: upnOID, Value: "alice@corp.example.com"},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Create CA-signed leaf with ClientAuth EKU
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafTemplate := &x509.Certificate{
+		SerialNumber:    randomSerial(t),
+		Subject:         pkix.Name{CommonName: "alice@corp.example.com"},
+		NotBefore:       time.Now().Add(-time.Hour),
+		NotAfter:        time.Now().Add(24 * time.Hour),
+		KeyUsage:        x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:     []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+		ExtraExtensions: []pkix.Extension{sanExt},
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafCert, err := x509.ParseCertificate(leafDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Verify email SAN
+	if len(leafCert.EmailAddresses) != 1 || leafCert.EmailAddresses[0] != "alice@corp.example.com" {
+		t.Errorf("EmailAddresses = %v, want [alice@corp.example.com]", leafCert.EmailAddresses)
+	}
+
+	// Verify UPN OtherName
+	otherNames := ParseOtherNameSANs(leafCert.Extensions)
+	if len(otherNames) != 1 || otherNames[0] != "UPN:alice@corp.example.com" {
+		t.Errorf("OtherNames = %v, want [UPN:alice@corp.example.com]", otherNames)
+	}
+
+	// Verify ClientAuth EKU
+	if len(leafCert.ExtKeyUsage) != 1 || leafCert.ExtKeyUsage[0] != x509.ExtKeyUsageClientAuth {
+		t.Errorf("ExtKeyUsage = %v, want [ClientAuth]", leafCert.ExtKeyUsage)
+	}
+
+	// Verify the certificate chains to the CA
+	roots := x509.NewCertPool()
+	roots.AddCert(caCert)
+	_, err = leafCert.Verify(x509.VerifyOptions{
+		Roots:     roots,
+		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
+	})
+	if err != nil {
+		t.Errorf("certificate chain verification failed: %v", err)
+	}
+}
+
+// mustParseURL parses a URL string or fails the test.
+func mustParseURL(t *testing.T, rawURL string) *url.URL {
+	t.Helper()
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		t.Fatalf("parsing URL %q: %v", rawURL, err)
+	}
+	return u
 }

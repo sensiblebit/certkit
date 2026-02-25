@@ -70,12 +70,23 @@ func GenerateCSR(leaf *x509.Certificate, privateKey crypto.PrivateKey) (csrPEM s
 	return csrPEM, keyPEM, nil
 }
 
+// CSRTemplateOtherName represents an OtherName SAN entry in a CSR template.
+type CSRTemplateOtherName struct {
+	// Type is a well-known label ("UPN", "SRV", "XMPP", "SmtpUTF8Mailbox")
+	// or a dotted-decimal OID string.
+	Type string `json:"type"`
+	// Value is the string value for the OtherName entry.
+	Value string `json:"value"`
+}
+
 // CSRTemplate is a JSON-serializable template for CSR generation.
 type CSRTemplate struct {
 	// Subject contains the distinguished name fields for the CSR.
 	Subject CSRSubject `json:"subject"`
 	// Hosts lists the DNS names, IP addresses, URIs, and email addresses for SANs.
 	Hosts []string `json:"hosts"`
+	// OtherNames lists OtherName SAN entries (e.g. UPN for mTLS user certs).
+	OtherNames []CSRTemplateOtherName `json:"other_names,omitempty"`
 }
 
 // CSRSubject holds the subject fields for a CSR template.
@@ -117,6 +128,11 @@ func ClassifyHosts(hosts []string) (dnsNames []string, ips []net.IP, uris []*url
 }
 
 // GenerateCSRFromTemplate creates a PEM-encoded CSR from a template and signer.
+//
+// When OtherNames are present, the entire SAN extension is built via
+// MarshalSANExtension and placed in ExtraExtensions. The typed SAN fields
+// (DNSNames, IPAddresses, etc.) are left nil on the CSR template to avoid
+// Go generating a duplicate SAN extension.
 func GenerateCSRFromTemplate(tmpl *CSRTemplate, signer crypto.Signer) (string, error) {
 	subject := pkix.Name{
 		CommonName:         tmpl.Subject.CommonName,
@@ -135,11 +151,34 @@ func GenerateCSRFromTemplate(tmpl *CSRTemplate, signer crypto.Signer) (string, e
 	}
 
 	csrTemplate := &x509.CertificateRequest{
-		Subject:        subject,
-		DNSNames:       dnsNames,
-		IPAddresses:    ips,
-		URIs:           uris,
-		EmailAddresses: emails,
+		Subject: subject,
+	}
+
+	if len(tmpl.OtherNames) > 0 {
+		otherNames := make([]OtherNameSAN, 0, len(tmpl.OtherNames))
+		for _, on := range tmpl.OtherNames {
+			oid, err := ResolveOtherNameOID(on.Type)
+			if err != nil {
+				return "", fmt.Errorf("resolving OtherName type: %w", err)
+			}
+			otherNames = append(otherNames, OtherNameSAN{OID: oid, Value: on.Value})
+		}
+		sanExt, err := MarshalSANExtension(MarshalSANExtensionInput{
+			DNSNames:       dnsNames,
+			EmailAddresses: emails,
+			IPAddresses:    ips,
+			URIs:           uris,
+			OtherNames:     otherNames,
+		})
+		if err != nil {
+			return "", fmt.Errorf("building SAN extension: %w", err)
+		}
+		csrTemplate.ExtraExtensions = []pkix.Extension{sanExt}
+	} else {
+		csrTemplate.DNSNames = dnsNames
+		csrTemplate.IPAddresses = ips
+		csrTemplate.URIs = uris
+		csrTemplate.EmailAddresses = emails
 	}
 
 	csrDER, err := x509.CreateCertificateRequest(rand.Reader, csrTemplate, signer)
@@ -154,14 +193,31 @@ func GenerateCSRFromTemplate(tmpl *CSRTemplate, signer crypto.Signer) (string, e
 }
 
 // GenerateCSRFromCSR creates a new CSR using an existing CSR as template,
-// signed by the provided key.
+// signed by the provided key. OtherName SAN entries from the source CSR
+// are preserved by rebuilding the full SAN extension.
 func GenerateCSRFromCSR(source *x509.CertificateRequest, signer crypto.Signer) (string, error) {
 	csrTemplate := &x509.CertificateRequest{
-		Subject:        source.Subject,
-		DNSNames:       source.DNSNames,
-		IPAddresses:    source.IPAddresses,
-		URIs:           source.URIs,
-		EmailAddresses: source.EmailAddresses,
+		Subject: source.Subject,
+	}
+
+	otherNames := parseOtherNameSANEntries(source.Extensions)
+	if len(otherNames) > 0 {
+		sanExt, err := MarshalSANExtension(MarshalSANExtensionInput{
+			DNSNames:       source.DNSNames,
+			EmailAddresses: source.EmailAddresses,
+			IPAddresses:    source.IPAddresses,
+			URIs:           source.URIs,
+			OtherNames:     otherNames,
+		})
+		if err != nil {
+			return "", fmt.Errorf("building SAN extension: %w", err)
+		}
+		csrTemplate.ExtraExtensions = []pkix.Extension{sanExt}
+	} else {
+		csrTemplate.DNSNames = source.DNSNames
+		csrTemplate.IPAddresses = source.IPAddresses
+		csrTemplate.URIs = source.URIs
+		csrTemplate.EmailAddresses = source.EmailAddresses
 	}
 
 	csrDER, err := x509.CreateCertificateRequest(rand.Reader, csrTemplate, signer)

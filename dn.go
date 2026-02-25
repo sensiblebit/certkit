@@ -5,7 +5,11 @@ import (
 	"crypto/x509/pkix"
 	"encoding/asn1"
 	"encoding/hex"
+	"errors"
 	"fmt"
+	"net"
+	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -124,6 +128,266 @@ var otherNameLabels = map[string]string{
 	"1.3.6.1.5.5.7.8.9":       "SmtpUTF8Mailbox", // id-on-SmtpUTF8Mailbox
 	"1.3.6.1.4.1.311.25.1":    "DC-GUID",         // Microsoft DC GUID
 	"2.16.840.1.113733.1.9.7": "Strong-Extranet", // VeriSign SGC
+}
+
+// otherNameOIDs maps well-known OtherName labels to their OIDs.
+// This is the reverse of otherNameLabels for the four string-typed OtherName types.
+var otherNameOIDs = map[string]asn1.ObjectIdentifier{
+	"UPN":             {1, 3, 6, 1, 4, 1, 311, 20, 2, 3},
+	"XMPP":            {1, 3, 6, 1, 5, 5, 7, 8, 5},
+	"SRV":             {1, 3, 6, 1, 5, 5, 7, 8, 7},
+	"SmtpUTF8Mailbox": {1, 3, 6, 1, 5, 5, 7, 8, 9},
+}
+
+// oidSRV is the OID for id-on-dnsSRV, the only well-known OtherName type
+// encoded as IA5String instead of UTF8String.
+var oidSRV = asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 8, 7}
+
+// OtherNameSAN represents a single OtherName entry in a Subject Alternative
+// Name extension. OID identifies the type (e.g. UPN, SRV) and Value holds the
+// string representation.
+type OtherNameSAN struct {
+	OID   asn1.ObjectIdentifier
+	Value string
+}
+
+// MarshalSANExtensionInput holds all SAN types for building a complete
+// SubjectAltName extension. Use this when OtherName entries are needed
+// alongside standard SAN types.
+type MarshalSANExtensionInput struct {
+	DNSNames       []string
+	EmailAddresses []string
+	IPAddresses    []net.IP
+	URIs           []*url.URL
+	OtherNames     []OtherNameSAN
+}
+
+// MarshalSANExtension builds a complete Subject Alternative Name extension
+// (OID 2.5.29.17) containing all GeneralName types from the input. The
+// returned extension can be used in x509.Certificate.ExtraExtensions or
+// x509.CertificateRequest.ExtraExtensions.
+//
+// When OtherNames are present, callers must nil out the typed SAN fields
+// (DNSNames, IPAddresses, etc.) on the certificate/CSR template to avoid
+// Go's x509 package generating a duplicate SAN extension.
+func MarshalSANExtension(input MarshalSANExtensionInput) (pkix.Extension, error) {
+	var gnBytes []byte
+
+	for _, on := range input.OtherNames {
+		b, err := marshalOtherNameGN(on)
+		if err != nil {
+			return pkix.Extension{}, err
+		}
+		gnBytes = append(gnBytes, b...)
+	}
+
+	for _, email := range input.EmailAddresses {
+		b, err := asn1.Marshal(asn1.RawValue{
+			Class: asn1.ClassContextSpecific,
+			Tag:   1,
+			Bytes: []byte(email),
+		})
+		if err != nil {
+			return pkix.Extension{}, fmt.Errorf("marshaling email SAN: %w", err)
+		}
+		gnBytes = append(gnBytes, b...)
+	}
+
+	for _, dns := range input.DNSNames {
+		b, err := asn1.Marshal(asn1.RawValue{
+			Class: asn1.ClassContextSpecific,
+			Tag:   2,
+			Bytes: []byte(dns),
+		})
+		if err != nil {
+			return pkix.Extension{}, fmt.Errorf("marshaling DNS SAN: %w", err)
+		}
+		gnBytes = append(gnBytes, b...)
+	}
+
+	for _, ip := range input.IPAddresses {
+		ipBytes := ip.To4()
+		if ipBytes == nil {
+			ipBytes = ip.To16()
+		}
+		b, err := asn1.Marshal(asn1.RawValue{
+			Class: asn1.ClassContextSpecific,
+			Tag:   7,
+			Bytes: ipBytes,
+		})
+		if err != nil {
+			return pkix.Extension{}, fmt.Errorf("marshaling IP SAN: %w", err)
+		}
+		gnBytes = append(gnBytes, b...)
+	}
+
+	for _, uri := range input.URIs {
+		b, err := asn1.Marshal(asn1.RawValue{
+			Class: asn1.ClassContextSpecific,
+			Tag:   6,
+			Bytes: []byte(uri.String()),
+		})
+		if err != nil {
+			return pkix.Extension{}, fmt.Errorf("marshaling URI SAN: %w", err)
+		}
+		gnBytes = append(gnBytes, b...)
+	}
+
+	sanSeq := asn1.RawValue{
+		Tag:        asn1.TagSequence,
+		Class:      asn1.ClassUniversal,
+		IsCompound: true,
+		Bytes:      gnBytes,
+	}
+	sanBytes, err := asn1.Marshal(sanSeq)
+	if err != nil {
+		return pkix.Extension{}, fmt.Errorf("marshaling SAN extension: %w", err)
+	}
+
+	return pkix.Extension{
+		Id:    oidSubjectAltName,
+		Value: sanBytes,
+	}, nil
+}
+
+// ResolveOtherNameOID resolves a human-readable label ("UPN", "SRV") or
+// dotted-decimal OID string ("1.3.6.1.4.1.311.20.2.3") to an
+// asn1.ObjectIdentifier.
+func ResolveOtherNameOID(s string) (asn1.ObjectIdentifier, error) {
+	if s == "" {
+		return nil, errors.New("empty OtherName type")
+	}
+	if oid, ok := otherNameOIDs[s]; ok {
+		return oid, nil
+	}
+	parts := strings.Split(s, ".")
+	if len(parts) < 2 {
+		return nil, fmt.Errorf("invalid OtherName type %q: not a known label or valid OID", s)
+	}
+	oid := make(asn1.ObjectIdentifier, 0, len(parts))
+	for _, part := range parts {
+		n, err := strconv.Atoi(part)
+		if err != nil || n < 0 {
+			return nil, fmt.Errorf("invalid OtherName type %q: not a known label or valid OID", s)
+		}
+		oid = append(oid, n)
+	}
+	return oid, nil
+}
+
+// otherNameStringTag returns the ASN.1 tag for encoding an OtherName value.
+// SRV (id-on-dnsSRV) uses IA5String; all others use UTF8String.
+func otherNameStringTag(oid asn1.ObjectIdentifier) int {
+	if oid.Equal(oidSRV) {
+		return asn1.TagIA5String
+	}
+	return asn1.TagUTF8String
+}
+
+// marshalOtherNameGN encodes a single OtherName as a GeneralName (context-
+// specific tag 0). The encoding follows RFC 5280:
+//
+//	OtherName ::= SEQUENCE { type-id OID, value [0] EXPLICIT ANY }
+//
+// With IMPLICIT tagging, the outer SEQUENCE tag is replaced by the
+// context-specific tag 0 for the GeneralName CHOICE.
+func marshalOtherNameGN(on OtherNameSAN) ([]byte, error) {
+	oidBytes, err := asn1.Marshal(on.OID)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling OtherName OID: %w", err)
+	}
+
+	tag := otherNameStringTag(on.OID)
+	var valueBytes []byte
+	if tag == asn1.TagIA5String {
+		valueBytes, err = asn1.Marshal(asn1.RawValue{
+			Tag:   asn1.TagIA5String,
+			Class: asn1.ClassUniversal,
+			Bytes: []byte(on.Value),
+		})
+	} else {
+		valueBytes, err = asn1.Marshal(on.Value)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("marshaling OtherName value: %w", err)
+	}
+
+	explicitBytes, err := asn1.Marshal(asn1.RawValue{
+		Class:      asn1.ClassContextSpecific,
+		Tag:        0,
+		IsCompound: true,
+		Bytes:      valueBytes,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("marshaling OtherName explicit wrapper: %w", err)
+	}
+
+	seqContent := append(oidBytes, explicitBytes...)
+
+	return asn1.Marshal(asn1.RawValue{
+		Class:      asn1.ClassContextSpecific,
+		Tag:        0,
+		IsCompound: true,
+		Bytes:      seqContent,
+	})
+}
+
+// parseOtherNameSANEntries extracts structured OtherNameSAN entries from
+// a list of extensions. Unlike ParseOtherNameSANs which returns formatted
+// strings, this returns typed entries suitable for re-encoding.
+func parseOtherNameSANEntries(extensions []pkix.Extension) []OtherNameSAN {
+	for _, ext := range extensions {
+		if !ext.Id.Equal(oidSubjectAltName) {
+			continue
+		}
+		return parseOtherNameEntriesFromSANBytes(ext.Value)
+	}
+	return nil
+}
+
+func parseOtherNameEntriesFromSANBytes(raw []byte) []OtherNameSAN {
+	var seq asn1.RawValue
+	rest, err := asn1.Unmarshal(raw, &seq)
+	if err != nil || len(rest) > 0 {
+		return nil
+	}
+
+	var entries []OtherNameSAN
+	inner := seq.Bytes
+	for len(inner) > 0 {
+		var gn asn1.RawValue
+		inner, err = asn1.Unmarshal(inner, &gn)
+		if err != nil {
+			break
+		}
+		if gn.Class != asn1.ClassContextSpecific || gn.Tag != 0 {
+			continue
+		}
+
+		content := gn.Bytes
+		var probe asn1.RawValue
+		if _, probeErr := asn1.Unmarshal(gn.Bytes, &probe); probeErr == nil &&
+			probe.Tag == asn1.TagSequence && probe.Class == asn1.ClassUniversal {
+			content = probe.Bytes
+		}
+
+		var oid asn1.ObjectIdentifier
+		oidRest, oidErr := asn1.Unmarshal(content, &oid)
+		if oidErr != nil {
+			continue
+		}
+
+		var explicit asn1.RawValue
+		if _, explErr := asn1.Unmarshal(oidRest, &explicit); explErr != nil {
+			continue
+		}
+
+		var strVal string
+		if _, strErr := asn1.Unmarshal(explicit.Bytes, &strVal); strErr == nil {
+			entries = append(entries, OtherNameSAN{OID: oid, Value: strVal})
+		}
+	}
+	return entries
 }
 
 // ParseOtherNameSANs extracts SAN entries that Go's x509 package silently
