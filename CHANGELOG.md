@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Fix AIA proxy rejecting `cacerts.geotrust.com` and `cacerts.thawte.com` — consolidate all per-host CA entries into suffix matches for broader coverage of CA subdomains
+
+### Added
+
+- Add `MarshalSANExtension` for building complete SAN extensions with OtherName support (UPN, XMPP, SRV, SmtpUTF8Mailbox, arbitrary OIDs)
+- Add `ResolveOtherNameOID` for resolving OtherName labels or dotted-decimal OID strings
+- Add `OtherNameSAN` and `MarshalSANExtensionInput` types for OtherName SAN generation
+- Add `other_names` field to `CSRTemplate` for mTLS user identity certificate CSRs
+- Add OtherName SAN preservation in `GenerateCSRFromCSR` — OtherName entries survive CSR-to-CSR key rotation
+
+### Tests
+
+- Add `TestMarshalSANExtension` table-driven tests covering UPN, SRV (IA5String), DNS+UPN mixed, all types combined, multiple OtherNames, arbitrary OIDs, IPv4+IPv6
+- Add `TestMarshalSANExtension_CertificateRoundTrip` — full encode→decode round-trip through `x509.CreateCertificate`
+- Add `TestMarshalSANExtension_mTLSUserCert` — CA-signed leaf with UPN + rfc822Name + ClientAuth EKU, chain verification
+- Add `TestResolveOtherNameOID` table-driven tests for known labels, dotted OIDs, and error cases
+- Add `TestParseCSRTemplate_WithOtherNames` — JSON parsing with and without `other_names` field
+- Add `TestGenerateCSRFromTemplate_WithOtherNames` table-driven tests including RFC 5280 duplicate SAN check
+- Add `TestGenerateCSRFromCSR_PreservesOtherNames` — OtherName survival through CSR regeneration
+
 ## [0.8.1] - 2026-02-25
 
 ### Added
