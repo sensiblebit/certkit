@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"errors"
 	"net"
 	"net/url"
 	"slices"
@@ -1044,8 +1045,46 @@ func TestMarshalSANExtension_EmptyInput(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for empty SAN input, got nil")
 	}
-	if !strings.Contains(err.Error(), "no SAN entries provided") {
-		t.Errorf("error = %q, want substring %q", err.Error(), "no SAN entries provided")
+	if !errors.Is(err, ErrEmptySANExtension) {
+		t.Errorf("error = %v, want errors.Is(err, ErrEmptySANExtension)", err)
+	}
+}
+
+func TestMarshalSANExtension_ValidationErrors(t *testing.T) {
+	// WHY: MarshalSANExtension manually encodes IA5String GeneralNames (email,
+	// DNS, URI). Non-ASCII or empty values would produce invalid DER per RFC 5280.
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input MarshalSANExtensionInput
+	}{
+		{
+			name:  "empty DNS name",
+			input: MarshalSANExtensionInput{DNSNames: []string{""}},
+		},
+		{
+			name:  "non-ASCII DNS name",
+			input: MarshalSANExtensionInput{DNSNames: []string{"ex\xc3\xa4mple.com"}},
+		},
+		{
+			name:  "empty email address",
+			input: MarshalSANExtensionInput{EmailAddresses: []string{""}},
+		},
+		{
+			name:  "non-ASCII email address",
+			input: MarshalSANExtensionInput{EmailAddresses: []string{"us\xc3\xa9r@example.com"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			_, err := MarshalSANExtension(tt.input)
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+		})
 	}
 }
 

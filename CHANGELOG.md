@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `other_names` field to `CSRTemplate` for mTLS user identity certificate CSRs ([#74])
 - Add OtherName SAN preservation in `GenerateCSRFromCSR` — OtherName entries survive CSR-to-CSR key rotation ([#74])
 - Add `ErrUnknownOtherNameType` sentinel error for invalid OtherName type strings ([#74])
+- Add `ErrEmptySANExtension` sentinel error for empty SAN extension input ([#74])
 - Add `aia_fetched` field to inspect results and "via aia" badge in web UI for AIA-fetched certificates ([#73])
 
 ### Fixed
@@ -26,6 +27,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix error strings in `ResolveOtherNameOID` using capitalized "OtherName" instead of lowercase (ERR-4) ([#74])
 - Fix bare error returns in `MarshalSANExtension` and `marshalOtherNameGN` — wrap with `%w` context per ERR-1 ([#74])
 - Fix `MarshalSANExtension` silently producing empty SAN extension when all input fields are nil/empty ([#74])
+- Fix `registeredID` parsing in `ParseOtherNameSANs` — re-wrap implicit tag as universal OID before unmarshaling ([#74])
+- Fix `MarshalSANExtension` accepting non-ASCII and empty strings for DNS, email, and URI SANs ([#74])
+- Fix inconsistent error type for empty input in `ResolveOtherNameOID` — now wraps `ErrUnknownOtherNameType` ([#74])
 
 ### Changed
 
@@ -45,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `TestMarshalSANExtension_EmptyInput` — verifies empty SAN input is rejected with clear error ([#74])
 - Add standard SAN type assertions to `TestMarshalSANExtension_CertificateRoundTrip` — DNS, email, IP, URI round-trip per T-6 ([#74])
 - Remove T-9-violating key rotation assertion from `TestGenerateCSRFromCSR_PreservesOtherNames` ([#74])
+- Add `TestMarshalSANExtension_ValidationErrors` — rejects empty and non-ASCII DNS, email, URI values ([#74])
 
 ## [0.8.1] - 2026-02-25
 

@@ -18,6 +18,10 @@ import (
 // recognized label or a valid dotted-decimal OID.
 var ErrUnknownOtherNameType = errors.New("unknown othername type")
 
+// ErrEmptySANExtension is returned when MarshalSANExtension is called with no
+// SAN entries of any type.
+var ErrEmptySANExtension = errors.New("no SAN entries provided")
+
 var extKeyUsageNames = map[x509.ExtKeyUsage]string{
 	x509.ExtKeyUsageAny:                        "Any",
 	x509.ExtKeyUsageServerAuth:                 "Server Authentication",
@@ -167,6 +171,18 @@ type MarshalSANExtensionInput struct {
 	OtherNames     []OtherNameSAN
 }
 
+// isIA5String reports whether s contains only ASCII characters (bytes 0-127),
+// as required for IA5String-encoded GeneralName fields (rfc822Name, dNSName,
+// uniformResourceIdentifier).
+func isIA5String(s string) bool {
+	for i := range len(s) {
+		if s[i] > 127 {
+			return false
+		}
+	}
+	return true
+}
+
 // MarshalSANExtension builds a complete Subject Alternative Name extension
 // (OID 2.5.29.17) containing all GeneralName types from the input. The
 // returned extension can be used in x509.Certificate.ExtraExtensions or
@@ -187,6 +203,12 @@ func MarshalSANExtension(input MarshalSANExtensionInput) (pkix.Extension, error)
 	}
 
 	for _, email := range input.EmailAddresses {
+		if email == "" {
+			return pkix.Extension{}, fmt.Errorf("marshaling email SAN: empty value")
+		}
+		if !isIA5String(email) {
+			return pkix.Extension{}, fmt.Errorf("marshaling email SAN %q: contains non-ASCII characters", email)
+		}
 		b, err := asn1.Marshal(asn1.RawValue{
 			Class: asn1.ClassContextSpecific,
 			Tag:   1,
@@ -199,6 +221,12 @@ func MarshalSANExtension(input MarshalSANExtensionInput) (pkix.Extension, error)
 	}
 
 	for _, dns := range input.DNSNames {
+		if dns == "" {
+			return pkix.Extension{}, fmt.Errorf("marshaling DNS SAN: empty value")
+		}
+		if !isIA5String(dns) {
+			return pkix.Extension{}, fmt.Errorf("marshaling DNS SAN %q: contains non-ASCII characters", dns)
+		}
 		b, err := asn1.Marshal(asn1.RawValue{
 			Class: asn1.ClassContextSpecific,
 			Tag:   2,
@@ -233,10 +261,17 @@ func MarshalSANExtension(input MarshalSANExtensionInput) (pkix.Extension, error)
 		if uri == nil {
 			return pkix.Extension{}, errors.New("nil URI in SAN input")
 		}
+		uriStr := uri.String()
+		if uriStr == "" {
+			return pkix.Extension{}, fmt.Errorf("marshaling URI SAN: empty value")
+		}
+		if !isIA5String(uriStr) {
+			return pkix.Extension{}, fmt.Errorf("marshaling URI SAN %q: contains non-ASCII characters", uriStr)
+		}
 		b, err := asn1.Marshal(asn1.RawValue{
 			Class: asn1.ClassContextSpecific,
 			Tag:   6,
-			Bytes: []byte(uri.String()),
+			Bytes: []byte(uriStr),
 		})
 		if err != nil {
 			return pkix.Extension{}, fmt.Errorf("marshaling URI SAN: %w", err)
@@ -245,7 +280,7 @@ func MarshalSANExtension(input MarshalSANExtensionInput) (pkix.Extension, error)
 	}
 
 	if len(gnBytes) == 0 {
-		return pkix.Extension{}, fmt.Errorf("marshaling SAN extension: no SAN entries provided")
+		return pkix.Extension{}, fmt.Errorf("marshaling SAN extension: %w", ErrEmptySANExtension)
 	}
 
 	sanSeq := asn1.RawValue{
@@ -270,7 +305,7 @@ func MarshalSANExtension(input MarshalSANExtensionInput) (pkix.Extension, error)
 // asn1.ObjectIdentifier.
 func ResolveOtherNameOID(s string) (asn1.ObjectIdentifier, error) {
 	if s == "" {
-		return nil, errors.New("empty othername type")
+		return nil, fmt.Errorf("%w: empty othername type", ErrUnknownOtherNameType)
 	}
 	if oid, ok := otherNameOIDs[s]; ok {
 		return oid, nil
@@ -487,9 +522,20 @@ func parseOtherNamesFromSANBytes(raw []byte) []string {
 				pn.FillFromRDNSequence(&name)
 				sans = append(sans, "DirName:"+FormatDN(pn))
 			}
-		case 8: // registeredID [8]
+		case 8: // registeredID [8] IMPLICIT OBJECT IDENTIFIER
+			// gn.Bytes contains the raw OID content but gn.FullBytes has a
+			// context-specific tag (0x88) instead of the universal OID tag
+			// (0x06). Re-wrap as a universal OID before unmarshaling.
+			rewrapped, rewrapErr := asn1.Marshal(asn1.RawValue{
+				Class: asn1.ClassUniversal,
+				Tag:   asn1.TagOID,
+				Bytes: gn.Bytes,
+			})
+			if rewrapErr != nil {
+				continue
+			}
 			var oid asn1.ObjectIdentifier
-			if _, err := asn1.Unmarshal(gn.FullBytes, &oid); err == nil {
+			if _, err := asn1.Unmarshal(rewrapped, &oid); err == nil {
 				sans = append(sans, "RegisteredID:"+oid.String())
 			}
 		}
