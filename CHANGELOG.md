@@ -40,12 +40,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add `TestMarshalSANExtension` table-driven tests covering UPN, SRV (IA5String), DNS+UPN mixed, all types combined, multiple OtherNames, arbitrary OIDs, IPv4+IPv6 ([#74])
 - Add `TestMarshalSANExtension_CertificateRoundTrip` — full encode→decode round-trip through `x509.CreateCertificate` ([#74])
-- Add `TestMarshalSANExtension_mTLSUserCert` — CA-signed leaf with UPN + rfc822Name + ClientAuth EKU ([#74])
 - Add `TestResolveOtherNameOID` table-driven tests for known labels, dotted OIDs, and error cases ([#74])
 - Add `TestParseCSRTemplate_WithOtherNames` — JSON parsing with and without `other_names` field ([#74])
 - Add `TestGenerateCSRFromTemplate_WithOtherNames` table-driven tests including RFC 5280 duplicate SAN check ([#74])
 - Add `TestGenerateCSRFromCSR_PreservesOtherNames` — OtherName survival through CSR regeneration ([#74])
-- Remove stdlib-testing assertions from `TestMarshalSANExtension_mTLSUserCert` (EKU check, chain verification) per T-9 ([#74])
+- Remove `TestMarshalSANExtension_mTLSUserCert` — duplicate of `CertificateRoundTrip`; CA hierarchy tested stdlib, not certkit (T-9) ([#74])
 - Add `TestMarshalSANExtension_EmptyInput` — verifies empty SAN input is rejected with clear error ([#74])
 - Add standard SAN type assertions to `TestMarshalSANExtension_CertificateRoundTrip` — DNS, email, IP, URI round-trip per T-6 ([#74])
 - Remove T-9-violating key rotation assertion from `TestGenerateCSRFromCSR_PreservesOtherNames` ([#74])
