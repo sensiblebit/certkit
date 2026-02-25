@@ -1075,6 +1075,10 @@ func TestMarshalSANExtension_ValidationErrors(t *testing.T) {
 			name:  "non-ASCII email address",
 			input: MarshalSANExtensionInput{EmailAddresses: []string{"us\xc3\xa9r@example.com"}},
 		},
+		{
+			name:  "nil URI in slice",
+			input: MarshalSANExtensionInput{URIs: []*url.URL{nil}},
+		},
 	}
 
 	for _, tt := range tests {

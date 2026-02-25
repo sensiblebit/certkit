@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `ResolveOtherNameOID` for resolving OtherName labels or dotted-decimal OID strings ([#74])
 - Add `OtherNameSAN` and `MarshalSANExtensionInput` types for OtherName SAN generation ([#74])
 - Add `other_names` field to `CSRTemplate` for mTLS user identity certificate CSRs ([#74])
-- Add OtherName SAN preservation in `GenerateCSRFromCSR` — OtherName entries survive CSR-to-CSR key rotation ([#74])
+- Add OtherName SAN preservation in `GenerateCSRFromCSR` — string-typed OtherName entries survive CSR-to-CSR key rotation; binary-typed OtherNames are silently skipped ([#74])
 - Add `ErrUnknownOtherNameType` sentinel error for invalid OtherName type strings ([#74])
 - Add `ErrEmptySANExtension` sentinel error for empty SAN extension input ([#74])
 - Add `aia_fetched` field to inspect results and "via aia" badge in web UI for AIA-fetched certificates ([#73])
@@ -30,11 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix `registeredID` parsing in `ParseOtherNameSANs` — re-wrap implicit tag as universal OID before unmarshaling ([#74])
 - Fix `MarshalSANExtension` accepting non-ASCII and empty strings for DNS, email, and URI SANs ([#74])
 - Fix inconsistent error type for empty input in `ResolveOtherNameOID` — now wraps `ErrUnknownOtherNameType` ([#74])
-
-### Changed
-
-- Refactor OtherName SAN parsing to share common walker between `parseOtherNamesFromSANBytes` and `parseOtherNameEntriesFromSANBytes` ([#74])
-- Clarify `GenerateCSRFromCSR` doc comment — only string-typed OtherNames are preserved; binary-typed are silently skipped ([#74])
+- Fix silently discarded `registeredID` re-wrap error in `parseOtherNamesFromSANBytes` — add `slog.Debug` per ERR-5 ([#74])
+- Fix `marshalOtherNameGN` accepting non-ASCII SRV OtherName values — validate IA5String before encoding ([#74])
+- Fix `ResolveOtherNameOID` returning mutable reference to global `otherNameOIDs` map — return a defensive copy ([#74])
+- Fix camelCase `otherName` in error strings — use lowercase `othername` per ERR-4 ([#74])
 
 ### Tests
 

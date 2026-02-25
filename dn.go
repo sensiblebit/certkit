@@ -197,7 +197,7 @@ func MarshalSANExtension(input MarshalSANExtensionInput) (pkix.Extension, error)
 	for _, on := range input.OtherNames {
 		b, err := marshalOtherNameGN(on)
 		if err != nil {
-			return pkix.Extension{}, fmt.Errorf("marshaling otherName SAN %q: %w", on.OID, err)
+			return pkix.Extension{}, fmt.Errorf("marshaling othername SAN %q: %w", on.OID, err)
 		}
 		gnBytes = append(gnBytes, b...)
 	}
@@ -308,7 +308,7 @@ func ResolveOtherNameOID(s string) (asn1.ObjectIdentifier, error) {
 		return nil, fmt.Errorf("%w: empty othername type", ErrUnknownOtherNameType)
 	}
 	if oid, ok := otherNameOIDs[s]; ok {
-		return oid, nil
+		return append(asn1.ObjectIdentifier(nil), oid...), nil
 	}
 	parts := strings.Split(s, ".")
 	if len(parts) < 2 {
@@ -344,10 +344,13 @@ func otherNameStringTag(oid asn1.ObjectIdentifier) int {
 func marshalOtherNameGN(on OtherNameSAN) ([]byte, error) {
 	oidBytes, err := asn1.Marshal(on.OID)
 	if err != nil {
-		return nil, fmt.Errorf("marshaling otherName OID: %w", err)
+		return nil, fmt.Errorf("marshaling othername OID: %w", err)
 	}
 
 	tag := otherNameStringTag(on.OID)
+	if tag == asn1.TagIA5String && !isIA5String(on.Value) {
+		return nil, fmt.Errorf("marshaling othername SRV value %q: contains non-ASCII characters", on.Value)
+	}
 	var valueBytes []byte
 	if tag == asn1.TagIA5String {
 		valueBytes, err = asn1.Marshal(asn1.RawValue{
@@ -363,7 +366,7 @@ func marshalOtherNameGN(on OtherNameSAN) ([]byte, error) {
 		})
 	}
 	if err != nil {
-		return nil, fmt.Errorf("marshaling otherName value: %w", err)
+		return nil, fmt.Errorf("marshaling othername value: %w", err)
 	}
 
 	explicitBytes, err := asn1.Marshal(asn1.RawValue{
@@ -373,7 +376,7 @@ func marshalOtherNameGN(on OtherNameSAN) ([]byte, error) {
 		Bytes:      valueBytes,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("marshaling otherName explicit wrapper: %w", err)
+		return nil, fmt.Errorf("marshaling othername explicit wrapper: %w", err)
 	}
 
 	seqContent := append(oidBytes, explicitBytes...)
@@ -385,7 +388,7 @@ func marshalOtherNameGN(on OtherNameSAN) ([]byte, error) {
 		Bytes:      seqContent,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("marshaling otherName GeneralName: %w", err)
+		return nil, fmt.Errorf("marshaling othername GeneralName: %w", err)
 	}
 	return gnBytes, nil
 }
@@ -532,6 +535,7 @@ func parseOtherNamesFromSANBytes(raw []byte) []string {
 				Bytes: gn.Bytes,
 			})
 			if rewrapErr != nil {
+				slog.Debug("skipping registeredID SAN: re-wrap failed", "error", rewrapErr)
 				continue
 			}
 			var oid asn1.ObjectIdentifier
