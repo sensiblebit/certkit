@@ -7,11 +7,16 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/url"
 	"strconv"
 	"strings"
 )
+
+// ErrUnknownOtherNameType is returned when an OtherName type string is not a
+// recognized label or a valid dotted-decimal OID.
+var ErrUnknownOtherNameType = errors.New("unknown othername type")
 
 var extKeyUsageNames = map[x509.ExtKeyUsage]string{
 	x509.ExtKeyUsageAny:                        "Any",
@@ -210,6 +215,9 @@ func MarshalSANExtension(input MarshalSANExtensionInput) (pkix.Extension, error)
 		if ipBytes == nil {
 			ipBytes = ip.To16()
 		}
+		if len(ipBytes) != 4 && len(ipBytes) != 16 {
+			return pkix.Extension{}, fmt.Errorf("invalid IP address %v: must be 4 or 16 bytes", ip)
+		}
 		b, err := asn1.Marshal(asn1.RawValue{
 			Class: asn1.ClassContextSpecific,
 			Tag:   7,
@@ -222,6 +230,9 @@ func MarshalSANExtension(input MarshalSANExtensionInput) (pkix.Extension, error)
 	}
 
 	for _, uri := range input.URIs {
+		if uri == nil {
+			return pkix.Extension{}, errors.New("nil URI in SAN input")
+		}
 		b, err := asn1.Marshal(asn1.RawValue{
 			Class: asn1.ClassContextSpecific,
 			Tag:   6,
@@ -255,20 +266,20 @@ func MarshalSANExtension(input MarshalSANExtensionInput) (pkix.Extension, error)
 // asn1.ObjectIdentifier.
 func ResolveOtherNameOID(s string) (asn1.ObjectIdentifier, error) {
 	if s == "" {
-		return nil, errors.New("empty OtherName type")
+		return nil, errors.New("empty othername type")
 	}
 	if oid, ok := otherNameOIDs[s]; ok {
 		return oid, nil
 	}
 	parts := strings.Split(s, ".")
 	if len(parts) < 2 {
-		return nil, fmt.Errorf("invalid OtherName type %q: not a known label or valid OID", s)
+		return nil, fmt.Errorf("%w %q: not a known label or valid OID", ErrUnknownOtherNameType, s)
 	}
 	oid := make(asn1.ObjectIdentifier, 0, len(parts))
 	for _, part := range parts {
 		n, err := strconv.Atoi(part)
 		if err != nil || n < 0 {
-			return nil, fmt.Errorf("invalid OtherName type %q: not a known label or valid OID", s)
+			return nil, fmt.Errorf("%w %q: not a known label or valid OID", ErrUnknownOtherNameType, s)
 		}
 		oid = append(oid, n)
 	}
@@ -306,7 +317,11 @@ func marshalOtherNameGN(on OtherNameSAN) ([]byte, error) {
 			Bytes: []byte(on.Value),
 		})
 	} else {
-		valueBytes, err = asn1.Marshal(on.Value)
+		valueBytes, err = asn1.Marshal(asn1.RawValue{
+			Tag:   tag,
+			Class: asn1.ClassUniversal,
+			Bytes: []byte(on.Value),
+		})
 	}
 	if err != nil {
 		return nil, fmt.Errorf("marshaling OtherName value: %w", err)
@@ -346,13 +361,31 @@ func parseOtherNameSANEntries(extensions []pkix.Extension) []OtherNameSAN {
 }
 
 func parseOtherNameEntriesFromSANBytes(raw []byte) []OtherNameSAN {
+	var entries []OtherNameSAN
+	walkOtherNameSANs(raw, func(oid asn1.ObjectIdentifier, valueBytes []byte) {
+		var strVal string
+		if _, strErr := asn1.Unmarshal(valueBytes, &strVal); strErr != nil {
+			slog.Debug("skipping OtherName entry: string value parse failed", "oid", oid, "error", strErr)
+			return
+		}
+		entries = append(entries, OtherNameSAN{OID: oid, Value: strVal})
+	})
+	return entries
+}
+
+// walkOtherNameSANs iterates over the OtherName GeneralName entries in raw
+// SAN extension bytes and calls fn for each successfully parsed entry. The
+// valueBytes passed to fn are the inner bytes of the [0] EXPLICIT wrapper
+// (i.e. the TLV-encoded string value). This shared walker is used by both
+// parseOtherNameEntriesFromSANBytes (structured extraction) and
+// parseOtherNamesFromSANBytes (display formatting).
+func walkOtherNameSANs(raw []byte, fn func(oid asn1.ObjectIdentifier, valueBytes []byte)) {
 	var seq asn1.RawValue
 	rest, err := asn1.Unmarshal(raw, &seq)
 	if err != nil || len(rest) > 0 {
-		return nil
+		return
 	}
 
-	var entries []OtherNameSAN
 	inner := seq.Bytes
 	for len(inner) > 0 {
 		var gn asn1.RawValue
@@ -374,20 +407,18 @@ func parseOtherNameEntriesFromSANBytes(raw []byte) []OtherNameSAN {
 		var oid asn1.ObjectIdentifier
 		oidRest, oidErr := asn1.Unmarshal(content, &oid)
 		if oidErr != nil {
+			slog.Debug("skipping OtherName entry: OID parse failed", "error", oidErr)
 			continue
 		}
 
 		var explicit asn1.RawValue
 		if _, explErr := asn1.Unmarshal(oidRest, &explicit); explErr != nil {
+			slog.Debug("skipping OtherName entry: explicit tag parse failed", "oid", oid, "error", explErr)
 			continue
 		}
 
-		var strVal string
-		if _, strErr := asn1.Unmarshal(explicit.Bytes, &strVal); strErr == nil {
-			entries = append(entries, OtherNameSAN{OID: oid, Value: strVal})
-		}
+		fn(oid, explicit.Bytes)
 	}
-	return entries
 }
 
 // ParseOtherNameSANs extracts SAN entries that Go's x509 package silently
@@ -413,7 +444,23 @@ func parseOtherNamesFromSANBytes(raw []byte) []string {
 		return nil
 	}
 
+	// Collect OtherName entries via shared walker.
 	var sans []string
+	walkOtherNameSANs(raw, func(oid asn1.ObjectIdentifier, valueBytes []byte) {
+		label := oid.String()
+		if name, ok := otherNameLabels[label]; ok {
+			label = name
+		}
+		var strVal string
+		if _, strErr := asn1.Unmarshal(valueBytes, &strVal); strErr == nil {
+			sans = append(sans, label+":"+strVal)
+		} else {
+			sans = append(sans, label+":"+hex.EncodeToString(valueBytes))
+		}
+	})
+
+	// Handle DirectoryName (tag 4) and RegisteredID (tag 8) which the
+	// OtherName walker does not cover.
 	inner := seq.Bytes
 	for len(inner) > 0 {
 		var gn asn1.RawValue
@@ -425,11 +472,6 @@ func parseOtherNamesFromSANBytes(raw []byte) []string {
 			continue
 		}
 		switch gn.Tag {
-		case 0: // otherName [0] IMPLICIT SEQUENCE { OID, [0] EXPLICIT ANY }
-			s := formatOtherName(gn.Bytes)
-			if s != "" {
-				sans = append(sans, s)
-			}
 		case 4: // directoryName [4]
 			var name pkix.RDNSequence
 			if _, err := asn1.Unmarshal(gn.Bytes, &name); err == nil {
@@ -444,46 +486,11 @@ func parseOtherNamesFromSANBytes(raw []byte) []string {
 			}
 		}
 	}
+
+	if len(sans) == 0 {
+		return nil
+	}
 	return sans
-}
-
-func formatOtherName(data []byte) string {
-	// OtherName ::= SEQUENCE { type-id OID, value [0] EXPLICIT ANY }
-	//
-	// With IMPLICIT tagging (RFC 5280), [0] replaces the SEQUENCE tag so
-	// data starts with the OID directly. Some encoders use EXPLICIT tagging
-	// or wrap in a SEQUENCE, so data may start with a SEQUENCE tag (0x30).
-	content := data
-	var probe asn1.RawValue
-	if _, err := asn1.Unmarshal(data, &probe); err == nil && probe.Tag == asn1.TagSequence && probe.Class == asn1.ClassUniversal {
-		content = probe.Bytes
-	}
-
-	var oid asn1.ObjectIdentifier
-	rest, err := asn1.Unmarshal(content, &oid)
-	if err != nil {
-		return ""
-	}
-
-	label := oid.String()
-	if name, ok := otherNameLabels[label]; ok {
-		label = name
-	}
-
-	// Unwrap the [0] EXPLICIT wrapper to get the inner value.
-	var explicit asn1.RawValue
-	if _, err := asn1.Unmarshal(rest, &explicit); err != nil {
-		return label + ":<unparseable>"
-	}
-
-	// Try common string types (UTF8String, IA5String, PrintableString).
-	var strVal string
-	if _, err := asn1.Unmarshal(explicit.Bytes, &strVal); err == nil {
-		return label + ":" + strVal
-	}
-
-	// Fallback: hex-encode the raw value.
-	return label + ":" + hex.EncodeToString(explicit.Bytes)
 }
 
 // extraOIDLabels maps OIDs not handled by Go's pkix.Name.String() to their

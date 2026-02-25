@@ -8,6 +8,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/asn1"
 	"encoding/pem"
+	"errors"
 	"slices"
 	"strings"
 	"testing"
@@ -865,8 +866,8 @@ func TestGenerateCSRFromTemplate_InvalidOtherNameType(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for invalid OtherName type")
 	}
-	if !strings.Contains(err.Error(), "resolving OtherName type") {
-		t.Errorf("error should mention resolving OtherName type, got: %v", err)
+	if !errors.Is(err, ErrUnknownOtherNameType) {
+		t.Errorf("error should wrap ErrUnknownOtherNameType, got: %v", err)
 	}
 }
 

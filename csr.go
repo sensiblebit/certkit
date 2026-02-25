@@ -159,7 +159,7 @@ func GenerateCSRFromTemplate(tmpl *CSRTemplate, signer crypto.Signer) (string, e
 		for _, on := range tmpl.OtherNames {
 			oid, err := ResolveOtherNameOID(on.Type)
 			if err != nil {
-				return "", fmt.Errorf("resolving OtherName type: %w", err)
+				return "", fmt.Errorf("resolving othername type: %w", err)
 			}
 			otherNames = append(otherNames, OtherNameSAN{OID: oid, Value: on.Value})
 		}

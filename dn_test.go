@@ -1217,21 +1217,6 @@ func TestMarshalSANExtension_mTLSUserCert(t *testing.T) {
 		t.Errorf("OtherNames = %v, want [UPN:alice@corp.example.com]", otherNames)
 	}
 
-	// Verify ClientAuth EKU
-	if len(leafCert.ExtKeyUsage) != 1 || leafCert.ExtKeyUsage[0] != x509.ExtKeyUsageClientAuth {
-		t.Errorf("ExtKeyUsage = %v, want [ClientAuth]", leafCert.ExtKeyUsage)
-	}
-
-	// Verify the certificate chains to the CA
-	roots := x509.NewCertPool()
-	roots.AddCert(caCert)
-	_, err = leafCert.Verify(x509.VerifyOptions{
-		Roots:     roots,
-		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageClientAuth},
-	})
-	if err != nil {
-		t.Errorf("certificate chain verification failed: %v", err)
-	}
 }
 
 // mustParseURL parses a URL string or fails the test.

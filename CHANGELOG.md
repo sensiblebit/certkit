@@ -9,26 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Add `MarshalSANExtension` for building complete SAN extensions with OtherName support (UPN, XMPP, SRV, SmtpUTF8Mailbox, arbitrary OIDs)
-- Add `ResolveOtherNameOID` for resolving OtherName labels or dotted-decimal OID strings
-- Add `OtherNameSAN` and `MarshalSANExtensionInput` types for OtherName SAN generation
-- Add `other_names` field to `CSRTemplate` for mTLS user identity certificate CSRs
-- Add OtherName SAN preservation in `GenerateCSRFromCSR` — OtherName entries survive CSR-to-CSR key rotation
+- Add `MarshalSANExtension` for building complete SAN extensions with OtherName support (UPN, XMPP, SRV, SmtpUTF8Mailbox, arbitrary OIDs) ([#74])
+- Add `ResolveOtherNameOID` for resolving OtherName labels or dotted-decimal OID strings ([#74])
+- Add `OtherNameSAN` and `MarshalSANExtensionInput` types for OtherName SAN generation ([#74])
+- Add `other_names` field to `CSRTemplate` for mTLS user identity certificate CSRs ([#74])
+- Add OtherName SAN preservation in `GenerateCSRFromCSR` — OtherName entries survive CSR-to-CSR key rotation ([#74])
+- Add `ErrUnknownOtherNameType` sentinel error for invalid OtherName type strings ([#74])
 - Add `aia_fetched` field to inspect results and "via aia" badge in web UI for AIA-fetched certificates ([#73])
 
 ### Fixed
 
 - Fix AIA proxy rejecting `cacerts.geotrust.com` and `cacerts.thawte.com` — consolidate all per-host CA entries into suffix matches for broader coverage of CA subdomains
+- Fix `marshalOtherNameGN` encoding non-SRV OtherName values as PrintableString instead of UTF8String ([#74])
+- Fix `MarshalSANExtension` accepting nil URI entries and invalid IP addresses without validation ([#74])
+- Fix `parseOtherNameEntriesFromSANBytes` silently discarding parse errors without logging (ERR-5) ([#74])
+- Fix error strings in `ResolveOtherNameOID` using capitalized "OtherName" instead of lowercase (ERR-4) ([#74])
+- Refactor OtherName SAN parsing to share common walker between `parseOtherNamesFromSANBytes` and `parseOtherNameEntriesFromSANBytes` ([#74])
 
 ### Tests
 
-- Add `TestMarshalSANExtension` table-driven tests covering UPN, SRV (IA5String), DNS+UPN mixed, all types combined, multiple OtherNames, arbitrary OIDs, IPv4+IPv6
-- Add `TestMarshalSANExtension_CertificateRoundTrip` — full encode→decode round-trip through `x509.CreateCertificate`
-- Add `TestMarshalSANExtension_mTLSUserCert` — CA-signed leaf with UPN + rfc822Name + ClientAuth EKU, chain verification
-- Add `TestResolveOtherNameOID` table-driven tests for known labels, dotted OIDs, and error cases
-- Add `TestParseCSRTemplate_WithOtherNames` — JSON parsing with and without `other_names` field
-- Add `TestGenerateCSRFromTemplate_WithOtherNames` table-driven tests including RFC 5280 duplicate SAN check
-- Add `TestGenerateCSRFromCSR_PreservesOtherNames` — OtherName survival through CSR regeneration
+- Add `TestMarshalSANExtension` table-driven tests covering UPN, SRV (IA5String), DNS+UPN mixed, all types combined, multiple OtherNames, arbitrary OIDs, IPv4+IPv6 ([#74])
+- Add `TestMarshalSANExtension_CertificateRoundTrip` — full encode→decode round-trip through `x509.CreateCertificate` ([#74])
+- Add `TestMarshalSANExtension_mTLSUserCert` — CA-signed leaf with UPN + rfc822Name + ClientAuth EKU ([#74])
+- Add `TestResolveOtherNameOID` table-driven tests for known labels, dotted OIDs, and error cases ([#74])
+- Add `TestParseCSRTemplate_WithOtherNames` — JSON parsing with and without `other_names` field ([#74])
+- Add `TestGenerateCSRFromTemplate_WithOtherNames` table-driven tests including RFC 5280 duplicate SAN check ([#74])
+- Add `TestGenerateCSRFromCSR_PreservesOtherNames` — OtherName survival through CSR regeneration ([#74])
+- Remove stdlib-testing assertions from `TestMarshalSANExtension_mTLSUserCert` (EKU check, chain verification) per T-9 ([#74])
 
 ## [0.8.1] - 2026-02-25
 
@@ -691,6 +698,7 @@ Initial release.
 [`55b5c1e`]: https://github.com/sensiblebit/certkit/commit/55b5c1e
 [`8cf81d9`]: https://github.com/sensiblebit/certkit/commit/8cf81d9
 [`3569926`]: https://github.com/sensiblebit/certkit/commit/3569926
+[#74]: https://github.com/sensiblebit/certkit/pull/74
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63
