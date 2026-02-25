@@ -424,3 +424,103 @@ func TestVerifyCert_ChainOnlyNoKeyMatch(t *testing.T) {
 		t.Error("last chain entry should be marked as root")
 	}
 }
+
+func TestDiagnoseChain(t *testing.T) {
+	t.Parallel()
+
+	ca := newRSACA(t)
+
+	tests := []struct {
+		name       string
+		input      DiagnoseChainInput
+		wantChecks map[string]string // check -> expected status
+	}{
+		{
+			name: "valid leaf with intermediates",
+			input: DiagnoseChainInput{
+				Cert:       newRSALeaf(t, ca, "valid.example.com", []string{"valid.example.com"}, nil).cert,
+				ExtraCerts: []*x509.Certificate{ca.cert},
+				TrustStore: "custom",
+			},
+			wantChecks: map[string]string{
+				"expired": "pass",
+			},
+		},
+		{
+			name: "expired leaf",
+			input: DiagnoseChainInput{
+				Cert:       newExpiredLeaf(t, ca).cert,
+				ExtraCerts: []*x509.Certificate{ca.cert},
+				TrustStore: "custom",
+			},
+			wantChecks: map[string]string{
+				"expired": "fail",
+			},
+		},
+		{
+			name: "self-signed leaf",
+			input: DiagnoseChainInput{
+				Cert: ca.cert, // CA cert is self-signed
+			},
+			wantChecks: map[string]string{
+				"self-signed": "warn",
+			},
+		},
+		{
+			name: "missing intermediate",
+			input: DiagnoseChainInput{
+				Cert: newRSALeaf(t, ca, "missing.example.com", []string{"missing.example.com"}, nil).cert,
+				// No extra certs — intermediate is missing
+			},
+			wantChecks: map[string]string{
+				"missing-intermediate": "fail",
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			diags := DiagnoseChain(tc.input)
+
+			diagMap := make(map[string]string)
+			for _, d := range diags {
+				diagMap[d.Check] = d.Status
+			}
+
+			for check, wantStatus := range tc.wantChecks {
+				gotStatus, found := diagMap[check]
+				if !found {
+					t.Errorf("expected check %q not found in diagnostics", check)
+					continue
+				}
+				if gotStatus != wantStatus {
+					t.Errorf("check %q: status = %q, want %q", check, gotStatus, wantStatus)
+				}
+			}
+		})
+	}
+}
+
+func TestFormatDiagnoses(t *testing.T) {
+	t.Parallel()
+	diags := []Diagnosis{
+		{Check: "expired", Status: "fail", Detail: "leaf certificate expired"},
+		{Check: "self-signed", Status: "warn", Detail: "self-signed leaf"},
+		{Check: "missing-intermediate", Status: "pass", Detail: "intermediate found"},
+	}
+
+	output := FormatDiagnoses(diags)
+	if !strings.Contains(output, "Diagnostics:") {
+		t.Error("output missing 'Diagnostics:' header")
+	}
+	if !strings.Contains(output, "[FAIL]") {
+		t.Error("output missing [FAIL] marker")
+	}
+	if !strings.Contains(output, "[WARN]") {
+		t.Error("output missing [WARN] marker")
+	}
+	if !strings.Contains(output, "[OK]") {
+		t.Error("output missing [OK] marker")
+	}
+}

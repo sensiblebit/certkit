@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"bytes"
 	"context"
 	"crypto"
 	"crypto/x509"
@@ -132,6 +133,134 @@ func buildChainDisplay(bundle *certkit.BundleResult) []ChainCert {
 		})
 	}
 	return chain
+}
+
+// Diagnosis describes one diagnostic finding when chain verification fails.
+type Diagnosis struct {
+	// Check is a short label for the diagnostic (e.g. "expired", "self-signed").
+	Check string `json:"check"`
+	// Status is "pass", "fail", or "warn".
+	Status string `json:"status"`
+	// Detail is a human-readable explanation.
+	Detail string `json:"detail"`
+}
+
+// DiagnoseChainInput holds the parameters for chain diagnostics.
+type DiagnoseChainInput struct {
+	Cert       *x509.Certificate
+	ExtraCerts []*x509.Certificate
+	TrustStore string
+}
+
+// DiagnoseChain analyzes why chain verification might fail, returning a list
+// of diagnostic findings. It checks for expiry, not-yet-valid, self-signed
+// leaf, missing intermediates, and weak signatures.
+func DiagnoseChain(input DiagnoseChainInput) []Diagnosis {
+	var diags []Diagnosis
+	now := time.Now()
+
+	// Check leaf expiry
+	if now.After(input.Cert.NotAfter) {
+		diags = append(diags, Diagnosis{
+			Check:  "expired",
+			Status: "fail",
+			Detail: fmt.Sprintf("leaf certificate expired on %s", input.Cert.NotAfter.UTC().Format(time.RFC3339)),
+		})
+	} else {
+		diags = append(diags, Diagnosis{
+			Check:  "expired",
+			Status: "pass",
+			Detail: fmt.Sprintf("leaf certificate valid until %s", input.Cert.NotAfter.UTC().Format(time.RFC3339)),
+		})
+	}
+
+	// Check not-yet-valid
+	if now.Before(input.Cert.NotBefore) {
+		diags = append(diags, Diagnosis{
+			Check:  "not-yet-valid",
+			Status: "fail",
+			Detail: fmt.Sprintf("leaf certificate not valid until %s", input.Cert.NotBefore.UTC().Format(time.RFC3339)),
+		})
+	}
+
+	// Check if self-signed
+	if isSelfSigned(input.Cert) {
+		diags = append(diags, Diagnosis{
+			Check:  "self-signed",
+			Status: "warn",
+			Detail: "leaf certificate is self-signed and not in the trust store",
+		})
+	}
+
+	// Check intermediates for expiry
+	for _, extra := range input.ExtraCerts {
+		if now.After(extra.NotAfter) {
+			diags = append(diags, Diagnosis{
+				Check:  "intermediate-expired",
+				Status: "fail",
+				Detail: fmt.Sprintf("intermediate %q expired on %s", extra.Subject.CommonName, extra.NotAfter.UTC().Format(time.RFC3339)),
+			})
+		}
+	}
+
+	// Check for missing intermediate: leaf issuer != leaf subject AND no extra cert matches
+	if !isSelfSigned(input.Cert) {
+		found := false
+		for _, extra := range input.ExtraCerts {
+			if bytes.Equal(extra.RawSubject, input.Cert.RawIssuer) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			diags = append(diags, Diagnosis{
+				Check:  "missing-intermediate",
+				Status: "fail",
+				Detail: fmt.Sprintf("no intermediate certificate found for issuer %q", input.Cert.Issuer.CommonName),
+			})
+		}
+	}
+
+	// Check weak signature algorithms
+	weakAlgs := map[x509.SignatureAlgorithm]string{
+		x509.MD2WithRSA:    "MD2",
+		x509.MD5WithRSA:    "MD5",
+		x509.SHA1WithRSA:   "SHA-1",
+		x509.ECDSAWithSHA1: "SHA-1",
+	}
+	if name, weak := weakAlgs[input.Cert.SignatureAlgorithm]; weak {
+		diags = append(diags, Diagnosis{
+			Check:  "weak-signature",
+			Status: "warn",
+			Detail: fmt.Sprintf("leaf certificate uses weak %s signature algorithm", name),
+		})
+	}
+
+	return diags
+}
+
+// isSelfSigned checks if a certificate's issuer matches its subject.
+func isSelfSigned(cert *x509.Certificate) bool {
+	return bytes.Equal(cert.RawIssuer, cert.RawSubject)
+}
+
+// FormatDiagnoses formats a slice of Diagnosis as human-readable text.
+func FormatDiagnoses(diags []Diagnosis) string {
+	var sb strings.Builder
+	sb.WriteString("\nDiagnostics:\n")
+	for _, d := range diags {
+		icon := "?"
+		switch d.Status {
+		case "pass":
+			icon = "OK"
+		case "fail":
+			icon = "FAIL"
+		case "warn":
+			icon = "WARN"
+		}
+		fmt.Fprintf(&sb, "  [%s] %s: %s\n", icon, d.Check, d.Detail)
+	}
+	return sb.String()
 }
 
 // daysUntil returns the number of days from now until t, rounded down.

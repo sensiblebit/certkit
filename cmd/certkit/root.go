@@ -38,4 +38,9 @@ func init() {
 	rootCmd.AddCommand(verifyCmd)
 	rootCmd.AddCommand(keygenCmd)
 	rootCmd.AddCommand(csrCmd)
+	rootCmd.AddCommand(convertCmd)
+	rootCmd.AddCommand(signCmd)
+	rootCmd.AddCommand(connectCmd)
+	rootCmd.AddCommand(ocspCmd)
+	rootCmd.AddCommand(crlCmd)
 }

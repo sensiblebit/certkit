@@ -35,6 +35,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix `ResolveOtherNameOID` returning mutable reference to global `otherNameOIDs` map — return a defensive copy ([#74])
 - Fix camelCase `otherName` in error strings — use lowercase `othername` per ERR-4 ([#74])
 
+### Added
+
+- Add `convert` command for converting between PEM, DER, PKCS#12, JKS, and PKCS#7 formats
+- Add `sign` command with `self-signed` and `csr` subcommands for certificate signing
+- Add `connect` command for TLS connection testing with certificate chain display
+- Add `--diagnose` flag to `verify` command for chain failure diagnostics
+- Add `ocsp` command for checking certificate revocation status via OCSP
+- Add `crl` command for parsing and inspecting Certificate Revocation Lists
+- Add `CreateSelfSigned` and `SignCSR` library functions for certificate signing
+- Add `ConnectTLS` library function for TLS connection probing
+- Add `CheckOCSP` library function for OCSP revocation checking
+- Add `ParseCRL`, `CRLContainsCert`, and `CRLInfoFromList` library functions for CRL handling
+- Add `DiagnoseChain` function to `internal` package for chain failure analysis
+
 ### Tests
 
 - Add `TestMarshalSANExtension` table-driven tests covering UPN, SRV (IA5String), DNS+UPN mixed, all types combined, multiple OtherNames, arbitrary OIDs, IPv4+IPv6 ([#74])
@@ -48,6 +62,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add standard SAN type assertions to `TestMarshalSANExtension_CertificateRoundTrip` — DNS, email, IP, URI round-trip per T-6 ([#74])
 - Remove T-9-violating key rotation assertion from `TestGenerateCSRFromCSR_PreservesOtherNames` ([#74])
 - Add `TestMarshalSANExtension_ValidationErrors` — rejects empty and non-ASCII DNS, email, URI values ([#74])
+- Add `TestCreateSelfSigned` and `TestSignCSR` table-driven tests for certificate signing
+- Add `TestSignCSR_ChainVerifies` round-trip chain verification test
+- Add `TestConnectTLS` with mock TLS server for connection probing
+- Add `TestCheckOCSP_MockGoodResponse` and `TestCheckOCSP_MockRevokedResponse` with mock OCSP server
+- Add `TestParseCRL`, `TestCRLContainsCert`, and `TestCRLInfoFromList` for CRL handling
+- Add `TestDiagnoseChain` table-driven tests for chain diagnostics
 
 ## [0.8.1] - 2026-02-25
 

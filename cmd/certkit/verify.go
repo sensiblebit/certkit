@@ -19,6 +19,7 @@ var (
 	verifyExpiry     string
 	verifyTrustStore string
 	verifyFormat     string
+	verifyDiagnose   bool
 )
 
 var verifyCmd = &cobra.Command{
@@ -46,6 +47,7 @@ func init() {
 	verifyCmd.Flags().StringVarP(&verifyExpiry, "expiry", "e", "", "Check if cert expires within duration (e.g., 30d, 720h)")
 	verifyCmd.Flags().StringVar(&verifyTrustStore, "trust-store", "mozilla", "Trust store for chain validation: system, mozilla")
 	verifyCmd.Flags().StringVar(&verifyFormat, "format", "text", "Output format: text or json")
+	verifyCmd.Flags().BoolVar(&verifyDiagnose, "diagnose", false, "Show diagnostics when verification fails")
 
 	registerCompletion(verifyCmd, completionInput{"format", fixedCompletion("text", "json")})
 	registerCompletion(verifyCmd, completionInput{"trust-store", fixedCompletion("system", "mozilla")})
@@ -132,6 +134,23 @@ func runVerify(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(result.Errors) > 0 {
+		if verifyDiagnose {
+			diags := internal.DiagnoseChain(internal.DiagnoseChainInput{
+				Cert:       contents.Leaf,
+				ExtraCerts: contents.ExtraCerts,
+				TrustStore: verifyTrustStore,
+			})
+			switch verifyFormat {
+			case "json":
+				data, err := json.MarshalIndent(diags, "", "  ")
+				if err != nil {
+					return fmt.Errorf("marshaling diagnostics JSON: %w", err)
+				}
+				fmt.Println(string(data))
+			case "text":
+				fmt.Print(internal.FormatDiagnoses(diags))
+			}
+		}
 		return &ValidationError{Message: "verification failed"}
 	}
 	return nil
