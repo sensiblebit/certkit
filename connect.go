@@ -131,18 +131,18 @@ func tlsVersionString(version uint16) string {
 // FormatConnectResult formats a ConnectResult as human-readable text.
 func FormatConnectResult(r *ConnectResult) string {
 	var out strings.Builder
-	out.WriteString(fmt.Sprintf("Host:         %s:%s\n", r.Host, r.Port))
-	out.WriteString(fmt.Sprintf("Protocol:     %s\n", r.Protocol))
-	out.WriteString(fmt.Sprintf("Cipher Suite: %s\n", r.CipherSuite))
-	out.WriteString(fmt.Sprintf("Server Name:  %s\n", r.ServerName))
+	fmt.Fprintf(&out, "Host:         %s:%s\n", r.Host, r.Port)
+	fmt.Fprintf(&out, "Protocol:     %s\n", r.Protocol)
+	fmt.Fprintf(&out, "Cipher Suite: %s\n", r.CipherSuite)
+	fmt.Fprintf(&out, "Server Name:  %s\n", r.ServerName)
 
 	if r.VerifyError != "" {
-		out.WriteString(fmt.Sprintf("Verify:       FAILED (%s)\n", r.VerifyError))
+		fmt.Fprintf(&out, "Verify:       FAILED (%s)\n", r.VerifyError)
 	} else {
 		out.WriteString("Verify:       OK\n")
 	}
 
-	out.WriteString(fmt.Sprintf("\nCertificate chain (%d certificate(s)):\n", len(r.PeerChain)))
+	fmt.Fprintf(&out, "\nCertificate chain (%d certificate(s)):\n", len(r.PeerChain))
 	now := time.Now()
 	for i, cert := range r.PeerChain {
 		expired := ""
@@ -150,13 +150,13 @@ func FormatConnectResult(r *ConnectResult) string {
 			expired = " [EXPIRED]"
 		}
 		certType := GetCertificateType(cert)
-		out.WriteString(fmt.Sprintf("  %d: %s (%s)%s\n", i, FormatDN(cert.Subject), certType, expired))
-		out.WriteString(fmt.Sprintf("     Issuer:      %s\n", FormatDN(cert.Issuer)))
-		out.WriteString(fmt.Sprintf("     Not Before:  %s\n", cert.NotBefore.UTC().Format(time.RFC3339)))
-		out.WriteString(fmt.Sprintf("     Not After:   %s\n", cert.NotAfter.UTC().Format(time.RFC3339)))
-		out.WriteString(fmt.Sprintf("     Fingerprint: %s\n", CertFingerprint(cert)))
+		fmt.Fprintf(&out, "  %d: %s (%s)%s\n", i, FormatDN(cert.Subject), certType, expired)
+		fmt.Fprintf(&out, "     Issuer:      %s\n", FormatDN(cert.Issuer))
+		fmt.Fprintf(&out, "     Not Before:  %s\n", cert.NotBefore.UTC().Format(time.RFC3339))
+		fmt.Fprintf(&out, "     Not After:   %s\n", cert.NotAfter.UTC().Format(time.RFC3339))
+		fmt.Fprintf(&out, "     Fingerprint: %s\n", CertFingerprint(cert))
 		if len(cert.DNSNames) > 0 {
-			out.WriteString(fmt.Sprintf("     SANs:        %s\n", strings.Join(cert.DNSNames, ", ")))
+			fmt.Fprintf(&out, "     SANs:        %s\n", strings.Join(cert.DNSNames, ", "))
 		}
 	}
 
