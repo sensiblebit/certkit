@@ -7,17 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- Add `MarshalSANExtension` for building complete SAN extensions with OtherName support (UPN, XMPP, SRV, SmtpUTF8Mailbox, arbitrary OIDs) ([#74])
-- Add `ResolveOtherNameOID` for resolving OtherName labels or dotted-decimal OID strings ([#74])
-- Add `OtherNameSAN` and `MarshalSANExtensionInput` types for OtherName SAN generation ([#74])
-- Add `other_names` field to `CSRTemplate` for mTLS user identity certificate CSRs ([#74])
-- Add OtherName SAN preservation in `GenerateCSRFromCSR` — string-typed OtherName entries survive CSR-to-CSR key rotation; binary-typed OtherNames are silently skipped ([#74])
-- Add `ErrUnknownOtherNameType` sentinel error for invalid OtherName type strings ([#74])
-- Add `ErrEmptySANExtension` sentinel error for empty SAN extension input ([#74])
-- Add `aia_fetched` field to inspect results and "via aia" badge in web UI for AIA-fetched certificates ([#73])
-
 ### Fixed
 
 - Fix `buildChainFromPool` infinite loop on circular issuer chains — add visited-set cycle guard ([#75])
@@ -70,6 +59,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add `MarshalSANExtension` for building complete SAN extensions with OtherName support (UPN, XMPP, SRV, SmtpUTF8Mailbox, arbitrary OIDs) ([#74])
+- Add `ResolveOtherNameOID` for resolving OtherName labels or dotted-decimal OID strings ([#74])
+- Add `OtherNameSAN` and `MarshalSANExtensionInput` types for OtherName SAN generation ([#74])
+- Add `other_names` field to `CSRTemplate` for mTLS user identity certificate CSRs ([#74])
+- Add OtherName SAN preservation in `GenerateCSRFromCSR` — string-typed OtherName entries survive CSR-to-CSR key rotation; binary-typed OtherNames are silently skipped ([#74])
+- Add `ErrUnknownOtherNameType` sentinel error for invalid OtherName type strings ([#74])
+- Add `ErrEmptySANExtension` sentinel error for empty SAN extension input ([#74])
+- Add `aia_fetched` field to inspect results and "via aia" badge in web UI for AIA-fetched certificates ([#73])
 - Add multi-entry JKS support to `convert --key` — when multiple keys match different certificates, JKS output creates a multi-alias keystore with one `PrivateKeyEntry` per match
 - Add `EncodeJKSEntries` library function for creating multi-entry JKS keystores with alias sanitization and deduplication
 - Add `CollectCertificateSANs` library function for canonical SAN aggregation (DNS, IP, email, URI, OtherName) across all commands

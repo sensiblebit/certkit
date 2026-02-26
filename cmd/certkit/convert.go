@@ -269,7 +269,7 @@ func formatConvertJKS(input formatConvertInput) ([]byte, error) {
 func findAllKeyLeafPairs(keyData []byte, passwords []string, certs []*x509.Certificate) ([]keyLeafPair, error) {
 	keys, err := certkit.ParsePEMPrivateKeys(keyData, passwords)
 	if err != nil {
-		return nil, fmt.Errorf("no private keys found in key file")
+		return nil, fmt.Errorf("parsing private keys from key file: %w", err)
 	}
 
 	usedKeys := make(map[int]bool)
@@ -340,7 +340,7 @@ func buildChainFromPool(leaf *x509.Certificate, pool []*x509.Certificate) []*x50
 	for !bytes.Equal(current.RawIssuer, current.RawSubject) {
 		var issuer *x509.Certificate
 		for _, c := range pool {
-			if seen[c] {
+			if c == nil || seen[c] {
 				continue
 			}
 			if bytes.Equal(current.RawIssuer, c.RawSubject) {

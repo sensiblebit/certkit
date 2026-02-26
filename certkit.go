@@ -218,7 +218,8 @@ var keyBlockTypes = map[string]bool{
 
 // ParsePEMPrivateKeys parses all private keys from a PEM bundle, trying each
 // password for encrypted blocks. Non-key PEM blocks (e.g., CERTIFICATE) are
-// silently skipped. Returns an error only if no keys are found at all.
+// silently skipped. Returns an error if a key block fails to parse or if no
+// keys are found at all.
 func ParsePEMPrivateKeys(pemData []byte, passwords []string) ([]crypto.PrivateKey, error) {
 	var keys []crypto.PrivateKey
 	rest := pemData
