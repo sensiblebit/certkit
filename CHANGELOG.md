@@ -7,6 +7,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `connect` automatically checks OCSP revocation status on the leaf certificate (best-effort; silent on failure)
+- Add `--crl` flag to `connect` for opt-in CRL revocation checking via distribution points
+- Add `FetchCRL` library function for downloading CRLs from HTTP URLs
+- `connect` exits with code 2 when OCSP or CRL reports a revoked certificate
+- Add `MarshalSANExtension` for building complete SAN extensions with OtherName support (UPN, XMPP, SRV, SmtpUTF8Mailbox, arbitrary OIDs) ([#74])
+- Add `ResolveOtherNameOID` for resolving OtherName labels or dotted-decimal OID strings ([#74])
+- Add `OtherNameSAN` and `MarshalSANExtensionInput` types for OtherName SAN generation ([#74])
+- Add `other_names` field to `CSRTemplate` for mTLS user identity certificate CSRs ([#74])
+- Add OtherName SAN preservation in `GenerateCSRFromCSR` — string-typed OtherName entries survive CSR-to-CSR key rotation; binary-typed OtherNames are silently skipped ([#74])
+- Add `ErrUnknownOtherNameType` sentinel error for invalid OtherName type strings ([#74])
+- Add `ErrEmptySANExtension` sentinel error for empty SAN extension input ([#74])
+- Add `aia_fetched` field to inspect results and "via aia" badge in web UI for AIA-fetched certificates ([#73])
+- Add multi-entry JKS support to `convert --key` — when multiple keys match different certificates, JKS output creates a multi-alias keystore with one `PrivateKeyEntry` per match
+- Add `EncodeJKSEntries` library function for creating multi-entry JKS keystores with alias sanitization and deduplication
+- Add `CollectCertificateSANs` library function for canonical SAN aggregation (DNS, IP, email, URI, OtherName) across all commands
+- Add `ParsePEMPrivateKeys` library function for extracting all private keys from a multi-key PEM bundle, skipping non-key blocks
+- Add chain diagnostics to `connect` command — detect root certificates in chain (RFC 8446 §4.4.2) and duplicate certificates
+- Add AIA walking to `connect` command — automatically fetch missing intermediates when server sends leaf-only chain, with `missing-intermediate` diagnostic warning
+- Add mTLS detection to `connect` command — shows whether the server requests a client certificate, acceptable CAs, and accepted signature algorithms
+- Add ALPN (negotiated application protocol) to `connect` command output
+- Add `--verbose` / `-v` global flag for extended certificate details in `connect`, `verify`, `scan`, and `ocsp` output (serial, key info, signature algorithm, key usage, EKU, fingerprints, SKI/AKI)
+- Add CRL number and authority key identifier to `crl` output
+- Add `convert` command for converting between PEM, DER, PKCS#12, JKS, and PKCS#7 formats
+- Add `sign` command with `self-signed` and `csr` subcommands for certificate signing
+- Add `connect` command for TLS connection testing with certificate chain display
+- Add `--diagnose` flag to `verify` command for chain failure diagnostics
+- Add `ocsp` command for checking certificate revocation status via OCSP
+- Add `crl` command for parsing and inspecting Certificate Revocation Lists
+
 ### Changed
 
 - Improve error messages when AIA certificate fetching fails — errors now include the URL and operation context ([#76])
@@ -67,38 +98,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix `connect` command JSON using `fingerprint_sha256`, `type`, and `dns_names` field names instead of codebase-standard `sha256_fingerprint`, `cert_type`, and `sans` (CLI-4) ([#75])
 - Fix `convert` command performing encoding before checking if `-o` is required for binary formats — binary format error is now returned immediately ([#75])
 - Fix `crl --check` verdict written to stderr instead of stdout (CLI-1) and absent from JSON output (CLI-3) — check result now included as `check_result` in JSON and printed to stdout in text mode ([#75])
-
-### Added
-
-- Add `MarshalSANExtension` for building complete SAN extensions with OtherName support (UPN, XMPP, SRV, SmtpUTF8Mailbox, arbitrary OIDs) ([#74])
-- Add `ResolveOtherNameOID` for resolving OtherName labels or dotted-decimal OID strings ([#74])
-- Add `OtherNameSAN` and `MarshalSANExtensionInput` types for OtherName SAN generation ([#74])
-- Add `other_names` field to `CSRTemplate` for mTLS user identity certificate CSRs ([#74])
-- Add OtherName SAN preservation in `GenerateCSRFromCSR` — string-typed OtherName entries survive CSR-to-CSR key rotation; binary-typed OtherNames are silently skipped ([#74])
-- Add `ErrUnknownOtherNameType` sentinel error for invalid OtherName type strings ([#74])
-- Add `ErrEmptySANExtension` sentinel error for empty SAN extension input ([#74])
-- Add `aia_fetched` field to inspect results and "via aia" badge in web UI for AIA-fetched certificates ([#73])
-- Add multi-entry JKS support to `convert --key` — when multiple keys match different certificates, JKS output creates a multi-alias keystore with one `PrivateKeyEntry` per match
-- Add `EncodeJKSEntries` library function for creating multi-entry JKS keystores with alias sanitization and deduplication
-- Add `CollectCertificateSANs` library function for canonical SAN aggregation (DNS, IP, email, URI, OtherName) across all commands
-- Add `ParsePEMPrivateKeys` library function for extracting all private keys from a multi-key PEM bundle, skipping non-key blocks
-- Add chain diagnostics to `connect` command — detect root certificates in chain (RFC 8446 §4.4.2) and duplicate certificates
-- Add AIA walking to `connect` command — automatically fetch missing intermediates when server sends leaf-only chain, with `missing-intermediate` diagnostic warning
-- Add mTLS detection to `connect` command — shows whether the server requests a client certificate, acceptable CAs, and accepted signature algorithms
-- Add ALPN (negotiated application protocol) to `connect` command output
-- Add `--verbose` / `-v` global flag for extended certificate details in `connect`, `verify`, `scan`, and `ocsp` output (serial, key info, signature algorithm, key usage, EKU, fingerprints, SKI/AKI)
-- Add CRL number and authority key identifier to `crl` output
-- Add `convert` command for converting between PEM, DER, PKCS#12, JKS, and PKCS#7 formats
-- Add `sign` command with `self-signed` and `csr` subcommands for certificate signing
-- Add `connect` command for TLS connection testing with certificate chain display
-- Add `--diagnose` flag to `verify` command for chain failure diagnostics
-- Add `ocsp` command for checking certificate revocation status via OCSP
-- Add `crl` command for parsing and inspecting Certificate Revocation Lists
-- Add `CreateSelfSigned` and `SignCSR` library functions for certificate signing
-- Add `ConnectTLS` library function for TLS connection probing
-- Add `CheckOCSP` library function for OCSP revocation checking
-- Add `ParseCRL`, `CRLContainsCertificate`, and `CRLInfoFromList` library functions for CRL handling
-- Add chain diagnostic checks (`--diagnose` flag) for `verify` command
 
 ### Tests
 
@@ -726,7 +725,6 @@ Initial release.
 [0.1.2]: https://github.com/sensiblebit/certkit/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/sensiblebit/certkit/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/sensiblebit/certkit/releases/tag/v0.1.0
-
 [`84c4edf`]: https://github.com/sensiblebit/certkit/commit/84c4edf
 [`2b8cb8c`]: https://github.com/sensiblebit/certkit/commit/2b8cb8c
 [`392878a`]: https://github.com/sensiblebit/certkit/commit/392878a

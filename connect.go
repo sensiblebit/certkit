@@ -76,6 +76,14 @@ type ConnectTLSInput struct {
 	DisableAIA bool
 	// AIATimeout is the timeout for AIA certificate fetching (default: 5s).
 	AIATimeout time.Duration
+	// DisableOCSP disables the automatic best-effort OCSP check on the leaf certificate.
+	DisableOCSP bool
+	// OCSPTimeout is the timeout for OCSP checking (default: 5s).
+	OCSPTimeout time.Duration
+	// CheckCRL enables CRL-based revocation checking on the leaf certificate.
+	CheckCRL bool
+	// CRLTimeout is the timeout for CRL fetching (default: 5s).
+	CRLTimeout time.Duration
 }
 
 // ClientAuthInfo describes the server's client certificate request (mTLS).
@@ -86,6 +94,17 @@ type ClientAuthInfo struct {
 	AcceptableCAs []string `json:"acceptable_cas,omitempty"`
 	// SignatureSchemes are the signature algorithms the server will accept.
 	SignatureSchemes []string `json:"signature_schemes,omitempty"`
+}
+
+// CRLCheckResult contains the result of a CRL revocation check during a TLS connection probe.
+type CRLCheckResult struct {
+	// Status is the check result: "good", "revoked", or "unavailable".
+	Status string `json:"status"`
+	// URL is the CRL distribution point that was fetched.
+	URL string `json:"url,omitempty"`
+	// Detail provides context when Status is "unavailable" (the error message)
+	// or "revoked" (the serial number).
+	Detail string `json:"detail,omitempty"`
 }
 
 // ConnectResult contains the results of a TLS connection probe.
@@ -114,6 +133,10 @@ type ConnectResult struct {
 	Diagnostics []ChainDiagnostic `json:"diagnostics,omitempty"`
 	// AIAFetched is true when missing intermediates were successfully fetched via AIA.
 	AIAFetched bool `json:"aia_fetched,omitempty"`
+	// OCSP contains the leaf certificate's OCSP revocation status (nil when unavailable or disabled).
+	OCSP *OCSPResult `json:"ocsp,omitempty"`
+	// CRL contains the leaf certificate's CRL revocation status (nil when not requested or unavailable).
+	CRL *CRLCheckResult `json:"crl,omitempty"`
 }
 
 // ConnectTLS connects to a TLS server and returns connection details including
@@ -248,7 +271,102 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 		}
 	}
 
+	// Best-effort OCSP check on the leaf certificate.
+	if !input.DisableOCSP && len(state.PeerCertificates) >= 2 {
+		leaf := state.PeerCertificates[0]
+		issuer := state.PeerCertificates[1]
+		if len(leaf.OCSPServer) > 0 {
+			ocspTimeout := input.OCSPTimeout
+			if ocspTimeout == 0 {
+				ocspTimeout = 5 * time.Second
+			}
+			ocspCtx, ocspCancel := context.WithTimeout(ctx, ocspTimeout)
+			ocspResult, ocspErr := CheckOCSP(ocspCtx, CheckOCSPInput{
+				Cert:   leaf,
+				Issuer: issuer,
+			})
+			ocspCancel()
+			if ocspErr != nil {
+				slog.Debug("OCSP check failed", "error", ocspErr)
+			} else {
+				result.OCSP = ocspResult
+			}
+		}
+	}
+
+	// Opt-in CRL check on the leaf certificate.
+	if input.CheckCRL && len(state.PeerCertificates) > 0 {
+		leaf := state.PeerCertificates[0]
+		result.CRL = checkLeafCRL(ctx, leaf, input.CRLTimeout)
+	}
+
 	return result, nil
+}
+
+// checkLeafCRL fetches the first HTTP CRL distribution point and checks whether
+// the leaf certificate is revoked. Returns a best-effort result (never nil when
+// called, but Status may be "unavailable").
+func checkLeafCRL(ctx context.Context, leaf *x509.Certificate, timeout time.Duration) *CRLCheckResult {
+	if len(leaf.CRLDistributionPoints) == 0 {
+		return &CRLCheckResult{
+			Status: "unavailable",
+			Detail: "certificate has no CRL distribution points",
+		}
+	}
+
+	// Find the first HTTP(S) URL.
+	var cdpURL string
+	for _, u := range leaf.CRLDistributionPoints {
+		if strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") {
+			cdpURL = u
+			break
+		}
+	}
+	if cdpURL == "" {
+		return &CRLCheckResult{
+			Status: "unavailable",
+			Detail: "no HTTP CRL distribution point found",
+		}
+	}
+
+	if timeout == 0 {
+		timeout = 5 * time.Second
+	}
+	crlCtx, crlCancel := context.WithTimeout(ctx, timeout)
+	defer crlCancel()
+
+	data, err := FetchCRL(crlCtx, cdpURL)
+	if err != nil {
+		slog.Debug("CRL fetch failed", "url", cdpURL, "error", err)
+		return &CRLCheckResult{
+			Status: "unavailable",
+			URL:    cdpURL,
+			Detail: err.Error(),
+		}
+	}
+
+	crl, err := ParseCRL(data)
+	if err != nil {
+		slog.Debug("CRL parse failed", "url", cdpURL, "error", err)
+		return &CRLCheckResult{
+			Status: "unavailable",
+			URL:    cdpURL,
+			Detail: err.Error(),
+		}
+	}
+
+	if CRLContainsCertificate(crl, leaf) {
+		return &CRLCheckResult{
+			Status: "revoked",
+			URL:    cdpURL,
+			Detail: fmt.Sprintf("serial %s found in CRL", leaf.SerialNumber.Text(16)),
+		}
+	}
+
+	return &CRLCheckResult{
+		Status: "good",
+		URL:    cdpURL,
+	}
 }
 
 // signatureSchemeString returns a human-readable name for a TLS signature scheme.
@@ -321,6 +439,35 @@ func FormatConnectResult(r *ConnectResult) string {
 		out.WriteString("Verify:       OK (intermediates fetched via AIA)\n")
 	} else {
 		out.WriteString("Verify:       OK\n")
+	}
+
+	if r.OCSP != nil {
+		switch r.OCSP.Status {
+		case "good":
+			fmt.Fprintf(&out, "OCSP:         good (%s)\n", r.OCSP.ResponderURL)
+		case "revoked":
+			detail := "revoked"
+			if r.OCSP.RevokedAt != nil {
+				detail += " at " + *r.OCSP.RevokedAt
+			}
+			if r.OCSP.RevocationReason != nil {
+				detail += ", reason: " + *r.OCSP.RevocationReason
+			}
+			fmt.Fprintf(&out, "OCSP:         %s\n", detail)
+		default:
+			fmt.Fprintf(&out, "OCSP:         %s\n", r.OCSP.Status)
+		}
+	}
+
+	if r.CRL != nil {
+		switch r.CRL.Status {
+		case "good":
+			fmt.Fprintf(&out, "CRL:          good (%s)\n", r.CRL.URL)
+		case "revoked":
+			fmt.Fprintf(&out, "CRL:          revoked (%s)\n", r.CRL.Detail)
+		case "unavailable":
+			fmt.Fprintf(&out, "CRL:          unavailable (%s)\n", r.CRL.Detail)
+		}
 	}
 
 	if r.ClientAuth != nil && r.ClientAuth.Requested {

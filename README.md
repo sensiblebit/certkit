@@ -145,12 +145,13 @@ Chain verification is always performed. When the input contains an embedded priv
 
 ### Connect Flags
 
-| Flag           | Default | Description                              |
-| -------------- | ------- | ---------------------------------------- |
-| `--servername` |         | Override SNI hostname (defaults to host) |
-| `--format`     | `text`  | Output format: `text`, `json`            |
+| Flag           | Default | Description                                  |
+| -------------- | ------- | -------------------------------------------- |
+| `--servername` |         | Override SNI hostname (defaults to host)     |
+| `--crl`        | `false` | Check CRL distribution points for revocation |
+| `--format`     | `text`  | Output format: `text`, `json`                |
 
-Port defaults to 443 if not specified. Use `--verbose` for extended details (serial, key info, signature algorithm, key usage, EKU).
+Port defaults to 443 if not specified. OCSP revocation status is checked automatically (best-effort). Use `--verbose` for extended details (serial, key info, signature algorithm, key usage, EKU).
 
 ### Bundle Flags
 

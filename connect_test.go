@@ -17,6 +17,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/ocsp"
 )
 
 func TestConnectTLS(t *testing.T) {
@@ -740,4 +742,635 @@ func TestDiagnoseConnectChain_DetailContent(t *testing.T) {
 			t.Error("duplicate-cert diagnostic not found")
 		}
 	})
+}
+
+func TestConnectTLS_OCSP(t *testing.T) {
+	t.Parallel()
+
+	// Build a CA + leaf with OCSP responder pointing to our mock server.
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "OCSP Connect CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name       string
+		ocspStatus int
+		wantStatus string
+	}{
+		{name: "good", ocspStatus: ocsp.Good, wantStatus: "good"},
+		{name: "revoked", ocspStatus: ocsp.Revoked, wantStatus: "revoked"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			// Mock OCSP responder.
+			respTemplate := ocsp.Response{
+				Status:       tc.ocspStatus,
+				SerialNumber: big.NewInt(100),
+				ThisUpdate:   time.Now().Add(-time.Hour),
+				NextUpdate:   time.Now().Add(time.Hour),
+			}
+			if tc.ocspStatus == ocsp.Revoked {
+				respTemplate.RevokedAt = time.Now().Add(-12 * time.Hour)
+				respTemplate.RevocationReason = ocsp.KeyCompromise
+			}
+			ocspRespBytes, err := ocsp.CreateResponse(caCert, caCert, respTemplate, caKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ocspServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/ocsp-response")
+				_, _ = w.Write(ocspRespBytes)
+			}))
+			defer ocspServer.Close()
+
+			// Leaf cert with OCSP responder URL.
+			leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			leafTemplate := &x509.Certificate{
+				SerialNumber: big.NewInt(100),
+				Subject:      pkix.Name{CommonName: "localhost"},
+				DNSNames:     []string{"localhost"},
+				IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+				NotBefore:    time.Now().Add(-time.Hour),
+				NotAfter:     time.Now().Add(24 * time.Hour),
+				KeyUsage:     x509.KeyUsageDigitalSignature,
+				ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+				OCSPServer:   []string{ocspServer.URL},
+			}
+			leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// TLS server sends leaf + CA.
+			tlsCert := tls.Certificate{
+				Certificate: [][]byte{leafDER, caDER},
+				PrivateKey:  leafKey,
+			}
+			listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+				Certificates: []tls.Certificate{tlsCert},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = listener.Close() }()
+
+			go func() {
+				for {
+					conn, err := listener.Accept()
+					if err != nil {
+						return
+					}
+					if tc, ok := conn.(*tls.Conn); ok {
+						_ = tc.Handshake()
+					}
+					_ = conn.Close()
+				}
+			}()
+
+			_, portStr, err := net.SplitHostPort(listener.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			result, err := ConnectTLS(ctx, ConnectTLSInput{
+				Host: "127.0.0.1",
+				Port: portStr,
+			})
+			if err != nil {
+				t.Fatalf("ConnectTLS failed: %v", err)
+			}
+
+			if result.OCSP == nil {
+				t.Fatal("OCSP result is nil, expected a response")
+			}
+			if result.OCSP.Status != tc.wantStatus {
+				t.Errorf("OCSP.Status = %q, want %q", result.OCSP.Status, tc.wantStatus)
+			}
+		})
+	}
+}
+
+func TestConnectTLS_OCSP_DisableOCSP(t *testing.T) {
+	t.Parallel()
+
+	// Build CA + leaf with OCSP URL; verify DisableOCSP skips the check.
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Disable OCSP CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var ocspHit atomic.Int64
+	ocspServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ocspHit.Add(1)
+		http.Error(w, "should not be called", http.StatusInternalServerError)
+	}))
+	defer ocspServer.Close()
+
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "localhost"},
+		DNSNames:     []string{"localhost"},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		OCSPServer:   []string{ocspServer.URL},
+	}
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tlsCert := tls.Certificate{
+		Certificate: [][]byte{leafDER, caDER},
+		PrivateKey:  leafKey,
+	}
+	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		Certificates: []tls.Certificate{tlsCert},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Close() }()
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			if tc, ok := conn.(*tls.Conn); ok {
+				_ = tc.Handshake()
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	_, portStr, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := ConnectTLS(ctx, ConnectTLSInput{
+		Host:        "127.0.0.1",
+		Port:        portStr,
+		DisableOCSP: true,
+	})
+	if err != nil {
+		t.Fatalf("ConnectTLS failed: %v", err)
+	}
+
+	if result.OCSP != nil {
+		t.Errorf("OCSP = %+v, want nil when DisableOCSP is set", result.OCSP)
+	}
+	if ocspHit.Load() != 0 {
+		t.Error("OCSP server was contacted despite DisableOCSP")
+	}
+}
+
+func TestConnectTLS_OCSP_BestEffort(t *testing.T) {
+	t.Parallel()
+
+	// OCSP responder returns an error; connect should succeed with OCSP nil.
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "Best Effort CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Server returns garbage (not valid OCSP).
+	ocspServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "broken", http.StatusInternalServerError)
+	}))
+	defer ocspServer.Close()
+
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject:      pkix.Name{CommonName: "localhost"},
+		DNSNames:     []string{"localhost"},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		OCSPServer:   []string{ocspServer.URL},
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tlsCert := tls.Certificate{
+		Certificate: [][]byte{leafDER, caDER},
+		PrivateKey:  leafKey,
+	}
+	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		Certificates: []tls.Certificate{tlsCert},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Close() }()
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			if tc, ok := conn.(*tls.Conn); ok {
+				_ = tc.Handshake()
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	_, portStr, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := ConnectTLS(ctx, ConnectTLSInput{
+		Host: "127.0.0.1",
+		Port: portStr,
+	})
+	if err != nil {
+		t.Fatalf("ConnectTLS failed: %v", err)
+	}
+
+	// OCSP should be nil (best-effort failure), not an error.
+	if result.OCSP != nil {
+		t.Errorf("OCSP = %+v, want nil on OCSP responder failure", result.OCSP)
+	}
+}
+
+func TestConnectTLS_CRL(t *testing.T) {
+	t.Parallel()
+
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "CRL Connect CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	revokedSerial := big.NewInt(200)
+	goodSerial := big.NewInt(100)
+
+	// Build a CRL containing only the revokedSerial.
+	crlTemplate := &x509.RevocationList{
+		Number:     big.NewInt(1),
+		ThisUpdate: time.Now().Add(-time.Hour),
+		NextUpdate: time.Now().Add(time.Hour),
+		RevokedCertificateEntries: []x509.RevocationListEntry{
+			{SerialNumber: revokedSerial, RevocationTime: time.Now().Add(-6 * time.Hour)},
+		},
+	}
+	crlDER, err := x509.CreateRevocationList(rand.Reader, crlTemplate, caCert, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	crlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pkix-crl")
+		_, _ = w.Write(crlDER)
+	}))
+	defer crlServer.Close()
+
+	tests := []struct {
+		name       string
+		serial     *big.Int
+		wantStatus string
+	}{
+		{name: "good cert", serial: goodSerial, wantStatus: "good"},
+		{name: "revoked cert", serial: revokedSerial, wantStatus: "revoked"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			// Not parallel: shares crlServer from parent scope.
+
+			leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+			if err != nil {
+				t.Fatal(err)
+			}
+			leafTemplate := &x509.Certificate{
+				SerialNumber:          tc.serial,
+				Subject:               pkix.Name{CommonName: "localhost"},
+				DNSNames:              []string{"localhost"},
+				IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
+				NotBefore:             time.Now().Add(-time.Hour),
+				NotAfter:              time.Now().Add(24 * time.Hour),
+				KeyUsage:              x509.KeyUsageDigitalSignature,
+				ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+				CRLDistributionPoints: []string{crlServer.URL},
+			}
+			leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			tlsCert := tls.Certificate{
+				Certificate: [][]byte{leafDER, caDER},
+				PrivateKey:  leafKey,
+			}
+			listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+				Certificates: []tls.Certificate{tlsCert},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = listener.Close() }()
+
+			go func() {
+				for {
+					conn, err := listener.Accept()
+					if err != nil {
+						return
+					}
+					if tc, ok := conn.(*tls.Conn); ok {
+						_ = tc.Handshake()
+					}
+					_ = conn.Close()
+				}
+			}()
+
+			_, portStr, err := net.SplitHostPort(listener.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			result, err := ConnectTLS(ctx, ConnectTLSInput{
+				Host:        "127.0.0.1",
+				Port:        portStr,
+				CheckCRL:    true,
+				DisableOCSP: true,
+			})
+			if err != nil {
+				t.Fatalf("ConnectTLS failed: %v", err)
+			}
+
+			if result.CRL == nil {
+				t.Fatal("CRL result is nil, expected a response")
+			}
+			if result.CRL.Status != tc.wantStatus {
+				t.Errorf("CRL.Status = %q (detail: %q, url: %q), want %q", result.CRL.Status, result.CRL.Detail, result.CRL.URL, tc.wantStatus)
+			}
+			if result.CRL.URL != crlServer.URL {
+				t.Errorf("CRL.URL = %q, want %q", result.CRL.URL, crlServer.URL)
+			}
+		})
+	}
+}
+
+func TestConnectTLS_CRL_NoCDP(t *testing.T) {
+	t.Parallel()
+
+	// Leaf cert has no CRL distribution points; CRL check returns "unavailable".
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "localhost"},
+		DNSNames:     []string{"localhost"},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tlsCert := tls.Certificate{
+		Certificate: [][]byte{certDER},
+		PrivateKey:  key,
+	}
+	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		Certificates: []tls.Certificate{tlsCert},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Close() }()
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			if tc, ok := conn.(*tls.Conn); ok {
+				_ = tc.Handshake()
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	_, portStr, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := ConnectTLS(ctx, ConnectTLSInput{
+		Host:     "127.0.0.1",
+		Port:     portStr,
+		CheckCRL: true,
+	})
+	if err != nil {
+		t.Fatalf("ConnectTLS failed: %v", err)
+	}
+
+	if result.CRL == nil {
+		t.Fatal("CRL is nil, expected 'unavailable' result")
+	}
+	if result.CRL.Status != "unavailable" {
+		t.Errorf("CRL.Status = %q, want %q", result.CRL.Status, "unavailable")
+	}
+}
+
+func TestFormatConnectResult_OCSP(t *testing.T) {
+	t.Parallel()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "test.example.com"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name        string
+		ocsp        *OCSPResult
+		crl         *CRLCheckResult
+		wantStrings []string
+	}{
+		{
+			name: "OCSP good",
+			ocsp: &OCSPResult{Status: "good", ResponderURL: "http://ocsp.example.com"},
+			wantStrings: []string{
+				"OCSP:         good (http://ocsp.example.com)",
+			},
+		},
+		{
+			name: "OCSP revoked",
+			ocsp: &OCSPResult{
+				Status:           "revoked",
+				ResponderURL:     "http://ocsp.example.com",
+				RevokedAt:        new("2025-01-15T00:00:00Z"),
+				RevocationReason: new("key compromise"),
+			},
+			wantStrings: []string{
+				"OCSP:         revoked at 2025-01-15T00:00:00Z, reason: key compromise",
+			},
+		},
+		{
+			name: "CRL good",
+			crl:  &CRLCheckResult{Status: "good", URL: "http://crl.example.com/ca.crl"},
+			wantStrings: []string{
+				"CRL:          good (http://crl.example.com/ca.crl)",
+			},
+		},
+		{
+			name: "CRL unavailable",
+			crl:  &CRLCheckResult{Status: "unavailable", Detail: "certificate has no CRL distribution points"},
+			wantStrings: []string{
+				"CRL:          unavailable (certificate has no CRL distribution points)",
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			result := &ConnectResult{
+				Host:        "test.example.com",
+				Port:        "443",
+				Protocol:    "TLS 1.3",
+				CipherSuite: "TLS_AES_128_GCM_SHA256",
+				ServerName:  "test.example.com",
+				PeerChain:   []*x509.Certificate{cert},
+				OCSP:        tc.ocsp,
+				CRL:         tc.crl,
+			}
+			output := FormatConnectResult(result)
+			for _, want := range tc.wantStrings {
+				if !strings.Contains(output, want) {
+					t.Errorf("output missing %q\ngot:\n%s", want, output)
+				}
+			}
+		})
+	}
 }
