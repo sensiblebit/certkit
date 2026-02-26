@@ -25,7 +25,7 @@ type OCSPResult struct {
 	// Status is "good", "revoked", "unknown", "unavailable", or "skipped".
 	Status string `json:"status"`
 	// SerialNumber is the certificate serial in hex.
-	SerialNumber string `json:"serial_number,omitempty"`
+	SerialNumber string `json:"serial,omitempty"`
 	// ResponderURL is the OCSP responder that was queried.
 	ResponderURL string `json:"responder_url,omitempty"`
 	// ThisUpdate is when the OCSP response was generated (RFC 3339).

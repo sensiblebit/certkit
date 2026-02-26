@@ -21,6 +21,7 @@ var (
 	connectServerName string
 	connectFormat     string
 	connectCRL        bool
+	connectNoOCSP     bool
 )
 
 var connectCmd = &cobra.Command{
@@ -30,7 +31,8 @@ var connectCmd = &cobra.Command{
 and the full certificate chain.
 
 Port defaults to 443 if not specified. OCSP revocation status is checked
-automatically (best-effort). Use --crl to also check CRL distribution points.
+automatically (best-effort). Use --no-ocsp to disable. Use --crl to also
+check CRL distribution points.
 
 Exits with code 2 if chain verification fails or the certificate is revoked.`,
 	Example: `  certkit connect example.com
@@ -46,6 +48,7 @@ func init() {
 	connectCmd.Flags().StringVar(&connectServerName, "servername", "", "Override SNI hostname (defaults to host)")
 	connectCmd.Flags().StringVar(&connectFormat, "format", "text", "Output format: text or json")
 	connectCmd.Flags().BoolVar(&connectCRL, "crl", false, "Check CRL distribution points for revocation")
+	connectCmd.Flags().BoolVar(&connectNoOCSP, "no-ocsp", false, "Disable automatic OCSP revocation check")
 
 	registerCompletion(connectCmd, completionInput{"format", fixedCompletion("text", "json")})
 }
@@ -100,10 +103,11 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	defer cancel()
 
 	result, err := certkit.ConnectTLS(ctx, certkit.ConnectTLSInput{
-		Host:       host,
-		Port:       port,
-		ServerName: connectServerName,
-		CheckCRL:   connectCRL,
+		Host:        host,
+		Port:        port,
+		ServerName:  connectServerName,
+		DisableOCSP: connectNoOCSP,
+		CheckCRL:    connectCRL,
 	})
 	if err != nil {
 		return fmt.Errorf("connecting to %s: %w", args[0], err)

@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `connect` OCSP check rejects expired responses (past `NextUpdate`) to prevent replay of stale data ([#78])
 - `connect` OCSP "unavailable" output now shows the error reason instead of just the responder URL ([#78])
 - `connect` OCSP "unknown" output now explains the status: "responder does not recognize this certificate" ([#78])
+- Add `--no-ocsp` flag to `connect` to disable automatic OCSP revocation check ([#78])
 - Add `MarshalSANExtension` for building complete SAN extensions with OtherName support (UPN, XMPP, SRV, SmtpUTF8Mailbox, arbitrary OIDs) ([#74])
 - Add `ResolveOtherNameOID` for resolving OtherName labels or dotted-decimal OID strings ([#74])
 - Add `OtherNameSAN` and `MarshalSANExtensionInput` types for OtherName SAN generation ([#74])
@@ -46,6 +47,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Breaking:** Rename `CRLCheckResult.URL` to `CRLCheckResult.DistributionPoint` (JSON: `distribution_point`) for accuracy and CLI-4 consistency ([#78])
+- **Breaking:** Rename OCSP JSON field `serial_number` to `serial` for CLI-4 consistency with all other commands ([#78])
 - Improve error messages when AIA certificate fetching fails — errors now include the URL and operation context ([#76])
 
 ### Security
