@@ -46,15 +46,17 @@ func init() {
 
 // connectResultJSON is a JSON-serializable version of ConnectResult.
 type connectResultJSON struct {
-	Host        string                  `json:"host"`
-	Port        string                  `json:"port"`
-	Protocol    string                  `json:"protocol"`
-	CipherSuite string                  `json:"cipher_suite"`
-	ServerName  string                  `json:"server_name"`
-	ALPN        string                  `json:"alpn,omitempty"`
-	ClientAuth  *certkit.ClientAuthInfo `json:"client_auth,omitempty"`
-	VerifyError string                  `json:"verify_error,omitempty"`
-	Chain       []connectCertJSON       `json:"chain"`
+	Host        string                    `json:"host"`
+	Port        string                    `json:"port"`
+	Protocol    string                    `json:"protocol"`
+	CipherSuite string                    `json:"cipher_suite"`
+	ServerName  string                    `json:"server_name"`
+	ALPN        string                    `json:"alpn,omitempty"`
+	ClientAuth  *certkit.ClientAuthInfo   `json:"client_auth,omitempty"`
+	VerifyError string                    `json:"verify_error,omitempty"`
+	Diagnostics []certkit.ChainDiagnostic `json:"diagnostics,omitempty"`
+	AIAFetched  bool                      `json:"aia_fetched,omitempty"`
+	Chain       []connectCertJSON         `json:"chain"`
 }
 
 type connectCertJSON struct {
@@ -111,6 +113,8 @@ func runConnect(cmd *cobra.Command, args []string) error {
 			ALPN:        result.ALPN,
 			ClientAuth:  result.ClientAuth,
 			VerifyError: result.VerifyError,
+			Diagnostics: result.Diagnostics,
+			AIAFetched:  result.AIAFetched,
 		}
 		for _, cert := range result.PeerChain {
 			cj := connectCertJSON{
@@ -175,6 +179,8 @@ func formatConnectVerbose(r *certkit.ConnectResult, now time.Time) string {
 
 	if r.VerifyError != "" {
 		fmt.Fprintf(&out, "Verify:       FAILED (%s)\n", r.VerifyError)
+	} else if r.AIAFetched {
+		out.WriteString("Verify:       OK (intermediates fetched via AIA)\n")
 	} else {
 		out.WriteString("Verify:       OK\n")
 	}
@@ -189,6 +195,13 @@ func formatConnectVerbose(r *certkit.ConnectResult, now time.Time) string {
 		}
 		if len(r.ClientAuth.SignatureSchemes) > 0 {
 			fmt.Fprintf(&out, "  Signature Schemes:\n    %s\n", strings.Join(r.ClientAuth.SignatureSchemes, ", "))
+		}
+	}
+
+	if len(r.Diagnostics) > 0 {
+		out.WriteString("\nDiagnostics:\n")
+		for _, d := range r.Diagnostics {
+			fmt.Fprintf(&out, "  [WARN] %s: %s\n", d.Check, d.Detail)
 		}
 	}
 

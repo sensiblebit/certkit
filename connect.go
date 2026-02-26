@@ -7,10 +7,62 @@ import (
 	"crypto/x509/pkix"
 	"encoding/asn1"
 	"fmt"
+	"log/slog"
 	"net"
 	"strings"
 	"time"
 )
+
+// ChainDiagnostic describes a single chain configuration issue found during connection probing.
+type ChainDiagnostic struct {
+	// Check is the diagnostic identifier (e.g. "root-in-chain", "duplicate-cert", "missing-intermediate").
+	Check string `json:"check"`
+	// Status is the severity level (currently always "warn").
+	Status string `json:"status"`
+	// Detail is a human-readable description of the issue.
+	Detail string `json:"detail"`
+}
+
+// DiagnoseConnectChainInput contains parameters for diagnosing a TLS peer chain.
+type DiagnoseConnectChainInput struct {
+	// PeerChain is the certificate chain presented by the server.
+	PeerChain []*x509.Certificate
+}
+
+// DiagnoseConnectChain inspects a server-presented certificate chain for
+// misconfigurations: root certificates included in the chain (wastes bandwidth,
+// per RFC 8446 §4.4.2) and duplicate certificates.
+func DiagnoseConnectChain(input DiagnoseConnectChainInput) []ChainDiagnostic {
+	var diags []ChainDiagnostic
+
+	fingerprints := make(map[string]int) // fingerprint → first position
+
+	for i, cert := range input.PeerChain {
+		fp := CertFingerprint(cert)
+
+		// Check for duplicates.
+		if firstPos, seen := fingerprints[fp]; seen {
+			diags = append(diags, ChainDiagnostic{
+				Check:  "duplicate-cert",
+				Status: "warn",
+				Detail: fmt.Sprintf("certificate %q appears at positions %d and %d", FormatDN(cert.Subject), firstPos, i),
+			})
+		} else {
+			fingerprints[fp] = i
+		}
+
+		// Check for root certs in non-leaf positions.
+		if i > 0 && GetCertificateType(cert) == "root" {
+			diags = append(diags, ChainDiagnostic{
+				Check:  "root-in-chain",
+				Status: "warn",
+				Detail: fmt.Sprintf("server sent root certificate %q (position %d)", FormatDN(cert.Subject), i),
+			})
+		}
+	}
+
+	return diags
+}
 
 // ConnectTLSInput contains parameters for a TLS connection probe.
 type ConnectTLSInput struct {
@@ -20,6 +72,10 @@ type ConnectTLSInput struct {
 	Port string
 	// ServerName overrides the SNI hostname (defaults to Host).
 	ServerName string
+	// DisableAIA disables automatic AIA certificate fetching when chain verification fails.
+	DisableAIA bool
+	// AIATimeout is the timeout for AIA certificate fetching (default: 5s).
+	AIATimeout time.Duration
 }
 
 // ClientAuthInfo describes the server's client certificate request (mTLS).
@@ -54,6 +110,10 @@ type ConnectResult struct {
 	VerifiedChains [][]*x509.Certificate `json:"-"`
 	// VerifyError is non-empty if chain verification failed.
 	VerifyError string `json:"verify_error,omitempty"`
+	// Diagnostics contains chain configuration warnings (root-in-chain, duplicate-cert, missing-intermediate).
+	Diagnostics []ChainDiagnostic `json:"diagnostics,omitempty"`
+	// AIAFetched is true when missing intermediates were successfully fetched via AIA.
+	AIAFetched bool `json:"aia_fetched,omitempty"`
 }
 
 // ConnectTLS connects to a TLS server and returns connection details including
@@ -134,8 +194,16 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 		PeerChain:   state.PeerCertificates,
 	}
 
-	// Verify the chain ourselves to capture the error message
+	// Run chain diagnostics on the raw peer chain.
 	if len(state.PeerCertificates) > 0 {
+		result.Diagnostics = DiagnoseConnectChain(DiagnoseConnectChainInput{
+			PeerChain: state.PeerCertificates,
+		})
+	}
+
+	// Verify the chain ourselves to capture the error message.
+	if len(state.PeerCertificates) > 0 {
+		leaf := state.PeerCertificates[0]
 		opts := x509.VerifyOptions{
 			DNSName:       serverName,
 			Intermediates: x509.NewCertPool(),
@@ -143,7 +211,32 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 		for _, cert := range state.PeerCertificates[1:] {
 			opts.Intermediates.AddCert(cert)
 		}
-		chains, verifyErr := state.PeerCertificates[0].Verify(opts)
+		chains, verifyErr := leaf.Verify(opts)
+		if verifyErr != nil && !input.DisableAIA && len(leaf.IssuingCertificateURL) > 0 {
+			// Attempt AIA walking to fetch missing intermediates.
+			aiaTimeout := input.AIATimeout
+			if aiaTimeout == 0 {
+				aiaTimeout = 5 * time.Second
+			}
+			aiaCerts, aiaWarnings := FetchAIACertificates(ctx, leaf, aiaTimeout, 5)
+			for _, w := range aiaWarnings {
+				slog.Debug("AIA fetch warning", "warning", w)
+			}
+			if len(aiaCerts) > 0 {
+				for _, c := range aiaCerts {
+					opts.Intermediates.AddCert(c)
+				}
+				chains, verifyErr = leaf.Verify(opts)
+				if verifyErr == nil {
+					result.AIAFetched = true
+					result.Diagnostics = append(result.Diagnostics, ChainDiagnostic{
+						Check:  "missing-intermediate",
+						Status: "warn",
+						Detail: "server does not send intermediate certificates; chain was completed via AIA",
+					})
+				}
+			}
+		}
 		if verifyErr != nil {
 			result.VerifyError = verifyErr.Error()
 		} else {
@@ -220,6 +313,8 @@ func FormatConnectResult(r *ConnectResult) string {
 
 	if r.VerifyError != "" {
 		fmt.Fprintf(&out, "Verify:       FAILED (%s)\n", r.VerifyError)
+	} else if r.AIAFetched {
+		out.WriteString("Verify:       OK (intermediates fetched via AIA)\n")
 	} else {
 		out.WriteString("Verify:       OK\n")
 	}
@@ -229,6 +324,13 @@ func FormatConnectResult(r *ConnectResult) string {
 			fmt.Fprintf(&out, "Client Auth:  requested (%d acceptable CA(s))\n", len(r.ClientAuth.AcceptableCAs))
 		} else {
 			out.WriteString("Client Auth:  requested (any CA)\n")
+		}
+	}
+
+	if len(r.Diagnostics) > 0 {
+		out.WriteString("\nDiagnostics:\n")
+		for _, d := range r.Diagnostics {
+			fmt.Fprintf(&out, "  [WARN] %s: %s\n", d.Check, d.Detail)
 		}
 	}
 
