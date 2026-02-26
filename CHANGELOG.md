@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `connect` automatically checks OCSP revocation status on the leaf certificate (best-effort; shows "unavailable" on failure) ([#78])
+- `connect` automatically checks OCSP revocation status on the leaf certificate (best-effort; shows "skipped" or "unavailable" when check cannot complete) ([#78])
 - Add `--crl` flag to `connect` for opt-in CRL revocation checking via distribution points ([#78])
 - Add `FetchCRL` library function for downloading CRLs from HTTP URLs with SSRF validation ([#78])
 - `connect` exits with code 2 when OCSP or CRL reports a revoked certificate ([#78])

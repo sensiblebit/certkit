@@ -22,20 +22,22 @@ type CheckOCSPInput struct {
 
 // OCSPResult contains the OCSP response details.
 type OCSPResult struct {
-	// Status is "good", "revoked", or "unknown".
+	// Status is "good", "revoked", "unknown", "unavailable", or "skipped".
 	Status string `json:"status"`
 	// SerialNumber is the certificate serial in hex.
-	SerialNumber string `json:"serial_number"`
+	SerialNumber string `json:"serial_number,omitempty"`
 	// ResponderURL is the OCSP responder that was queried.
-	ResponderURL string `json:"responder_url"`
+	ResponderURL string `json:"responder_url,omitempty"`
 	// ThisUpdate is when the OCSP response was generated (RFC 3339).
-	ThisUpdate string `json:"this_update"`
+	ThisUpdate string `json:"this_update,omitempty"`
 	// NextUpdate is when the OCSP response expires (RFC 3339).
-	NextUpdate string `json:"next_update"`
+	NextUpdate string `json:"next_update,omitempty"`
 	// RevokedAt is the revocation time in RFC 3339 (only set when Status is "revoked").
 	RevokedAt *string `json:"revoked_at,omitempty"`
 	// RevocationReason is the reason code (only set when Status is "revoked").
 	RevocationReason *string `json:"revocation_reason,omitempty"`
+	// Detail provides context when Status is "skipped" or "unavailable".
+	Detail string `json:"detail,omitempty"`
 }
 
 // CheckOCSP queries the OCSP responder for a certificate's revocation status.

@@ -354,6 +354,13 @@ func TestFormatConnectResult(t *testing.T) {
 			},
 		},
 		{
+			name: "OCSP skipped",
+			ocsp: &OCSPResult{Status: "skipped", Detail: "certificate has no OCSP responder URL"},
+			wantStrings: []string{
+				"OCSP:         skipped (certificate has no OCSP responder URL)",
+			},
+		},
+		{
 			name: "CRL good",
 			crl:  &CRLCheckResult{Status: "good", DistributionPoint: "http://crl.example.com/ca.crl"},
 			wantStrings: []string{
@@ -751,13 +758,6 @@ func TestConnectTLS_OCSP_SkipAndFailure(t *testing.T) {
 	// best-effort failure (unavailable result, server hit).
 	ca := generateTestCA(t, "OCSP Skip CA")
 
-	var ocspHit atomic.Int64
-	ocspServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ocspHit.Add(1)
-		http.Error(w, "broken", http.StatusInternalServerError)
-	}))
-	defer ocspServer.Close()
-
 	tests := []struct {
 		name          string
 		disableOCSP   bool
@@ -782,7 +782,12 @@ func TestConnectTLS_OCSP_SkipAndFailure(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			ocspHit.Store(0)
+			var hits atomic.Int64
+			ocspServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hits.Add(1)
+				http.Error(w, "broken", http.StatusInternalServerError)
+			}))
+			defer ocspServer.Close()
 
 			leaf := generateTestLeafCert(t, ca,
 				withOCSPServer(strings.Replace(ocspServer.URL, "127.0.0.1", "localhost", 1)),
@@ -814,10 +819,10 @@ func TestConnectTLS_OCSP_SkipAndFailure(t *testing.T) {
 				}
 			}
 
-			if tc.wantServerHit && ocspHit.Load() == 0 {
+			if tc.wantServerHit && hits.Load() == 0 {
 				t.Error("OCSP server was not contacted")
 			}
-			if !tc.wantServerHit && ocspHit.Load() != 0 {
+			if !tc.wantServerHit && hits.Load() != 0 {
 				t.Error("OCSP server was contacted despite DisableOCSP")
 			}
 		})

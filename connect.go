@@ -136,9 +136,10 @@ type ConnectResult struct {
 	// AIAFetched is true when missing intermediates were successfully fetched via AIA.
 	AIAFetched bool `json:"aia_fetched,omitempty"`
 	// OCSP contains the leaf certificate's OCSP revocation status.
-	// Nil when OCSP is disabled, when no issuer is available (single-cert chain),
-	// or when the leaf has no OCSP responder URL. A non-nil result with Status
-	// "unavailable" means the OCSP query was attempted but failed.
+	// Nil only when OCSP is explicitly disabled (DisableOCSP is true).
+	// Status "skipped" means preconditions were not met (no issuer in chain,
+	// or no OCSP responder URL). Status "unavailable" means the query was
+	// attempted but failed (network error, parse error, etc.).
 	OCSP *OCSPResult `json:"ocsp,omitempty"`
 	// CRL contains the leaf certificate's CRL revocation status.
 	// Nil when CRL checking is not requested (CheckCRL is false).
@@ -278,29 +279,38 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 	}
 
 	// Best-effort OCSP check on the leaf certificate.
-	if !input.DisableOCSP && len(state.PeerCertificates) >= 2 {
-		leaf := state.PeerCertificates[0]
+	if input.DisableOCSP {
+		// User explicitly disabled — no output.
+	} else if len(state.PeerCertificates) < 2 {
+		result.OCSP = &OCSPResult{
+			Status: "skipped",
+			Detail: "no issuer certificate in chain",
+		}
+	} else if leaf := state.PeerCertificates[0]; len(leaf.OCSPServer) == 0 {
+		result.OCSP = &OCSPResult{
+			Status: "skipped",
+			Detail: "certificate has no OCSP responder URL",
+		}
+	} else {
 		issuer := state.PeerCertificates[1]
-		if len(leaf.OCSPServer) > 0 {
-			ocspTimeout := input.OCSPTimeout
-			if ocspTimeout == 0 {
-				ocspTimeout = 5 * time.Second
+		ocspTimeout := input.OCSPTimeout
+		if ocspTimeout == 0 {
+			ocspTimeout = 5 * time.Second
+		}
+		ocspCtx, ocspCancel := context.WithTimeout(ctx, ocspTimeout)
+		ocspResult, ocspErr := CheckOCSP(ocspCtx, CheckOCSPInput{
+			Cert:   leaf,
+			Issuer: issuer,
+		})
+		ocspCancel()
+		if ocspErr != nil {
+			slog.Debug("OCSP check failed", "error", ocspErr)
+			result.OCSP = &OCSPResult{
+				Status:       "unavailable",
+				ResponderURL: leaf.OCSPServer[0],
 			}
-			ocspCtx, ocspCancel := context.WithTimeout(ctx, ocspTimeout)
-			ocspResult, ocspErr := CheckOCSP(ocspCtx, CheckOCSPInput{
-				Cert:   leaf,
-				Issuer: issuer,
-			})
-			ocspCancel()
-			if ocspErr != nil {
-				slog.Debug("OCSP check failed", "error", ocspErr)
-				result.OCSP = &OCSPResult{
-					Status:       "unavailable",
-					ResponderURL: leaf.OCSPServer[0],
-				}
-			} else {
-				result.OCSP = ocspResult
-			}
+		} else {
+			result.OCSP = ocspResult
 		}
 	}
 
@@ -448,6 +458,8 @@ func tlsVersionString(version uint16) string {
 }
 
 // FormatOCSPLine formats an OCSPResult as a single line for connect output.
+// Used by both FormatConnectResult and the CLI's verbose formatter to avoid
+// duplicating status-to-text logic.
 func FormatOCSPLine(r *OCSPResult) string {
 	switch r.Status {
 	case "good":
@@ -463,12 +475,16 @@ func FormatOCSPLine(r *OCSPResult) string {
 		return fmt.Sprintf("OCSP:         %s\n", detail)
 	case "unavailable":
 		return fmt.Sprintf("OCSP:         unavailable (%s)\n", r.ResponderURL)
+	case "skipped":
+		return fmt.Sprintf("OCSP:         skipped (%s)\n", r.Detail)
 	default:
 		return fmt.Sprintf("OCSP:         %s\n", r.Status)
 	}
 }
 
 // FormatCRLLine formats a CRLCheckResult as a single line for connect output.
+// Used by both FormatConnectResult and the CLI's verbose formatter to avoid
+// duplicating status-to-text logic.
 func FormatCRLLine(r *CRLCheckResult) string {
 	switch r.Status {
 	case "good":

@@ -126,6 +126,7 @@ func TestCRLContainsCertificate(t *testing.T) {
 	}{
 		{"revoked cert", big.NewInt(42), true},
 		{"non-revoked cert", big.NewInt(100), false},
+		{"zero serial", big.NewInt(0), false},
 	}
 
 	for _, tc := range tests {
@@ -137,6 +138,42 @@ func TestCRLContainsCertificate(t *testing.T) {
 				t.Errorf("CRLContainsCertificate = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestCRLContainsCertificate_EmptyCRL(t *testing.T) {
+	t.Parallel()
+
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, err := CreateSelfSigned(SelfSignedInput{
+		Signer:  caKey,
+		Subject: pkix.Name{CommonName: "Empty CRL CA"},
+		Days:    1,
+		IsCA:    true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now()
+	crlDER, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+		Number:     big.NewInt(1),
+		ThisUpdate: now,
+		NextUpdate: now.Add(24 * time.Hour),
+	}, ca, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	crl, err := ParseCRL(crlDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if CRLContainsCertificate(crl, &x509.Certificate{SerialNumber: big.NewInt(1)}) {
+		t.Error("empty CRL should not contain any certificate")
 	}
 }
 
