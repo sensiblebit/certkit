@@ -4,10 +4,8 @@ import (
 	"bytes"
 	"crypto"
 	"crypto/x509"
-	"encoding/pem"
 	"fmt"
 	"os"
-	"strings"
 
 	"github.com/sensiblebit/certkit"
 	"github.com/sensiblebit/certkit/internal"
@@ -171,7 +169,7 @@ func formatConvertOutput(input formatConvertInput) ([]byte, error) {
 			return nil, fmt.Errorf("PKCS#12 output requires a private key (use --key)")
 		}
 		if len(input.pairs) > 1 {
-			return nil, fmt.Errorf("PKCS#12 supports only one key entry; %d matches found (use JKS for multiple)", len(input.pairs))
+			return nil, &ValidationError{Message: fmt.Sprintf("PKCS#12 supports only one key entry; %d matches found (use JKS for multiple)", len(input.pairs))}
 		}
 		pw := bundlePassword(input.passwords)
 		data, err := certkit.EncodePKCS12(input.contents.Key, input.contents.Leaf, input.contents.ExtraCerts, pw)
@@ -266,9 +264,9 @@ func formatConvertJKS(input formatConvertInput) ([]byte, error) {
 // Prefers non-CA (leaf) certificates over CA certs. Each key and cert is
 // consumed at most once.
 func findAllKeyLeafPairs(keyData []byte, passwords []string, certs []*x509.Certificate) ([]keyLeafPair, error) {
-	keys, err := parseKeyBlocks(keyData, passwords)
+	keys, err := certkit.ParsePEMPrivateKeys(keyData, passwords)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("no private keys found in key file")
 	}
 
 	usedKeys := make(map[int]bool)
@@ -316,49 +314,31 @@ func findAllKeyLeafPairs(keyData []byte, passwords []string, certs []*x509.Certi
 	}
 
 	if len(pairs) == 0 {
-		return nil, fmt.Errorf("no key in the key file matches any of the %d certificate(s)", len(certs))
+		validCerts := 0
+		for _, c := range certs {
+			if c != nil {
+				validCerts++
+			}
+		}
+		return nil, &ValidationError{Message: fmt.Sprintf("no key in the key file matches any of the %d certificate(s)", validCerts)}
 	}
 	return pairs, nil
-}
-
-// parseKeyBlocks extracts all private keys from PEM data, skipping non-key blocks.
-func parseKeyBlocks(pemData []byte, passwords []string) ([]crypto.PrivateKey, error) {
-	var keys []crypto.PrivateKey
-	rest := pemData
-	for {
-		var block *pem.Block
-		block, rest = pem.Decode(rest)
-		if block == nil {
-			break
-		}
-		if !strings.Contains(block.Type, "PRIVATE KEY") {
-			continue
-		}
-		singlePEM := pem.EncodeToMemory(block)
-		key, err := certkit.ParsePEMPrivateKeyWithPasswords(singlePEM, passwords)
-		if err != nil {
-			continue
-		}
-		keys = append(keys, key)
-	}
-	if len(keys) == 0 {
-		return nil, fmt.Errorf("no private keys found in key file")
-	}
-	return keys, nil
 }
 
 // buildChainFromPool walks the issuer chain from leaf through a pool of
 // candidate certificates. Returns the chain certs (intermediates + root) in
 // order, excluding the leaf itself. Uses RawIssuer/RawSubject byte comparison
-// for matching.
+// for matching. Terminates on self-signed roots, missing issuers, or cycles.
 func buildChainFromPool(leaf *x509.Certificate, pool []*x509.Certificate) []*x509.Certificate {
 	var chain []*x509.Certificate
+	seen := make(map[*x509.Certificate]bool)
+	seen[leaf] = true
 	current := leaf
 	for !bytes.Equal(current.RawIssuer, current.RawSubject) {
 		var issuer *x509.Certificate
 		for _, c := range pool {
-			if c == leaf {
-				continue // don't include the leaf itself
+			if seen[c] {
+				continue
 			}
 			if bytes.Equal(current.RawIssuer, c.RawSubject) {
 				issuer = c
@@ -368,6 +348,7 @@ func buildChainFromPool(leaf *x509.Certificate, pool []*x509.Certificate) []*x50
 		if issuer == nil {
 			break // issuer not in pool
 		}
+		seen[issuer] = true
 		chain = append(chain, issuer)
 		current = issuer
 	}

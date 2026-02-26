@@ -730,6 +730,7 @@ func TestEncodeJKSEntries(t *testing.T) {
 		entries   func(t *testing.T) []JKSEntry
 		wantKeys  int
 		wantCerts int
+		wantCNs   []string // expected cert CNs after round-trip (order-independent)
 		wantErr   string
 	}{
 		{
@@ -763,6 +764,7 @@ func TestEncodeJKSEntries(t *testing.T) {
 			},
 			wantKeys:  1,
 			wantCerts: 2, // leaf + CA
+			wantCNs:   []string{"single.example.com", "JKS Entries CA"},
 		},
 		{
 			name: "TwoEntriesDifferentKeyTypes",
@@ -813,6 +815,7 @@ func TestEncodeJKSEntries(t *testing.T) {
 			},
 			wantKeys:  2,
 			wantCerts: 4, // 2 leaves + 2 CA copies (one per chain)
+			wantCNs:   []string{"rsa.example.com", "ecdsa.example.com"},
 		},
 		{
 			name: "DuplicateCNAlias",
@@ -863,6 +866,7 @@ func TestEncodeJKSEntries(t *testing.T) {
 			},
 			wantKeys:  2,
 			wantCerts: 2,
+			wantCNs:   []string{"server", "server"},
 		},
 		{
 			name: "EmptyEntries",
@@ -931,92 +935,24 @@ func TestEncodeJKSEntries(t *testing.T) {
 					t.Errorf("entry %d key not found after round-trip", i)
 				}
 			}
+
+			// Verify expected cert CNs survive the round-trip
+			for _, wantCN := range tt.wantCNs {
+				found := false
+				for _, c := range certs {
+					if c.Subject.CommonName == wantCN {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("cert CN %q not found after round-trip", wantCN)
+				}
+			}
 		})
 	}
 }
 
-func TestEncodeJKS_RoundTripWithCAChain(t *testing.T) {
-	// WHY: EncodeJKS appends CA certs to the PrivateKeyEntry chain (jks.go:103-108).
-	// This path was untested — a bug there would silently drop intermediates from
-	// JKS exports. Per T-6, every encode/decode path needs a round-trip test.
-	t.Parallel()
-
-	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-	caTmpl := &x509.Certificate{
-		SerialNumber:          randomSerial(t),
-		Subject:               pkix.Name{CommonName: "JKS RT CA"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
-		KeyUsage:              x509.KeyUsageCertSign,
-		BasicConstraintsValid: true,
-		IsCA:                  true,
-	}
-	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	caCert, err := x509.ParseCertificate(caDER)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	leafKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leafTmpl := &x509.Certificate{
-		SerialNumber: randomSerial(t),
-		Subject:      pkix.Name{CommonName: "jks-rt-leaf.example.com"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leafCert, err := x509.ParseCertificate(leafDER)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	password := "changeit"
-	jksData, err := EncodeJKS(leafKey, leafCert, []*x509.Certificate{caCert}, password)
-	if err != nil {
-		t.Fatalf("EncodeJKS: %v", err)
-	}
-
-	certs, keys, err := DecodeJKS(jksData, []string{password})
-	if err != nil {
-		t.Fatalf("DecodeJKS: %v", err)
-	}
-	if len(keys) != 1 {
-		t.Fatalf("expected 1 key, got %d", len(keys))
-	}
-	if !leafKey.Equal(keys[0]) {
-		t.Error("decoded key does not match original")
-	}
-	if len(certs) != 2 {
-		t.Fatalf("expected 2 certs (leaf + CA), got %d", len(certs))
-	}
-
-	// Verify both leaf and CA survived the round-trip.
-	foundLeaf, foundCA := false, false
-	for _, c := range certs {
-		if c.Subject.CommonName == "jks-rt-leaf.example.com" {
-			foundLeaf = true
-		}
-		if c.Subject.CommonName == "JKS RT CA" {
-			foundCA = true
-		}
-	}
-	if !foundLeaf {
-		t.Error("leaf cert not found after JKS round-trip")
-	}
-	if !foundCA {
-		t.Error("CA cert not found after JKS round-trip")
-	}
-}
+// TestEncodeJKS_RoundTripWithCAChain removed: duplicate of
+// TestEncodeJKSEntries/SingleEntry which covers the same leaf+CA chain
+// round-trip path with CN verification (T-14).

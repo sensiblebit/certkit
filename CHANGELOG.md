@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fix `buildChainFromPool` infinite loop on circular issuer chains — add visited-set cycle guard ([#75])
+- Fix `convert --key` P12 multi-match and key-mismatch errors returning exit code 1 instead of 2 — wrap in `ValidationError` (CLI-6) ([#75])
+- Fix `convert --key` duplicating `ParsePEMPrivateKeys` logic via internal `parseKeyBlocks` — consolidate to shared library function ([#75])
+- Fix `ParsePEMPrivateKeys` missing `ENCRYPTED PRIVATE KEY` PEM block type — PKCS#8 encrypted keys are now recognized ([#75])
+- Fix `convert --key` error reporting nil certificates in match count — now filters nil entries ([#75])
 - Fix `convert` hard-failing on key-only PEM input — PEM output now allows key-only conversions without requiring a certificate ([#75])
 - Fix `connect` fingerprint using lowercase hex without colons instead of OpenSSL-style colon-separated format — now uses `CertFingerprintColonSHA256` for consistency with `inspect` and `verify` ([#75])
 - Fix `connect` JSON `sans` field containing only DNS names instead of all SAN types — now uses `CollectCertificateSANs` for CLI-4 consistency with `inspect` and `verify` ([#75])
@@ -86,6 +91,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Tests
 
+- Add `TestFindAllKeyLeafPairs` and `TestBuildChainFromPool` tests for `convert --key` matching logic — single/multi match, nil certs, CA fallback, leaf priority, chain building, cycle termination ([#75])
+- Fix `TestConnectTLS_AIAFetch` false positive — add atomic request counter to verify AIA HTTP server is actually contacted ([#75])
+- Strengthen `TestEncodeJKSEntries` round-trip assertions — verify cert CN identity survives encode/decode ([#75])
+- Remove duplicate `TestEncodeJKS_RoundTripWithCAChain` — covered by `TestEncodeJKSEntries/SingleEntry` (T-14) ([#75])
 - Add `TestMarshalSANExtension` table-driven tests covering UPN, SRV (IA5String), DNS+UPN mixed, all types combined, multiple OtherNames, arbitrary OIDs, IPv4+IPv6 ([#74])
 - Add `TestMarshalSANExtension_CertificateRoundTrip` — full encode→decode round-trip through `x509.CreateCertificate` ([#74])
 - Add `TestResolveOtherNameOID` table-driven tests for known labels, dotted OIDs, and error cases ([#74])

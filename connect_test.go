@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -422,7 +423,9 @@ func TestConnectTLS_AIAFetch(t *testing.T) {
 	}
 
 	// Serve the intermediate cert over HTTP for AIA fetching.
+	var aiaRequests atomic.Int64
 	aiaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		aiaRequests.Add(1)
 		w.Header().Set("Content-Type", "application/pkix-cert")
 		_, _ = w.Write(intDER)
 	}))
@@ -500,12 +503,10 @@ func TestConnectTLS_AIAFetch(t *testing.T) {
 		t.Fatalf("ConnectTLS failed: %v", err)
 	}
 
-	// The chain won't fully verify against system roots (our test CA isn't trusted),
-	// but AIAFetched should be false since AIA certs alone can't build a path
-	// to a system-trusted root. The important thing is that AIA was attempted.
-	// To truly test AIA verification, we'd need to trust our root — which we
-	// can't do without modifying system roots. Instead, verify the diagnostic
-	// and AIA fetching mechanics via the unit test below.
+	// Verify the AIA server was actually contacted.
+	if got := aiaRequests.Load(); got == 0 {
+		t.Fatal("AIA HTTP server received 0 requests; expected at least 1")
+	}
 
 	// Verify the leaf was received.
 	if len(result.PeerChain) == 0 {
@@ -515,8 +516,10 @@ func TestConnectTLS_AIAFetch(t *testing.T) {
 		t.Errorf("leaf CN = %q, want %q", result.PeerChain[0].Subject.CommonName, "localhost")
 	}
 
-	// Verify there's a verify error (since our test root isn't system-trusted,
-	// even with AIA intermediates the chain won't verify against system roots).
+	// The chain won't fully verify against system roots (our test CA isn't trusted),
+	// so VerifyError will be non-empty. AIA fetching still occurred (proven by the
+	// request counter above), but the fetched intermediates alone can't build a
+	// path to a system-trusted root.
 	if result.VerifyError == "" {
 		t.Error("expected verify error (test CA not in system roots)")
 	}

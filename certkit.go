@@ -209,10 +209,11 @@ func ParsePEMPrivateKeyWithPasswords(pemData []byte, passwords []string) (crypto
 
 // keyBlockTypes is the set of PEM block types that represent private keys.
 var keyBlockTypes = map[string]bool{
-	"RSA PRIVATE KEY":     true,
-	"EC PRIVATE KEY":      true,
-	"PRIVATE KEY":         true,
-	"OPENSSH PRIVATE KEY": true,
+	"RSA PRIVATE KEY":       true,
+	"EC PRIVATE KEY":        true,
+	"PRIVATE KEY":           true,
+	"ENCRYPTED PRIVATE KEY": true,
+	"OPENSSH PRIVATE KEY":   true,
 }
 
 // ParsePEMPrivateKeys parses all private keys from a PEM bundle, trying each
