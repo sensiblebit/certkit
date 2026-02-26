@@ -1152,14 +1152,15 @@ func TestConnectTLS_CRL_DuplicateLeafInChain(t *testing.T) {
 	// WHY: When a server sends [leaf, leaf, intermediate] (duplicate leaf at
 	// position 1), PeerCertificates[1] is the duplicate leaf — not the actual
 	// issuer. Issuer resolution must prefer VerifiedChains[0][1] (the
-	// cryptographically validated intermediate) so CRL signature verification
-	// succeeds.
+	// cryptographically validated intermediate) so both OCSP and CRL signature
+	// verification succeed.
 
 	root := generateTestCA(t, "DupLeaf Root CA")
 	intermediate := generateIntermediateCA(t, root, "DupLeaf Intermediate CA")
 
 	revokedSerial := big.NewInt(600)
 
+	// CRL signed by intermediate containing the leaf serial.
 	crlDER, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
 		Number:     big.NewInt(1),
 		ThisUpdate: time.Now().Add(-time.Hour),
@@ -1178,10 +1179,29 @@ func TestConnectTLS_CRL_DuplicateLeafInChain(t *testing.T) {
 	}))
 	t.Cleanup(crlServer.Close)
 
+	// OCSP responder signed by intermediate.
+	ocspRespTemplate := ocsp.Response{
+		Status:       ocsp.Good,
+		SerialNumber: revokedSerial,
+		ThisUpdate:   time.Now().Add(-time.Hour),
+		NextUpdate:   time.Now().Add(time.Hour),
+	}
+	ocspRespBytes, err := ocsp.CreateResponse(intermediate.Cert, intermediate.Cert, ocspRespTemplate, intermediate.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ocspServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/ocsp-response")
+		_, _ = w.Write(ocspRespBytes)
+	}))
+	t.Cleanup(ocspServer.Close)
+
 	cdpURL := strings.Replace(crlServer.URL, "127.0.0.1", "localhost", 1)
+	ocspURL := strings.Replace(ocspServer.URL, "127.0.0.1", "localhost", 1)
 	leaf := generateTestLeafCert(t, intermediate,
 		withSerial(revokedSerial),
 		withCRLDistributionPoints(cdpURL),
+		withOCSPServer(ocspURL),
 	)
 
 	// Server sends [leaf, leaf(dup), intermediate] — duplicate leaf at position 1.
@@ -1194,11 +1214,10 @@ func TestConnectTLS_CRL_DuplicateLeafInChain(t *testing.T) {
 	defer cancel()
 
 	result, err := ConnectTLS(ctx, ConnectTLSInput{
-		Host:        "127.0.0.1",
-		Port:        port,
-		CheckCRL:    true,
-		DisableOCSP: true,
-		RootCAs:     rootPool,
+		Host:     "127.0.0.1",
+		Port:     port,
+		CheckCRL: true,
+		RootCAs:  rootPool,
 	})
 	if err != nil {
 		t.Fatalf("ConnectTLS failed: %v", err)
@@ -1221,12 +1240,23 @@ func TestConnectTLS_CRL_DuplicateLeafInChain(t *testing.T) {
 		t.Error("expected duplicate-cert diagnostic")
 	}
 
-	// CRL check must succeed — the issuer should be the intermediate from
+	// OCSP check must succeed — the issuer should be the intermediate from
 	// VerifiedChains, not the duplicate leaf from PeerCertificates[1].
+	if result.OCSP == nil {
+		t.Fatal("OCSP result is nil — issuer resolution failed")
+	}
+	if result.OCSP.Status != "good" {
+		t.Errorf("OCSP.Status = %q, want %q (detail: %s)", result.OCSP.Status, "good", result.OCSP.Detail)
+	}
+
+	// CRL check must also succeed with the correct issuer.
 	if result.CRL == nil {
 		t.Fatal("CRL result is nil — issuer resolution failed")
 	}
 	if result.CRL.Status != "revoked" {
 		t.Errorf("CRL.Status = %q, want %q (detail: %s)", result.CRL.Status, "revoked", result.CRL.Detail)
+	}
+	if !strings.Contains(result.CRL.Detail, revokedSerial.Text(16)) {
+		t.Errorf("CRL.Detail = %q, want substring %q", result.CRL.Detail, revokedSerial.Text(16))
 	}
 }
