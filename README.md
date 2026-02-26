@@ -138,10 +138,12 @@ Common passwords (`""`, `"password"`, `"changeit"`, `"keypassword"`) are always 
 | `--key`          |           | Private key file to check against the certificate           |
 | `--expiry`, `-e` |           | Check if cert expires within duration (e.g., `30d`, `720h`) |
 | `--trust-store`  | `mozilla` | Trust store: `system`, `mozilla`                            |
+| `--ocsp`         | `false`   | Check OCSP revocation status                                |
+| `--crl`          | `false`   | Check CRL distribution points for revocation                |
 | `--format`       | `text`    | Output format: `text`, `json`                               |
 | `--diagnose`     | `false`   | Show diagnostics when chain verification fails              |
 
-Chain verification is always performed. When the input contains an embedded private key (PKCS#12, JKS), key match is checked automatically.
+Chain verification is always performed. When the input contains an embedded private key (PKCS#12, JKS), key match is checked automatically. Use `--ocsp` and/or `--crl` to check revocation status (requires network access and a valid chain).
 
 ### Connect Flags
 
