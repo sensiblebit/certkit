@@ -7,10 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Improve error messages when AIA certificate fetching fails — errors now include the URL and operation context ([#76])
+
 ### Fixed
 
 - Fix potential panic in TLS connection handling during remote certificate fetch ([#76])
-- Improve error messages when AIA certificate fetching fails — errors now include the URL and operation context ([#76])
 - Fix `--save-db` silently writing incomplete SAN data when JSON encoding fails — now returns an error ([#76])
 - Fix `--save-db` silently dropping certificates or keys when database INSERT fails — now returns an error ([#76])
 - Fix `--save-db` corrupting subsequent operations by modifying certificate SAN data during export ([#76])
