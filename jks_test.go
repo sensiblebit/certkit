@@ -2,6 +2,7 @@ package certkit
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -691,6 +692,246 @@ func TestDecodeJKS_PrivateKeyEntry_EmptyCertChain(t *testing.T) {
 	}
 	if len(certs) != 0 {
 		t.Errorf("expected 0 certs from empty chain, got %d", len(certs))
+	}
+}
+
+func TestEncodeJKSEntries(t *testing.T) {
+	// WHY: EncodeJKSEntries is the multi-entry JKS encoder. Each subtest
+	// round-trips through DecodeJKS to verify all keys and certs survive.
+	t.Parallel()
+
+	// Shared CA for chain-building subtests
+	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caTmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "JKS Entries CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+	}
+	caDER, err := x509.CreateCertificate(rand.Reader, caTmpl, caTmpl, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caCert, err := x509.ParseCertificate(caDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	password := "changeit"
+
+	tests := []struct {
+		name      string
+		entries   func(t *testing.T) []JKSEntry
+		wantKeys  int
+		wantCerts int
+		wantErr   string
+	}{
+		{
+			name: "SingleEntry",
+			entries: func(t *testing.T) []JKSEntry {
+				t.Helper()
+				key, err := rsa.GenerateKey(rand.Reader, 2048)
+				if err != nil {
+					t.Fatal(err)
+				}
+				tmpl := &x509.Certificate{
+					SerialNumber: randomSerial(t),
+					Subject:      pkix.Name{CommonName: "single.example.com"},
+					NotBefore:    time.Now().Add(-time.Hour),
+					NotAfter:     time.Now().Add(24 * time.Hour),
+				}
+				leafDER, err := x509.CreateCertificate(rand.Reader, tmpl, caCert, &key.PublicKey, caKey)
+				if err != nil {
+					t.Fatal(err)
+				}
+				leaf, err := x509.ParseCertificate(leafDER)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return []JKSEntry{{
+					PrivateKey: key,
+					Leaf:       leaf,
+					CACerts:    []*x509.Certificate{caCert},
+					Alias:      "server",
+				}}
+			},
+			wantKeys:  1,
+			wantCerts: 2, // leaf + CA
+		},
+		{
+			name: "TwoEntriesDifferentKeyTypes",
+			entries: func(t *testing.T) []JKSEntry {
+				t.Helper()
+				rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+				if err != nil {
+					t.Fatal(err)
+				}
+				tmpl1 := &x509.Certificate{
+					SerialNumber: randomSerial(t),
+					Subject:      pkix.Name{CommonName: "rsa.example.com"},
+					NotBefore:    time.Now().Add(-time.Hour),
+					NotAfter:     time.Now().Add(24 * time.Hour),
+				}
+				rsaLeafDER, err := x509.CreateCertificate(rand.Reader, tmpl1, caCert, &rsaKey.PublicKey, caKey)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rsaLeaf, err := x509.ParseCertificate(rsaLeafDER)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				tmpl2 := &x509.Certificate{
+					SerialNumber: randomSerial(t),
+					Subject:      pkix.Name{CommonName: "ecdsa.example.com"},
+					NotBefore:    time.Now().Add(-time.Hour),
+					NotAfter:     time.Now().Add(24 * time.Hour),
+				}
+				ecLeafDER, err := x509.CreateCertificate(rand.Reader, tmpl2, caCert, &ecKey.PublicKey, caKey)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ecLeaf, err := x509.ParseCertificate(ecLeafDER)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				return []JKSEntry{
+					{PrivateKey: rsaKey, Leaf: rsaLeaf, CACerts: []*x509.Certificate{caCert}, Alias: "rsa-server"},
+					{PrivateKey: ecKey, Leaf: ecLeaf, CACerts: []*x509.Certificate{caCert}, Alias: "ec-server"},
+				}
+			},
+			wantKeys:  2,
+			wantCerts: 4, // 2 leaves + 2 CA copies (one per chain)
+		},
+		{
+			name: "DuplicateCNAlias",
+			entries: func(t *testing.T) []JKSEntry {
+				t.Helper()
+				key1, err := rsa.GenerateKey(rand.Reader, 2048)
+				if err != nil {
+					t.Fatal(err)
+				}
+				tmpl1 := &x509.Certificate{
+					SerialNumber: randomSerial(t),
+					Subject:      pkix.Name{CommonName: "server"},
+					NotBefore:    time.Now().Add(-time.Hour),
+					NotAfter:     time.Now().Add(24 * time.Hour),
+				}
+				leaf1DER, err := x509.CreateCertificate(rand.Reader, tmpl1, tmpl1, &key1.PublicKey, key1)
+				if err != nil {
+					t.Fatal(err)
+				}
+				leaf1, err := x509.ParseCertificate(leaf1DER)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				key2, err := rsa.GenerateKey(rand.Reader, 2048)
+				if err != nil {
+					t.Fatal(err)
+				}
+				tmpl2 := &x509.Certificate{
+					SerialNumber: randomSerial(t),
+					Subject:      pkix.Name{CommonName: "server"},
+					NotBefore:    time.Now().Add(-time.Hour),
+					NotAfter:     time.Now().Add(24 * time.Hour),
+				}
+				leaf2DER, err := x509.CreateCertificate(rand.Reader, tmpl2, tmpl2, &key2.PublicKey, key2)
+				if err != nil {
+					t.Fatal(err)
+				}
+				leaf2, err := x509.ParseCertificate(leaf2DER)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				return []JKSEntry{
+					{PrivateKey: key1, Leaf: leaf1, Alias: "server"},
+					{PrivateKey: key2, Leaf: leaf2, Alias: "server"},
+				}
+			},
+			wantKeys:  2,
+			wantCerts: 2,
+		},
+		{
+			name: "EmptyEntries",
+			entries: func(t *testing.T) []JKSEntry {
+				t.Helper()
+				return nil
+			},
+			wantErr: "at least one JKS entry is required",
+		},
+		{
+			name: "NilLeaf",
+			entries: func(t *testing.T) []JKSEntry {
+				t.Helper()
+				key, err := rsa.GenerateKey(rand.Reader, 2048)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return []JKSEntry{{PrivateKey: key, Leaf: nil, Alias: "bad"}}
+			},
+			wantErr: "leaf certificate cannot be nil",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			entries := tt.entries(t)
+
+			data, err := EncodeJKSEntries(entries, password)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("error %q should contain %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("EncodeJKSEntries: %v", err)
+			}
+
+			// Round-trip through DecodeJKS
+			certs, keys, err := DecodeJKS(data, []string{password})
+			if err != nil {
+				t.Fatalf("DecodeJKS: %v", err)
+			}
+			if len(keys) != tt.wantKeys {
+				t.Errorf("keys: got %d, want %d", len(keys), tt.wantKeys)
+			}
+			if len(certs) != tt.wantCerts {
+				t.Errorf("certs: got %d, want %d", len(certs), tt.wantCerts)
+			}
+
+			// Verify all original keys survive the round-trip
+			for i, entry := range entries {
+				found := false
+				for _, k := range keys {
+					type equalKey interface{ Equal(crypto.PrivateKey) bool }
+					if eq, ok := entry.PrivateKey.(equalKey); ok && eq.Equal(k) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("entry %d key not found after round-trip", i)
+				}
+			}
+		})
 	}
 }
 

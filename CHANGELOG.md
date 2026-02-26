@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fix `convert --key` only using first key from multi-key PEM file and including all certs in output — now matches the key to its leaf certificate and extracts only the chain for that leaf
 - Fix AIA proxy rejecting `cacerts.geotrust.com` and `cacerts.thawte.com` — consolidate all per-host CA entries into suffix matches for broader coverage of CA subdomains
 - Fix `marshalOtherNameGN` encoding non-SRV OtherName values as PrintableString instead of UTF8String ([#74])
 - Fix `MarshalSANExtension` accepting nil URI entries and invalid IP addresses without validation ([#74])
@@ -55,6 +56,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add multi-entry JKS support to `convert --key` — when multiple keys match different certificates, JKS output creates a multi-alias keystore with one `PrivateKeyEntry` per match
+- Add `EncodeJKSEntries` library function for creating multi-entry JKS keystores with alias sanitization and deduplication
 - Add chain diagnostics to `connect` command — detect root certificates in chain (RFC 8446 §4.4.2) and duplicate certificates
 - Add AIA walking to `connect` command — automatically fetch missing intermediates when server sends leaf-only chain, with `missing-intermediate` diagnostic warning
 - Add mTLS detection to `connect` command — shows whether the server requests a client certificate, acceptable CAs, and accepted signature algorithms
