@@ -315,13 +315,13 @@ func FetchLeafFromURL(ctx context.Context, rawURL string, timeout time.Duration)
 
 	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
 	if err != nil {
-		return nil, fmt.Errorf("tls dial to %s:%s: %w", host, port, err)
+		return nil, fmt.Errorf("TLS dial to %s:%s: %w", host, port, err)
 	}
 	defer func() { _ = conn.Close() }()
 
 	tlsConn, ok := conn.(*tls.Conn)
 	if !ok {
-		return nil, fmt.Errorf("tls dial to %s:%s: connection is not TLS", host, port)
+		return nil, fmt.Errorf("TLS dial to %s:%s: connection is not TLS", host, port)
 	}
 	certs := tlsConn.ConnectionState().PeerCertificates
 	if len(certs) == 0 {
