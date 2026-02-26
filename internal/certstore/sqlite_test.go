@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"net"
 	"path/filepath"
-	"slices"
 	"strings"
 	"testing"
 
@@ -192,8 +191,13 @@ func TestLoadFromSQLite_MergesWithExisting(t *testing.T) {
 
 func TestSaveToSQLite_DoesNotMutateDNSNames(t *testing.T) {
 	// WHY: SaveToSQLite concatenates DNSNames and IPAddresses for the SANs
-	// column. Before the slices.Concat fix, append could mutate the
-	// certificate's DNSNames backing array if it had spare capacity.
+	// column. Before the slices.Concat fix, append could write IP addresses
+	// into the DNSNames backing array's spare capacity, corrupting any
+	// sibling slices sharing that array.
+	//
+	// We detect this by placing sentinel values in the backing array beyond
+	// DNSNames' length. If append is used instead of slices.Concat, the
+	// sentinels get overwritten by IP address strings.
 	t.Parallel()
 
 	ca := newRSACA(t)
@@ -201,6 +205,12 @@ func TestSaveToSQLite_DoesNotMutateDNSNames(t *testing.T) {
 		[]string{"alias.example.com", "www.alias.example.com"},
 		[]net.IP{net.IPv4(10, 0, 0, 1), net.ParseIP("::1")},
 	)
+
+	// Give DNSNames a backing array with sentinel values beyond len.
+	// x509.ParseCertificate returns cap==len, so without this the bug
+	// is undetectable (append always allocates a new array).
+	backing := []string{"alias.example.com", "www.alias.example.com", "SENTINEL", "SENTINEL"}
+	leaf.cert.DNSNames = backing[:2:4]
 
 	store := NewMemStore()
 	if err := store.HandleCertificate(ca.cert, "test"); err != nil {
@@ -210,15 +220,15 @@ func TestSaveToSQLite_DoesNotMutateDNSNames(t *testing.T) {
 		t.Fatalf("store leaf cert: %v", err)
 	}
 
-	origDNS := slices.Clone(leaf.cert.DNSNames)
-
 	dbPath := filepath.Join(t.TempDir(), "alias.db")
 	if err := SaveToSQLite(store, dbPath); err != nil {
 		t.Fatalf("SaveToSQLite: %v", err)
 	}
 
-	if !slices.Equal(leaf.cert.DNSNames, origDNS) {
-		t.Errorf("SaveToSQLite mutated cert.DNSNames: got %v, want %v",
-			leaf.cert.DNSNames, origDNS)
+	// With the old append code, backing[2:] would contain IP addresses
+	// instead of sentinels.
+	if backing[2] != "SENTINEL" || backing[3] != "SENTINEL" {
+		t.Errorf("SaveToSQLite corrupted DNSNames backing array: got %v, want sentinels",
+			backing[2:])
 	}
 }
