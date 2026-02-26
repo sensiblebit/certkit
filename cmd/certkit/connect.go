@@ -124,7 +124,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 				NotAfter:  cert.NotAfter.UTC().Format(time.RFC3339),
 				SHA256:    certkit.CertFingerprint(cert),
 				CertType:  certkit.GetCertificateType(cert),
-				SANs:      cert.DNSNames,
+				SANs:      certkit.CollectCertificateSANs(cert),
 			}
 			if verbose {
 				isCA := cert.IsCA

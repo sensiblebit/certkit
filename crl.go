@@ -42,8 +42,8 @@ func ParseCRL(data []byte) (*x509.RevocationList, error) {
 	return crl, nil
 }
 
-// CRLContainsCert checks if a certificate's serial number appears in the CRL.
-func CRLContainsCert(crl *x509.RevocationList, cert *x509.Certificate) bool {
+// CRLContainsCertificate checks if a certificate's serial number appears in the CRL.
+func CRLContainsCertificate(crl *x509.RevocationList, cert *x509.Certificate) bool {
 	for _, entry := range crl.RevokedCertificateEntries {
 		if entry.SerialNumber.Cmp(cert.SerialNumber) == 0 {
 			return true

@@ -84,7 +84,7 @@ func TestParseCRL(t *testing.T) {
 	}
 }
 
-func TestCRLContainsCert(t *testing.T) {
+func TestCRLContainsCertificate(t *testing.T) {
 	t.Parallel()
 
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -132,9 +132,9 @@ func TestCRLContainsCert(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			cert := &x509.Certificate{SerialNumber: tc.serial}
-			got := CRLContainsCert(crl, cert)
+			got := CRLContainsCertificate(crl, cert)
 			if got != tc.want {
-				t.Errorf("CRLContainsCert = %v, want %v", got, tc.want)
+				t.Errorf("CRLContainsCertificate = %v, want %v", got, tc.want)
 			}
 		})
 	}

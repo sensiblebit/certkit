@@ -95,7 +95,7 @@ func runCRL(cmd *cobra.Command, args []string) error {
 		}
 		checkResult = &crlCheckResult{
 			Serial:  contents.Leaf.SerialNumber.Text(16),
-			Revoked: certkit.CRLContainsCert(crl, contents.Leaf),
+			Revoked: certkit.CRLContainsCertificate(crl, contents.Leaf),
 		}
 	}
 

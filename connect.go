@@ -351,8 +351,8 @@ func FormatConnectResult(r *ConnectResult) string {
 		fmt.Fprintf(&out, "     Not Before:  %s\n", cert.NotBefore.UTC().Format(time.RFC3339))
 		fmt.Fprintf(&out, "     Not After:   %s\n", cert.NotAfter.UTC().Format(time.RFC3339))
 		fmt.Fprintf(&out, "     Fingerprint: %s\n", CertFingerprintColonSHA256(cert))
-		if len(cert.DNSNames) > 0 {
-			fmt.Fprintf(&out, "     SANs:        %s\n", strings.Join(cert.DNSNames, ", "))
+		if sans := CollectCertificateSANs(cert); len(sans) > 0 {
+			fmt.Fprintf(&out, "     SANs:        %s\n", strings.Join(sans, ", "))
 		}
 	}
 

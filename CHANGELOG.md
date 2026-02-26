@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Fix `convert` hard-failing on key-only PEM input — PEM output now allows key-only conversions without requiring a certificate ([#75])
 - Fix `connect` fingerprint using lowercase hex without colons instead of OpenSSL-style colon-separated format — now uses `CertFingerprintColonSHA256` for consistency with `inspect` and `verify` ([#75])
+- Fix `connect` JSON `sans` field containing only DNS names instead of all SAN types — now uses `CollectCertificateSANs` for CLI-4 consistency with `inspect` and `verify` ([#75])
+- **Breaking:** Rename `CRLContainsCert` to `CRLContainsCertificate` — exported function names must not abbreviate per CS-2 ([#75])
 - Fix `verify --diagnose` running chain diagnostics on non-chain errors (key mismatch, expiry warnings) — now gates on `chain_valid == false` only ([#75])
 - Fix silent `continue` in `connect` mTLS CA DN parsing when `asn1.Unmarshal` fails — now logs with `slog.Debug` (ERR-5) ([#75])
 - Fix `convert --key` only using first key from multi-key PEM file and including all certs in output — now matches the key to its leaf certificate and extracts only the chain for that leaf
@@ -62,6 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add multi-entry JKS support to `convert --key` — when multiple keys match different certificates, JKS output creates a multi-alias keystore with one `PrivateKeyEntry` per match
 - Add `EncodeJKSEntries` library function for creating multi-entry JKS keystores with alias sanitization and deduplication
+- Add `CollectCertificateSANs` library function for canonical SAN aggregation (DNS, IP, email, URI, OtherName) across all commands
 - Add chain diagnostics to `connect` command — detect root certificates in chain (RFC 8446 §4.4.2) and duplicate certificates
 - Add AIA walking to `connect` command — automatically fetch missing intermediates when server sends leaf-only chain, with `missing-intermediate` diagnostic warning
 - Add mTLS detection to `connect` command — shows whether the server requests a client certificate, acceptable CAs, and accepted signature algorithms
@@ -77,7 +80,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `CreateSelfSigned` and `SignCSR` library functions for certificate signing
 - Add `ConnectTLS` library function for TLS connection probing
 - Add `CheckOCSP` library function for OCSP revocation checking
-- Add `ParseCRL`, `CRLContainsCert`, and `CRLInfoFromList` library functions for CRL handling
+- Add `ParseCRL`, `CRLContainsCertificate`, and `CRLInfoFromList` library functions for CRL handling
 - Add chain diagnostic checks (`--diagnose` flag) for `verify` command
 
 ### Tests
@@ -97,7 +100,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `TestSignCSR_ChainVerifies` round-trip chain verification test
 - Add `TestConnectTLS` with mock TLS server for connection probing
 - Add `TestCheckOCSP_MockResponse` table-driven test with mock OCSP server covering good and revoked responses
-- Add `TestParseCRL`, `TestCRLContainsCert`, and `TestCRLInfoFromList` for CRL handling
+- Add `TestParseCRL`, `TestCRLContainsCertificate`, and `TestCRLInfoFromList` for CRL handling
 - Add `TestDiagnoseChain` table-driven tests for chain diagnostics
 
 ## [0.8.1] - 2026-02-25
