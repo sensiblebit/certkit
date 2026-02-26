@@ -3,6 +3,8 @@ package internal
 import (
 	"archive/tar"
 	"bytes"
+	"encoding/binary"
+	"math"
 	"strings"
 	"testing"
 )
@@ -669,6 +671,30 @@ func TestProcessArchive_DecompressionRatioLimit(t *testing.T) {
 	}
 }
 
+func TestProcessArchive_ZipOverflowUncompressedSize(t *testing.T) {
+	// WHY: Verifies that ZIP entries with UncompressedSize64 > math.MaxInt64
+	// are skipped. Without the overflow guard, the uint64→int64 cast wraps
+	// negative, bypassing decompression ratio and size limit checks.
+	t.Parallel()
+
+	zipData := createZipWithOverflowSize(t, "overflow.pem", math.MaxInt64+1)
+
+	cfg := newTestConfig(t)
+	n, err := ProcessArchive(ProcessArchiveInput{
+		ArchivePath: "test.zip",
+		Data:        zipData,
+		Format:      "zip",
+		Limits:      DefaultArchiveLimits(),
+		Store:       cfg.Store, Passwords: cfg.Passwords,
+	})
+	if err != nil {
+		t.Fatalf("ProcessArchive: %v", err)
+	}
+	if n != 0 {
+		t.Errorf("processed %d entries, want 0 (overflow entry should be skipped)", n)
+	}
+}
+
 func TestProcessArchive_TarPartialCorruption(t *testing.T) {
 	// WHY: Verifies graceful degradation when a TAR archive has valid entries
 	// followed by corruption. The code should return the successfully processed
@@ -710,4 +736,58 @@ func TestProcessArchive_TarPartialCorruption(t *testing.T) {
 	if len(certs) != 1 {
 		t.Errorf("got %d certs in store, want 1", len(certs))
 	}
+}
+
+// createZipWithOverflowSize constructs a minimal ZIP archive containing a
+// single entry whose central-directory UncompressedSize64 is set to the given
+// value via a ZIP64 extended information extra field. This cannot be done with
+// archive/zip.Writer because it writes actual data sizes.
+func createZipWithOverflowSize(t *testing.T, name string, uncompressedSize uint64) []byte {
+	t.Helper()
+
+	nameBytes := []byte(name)
+	nameLen := len(nameBytes)
+
+	// ZIP64 extended information extra field
+	zip64Extra := make([]byte, 12)
+	binary.LittleEndian.PutUint16(zip64Extra[0:2], 0x0001) // ZIP64 header ID
+	binary.LittleEndian.PutUint16(zip64Extra[2:4], 8)      // data size (one 8-byte field)
+	binary.LittleEndian.PutUint64(zip64Extra[4:12], uncompressedSize)
+
+	var buf bytes.Buffer
+
+	// Local file header (30 bytes + filename)
+	local := make([]byte, 30)
+	binary.LittleEndian.PutUint32(local[0:4], 0x04034b50) // signature
+	binary.LittleEndian.PutUint16(local[4:6], 45)         // version (4.5 = ZIP64)
+	binary.LittleEndian.PutUint16(local[26:28], uint16(nameLen))
+	buf.Write(local)
+	buf.Write(nameBytes)
+
+	cdOffset := buf.Len()
+
+	// Central directory header (46 bytes + filename + extra)
+	cd := make([]byte, 46)
+	binary.LittleEndian.PutUint32(cd[0:4], 0x02014b50)   // signature
+	binary.LittleEndian.PutUint16(cd[4:6], 45)           // version made by
+	binary.LittleEndian.PutUint16(cd[6:8], 45)           // version needed
+	binary.LittleEndian.PutUint32(cd[24:28], 0xFFFFFFFF) // uncompressed size → ZIP64
+	binary.LittleEndian.PutUint16(cd[28:30], uint16(nameLen))
+	binary.LittleEndian.PutUint16(cd[30:32], uint16(len(zip64Extra)))
+	buf.Write(cd)
+	buf.Write(nameBytes)
+	buf.Write(zip64Extra)
+
+	cdSize := buf.Len() - cdOffset
+
+	// End of central directory record (22 bytes)
+	eocd := make([]byte, 22)
+	binary.LittleEndian.PutUint32(eocd[0:4], 0x06054b50)
+	binary.LittleEndian.PutUint16(eocd[8:10], 1)  // entries on this disk
+	binary.LittleEndian.PutUint16(eocd[10:12], 1) // total entries
+	binary.LittleEndian.PutUint32(eocd[12:16], uint32(cdSize))
+	binary.LittleEndian.PutUint32(eocd[16:20], uint32(cdOffset))
+	buf.Write(eocd)
+
+	return buf.Bytes()
 }

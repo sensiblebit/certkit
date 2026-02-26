@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -205,11 +206,11 @@ func SaveToSQLite(store *MemStore, dbPath string) error {
 	for _, rec := range store.AllCertsFlat() {
 		certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rec.Cert.Raw})
 
-		sans := append(rec.Cert.DNSNames, FormatIPAddresses(rec.Cert.IPAddresses)...)
+		sans := slices.Concat(rec.Cert.DNSNames, FormatIPAddresses(rec.Cert.IPAddresses))
 		sansJSON, err := json.Marshal(sans)
 		if err != nil {
 			slog.Warn("marshaling SANs to JSON", "serial", rec.Cert.SerialNumber, "error", err)
-			continue
+			sansJSON = []byte("[]")
 		}
 
 		notBefore := rec.NotBefore

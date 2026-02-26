@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Fix unchecked type assertion `conn.(*tls.Conn)` in `FetchLeafFromURL` — add ok check for safety
 - Fix bare `return err` without context wrapping (ERR-1) in `fetchCertificatesFromURL` AIA fetcher
-- Fix unchecked `json.Marshal` error in `SaveToSQLite` SAN serialization — now logs and skips on failure
+- Fix unchecked `json.Marshal` error in `SaveToSQLite` SAN serialization — now logs and falls back to empty SANs instead of dropping the certificate
+- Fix `SaveToSQLite` `append(rec.Cert.DNSNames, ...)` slice aliasing — use `slices.Concat` to prevent mutating the certificate's backing array
 - Fix uint64→int64 overflow in ZIP archive extraction — entries claiming >MaxInt64 bytes bypassed all size limits
 - Fix `marshalOtherNameGN` appending to `oidBytes` slice and assigning to different variable — use `slices.Concat` to prevent aliasing
 - Fix `buildChainFromPool` infinite loop on circular issuer chains — add visited-set cycle guard ([#75])
