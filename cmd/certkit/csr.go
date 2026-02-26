@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -75,7 +76,17 @@ func runCSR(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("generating CSR: %w", err)
 	}
 
-	if csrOutPath == "" {
+	if jsonOutput {
+		out := csrJSON{CSRPEM: result.CSRPEM}
+		if result.KeyPEM != "" {
+			out.KeyPEM = result.KeyPEM
+		}
+		data, err := json.MarshalIndent(out, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshaling JSON: %w", err)
+		}
+		fmt.Println(string(data))
+	} else if csrOutPath == "" {
 		fmt.Print(result.CSRPEM)
 		if result.KeyPEM != "" {
 			fmt.Print(result.KeyPEM)
@@ -87,4 +98,10 @@ func runCSR(cmd *cobra.Command, args []string) error {
 		}
 	}
 	return nil
+}
+
+// csrJSON is the JSON output structure for the csr command.
+type csrJSON struct {
+	CSRPEM string `json:"csr_pem"`
+	KeyPEM string `json:"key_pem,omitempty"`
 }

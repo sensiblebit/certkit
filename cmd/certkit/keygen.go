@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -59,7 +60,20 @@ func runKeygen(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("generating key: %w", err)
 	}
 
-	if keygenOutPath == "" {
+	if jsonOutput {
+		out := keygenJSON{
+			KeyPEM:       result.KeyPEM,
+			PublicKeyPEM: result.PubPEM,
+		}
+		if result.CSRPEM != "" {
+			out.CSRPEM = result.CSRPEM
+		}
+		data, err := json.MarshalIndent(out, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshaling JSON: %w", err)
+		}
+		fmt.Println(string(data))
+	} else if keygenOutPath == "" {
 		fmt.Print(result.KeyPEM)
 		fmt.Print(result.PubPEM)
 		if result.CSRPEM != "" {
@@ -73,4 +87,11 @@ func runKeygen(cmd *cobra.Command, args []string) error {
 		}
 	}
 	return nil
+}
+
+// keygenJSON is the JSON output structure for the keygen command.
+type keygenJSON struct {
+	KeyPEM       string `json:"key_pem"`
+	PublicKeyPEM string `json:"public_key_pem"`
+	CSRPEM       string `json:"csr_pem,omitempty"`
 }

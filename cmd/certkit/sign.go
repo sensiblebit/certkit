@@ -6,6 +6,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -147,7 +148,17 @@ func runSignSelfSigned(_ *cobra.Command, _ []string) error {
 
 	certPEM := certkit.CertToPEM(cert)
 
-	if selfSignedOutFile != "" {
+	if jsonOutput {
+		out := signSelfSignedJSON{CertificatePEM: certPEM}
+		if keyPEM != "" {
+			out.KeyPEM = keyPEM
+		}
+		data, err := json.MarshalIndent(out, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshaling JSON: %w", err)
+		}
+		fmt.Println(string(data))
+	} else if selfSignedOutFile != "" {
 		output := certPEM
 		if keyPEM != "" {
 			output += keyPEM
@@ -165,6 +176,12 @@ func runSignSelfSigned(_ *cobra.Command, _ []string) error {
 	}
 
 	return nil
+}
+
+// signSelfSignedJSON is the JSON output structure for sign self-signed.
+type signSelfSignedJSON struct {
+	CertificatePEM string `json:"certificate_pem"`
+	KeyPEM         string `json:"key_pem,omitempty"`
 }
 
 func runSignCSR(_ *cobra.Command, args []string) error {
@@ -220,7 +237,14 @@ func runSignCSR(_ *cobra.Command, args []string) error {
 
 	certPEM := certkit.CertToPEM(cert)
 
-	if signCSROutFile != "" {
+	if jsonOutput {
+		out := signCSRJSON{CertificatePEM: certPEM}
+		data, err := json.MarshalIndent(out, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshaling JSON: %w", err)
+		}
+		fmt.Println(string(data))
+	} else if signCSROutFile != "" {
 		if err := os.WriteFile(signCSROutFile, []byte(certPEM), 0644); err != nil {
 			return fmt.Errorf("writing output: %w", err)
 		}
@@ -230,4 +254,9 @@ func runSignCSR(_ *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// signCSRJSON is the JSON output structure for sign csr.
+type signCSRJSON struct {
+	CertificatePEM string `json:"certificate_pem"`
 }

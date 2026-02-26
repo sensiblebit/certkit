@@ -19,6 +19,7 @@ import (
 
 var (
 	connectServerName string
+	connectFormat     string
 	connectCRL        bool
 	connectNoOCSP     bool
 )
@@ -38,15 +39,18 @@ Exits with code 2 if chain verification fails or the certificate is revoked.`,
   certkit connect example.com:8443
   certkit connect example.com --crl
   certkit connect example.com --servername alt.example.com
-  certkit connect example.com --json`,
+  certkit connect example.com --format json`,
 	Args: cobra.ExactArgs(1),
 	RunE: runConnect,
 }
 
 func init() {
 	connectCmd.Flags().StringVar(&connectServerName, "servername", "", "Override SNI hostname (defaults to host)")
+	connectCmd.Flags().StringVar(&connectFormat, "format", "text", "Output format: `text`, `json`")
 	connectCmd.Flags().BoolVar(&connectCRL, "crl", false, "Check CRL distribution points for revocation")
 	connectCmd.Flags().BoolVar(&connectNoOCSP, "no-ocsp", false, "Disable automatic OCSP revocation check")
+
+	registerCompletion(connectCmd, completionInput{"format", fixedCompletion("text", "json")})
 }
 
 // connectResultJSON is a JSON-serializable version of ConnectResult.
@@ -112,6 +116,11 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	now := time.Now()
 
 	if jsonOutput {
+		connectFormat = "json"
+	}
+
+	switch connectFormat {
+	case "json":
 		jr := connectResultJSON{
 			Host:        result.Host,
 			Port:        result.Port,
@@ -158,12 +167,14 @@ func runConnect(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("marshaling JSON: %w", err)
 		}
 		fmt.Println(string(data))
-	} else {
+	case "text":
 		if verbose {
 			fmt.Print(formatConnectVerbose(result, now))
 		} else {
 			fmt.Print(certkit.FormatConnectResult(result))
 		}
+	default:
+		return fmt.Errorf("unsupported output format %q (use text or json)", connectFormat)
 	}
 
 	if result.VerifyError != "" {

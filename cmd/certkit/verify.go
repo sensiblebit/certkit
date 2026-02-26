@@ -18,6 +18,7 @@ var (
 	verifyKeyPath    string
 	verifyExpiry     string
 	verifyTrustStore string
+	verifyFormat     string
 	verifyDiagnose   bool
 	verifyOCSP       bool
 	verifyCRL        bool
@@ -52,10 +53,12 @@ func init() {
 	verifyCmd.Flags().StringVar(&verifyKeyPath, "key", "", "Private key file to check against the certificate")
 	verifyCmd.Flags().StringVarP(&verifyExpiry, "expiry", "e", "", "Check if cert expires within duration (e.g., `30d`, `720h`)")
 	verifyCmd.Flags().StringVar(&verifyTrustStore, "trust-store", "mozilla", "Trust store: `system`, `mozilla`")
+	verifyCmd.Flags().StringVar(&verifyFormat, "format", "text", "Output format: `text`, `json`")
 	verifyCmd.Flags().BoolVar(&verifyDiagnose, "diagnose", false, "Show diagnostics when chain verification fails")
 	verifyCmd.Flags().BoolVar(&verifyOCSP, "ocsp", false, "Check OCSP revocation status")
 	verifyCmd.Flags().BoolVar(&verifyCRL, "crl", false, "Check CRL distribution points for revocation")
 
+	registerCompletion(verifyCmd, completionInput{"format", fixedCompletion("text", "json")})
 	registerCompletion(verifyCmd, completionInput{"trust-store", fixedCompletion("system", "mozilla")})
 }
 
@@ -143,16 +146,23 @@ func runVerify(cmd *cobra.Command, args []string) error {
 	}
 
 	if jsonOutput {
+		verifyFormat = "json"
+	}
+
+	switch verifyFormat {
+	case "json":
 		data, err := json.MarshalIndent(result, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshaling JSON: %w", err)
 		}
 		fmt.Println(string(data))
-	} else {
+	case "text":
 		fmt.Print(internal.FormatVerifyResult(result))
 		if len(result.Diagnoses) > 0 {
 			fmt.Print(internal.FormatDiagnoses(result.Diagnoses))
 		}
+	default:
+		return fmt.Errorf("unsupported output format %q (use text or json)", verifyFormat)
 	}
 
 	if len(result.Errors) > 0 {

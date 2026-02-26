@@ -31,6 +31,7 @@ var (
 	scanDumpKeys    string
 	scanDumpCerts   string
 	scanMaxFileSize int64
+	scanFormat      string
 )
 
 var scanCmd = &cobra.Command{
@@ -53,8 +54,11 @@ func init() {
 	scanCmd.Flags().StringVar(&scanDumpKeys, "dump-keys", "", "Dump all discovered keys to a single PEM file")
 	scanCmd.Flags().StringVar(&scanDumpCerts, "dump-certs", "", "Dump all discovered certificates to a single PEM file")
 	scanCmd.Flags().Int64Var(&scanMaxFileSize, "max-file-size", 10*1024*1024, "Skip files larger than this size in bytes (0 to disable)")
+	scanCmd.Flags().StringVar(&scanFormat, "format", "text", "Output format: `text`, `json`")
 	scanCmd.Flags().StringVar(&scanSaveDB, "save-db", "", "Save the in-memory database to disk after scanning")
 	scanCmd.Flags().StringVar(&scanLoadDB, "load-db", "", "Load an existing database into memory before scanning")
+
+	registerCompletion(scanCmd, completionInput{"format", fixedCompletion("text", "json")})
 	registerCompletion(scanCmd, completionInput{"bundle-path", directoryCompletion})
 }
 
@@ -269,6 +273,11 @@ func runScan(cmd *cobra.Command, args []string) error {
 			RootPool: mozillaPool,
 		})
 		if jsonOutput {
+			scanFormat = "json"
+		}
+
+		switch scanFormat {
+		case "json":
 			if verbose {
 				verboseOutput := scanVerboseJSON{
 					ScanSummary:  summary,
@@ -287,7 +296,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 				}
 				fmt.Println(string(data))
 			}
-		} else {
+		case "text":
 			total := summary.Roots + summary.Intermediates + summary.Leaves
 			fmt.Printf("\nFound %d certificate(s) and %d key(s)\n", total, summary.Keys)
 			if total > 0 {
@@ -304,6 +313,8 @@ func runScan(cmd *cobra.Command, args []string) error {
 			if verbose {
 				printScanVerboseText(store)
 			}
+		default:
+			return fmt.Errorf("unsupported output format %q (use text or json)", scanFormat)
 		}
 	}
 

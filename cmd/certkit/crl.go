@@ -11,7 +11,10 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var crlCheckPath string
+var (
+	crlCheckPath string
+	crlFormat    string
+)
 
 var crlCmd = &cobra.Command{
 	Use:   "crl <file-or-url>",
@@ -23,15 +26,17 @@ Exits with code 2 if the checked certificate is found in the CRL.`,
 	Example: `  certkit crl revoked.crl
   certkit crl http://crl.example.com/ca.crl
   certkit crl revoked.crl --check cert.pem
-  certkit crl revoked.crl --json`,
+  certkit crl revoked.crl --format json`,
 	Args: cobra.ExactArgs(1),
 	RunE: runCRL,
 }
 
 func init() {
 	crlCmd.Flags().StringVar(&crlCheckPath, "check", "", "Certificate file to check against the CRL")
+	crlCmd.Flags().StringVar(&crlFormat, "format", "text", "Output format: `text`, `json`")
 
 	registerCompletion(crlCmd, completionInput{"check", fileCompletion})
+	registerCompletion(crlCmd, completionInput{"format", fixedCompletion("text", "json")})
 }
 
 // crlCheckResult holds the result of a --check lookup.
@@ -95,13 +100,18 @@ func runCRL(cmd *cobra.Command, args []string) error {
 	}
 
 	if jsonOutput {
+		crlFormat = "json"
+	}
+
+	switch crlFormat {
+	case "json":
 		output := crlOutputJSON{CRLInfo: info, CheckResult: checkResult}
 		jsonData, err := json.MarshalIndent(output, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshaling JSON: %w", err)
 		}
 		fmt.Println(string(jsonData))
-	} else {
+	case "text":
 		fmt.Print(certkit.FormatCRLInfo(info))
 		if checkResult != nil {
 			if checkResult.Revoked {
@@ -110,6 +120,8 @@ func runCRL(cmd *cobra.Command, args []string) error {
 				fmt.Printf("Certificate serial %s is NOT in this CRL\n", checkResult.Serial)
 			}
 		}
+	default:
+		return fmt.Errorf("unsupported output format %q (use text or json)", crlFormat)
 	}
 
 	if checkResult != nil && checkResult.Revoked {

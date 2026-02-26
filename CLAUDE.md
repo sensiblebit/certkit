@@ -218,10 +218,10 @@ Invoke `/ralph` for comprehensive test validation. Full protocol in `.claude/ski
 
 - **CLI-1 (MUST)** Stdout is for data, stderr is for everything else. PEM output, JSON, scan summaries — anything a user might pipe goes to stdout. File paths, progress messages, warnings go to stderr. Follow the OpenSSL convention.
 - **CLI-2 (MUST)** Never write files without explicit consent. Commands that produce PEM output print to stdout by default. Files are only written when the user provides `-o`. Export requires `--bundle-path <dir>`. No silent writes to the current directory.
-- **CLI-3 (MUST)** Every command that displays certificate/key info must support `--json`.
+- **CLI-3 (MUST)** Every command supports `--json` (global persistent flag). Display commands (`inspect`, `verify`, `connect`, `scan`, `ocsp`, `crl`) also support `--format json`. `--json` overrides `--format` when both are set.
 - **CLI-4 (MUST)** JSON field names must be consistent across commands. Same concept uses the same key everywhere (e.g., SKI is always `subject_key_id`).
 - **CLI-5 (MUST)** All dates in RFC 3339 format. No RFC 1123, no custom layouts.
-- **CLI-6 (MUST)** Exit codes: `0` = success, `1` = general error, `2` = validation failure (chain invalid, key mismatch, expired).
+- **CLI-6 (MUST)** Exit codes: `0` = success, `1` = general error, `2` = validation failure (chain invalid, key mismatch, expired, revoked).
 - **CLI-7 (MUST)** JSON output is a single object or array, ending with `\n`. No mixed text/JSON. No log lines on stdout when `--json` is used.
 
 ---

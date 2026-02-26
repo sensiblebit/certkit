@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -13,7 +14,7 @@ import (
 )
 
 var (
-	convertFormat  string
+	convertTo      string
 	convertOutFile string
 	convertKeyPath string
 )
@@ -23,32 +24,32 @@ var convertCmd = &cobra.Command{
 	Short: "Convert certificates and keys between formats",
 	Long: `Convert certificates and keys between PEM, DER, PKCS#12, JKS, and PKCS#7.
 
-Input format is auto-detected. Use --format to specify the output format.
+Input format is auto-detected. Use --to to specify the output format.
 Binary formats (p12, jks) require -o to write to a file.
 
 When --key is provided, convert matches keys to leaf certificates and builds
 chain bundles. If multiple keys match different certs, JKS output creates a
 multi-alias keystore. PKCS#12 supports only a single key entry.`,
-	Example: `  certkit convert cert.der --format pem
-  certkit convert cert.pem --format der -o cert.der
-  certkit convert cert.pem --key key.pem --format p12 -o bundle.p12
-  certkit convert bundle.p12 --format pem
-  certkit convert cert.pem --format p7b -o certs.p7b
-  certkit convert bundle.p12 --format jks -o keystore.jks`,
+	Example: `  certkit convert cert.der --to pem
+  certkit convert cert.pem --to der -o cert.der
+  certkit convert cert.pem --key key.pem --to p12 -o bundle.p12
+  certkit convert bundle.p12 --to pem
+  certkit convert cert.pem --to p7b -o certs.p7b
+  certkit convert bundle.p12 --to jks -o keystore.jks`,
 	Args: cobra.ExactArgs(1),
 	RunE: runConvert,
 }
 
 func init() {
-	convertCmd.Flags().StringVar(&convertFormat, "format", "", "Output format: `pem`, `der`, `p12`, `jks`, `p7b`")
+	convertCmd.Flags().StringVar(&convertTo, "to", "", "Output format: `pem`, `der`, `p12`, `jks`, `p7b`")
 	convertCmd.Flags().StringVarP(&convertOutFile, "out-file", "o", "", "Output file (required for binary formats)")
-	convertCmd.Flags().StringVar(&convertKeyPath, "key", "", "Private key file (PEM)")
+	convertCmd.Flags().StringVar(&convertKeyPath, "key", "", "Private key file (PEM). Keys are matched to certificates automatically.")
 
-	_ = convertCmd.MarkFlagRequired("format")
+	_ = convertCmd.MarkFlagRequired("to")
 
 	convertCmd.Flags().Lookup("out-file").Annotations = map[string][]string{"readme_default": {"_(stdout for PEM)_"}}
 
-	registerCompletion(convertCmd, completionInput{"format", fixedCompletion("pem", "der", "p12", "jks", "p7b")})
+	registerCompletion(convertCmd, completionInput{"to", fixedCompletion("pem", "der", "p12", "jks", "p7b")})
 	registerCompletion(convertCmd, completionInput{"out-file", fileCompletion})
 	registerCompletion(convertCmd, completionInput{"key", fileCompletion})
 }
@@ -113,7 +114,7 @@ func runConvert(cmd *cobra.Command, args []string) error {
 	allCerts = append(allCerts, contents.ExtraCerts...)
 
 	if len(allCerts) == 0 {
-		switch convertFormat {
+		switch convertTo {
 		case "pem":
 			// Allow key-only PEM conversions when a private key is present
 			if contents.Key == nil {
@@ -124,16 +125,16 @@ func runConvert(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	isBinary := convertFormat == "p12" || convertFormat == "jks" || convertFormat == "der" || convertFormat == "p7b"
+	isBinary := convertTo == "p12" || convertTo == "jks" || convertTo == "der" || convertTo == "p7b"
 	if convertOutFile == "" && isBinary {
-		return fmt.Errorf("output format %q is binary; use -o to write to a file", convertFormat)
+		return fmt.Errorf("output format %q is binary; use -o to write to a file", convertTo)
 	}
 
 	output, err := formatConvertOutput(formatConvertInput{
 		contents:  contents,
 		allCerts:  allCerts,
 		pairs:     pairs,
-		format:    convertFormat,
+		format:    convertTo,
 		passwords: passwords,
 	})
 	if err != nil {
@@ -142,20 +143,46 @@ func runConvert(cmd *cobra.Command, args []string) error {
 
 	if convertOutFile != "" {
 		perm := os.FileMode(0644)
-		if convertFormat == "p12" || convertFormat == "jks" || contents.Key != nil {
+		if convertTo == "p12" || convertTo == "jks" || contents.Key != nil {
 			perm = 0600
 		}
 		if err := os.WriteFile(convertOutFile, output, perm); err != nil {
 			return fmt.Errorf("writing output: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "Wrote %s (%d bytes)\n", convertOutFile, len(output))
-	} else {
+	}
+
+	if jsonOutput {
+		var out convertJSON
+		if convertOutFile != "" {
+			// Binary format written to file — report metadata
+			out.File = convertOutFile
+			out.Format = convertTo
+			out.Size = len(output)
+		} else {
+			// Text format — include the data directly
+			out.Data = string(output)
+		}
+		data, err := json.MarshalIndent(out, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshaling JSON: %w", err)
+		}
+		fmt.Println(string(data))
+	} else if convertOutFile == "" {
 		if _, err := os.Stdout.Write(output); err != nil {
 			return fmt.Errorf("writing to stdout: %w", err)
 		}
 	}
 
 	return nil
+}
+
+// convertJSON is the JSON output structure for the convert command.
+type convertJSON struct {
+	Data   string `json:"data,omitempty"`
+	File   string `json:"file,omitempty"`
+	Format string `json:"format,omitempty"`
+	Size   int    `json:"size,omitempty"`
 }
 
 func formatConvertOutput(input formatConvertInput) ([]byte, error) {
