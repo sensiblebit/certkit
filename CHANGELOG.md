@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix `convert --key` duplicating `ParsePEMPrivateKeys` logic via internal `parseKeyBlocks` — consolidate to shared library function ([#75])
 - Fix `ParsePEMPrivateKeys` missing `ENCRYPTED PRIVATE KEY` PEM block type — PKCS#8 encrypted keys are now recognized ([#75])
 - Fix `convert --key` error reporting nil certificates in match count — now filters nil entries ([#75])
+- Fix `convert --key` constructing `[nil, ...]` certificate slice when input has no leaf — filter nil before passing to matcher ([#75])
 - Fix `convert` hard-failing on key-only PEM input — PEM output now allows key-only conversions without requiring a certificate ([#75])
 - Fix `connect` fingerprint using lowercase hex without colons instead of OpenSSL-style colon-separated format — now uses `CertFingerprintColonSHA256` for consistency with `inspect` and `verify` ([#75])
 - Fix `connect` JSON `sans` field containing only DNS names instead of all SAN types — now uses `CollectCertificateSANs` for CLI-4 consistency with `inspect` and `verify` ([#75])

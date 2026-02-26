@@ -89,7 +89,10 @@ func runConvert(cmd *cobra.Command, args []string) error {
 		if err != nil {
 			return fmt.Errorf("reading key file: %w", err)
 		}
-		allCerts := append([]*x509.Certificate{contents.Leaf}, contents.ExtraCerts...)
+		allCerts := contents.ExtraCerts
+		if contents.Leaf != nil {
+			allCerts = append([]*x509.Certificate{contents.Leaf}, allCerts...)
+		}
 		pairs, err = findAllKeyLeafPairs(keyData, passwords, allCerts)
 		if err != nil {
 			return fmt.Errorf("matching key to certificate: %w", err)
