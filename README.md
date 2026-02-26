@@ -138,19 +138,23 @@ Common passwords (`""`, `"password"`, `"changeit"`, `"keypassword"`) are always 
 | `--key`          |           | Private key file to check against the certificate           |
 | `--expiry`, `-e` |           | Check if cert expires within duration (e.g., `30d`, `720h`) |
 | `--trust-store`  | `mozilla` | Trust store: `system`, `mozilla`                            |
+| `--ocsp`         | `false`   | Check OCSP revocation status                                |
+| `--crl`          | `false`   | Check CRL distribution points for revocation                |
 | `--format`       | `text`    | Output format: `text`, `json`                               |
 | `--diagnose`     | `false`   | Show diagnostics when chain verification fails              |
 
-Chain verification is always performed. When the input contains an embedded private key (PKCS#12, JKS), key match is checked automatically.
+Chain verification is always performed. When the input contains an embedded private key (PKCS#12, JKS), key match is checked automatically. Use `--ocsp` and/or `--crl` to check revocation status (requires network access and a valid chain).
 
 ### Connect Flags
 
-| Flag           | Default | Description                              |
-| -------------- | ------- | ---------------------------------------- |
-| `--servername` |         | Override SNI hostname (defaults to host) |
-| `--format`     | `text`  | Output format: `text`, `json`            |
+| Flag           | Default | Description                                  |
+| -------------- | ------- | -------------------------------------------- |
+| `--servername` |         | Override SNI hostname (defaults to host)     |
+| `--no-ocsp`   | `false` | Disable automatic OCSP revocation check      |
+| `--crl`        | `false` | Check CRL distribution points for revocation |
+| `--format`     | `text`  | Output format: `text`, `json`                |
 
-Port defaults to 443 if not specified. Use `--verbose` for extended details (serial, key info, signature algorithm, key usage, EKU).
+Port defaults to 443 if not specified. OCSP revocation status is checked automatically (best-effort); use `--no-ocsp` to disable. Use `--verbose` for extended details (serial, key info, signature algorithm, key usage, EKU).
 
 ### Bundle Flags
 

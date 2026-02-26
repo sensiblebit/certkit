@@ -22,20 +22,22 @@ type CheckOCSPInput struct {
 
 // OCSPResult contains the OCSP response details.
 type OCSPResult struct {
-	// Status is "good", "revoked", or "unknown".
+	// Status is "good", "revoked", "unknown", "unavailable", or "skipped".
 	Status string `json:"status"`
 	// SerialNumber is the certificate serial in hex.
-	SerialNumber string `json:"serial_number"`
-	// ResponderURL is the OCSP responder that was queried.
-	ResponderURL string `json:"responder_url"`
+	SerialNumber string `json:"serial,omitempty"`
+	// URL is the OCSP responder that was queried.
+	URL string `json:"url,omitempty"`
 	// ThisUpdate is when the OCSP response was generated (RFC 3339).
-	ThisUpdate string `json:"this_update"`
+	ThisUpdate string `json:"this_update,omitempty"`
 	// NextUpdate is when the OCSP response expires (RFC 3339).
-	NextUpdate string `json:"next_update"`
+	NextUpdate string `json:"next_update,omitempty"`
 	// RevokedAt is the revocation time in RFC 3339 (only set when Status is "revoked").
 	RevokedAt *string `json:"revoked_at,omitempty"`
 	// RevocationReason is the reason code (only set when Status is "revoked").
 	RevocationReason *string `json:"revocation_reason,omitempty"`
+	// Detail provides context when Status is "skipped" or "unavailable".
+	Detail string `json:"detail,omitempty"`
 }
 
 // CheckOCSP queries the OCSP responder for a certificate's revocation status.
@@ -54,6 +56,10 @@ func CheckOCSP(ctx context.Context, input CheckOCSPInput) (*OCSPResult, error) {
 
 	responderURL := input.Cert.OCSPServer[0]
 
+	if err := ValidateAIAURL(responderURL); err != nil {
+		return nil, fmt.Errorf("validating OCSP responder URL: %w", err)
+	}
+
 	reqBytes, err := ocsp.CreateRequest(input.Cert, input.Issuer, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating OCSP request: %w", err)
@@ -65,7 +71,19 @@ func CheckOCSP(ctx context.Context, input CheckOCSPInput) (*OCSPResult, error) {
 	}
 	httpReq.Header.Set("Content-Type", "application/ocsp-request")
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	const maxRedirects = 3
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= maxRedirects {
+				return fmt.Errorf("stopped after %d redirects", maxRedirects)
+			}
+			if err := ValidateAIAURL(req.URL.String()); err != nil {
+				return fmt.Errorf("redirect blocked: %w", err)
+			}
+			return nil
+		},
+	}
 	httpResp, err := client.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("querying OCSP responder %s: %w", responderURL, err)
@@ -86,9 +104,14 @@ func CheckOCSP(ctx context.Context, input CheckOCSPInput) (*OCSPResult, error) {
 		return nil, fmt.Errorf("parsing OCSP response: %w", err)
 	}
 
+	// Reject expired OCSP responses to prevent replay of stale data over HTTP.
+	if !resp.NextUpdate.IsZero() && time.Now().After(resp.NextUpdate) {
+		return nil, fmt.Errorf("OCSP response expired at %s", resp.NextUpdate.UTC().Format(time.RFC3339))
+	}
+
 	result := &OCSPResult{
 		SerialNumber: input.Cert.SerialNumber.Text(16),
-		ResponderURL: responderURL,
+		URL:          responderURL,
 		ThisUpdate:   resp.ThisUpdate.UTC().Format(time.RFC3339),
 		NextUpdate:   resp.NextUpdate.UTC().Format(time.RFC3339),
 	}
@@ -134,7 +157,7 @@ func FormatOCSPResult(r *OCSPResult) string {
 	var out string
 	out += fmt.Sprintf("Serial:       %s\n", r.SerialNumber)
 	out += fmt.Sprintf("Status:       %s\n", r.Status)
-	out += fmt.Sprintf("Responder:    %s\n", r.ResponderURL)
+	out += fmt.Sprintf("Responder:    %s\n", r.URL)
 	out += fmt.Sprintf("This Update:  %s\n", r.ThisUpdate)
 	out += fmt.Sprintf("Next Update:  %s\n", r.NextUpdate)
 	if r.RevokedAt != nil {

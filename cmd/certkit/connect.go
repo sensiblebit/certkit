@@ -20,6 +20,8 @@ import (
 var (
 	connectServerName string
 	connectFormat     string
+	connectCRL        bool
+	connectNoOCSP     bool
 )
 
 var connectCmd = &cobra.Command{
@@ -28,9 +30,14 @@ var connectCmd = &cobra.Command{
 	Long: `Connect to a TLS server and display the negotiated protocol, cipher suite,
 and the full certificate chain.
 
-Port defaults to 443 if not specified. Exits with code 2 if chain verification fails.`,
+Port defaults to 443 if not specified. OCSP revocation status is checked
+automatically (best-effort). Use --no-ocsp to disable. Use --crl to also
+check CRL distribution points.
+
+Exits with code 2 if chain verification fails or the certificate is revoked.`,
 	Example: `  certkit connect example.com
   certkit connect example.com:8443
+  certkit connect example.com --crl
   certkit connect example.com --servername alt.example.com
   certkit connect example.com --format json`,
 	Args: cobra.ExactArgs(1),
@@ -40,6 +47,8 @@ Port defaults to 443 if not specified. Exits with code 2 if chain verification f
 func init() {
 	connectCmd.Flags().StringVar(&connectServerName, "servername", "", "Override SNI hostname (defaults to host)")
 	connectCmd.Flags().StringVar(&connectFormat, "format", "text", "Output format: text or json")
+	connectCmd.Flags().BoolVar(&connectCRL, "crl", false, "Check CRL distribution points for revocation")
+	connectCmd.Flags().BoolVar(&connectNoOCSP, "no-ocsp", false, "Disable automatic OCSP revocation check")
 
 	registerCompletion(connectCmd, completionInput{"format", fixedCompletion("text", "json")})
 }
@@ -56,6 +65,8 @@ type connectResultJSON struct {
 	VerifyError string                    `json:"verify_error,omitempty"`
 	Diagnostics []certkit.ChainDiagnostic `json:"diagnostics,omitempty"`
 	AIAFetched  bool                      `json:"aia_fetched,omitempty"`
+	OCSP        *certkit.OCSPResult       `json:"ocsp,omitempty"`
+	CRL         *certkit.CRLCheckResult   `json:"crl,omitempty"`
 	Chain       []connectCertJSON         `json:"chain"`
 }
 
@@ -92,9 +103,11 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	defer cancel()
 
 	result, err := certkit.ConnectTLS(ctx, certkit.ConnectTLSInput{
-		Host:       host,
-		Port:       port,
-		ServerName: connectServerName,
+		Host:        host,
+		Port:        port,
+		ServerName:  connectServerName,
+		DisableOCSP: connectNoOCSP,
+		CheckCRL:    connectCRL,
 	})
 	if err != nil {
 		return fmt.Errorf("connecting to %s: %w", args[0], err)
@@ -115,6 +128,8 @@ func runConnect(cmd *cobra.Command, args []string) error {
 			VerifyError: result.VerifyError,
 			Diagnostics: result.Diagnostics,
 			AIAFetched:  result.AIAFetched,
+			OCSP:        result.OCSP,
+			CRL:         result.CRL,
 		}
 		for _, cert := range result.PeerChain {
 			cj := connectCertJSON{
@@ -161,6 +176,12 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	if result.VerifyError != "" {
 		return &ValidationError{Message: fmt.Sprintf("certificate verification failed: %s", result.VerifyError)}
 	}
+	if result.OCSP != nil && result.OCSP.Status == "revoked" {
+		return &ValidationError{Message: "certificate is revoked (OCSP)"}
+	}
+	if result.CRL != nil && result.CRL.Status == "revoked" {
+		return &ValidationError{Message: "certificate is revoked (CRL)"}
+	}
 
 	return nil
 }
@@ -183,6 +204,14 @@ func formatConnectVerbose(r *certkit.ConnectResult, now time.Time) string {
 		out.WriteString("Verify:       OK (intermediates fetched via AIA)\n")
 	} else {
 		out.WriteString("Verify:       OK\n")
+	}
+
+	if r.OCSP != nil {
+		out.WriteString(certkit.FormatOCSPLine(r.OCSP))
+	}
+
+	if r.CRL != nil {
+		out.WriteString(certkit.FormatCRLLine(r.CRL))
 	}
 
 	if r.ClientAuth != nil && r.ClientAuth.Requested {

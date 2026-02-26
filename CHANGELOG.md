@@ -7,12 +7,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `connect` automatically checks OCSP revocation status on the leaf certificate (best-effort; shows "skipped" or "unavailable" when check cannot complete) ([#78])
+- Add `--crl` flag to `connect` for opt-in CRL revocation checking via distribution points ([#78])
+- Add `FetchCRL` library function for downloading CRLs from HTTP URLs with SSRF validation ([#78])
+- `connect` exits with code 2 when OCSP or CRL reports a revoked certificate ([#78])
+- `connect --crl` verifies CRL signatures against the issuer certificate — rejects CRLs signed by a different CA ([#78])
+- `connect --crl` rejects expired CRLs (past `NextUpdate`) to prevent replay of stale revocation data ([#78])
+- `connect` OCSP check rejects expired responses (past `NextUpdate`) to prevent replay of stale data ([#78])
+- `connect` OCSP "unavailable" output now shows the error reason instead of just the responder URL ([#78])
+- `connect` OCSP "unknown" output now explains the status: "responder does not recognize this certificate" ([#78])
+- Add `--no-ocsp` flag to `connect` to disable automatic OCSP revocation check ([#78])
+- Add `--ocsp` and `--crl` flags to `verify` for revocation checking against OCSP responders and CRL distribution points ([#78])
+- Add `RootCAs` field to `ConnectTLSInput` for chain verification against custom root pools ([#78])
+- Add `FetchCRLInput` struct with `AllowPrivateNetworks` flag — `certkit crl` now accepts private/loopback IPs for user-provided URLs ([#78])
+- Add `MarshalSANExtension` for building complete SAN extensions with OtherName support (UPN, XMPP, SRV, SmtpUTF8Mailbox, arbitrary OIDs) ([#74])
+- Add `ResolveOtherNameOID` for resolving OtherName labels or dotted-decimal OID strings ([#74])
+- Add `OtherNameSAN` and `MarshalSANExtensionInput` types for OtherName SAN generation ([#74])
+- Add `other_names` field to `CSRTemplate` for mTLS user identity certificate CSRs ([#74])
+- Add OtherName SAN preservation in `GenerateCSRFromCSR` — string-typed OtherName entries survive CSR-to-CSR key rotation; binary-typed OtherNames are silently skipped ([#74])
+- Add `ErrUnknownOtherNameType` sentinel error for invalid OtherName type strings ([#74])
+- Add `ErrEmptySANExtension` sentinel error for empty SAN extension input ([#74])
+- Add `aia_fetched` field to inspect results and "via aia" badge in web UI for AIA-fetched certificates ([#73])
+- Add multi-entry JKS support to `convert --key` — when multiple keys match different certificates, JKS output creates a multi-alias keystore with one `PrivateKeyEntry` per match
+- Add `EncodeJKSEntries` library function for creating multi-entry JKS keystores with alias sanitization and deduplication
+- Add `CollectCertificateSANs` library function for canonical SAN aggregation (DNS, IP, email, URI, OtherName) across all commands
+- Add `ParsePEMPrivateKeys` library function for extracting all private keys from a multi-key PEM bundle, skipping non-key blocks
+- Add chain diagnostics to `connect` command — detect root certificates in chain (RFC 8446 §4.4.2) and duplicate certificates
+- Add AIA walking to `connect` command — automatically fetch missing intermediates when server sends leaf-only chain, with `missing-intermediate` diagnostic warning
+- Add mTLS detection to `connect` command — shows whether the server requests a client certificate, acceptable CAs, and accepted signature algorithms
+- Add ALPN (negotiated application protocol) to `connect` command output
+- Add `--verbose` / `-v` global flag for extended certificate details in `connect`, `verify`, `scan`, and `ocsp` output (serial, key info, signature algorithm, key usage, EKU, fingerprints, SKI/AKI)
+- Add CRL number and authority key identifier to `crl` output
+- Add `convert` command for converting between PEM, DER, PKCS#12, JKS, and PKCS#7 formats
+- Add `sign` command with `self-signed` and `csr` subcommands for certificate signing
+- Add `connect` command for TLS connection testing with certificate chain display
+- Add `--diagnose` flag to `verify` command for chain failure diagnostics
+- Add `ocsp` command for checking certificate revocation status via OCSP
+- Add `crl` command for parsing and inspecting Certificate Revocation Lists
+
 ### Changed
 
+- **Breaking:** Rename `CRLCheckResult.DistributionPoint` to `CRLCheckResult.URL` (JSON: `url`) and `OCSPResult.ResponderURL` to `OCSPResult.URL` (JSON: `url`) — consistent field name for the checked endpoint across both revocation types (CLI-4) ([#78])
+- **Breaking:** Rename OCSP JSON field `serial_number` to `serial` for CLI-4 consistency with all other commands ([#78])
+- **Breaking:** `FetchCRL` now takes `FetchCRLInput` struct instead of a URL string — enables `AllowPrivateNetworks` for user-provided URLs ([#78])
+- Export `CheckLeafCRL` and `CheckLeafCRLInput` for use by `verify` command — previously unexported ([#78])
 - Improve error messages when AIA certificate fetching fails — errors now include the URL and operation context ([#76])
+
+### Security
+
+- Add SSRF validation (`ValidateAIAURL`) to OCSP responder URLs and CRL distribution point URLs — previously only AIA certificate URLs were validated ([#78])
+- Add `CheckRedirect` handlers to OCSP and CRL HTTP clients — prevents redirect-based SSRF bypass to internal networks ([#78])
+- Fix `connect` OCSP/CRL checks using unverified issuer from `PeerCertificates` when chain verification fails — a malicious server could forge valid revocation responses; now only uses cryptographically verified issuer from `VerifiedChains` ([#78])
 
 ### Fixed
 
+- Fix data race in `TestCheckLeafCRL` — CRL bytes are now generated before starting the test HTTP server (CC-3) ([#78])
+- Fix `CheckLeafCRL` panic on nil `Leaf` or `Issuer` — now returns "unavailable" result instead of panicking ([#78])
+- Fix `verify` help text claiming "Exits with code 2 if revoked" — actually exits 2 for any verification error including revocation ([#78])
+- Fix `connect` `FormatCRLLine` dropping `Detail` for "skipped" status — previously fell through to default which omitted the reason ([#78])
+- Fix `formatVerifyCRL` in `verify` missing "skipped" case — now delegates to shared `FormatCRLStatusLine` helper ([#78])
+- Fix silent error discard in test TLS server — `Handshake()` and `Close()` errors now logged with `slog.Debug` (ERR-5) ([#78])
+- Fix `checkVerifyOCSP` taking 3 positional arguments — now uses `CheckOCSPInput` struct (CS-5) ([#78])
+- Fix `formatVerifyOCSP`/`formatVerifyCRL` duplicating `FormatOCSPLine`/`FormatCRLLine` logic — extract shared `FormatOCSPStatusLine` and `FormatCRLStatusLine` helpers ([#78])
+- Fix `connect` OCSP/CRL checks failing when the server sends a duplicate leaf certificate in the chain (e.g., `[leaf, leaf, intermediate]`) — issuer resolution now prefers the cryptographically verified chain over the raw server-sent chain ([`2693116`])
+- Fix `connect` OCSP/CRL checks ignoring AIA-fetched issuer — when server sends leaf-only chain, revocation checks now fall back to `VerifiedChains` for the issuer ([#78])
+- Fix `certkit crl` rejecting private/loopback IPs — SSRF validation is now skipped for user-provided URLs ([#78])
+- `verify --ocsp`/`--crl` now reports "skipped" status when chain validation fails instead of silently omitting results ([#78])
+- `verify --ocsp` revocation error now includes revocation time and reason instead of a generic "certificate is revoked (OCSP)" message ([#78])
+- Add 10-second HTTP client timeout to OCSP and CRL fetchers — prevents indefinite hangs during DNS/connection phases ([#78])
 - Fix `--save-db` error messages formatting `*big.Int` serial numbers with `%s` instead of calling `.String()` ([#76])
 - Fix potential panic in TLS connection handling during remote certificate fetch ([#76])
 - Fix `--save-db` silently writing incomplete SAN data when JSON encoding fails — now returns an error ([#76])
@@ -68,40 +132,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix `convert` command performing encoding before checking if `-o` is required for binary formats — binary format error is now returned immediately ([#75])
 - Fix `crl --check` verdict written to stderr instead of stdout (CLI-1) and absent from JSON output (CLI-3) — check result now included as `check_result` in JSON and printed to stdout in text mode ([#75])
 
-### Added
-
-- Add `MarshalSANExtension` for building complete SAN extensions with OtherName support (UPN, XMPP, SRV, SmtpUTF8Mailbox, arbitrary OIDs) ([#74])
-- Add `ResolveOtherNameOID` for resolving OtherName labels or dotted-decimal OID strings ([#74])
-- Add `OtherNameSAN` and `MarshalSANExtensionInput` types for OtherName SAN generation ([#74])
-- Add `other_names` field to `CSRTemplate` for mTLS user identity certificate CSRs ([#74])
-- Add OtherName SAN preservation in `GenerateCSRFromCSR` — string-typed OtherName entries survive CSR-to-CSR key rotation; binary-typed OtherNames are silently skipped ([#74])
-- Add `ErrUnknownOtherNameType` sentinel error for invalid OtherName type strings ([#74])
-- Add `ErrEmptySANExtension` sentinel error for empty SAN extension input ([#74])
-- Add `aia_fetched` field to inspect results and "via aia" badge in web UI for AIA-fetched certificates ([#73])
-- Add multi-entry JKS support to `convert --key` — when multiple keys match different certificates, JKS output creates a multi-alias keystore with one `PrivateKeyEntry` per match
-- Add `EncodeJKSEntries` library function for creating multi-entry JKS keystores with alias sanitization and deduplication
-- Add `CollectCertificateSANs` library function for canonical SAN aggregation (DNS, IP, email, URI, OtherName) across all commands
-- Add `ParsePEMPrivateKeys` library function for extracting all private keys from a multi-key PEM bundle, skipping non-key blocks
-- Add chain diagnostics to `connect` command — detect root certificates in chain (RFC 8446 §4.4.2) and duplicate certificates
-- Add AIA walking to `connect` command — automatically fetch missing intermediates when server sends leaf-only chain, with `missing-intermediate` diagnostic warning
-- Add mTLS detection to `connect` command — shows whether the server requests a client certificate, acceptable CAs, and accepted signature algorithms
-- Add ALPN (negotiated application protocol) to `connect` command output
-- Add `--verbose` / `-v` global flag for extended certificate details in `connect`, `verify`, `scan`, and `ocsp` output (serial, key info, signature algorithm, key usage, EKU, fingerprints, SKI/AKI)
-- Add CRL number and authority key identifier to `crl` output
-- Add `convert` command for converting between PEM, DER, PKCS#12, JKS, and PKCS#7 formats
-- Add `sign` command with `self-signed` and `csr` subcommands for certificate signing
-- Add `connect` command for TLS connection testing with certificate chain display
-- Add `--diagnose` flag to `verify` command for chain failure diagnostics
-- Add `ocsp` command for checking certificate revocation status via OCSP
-- Add `crl` command for parsing and inspecting Certificate Revocation Lists
-- Add `CreateSelfSigned` and `SignCSR` library functions for certificate signing
-- Add `ConnectTLS` library function for TLS connection probing
-- Add `CheckOCSP` library function for OCSP revocation checking
-- Add `ParseCRL`, `CRLContainsCertificate`, and `CRLInfoFromList` library functions for CRL handling
-- Add chain diagnostic checks (`--diagnose` flag) for `verify` command
-
 ### Tests
 
+- Add `TestConnectTLS_CRL_AIAFetchedIssuer` — verifies CRL checking works when issuer is obtained via AIA walking ([#78])
+- Add `TestFetchCRL_AllowPrivateNetworks` — verifies loopback IPs succeed with `AllowPrivateNetworks` ([#78])
+- Add `TestFetchCRL` unit tests for HTTP handling, redirect limits, SSRF blocking, and error paths ([#78])
+- Add `TestCheckLeafCRL` table-driven tests covering revoked, good, expired CRL, wrong issuer, no CDPs, and non-HTTP CDPs ([#78])
+- Consolidate `TestVerifyCert_RevocationBehavior` table-driven test replacing 4 standalone verify revocation tests (T-12) ([#78])
+- Consolidate `TestConnectTLS_CRL` into single table-driven test with 4 cases replacing standalone WrongIssuer/Expired/Good tests (T-12) ([#78])
+- Add `TestFormatCRLLine` covering all status branches including unknown fallback ([#78])
 - Add `TestFindAllKeyLeafPairs` and `TestBuildChainFromPool` tests for `convert --key` matching logic — single/multi match, nil certs, CA fallback, leaf priority, chain building, cycle termination ([#75])
 - Fix `TestConnectTLS_AIAFetch` false positive — add atomic request counter to verify AIA HTTP server is actually contacted ([#75])
 - Strengthen `TestEncodeJKSEntries` round-trip assertions — verify cert CN identity survives encode/decode ([#75])
@@ -726,7 +765,7 @@ Initial release.
 [0.1.2]: https://github.com/sensiblebit/certkit/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/sensiblebit/certkit/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/sensiblebit/certkit/releases/tag/v0.1.0
-
+[`2693116`]: https://github.com/sensiblebit/certkit/commit/2693116
 [`84c4edf`]: https://github.com/sensiblebit/certkit/commit/84c4edf
 [`2b8cb8c`]: https://github.com/sensiblebit/certkit/commit/2b8cb8c
 [`392878a`]: https://github.com/sensiblebit/certkit/commit/392878a
@@ -788,6 +827,7 @@ Initial release.
 [#74]: https://github.com/sensiblebit/certkit/pull/74
 [#75]: https://github.com/sensiblebit/certkit/pull/75
 [#76]: https://github.com/sensiblebit/certkit/pull/76
+[#78]: https://github.com/sensiblebit/certkit/pull/78
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63

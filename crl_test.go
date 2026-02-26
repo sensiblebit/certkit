@@ -1,13 +1,14 @@
 package certkit
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
+	"context"
 	"crypto/rand"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -15,19 +16,7 @@ import (
 func TestParseCRL(t *testing.T) {
 	t.Parallel()
 
-	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ca, err := CreateSelfSigned(SelfSignedInput{
-		Signer:  caKey,
-		Subject: pkix.Name{CommonName: "CRL Test CA"},
-		Days:    3650,
-		IsCA:    true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	ca := generateTestCA(t, "CRL Test CA")
 
 	now := time.Now()
 	crlTemplate := &x509.RevocationList{
@@ -39,7 +28,7 @@ func TestParseCRL(t *testing.T) {
 			{SerialNumber: big.NewInt(99), RevocationTime: now.Add(-2 * time.Hour)},
 		},
 	}
-	crlDER, err := x509.CreateRevocationList(rand.Reader, crlTemplate, ca, caKey)
+	crlDER, err := x509.CreateRevocationList(rand.Reader, crlTemplate, ca.Cert, ca.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,52 +76,55 @@ func TestParseCRL(t *testing.T) {
 func TestCRLContainsCertificate(t *testing.T) {
 	t.Parallel()
 
-	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ca, err := CreateSelfSigned(SelfSignedInput{
-		Signer:  caKey,
-		Subject: pkix.Name{CommonName: "CRL Contains CA"},
-		Days:    3650,
-		IsCA:    true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	ca := generateTestCA(t, "CRL Contains CA")
 
 	now := time.Now()
-	crlTemplate := &x509.RevocationList{
+	populatedCRL, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
 		Number:     big.NewInt(1),
 		ThisUpdate: now,
 		NextUpdate: now.Add(24 * time.Hour),
 		RevokedCertificateEntries: []x509.RevocationListEntry{
 			{SerialNumber: big.NewInt(42), RevocationTime: now},
 		},
-	}
-	crlDER, err := x509.CreateRevocationList(rand.Reader, crlTemplate, ca, caKey)
+	}, ca.Cert, ca.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	crl, err := ParseCRL(crlDER)
+	crl, err := ParseCRL(populatedCRL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	emptyCRL, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+		Number:     big.NewInt(2),
+		ThisUpdate: now,
+		NextUpdate: now.Add(24 * time.Hour),
+	}, ca.Cert, ca.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyCRLParsed, err := ParseCRL(emptyCRL)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	tests := []struct {
 		name   string
+		crl    *x509.RevocationList
 		serial *big.Int
 		want   bool
 	}{
-		{"revoked cert", big.NewInt(42), true},
-		{"non-revoked cert", big.NewInt(100), false},
+		{"revoked cert", crl, big.NewInt(42), true},
+		{"non-revoked cert", crl, big.NewInt(100), false},
+		{"zero serial", crl, big.NewInt(0), false},
+		{"empty CRL", emptyCRLParsed, big.NewInt(1), false},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			cert := &x509.Certificate{SerialNumber: tc.serial}
-			got := CRLContainsCertificate(crl, cert)
+			got := CRLContainsCertificate(tc.crl, cert)
 			if got != tc.want {
 				t.Errorf("CRLContainsCertificate = %v, want %v", got, tc.want)
 			}
@@ -143,19 +135,7 @@ func TestCRLContainsCertificate(t *testing.T) {
 func TestCRLInfoFromList(t *testing.T) {
 	t.Parallel()
 
-	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ca, err := CreateSelfSigned(SelfSignedInput{
-		Signer:  caKey,
-		Subject: pkix.Name{CommonName: "CRL Info CA"},
-		Days:    3650,
-		IsCA:    true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	ca := generateTestCA(t, "CRL Info CA")
 
 	now := time.Now()
 	crlTemplate := &x509.RevocationList{
@@ -168,7 +148,7 @@ func TestCRLInfoFromList(t *testing.T) {
 			{SerialNumber: big.NewInt(3), RevocationTime: now},
 		},
 	}
-	crlDER, err := x509.CreateRevocationList(rand.Reader, crlTemplate, ca, caKey)
+	crlDER, err := x509.CreateRevocationList(rand.Reader, crlTemplate, ca.Cert, ca.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -184,10 +164,332 @@ func TestCRLInfoFromList(t *testing.T) {
 	if info.SignatureAlgorithm == "" {
 		t.Error("SignatureAlgorithm is empty")
 	}
+	if info.CRLNumber != "1" {
+		t.Errorf("CRLNumber = %q, want %q", info.CRLNumber, "1")
+	}
 
-	// FormatCRLInfo should produce non-empty output
 	output := FormatCRLInfo(info)
-	if output == "" {
-		t.Fatal("FormatCRLInfo returned empty string")
+	for _, want := range []string{
+		"Issuer:",
+		"CRL Number:  1",
+		"Entries:     3",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("output missing %q\ngot:\n%s", want, output)
+		}
+	}
+}
+
+func TestFetchCRL(t *testing.T) {
+	t.Parallel()
+
+	ca := generateTestCA(t, "FetchCRL Test CA")
+	now := time.Now()
+	crlDER, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+		Number:     big.NewInt(1),
+		ThisUpdate: now,
+		NextUpdate: now.Add(24 * time.Hour),
+	}, ca.Cert, ca.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name        string
+		handler     http.HandlerFunc // nil = no server needed (use overrideURL)
+		overrideURL string           // direct URL (bypasses test server)
+		wantErr     string
+		wantLength  int
+	}{
+		{
+			name: "success",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write(crlDER)
+			},
+			wantLength: len(crlDER),
+		},
+		{
+			name: "non-200 status",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusNotFound)
+			},
+			wantErr: "HTTP 404",
+		},
+		{
+			name: "redirect to private IP blocked",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				http.Redirect(w, r, "http://127.0.0.1/crl", http.StatusFound)
+			},
+			wantErr: "redirect blocked",
+		},
+		{
+			name: "too many redirects",
+			handler: func(w http.ResponseWriter, r *http.Request) {
+				// Redirect back to self — after 3 hops the client stops.
+				http.Redirect(w, r, r.URL.String(), http.StatusFound)
+			},
+			wantErr: "stopped after 3 redirects",
+		},
+		{
+			name:        "SSRF blocked loopback IP",
+			overrideURL: "http://127.0.0.1/crl",
+			wantErr:     "validating CRL URL",
+		},
+		{
+			name:        "invalid scheme",
+			overrideURL: "ftp://example.com/crl",
+			wantErr:     "validating CRL URL",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			fetchURL := tc.overrideURL
+			if tc.handler != nil {
+				srv := httptest.NewServer(tc.handler)
+				t.Cleanup(srv.Close)
+				// Replace 127.0.0.1 with localhost to pass SSRF validation.
+				fetchURL = strings.Replace(srv.URL, "127.0.0.1", "localhost", 1)
+			}
+
+			data, err := FetchCRL(context.Background(), FetchCRLInput{URL: fetchURL})
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tc.wantErr)
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Errorf("error = %q, want substring %q", err.Error(), tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(data) != tc.wantLength {
+				t.Errorf("got %d bytes, want %d", len(data), tc.wantLength)
+			}
+		})
+	}
+}
+
+func TestFetchCRL_AllowPrivateNetworks(t *testing.T) {
+	t.Parallel()
+
+	// WHY: When AllowPrivateNetworks is true, FetchCRL should succeed even for
+	// loopback IPs. This is used by the `crl` CLI command where the URL is
+	// user-provided, not from an untrusted certificate extension.
+	ca := generateTestCA(t, "FetchCRL Private CA")
+	now := time.Now()
+	crlDER, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+		Number:     big.NewInt(1),
+		ThisUpdate: now,
+		NextUpdate: now.Add(24 * time.Hour),
+	}, ca.Cert, ca.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(crlDER)
+	}))
+	t.Cleanup(srv.Close)
+
+	// Use raw 127.0.0.1 URL — would be blocked without AllowPrivateNetworks.
+	data, err := FetchCRL(context.Background(), FetchCRLInput{
+		URL:                  srv.URL,
+		AllowPrivateNetworks: true,
+	})
+	if err != nil {
+		t.Fatalf("FetchCRL with AllowPrivateNetworks failed: %v", err)
+	}
+	if len(data) != len(crlDER) {
+		t.Errorf("got %d bytes, want %d", len(data), len(crlDER))
+	}
+}
+
+func TestCheckLeafCRL(t *testing.T) {
+	t.Parallel()
+
+	ca := generateTestCA(t, "CheckLeafCRL CA")
+	now := time.Now()
+	revokedSerial := big.NewInt(200)
+
+	tests := []struct {
+		name       string
+		crlFunc    func(t *testing.T, srv *httptest.Server) []byte
+		leafSerial *big.Int
+		cdps       []string // override CDPs directly (no server needed)
+		wantStatus string
+		wantDetail string
+	}{
+		{
+			name: "revoked",
+			crlFunc: func(t *testing.T, _ *httptest.Server) []byte {
+				der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+					Number:     big.NewInt(1),
+					ThisUpdate: now,
+					NextUpdate: now.Add(24 * time.Hour),
+					RevokedCertificateEntries: []x509.RevocationListEntry{
+						{SerialNumber: revokedSerial, RevocationTime: now},
+					},
+				}, ca.Cert, ca.Key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return der
+			},
+			leafSerial: revokedSerial,
+			wantStatus: "revoked",
+			wantDetail: "c8",
+		},
+		{
+			name: "good",
+			crlFunc: func(t *testing.T, _ *httptest.Server) []byte {
+				der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+					Number:     big.NewInt(1),
+					ThisUpdate: now,
+					NextUpdate: now.Add(24 * time.Hour),
+					RevokedCertificateEntries: []x509.RevocationListEntry{
+						{SerialNumber: big.NewInt(999), RevocationTime: now},
+					},
+				}, ca.Cert, ca.Key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return der
+			},
+			leafSerial: big.NewInt(100),
+			wantStatus: "good",
+		},
+		{
+			name: "expired CRL",
+			crlFunc: func(t *testing.T, _ *httptest.Server) []byte {
+				der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+					Number:     big.NewInt(1),
+					ThisUpdate: now.Add(-48 * time.Hour),
+					NextUpdate: now.Add(-24 * time.Hour),
+				}, ca.Cert, ca.Key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return der
+			},
+			leafSerial: big.NewInt(100),
+			wantStatus: "unavailable",
+			wantDetail: "CRL expired",
+		},
+		{
+			name: "wrong issuer signature",
+			crlFunc: func(t *testing.T, _ *httptest.Server) []byte {
+				wrongCA := generateTestCA(t, "Wrong CA")
+				der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+					Number:     big.NewInt(1),
+					ThisUpdate: now,
+					NextUpdate: now.Add(24 * time.Hour),
+				}, wrongCA.Cert, wrongCA.Key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return der
+			},
+			leafSerial: big.NewInt(100),
+			wantStatus: "unavailable",
+			wantDetail: "signature verification failed",
+		},
+		{
+			name:       "no CDPs",
+			crlFunc:    nil,
+			leafSerial: big.NewInt(100),
+			wantStatus: "unavailable",
+			wantDetail: "no CRL distribution points",
+		},
+		{
+			name:       "non-HTTP CDP",
+			crlFunc:    nil,
+			leafSerial: big.NewInt(100),
+			cdps:       []string{"ldap://example.com/crl"},
+			wantStatus: "unavailable",
+			wantDetail: "no HTTP CRL distribution point",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var cdps []string
+			if tc.crlFunc != nil {
+				// Generate CRL data before starting the server to avoid a data
+				// race between the handler goroutine reading crlData and the
+				// test goroutine writing it.
+				crlData := tc.crlFunc(t, nil)
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					_, _ = w.Write(crlData)
+				}))
+				t.Cleanup(srv.Close)
+				cdps = []string{strings.Replace(srv.URL, "127.0.0.1", "localhost", 1)}
+			} else if tc.cdps != nil {
+				cdps = tc.cdps
+			}
+
+			leaf := &x509.Certificate{SerialNumber: tc.leafSerial}
+			if len(cdps) > 0 {
+				leaf.CRLDistributionPoints = cdps
+			}
+
+			result := CheckLeafCRL(context.Background(), CheckLeafCRLInput{
+				Leaf:   leaf,
+				Issuer: ca.Cert,
+			})
+			if result.Status != tc.wantStatus {
+				t.Errorf("Status = %q, want %q", result.Status, tc.wantStatus)
+			}
+			if tc.wantDetail != "" && !strings.Contains(result.Detail, tc.wantDetail) {
+				t.Errorf("Detail = %q, want substring %q", result.Detail, tc.wantDetail)
+			}
+		})
+	}
+}
+
+func TestFormatCRLLine(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		result *CRLCheckResult
+		want   string
+	}{
+		{
+			name:   "good",
+			result: &CRLCheckResult{Status: "good", URL: "http://crl.example.com/ca.crl"},
+			want:   "CRL:          good (http://crl.example.com/ca.crl)\n",
+		},
+		{
+			name:   "revoked",
+			result: &CRLCheckResult{Status: "revoked", Detail: "serial c8 found in CRL"},
+			want:   "CRL:          revoked (serial c8 found in CRL)\n",
+		},
+		{
+			name:   "unavailable",
+			result: &CRLCheckResult{Status: "unavailable", Detail: "certificate has no CRL distribution points"},
+			want:   "CRL:          unavailable (certificate has no CRL distribution points)\n",
+		},
+		{
+			name:   "unknown status fallback",
+			result: &CRLCheckResult{Status: "unexpected"},
+			want:   "CRL:          unexpected\n",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got := FormatCRLLine(tc.result)
+			if got != tc.want {
+				t.Errorf("FormatCRLLine() = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

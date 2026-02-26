@@ -3,11 +3,8 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"io"
-	"net/http"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/sensiblebit/certkit"
 	"github.com/sensiblebit/certkit/internal"
@@ -61,7 +58,10 @@ func runCRL(cmd *cobra.Command, args []string) error {
 	var err error
 
 	if strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://") {
-		data, err = fetchCRL(cmd, source)
+		data, err = certkit.FetchCRL(cmd.Context(), certkit.FetchCRLInput{
+			URL:                  source,
+			AllowPrivateNetworks: true,
+		})
 		if err != nil {
 			return fmt.Errorf("fetching CRL: %w", err)
 		}
@@ -125,27 +125,4 @@ func runCRL(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
-}
-
-func fetchCRL(cmd *cobra.Command, url string) ([]byte, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequestWithContext(cmd.Context(), http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("creating CRL request: %w", err)
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("downloading CRL from %s: %w", url, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("CRL server returned HTTP %d from %s", resp.StatusCode, url)
-	}
-
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // 10MB limit for CRLs
-	if err != nil {
-		return nil, fmt.Errorf("reading CRL response: %w", err)
-	}
-	return data, nil
 }

@@ -20,6 +20,8 @@ var (
 	verifyTrustStore string
 	verifyFormat     string
 	verifyDiagnose   bool
+	verifyOCSP       bool
+	verifyCRL        bool
 )
 
 var verifyCmd = &cobra.Command{
@@ -30,12 +32,17 @@ if it expires within a given duration.
 
 Accepts PEM, DER, PKCS#12, JKS, or PKCS#7 input. The chain is always verified.
 When the input contains an embedded private key (PKCS#12, JKS), the key match
-is checked automatically. Use --key to check against an external key file.`,
+is checked automatically. Use --key to check against an external key file.
+
+Use --ocsp to check OCSP revocation status, and --crl to check CRL distribution
+points. Both require network access and a valid chain (the issuer certificate
+is needed to verify the response). Exits with code 2 if verification finds any errors (including revocation).`,
 	Example: `  certkit verify cert.pem
   certkit verify cert.pem --key key.pem
   certkit verify cert.pem --expiry 30d
+  certkit verify cert.pem --ocsp
+  certkit verify cert.pem --ocsp --crl
   certkit verify store.p12
-  certkit verify store.p12 --expiry 90d
   certkit verify keystore.jks
   certkit verify chain.p7b`,
 	Args: cobra.ExactArgs(1),
@@ -48,6 +55,8 @@ func init() {
 	verifyCmd.Flags().StringVar(&verifyTrustStore, "trust-store", "mozilla", "Trust store for chain validation: system, mozilla")
 	verifyCmd.Flags().StringVar(&verifyFormat, "format", "text", "Output format: text or json")
 	verifyCmd.Flags().BoolVar(&verifyDiagnose, "diagnose", false, "Show diagnostics when verification fails")
+	verifyCmd.Flags().BoolVar(&verifyOCSP, "ocsp", false, "Check OCSP revocation status (requires network and valid chain)")
+	verifyCmd.Flags().BoolVar(&verifyCRL, "crl", false, "Check CRL distribution points for revocation (requires network and valid chain)")
 
 	registerCompletion(verifyCmd, completionInput{"format", fixedCompletion("text", "json")})
 	registerCompletion(verifyCmd, completionInput{"trust-store", fixedCompletion("system", "mozilla")})
@@ -118,6 +127,8 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		ExpiryDuration: expiryDuration,
 		TrustStore:     verifyTrustStore,
 		Verbose:        verbose,
+		CheckOCSP:      verifyOCSP,
+		CheckCRL:       verifyCRL,
 	}
 
 	result, err := internal.VerifyCert(cmd.Context(), input)

@@ -2,11 +2,7 @@ package certkit
 
 import (
 	"context"
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -20,29 +16,7 @@ import (
 func TestCheckOCSP_MockResponse(t *testing.T) {
 	t.Parallel()
 
-	// Shared CA setup
-	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	caTemplate := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		Subject:               pkix.Name{CommonName: "OCSP Test CA"},
-		NotBefore:             time.Now().Add(-time.Hour),
-		NotAfter:              time.Now().Add(24 * time.Hour),
-		IsCA:                  true,
-		BasicConstraintsValid: true,
-		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-	}
-	caDER, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ca, err := x509.ParseCertificate(caDER)
-	if err != nil {
-		t.Fatal(err)
-	}
-
+	ca := generateTestCA(t, "OCSP Test CA")
 	revokedTime := time.Now().Add(-12 * time.Hour)
 
 	tests := []struct {
@@ -71,6 +45,12 @@ func TestCheckOCSP_MockResponse(t *testing.T) {
 			wantRevokedAt:    true,
 			wantReason:       "key compromise",
 		},
+		{
+			name:       "unknown response",
+			ocspStatus: ocsp.Unknown,
+			serial:     300,
+			wantStatus: "unknown",
+		},
 	}
 
 	for _, tc := range tests {
@@ -86,7 +66,7 @@ func TestCheckOCSP_MockResponse(t *testing.T) {
 					RevokedAt:        tc.revokedAt,
 					RevocationReason: tc.revocationReason,
 				}
-				respBytes, err := ocsp.CreateResponse(ca, ca, resp, caKey)
+				respBytes, err := ocsp.CreateResponse(ca.Cert, ca.Cert, resp, ca.Key)
 				if err != nil {
 					http.Error(w, err.Error(), 500)
 					return
@@ -96,22 +76,11 @@ func TestCheckOCSP_MockResponse(t *testing.T) {
 			}))
 			defer server.Close()
 
-			leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-			if err != nil {
-				t.Fatal(err)
-			}
-			leafTemplate := &x509.Certificate{
-				SerialNumber: big.NewInt(tc.serial),
-				Subject:      pkix.Name{CommonName: "ocsp-test.example.com"},
-				NotBefore:    time.Now().Add(-time.Hour),
-				NotAfter:     time.Now().Add(24 * time.Hour),
-				OCSPServer:   []string{server.URL},
-			}
-			leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, ca, &leafKey.PublicKey, caKey)
-			if err != nil {
-				t.Fatal(err)
-			}
-			leaf, err := x509.ParseCertificate(leafDER)
+			leaf := generateTestLeafCert(t, ca,
+				withSerial(big.NewInt(tc.serial)),
+				withOCSPServer(strings.Replace(server.URL, "127.0.0.1", "localhost", 1)),
+			)
+			leafCert, err := x509.ParseCertificate(leaf.DER)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -120,8 +89,8 @@ func TestCheckOCSP_MockResponse(t *testing.T) {
 			defer cancel()
 
 			result, err := CheckOCSP(ctx, CheckOCSPInput{
-				Cert:   leaf,
-				Issuer: ca,
+				Cert:   leafCert,
+				Issuer: ca.Cert,
 			})
 			if err != nil {
 				t.Fatalf("CheckOCSP failed: %v", err)
@@ -144,14 +113,15 @@ func TestCheckOCSP_MockResponse(t *testing.T) {
 					t.Errorf("reason = %q, want %q", *result.RevocationReason, tc.wantReason)
 				}
 			}
-			if result.ResponderURL != server.URL {
-				t.Errorf("ResponderURL = %q, want %q", result.ResponderURL, server.URL)
+			wantURL := strings.Replace(server.URL, "127.0.0.1", "localhost", 1)
+			if result.URL != wantURL {
+				t.Errorf("URL = %q, want %q", result.URL, wantURL)
 			}
 		})
 	}
 }
 
-func TestCheckOCSP_NilInputs(t *testing.T) {
+func TestCheckOCSP_InvalidInputs(t *testing.T) {
 	t.Parallel()
 	tests := []struct {
 		name  string
@@ -159,26 +129,16 @@ func TestCheckOCSP_NilInputs(t *testing.T) {
 	}{
 		{"nil cert", CheckOCSPInput{Issuer: &x509.Certificate{}}},
 		{"nil issuer", CheckOCSPInput{Cert: &x509.Certificate{}}},
+		{"no OCSP URL", CheckOCSPInput{Cert: &x509.Certificate{}, Issuer: &x509.Certificate{}}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			_, err := CheckOCSP(context.Background(), tc.input)
 			if err == nil {
-				t.Fatal("expected error for nil input")
+				t.Fatal("expected error")
 			}
 		})
-	}
-}
-
-func TestCheckOCSP_NoOCSPURL(t *testing.T) {
-	t.Parallel()
-	_, err := CheckOCSP(context.Background(), CheckOCSPInput{
-		Cert:   &x509.Certificate{},
-		Issuer: &x509.Certificate{},
-	})
-	if err == nil {
-		t.Fatal("expected error for cert with no OCSP URL")
 	}
 }
 
@@ -188,7 +148,7 @@ func TestFormatOCSPResult(t *testing.T) {
 	result := &OCSPResult{
 		Status:       "good",
 		SerialNumber: "64",
-		ResponderURL: "http://ocsp.example.com",
+		URL:          "http://ocsp.example.com",
 		ThisUpdate:   now.UTC().Format(time.RFC3339),
 		NextUpdate:   now.Add(24 * time.Hour).UTC().Format(time.RFC3339),
 	}
@@ -196,9 +156,16 @@ func TestFormatOCSPResult(t *testing.T) {
 	if output == "" {
 		t.Fatal("FormatOCSPResult returned empty string")
 	}
-	for _, want := range []string{"Serial:", "Status:", "Responder:", "This Update:", "Next Update:"} {
+	// Check both labels and actual values appear in output.
+	for _, want := range []string{
+		"Serial:       64",
+		"Status:       good",
+		"Responder:    http://ocsp.example.com",
+		"This Update:  " + result.ThisUpdate,
+		"Next Update:  " + result.NextUpdate,
+	} {
 		if !strings.Contains(output, want) {
-			t.Errorf("output missing %q", want)
+			t.Errorf("output missing %q\ngot:\n%s", want, output)
 		}
 	}
 }

@@ -580,3 +580,149 @@ func TestFormatDiagnoses(t *testing.T) {
 		t.Error("output missing [OK] marker")
 	}
 }
+
+func TestVerifyCert_RevocationBehavior(t *testing.T) {
+	// WHY: Table-driven test for revocation flag combinations — verifies that
+	// OCSP/CRL results are correctly populated, skipped, or nil based on flags
+	// and chain validity.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	wrongCA := newRSACA(t)
+
+	tests := []struct {
+		name           string
+		useWrongCA     bool // sign leaf with wrongCA (chain will fail)
+		checkOCSP      bool
+		checkCRL       bool
+		wantOCSPNil    bool
+		wantOCSPStatus string
+		wantOCSPDetail string
+		wantCRLNil     bool
+		wantCRLStatus  string
+		wantCRLDetail  string
+	}{
+		{
+			name:           "OCSP skipped no responder URL",
+			checkOCSP:      true,
+			wantOCSPStatus: "skipped",
+			wantOCSPDetail: "no OCSP responder URL",
+			wantCRLNil:     true,
+		},
+		{
+			name:          "CRL unavailable no CDPs",
+			checkCRL:      true,
+			wantOCSPNil:   true,
+			wantCRLStatus: "unavailable",
+			wantCRLDetail: "no CRL distribution points",
+		},
+		{
+			name:           "invalid chain skips revocation",
+			useWrongCA:     true,
+			checkOCSP:      true,
+			checkCRL:       true,
+			wantOCSPStatus: "skipped",
+			wantOCSPDetail: "chain validation failed",
+			wantCRLStatus:  "skipped",
+			wantCRLDetail:  "chain validation failed",
+		},
+		{
+			name:        "disabled returns nil",
+			checkOCSP:   false,
+			checkCRL:    false,
+			wantOCSPNil: true,
+			wantCRLNil:  true,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			signer := ca
+			if tc.useWrongCA {
+				signer = wrongCA
+			}
+			leaf := newRSALeaf(t, signer, "test.example.com", []string{"test.example.com"}, nil)
+
+			result, err := VerifyCert(context.Background(), &VerifyInput{
+				Cert:        leaf.cert,
+				CheckChain:  true,
+				TrustStore:  "custom",
+				CustomRoots: []*x509.Certificate{ca.cert},
+				CheckOCSP:   tc.checkOCSP,
+				CheckCRL:    tc.checkCRL,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Check OCSP
+			if tc.wantOCSPNil {
+				if result.OCSP != nil {
+					t.Errorf("expected OCSP nil, got %+v", result.OCSP)
+				}
+			} else {
+				if result.OCSP == nil {
+					t.Fatal("expected OCSP result, got nil")
+				}
+				if result.OCSP.Status != tc.wantOCSPStatus {
+					t.Errorf("OCSP.Status = %q, want %q", result.OCSP.Status, tc.wantOCSPStatus)
+				}
+				if tc.wantOCSPDetail != "" && !strings.Contains(result.OCSP.Detail, tc.wantOCSPDetail) {
+					t.Errorf("OCSP.Detail = %q, want substring %q", result.OCSP.Detail, tc.wantOCSPDetail)
+				}
+			}
+
+			// Check CRL
+			if tc.wantCRLNil {
+				if result.CRL != nil {
+					t.Errorf("expected CRL nil, got %+v", result.CRL)
+				}
+			} else {
+				if result.CRL == nil {
+					t.Fatal("expected CRL result, got nil")
+				}
+				if result.CRL.Status != tc.wantCRLStatus {
+					t.Errorf("CRL.Status = %q, want %q", result.CRL.Status, tc.wantCRLStatus)
+				}
+				if tc.wantCRLDetail != "" && !strings.Contains(result.CRL.Detail, tc.wantCRLDetail) {
+					t.Errorf("CRL.Detail = %q, want substring %q", result.CRL.Detail, tc.wantCRLDetail)
+				}
+			}
+		})
+	}
+}
+
+func TestFormatVerifyOCSPAndCRL(t *testing.T) {
+	// WHY: formatVerifyOCSP and formatVerifyCRL must produce output that aligns
+	// with the verify command's label style and covers all status branches.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "fmt.example.com", []string{"fmt.example.com"}, nil)
+
+	// Test OCSP skipped output appears in formatted result.
+	result, err := VerifyCert(context.Background(), &VerifyInput{
+		Cert:        leaf.cert,
+		CheckChain:  true,
+		TrustStore:  "custom",
+		CustomRoots: []*x509.Certificate{ca.cert},
+		CheckOCSP:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	output := FormatVerifyResult(result)
+	if !strings.Contains(output, "OCSP:") {
+		t.Errorf("formatted output missing OCSP line\ngot:\n%s", output)
+	}
+	if !strings.Contains(output, "skipped") {
+		t.Errorf("formatted output missing 'skipped' status\ngot:\n%s", output)
+	}
+	// CRL should not appear when not requested.
+	if strings.Contains(output, "CRL:") {
+		t.Errorf("formatted output should not contain CRL when not requested\ngot:\n%s", output)
+	}
+}

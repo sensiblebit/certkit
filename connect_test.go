@@ -8,7 +8,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"fmt"
 	"math/big"
 	"net"
 	"net/http"
@@ -17,6 +16,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/ocsp"
 )
 
 func TestConnectTLS(t *testing.T) {
@@ -290,25 +291,132 @@ func TestFormatConnectResult(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result := &ConnectResult{
-		Host:        "test.example.com",
-		Port:        "443",
-		Protocol:    "TLS 1.3",
-		CipherSuite: "TLS_AES_128_GCM_SHA256",
-		ServerName:  "test.example.com",
-		PeerChain:   []*x509.Certificate{cert},
+	tests := []struct {
+		name           string
+		diagnostics    []ChainDiagnostic
+		aiaFetched     bool
+		ocsp           *OCSPResult
+		crl            *CRLCheckResult
+		wantStrings    []string
+		notWantStrings []string
+	}{
+		{
+			name: "basic fields present",
+			wantStrings: []string{
+				"Host:", "Protocol:", "Cipher Suite:", "Server Name:",
+				"Verify:", "Certificate chain", "test.example.com",
+			},
+		},
+		{
+			name: "diagnostics rendered",
+			diagnostics: []ChainDiagnostic{
+				{Check: "root-in-chain", Status: "warn", Detail: `server sent root certificate "CN=Root CA" (position 2)`},
+			},
+			wantStrings: []string{"Diagnostics:", "[WARN] root-in-chain:", "Verify:       OK\n"},
+		},
+		{
+			name:       "AIA-aware verify line",
+			aiaFetched: true,
+			diagnostics: []ChainDiagnostic{
+				{Check: "missing-intermediate", Status: "warn", Detail: "server does not send intermediate certificates; chain was completed via AIA"},
+			},
+			wantStrings: []string{"Verify:       OK (intermediates fetched via AIA)", "[WARN] missing-intermediate:"},
+		},
+		{
+			name:           "no diagnostics section when empty",
+			wantStrings:    []string{"Verify:       OK\n"},
+			notWantStrings: []string{"Diagnostics:"},
+		},
+		{
+			name: "OCSP good",
+			ocsp: &OCSPResult{Status: "good", URL: "http://ocsp.example.com"},
+			wantStrings: []string{
+				"OCSP:         good (http://ocsp.example.com)",
+			},
+		},
+		{
+			name: "OCSP revoked",
+			ocsp: &OCSPResult{
+				Status:           "revoked",
+				URL:              "http://ocsp.example.com",
+				RevokedAt:        new("2025-01-15T00:00:00Z"),
+				RevocationReason: new("key compromise"),
+			},
+			wantStrings: []string{
+				"OCSP:         revoked at 2025-01-15T00:00:00Z, reason: key compromise",
+			},
+		},
+		{
+			name: "OCSP unavailable with detail",
+			ocsp: &OCSPResult{Status: "unavailable", URL: "http://ocsp.example.com", Detail: "connection refused"},
+			wantStrings: []string{
+				"OCSP:         unavailable (connection refused)",
+			},
+		},
+		{
+			name: "OCSP unavailable without detail",
+			ocsp: &OCSPResult{Status: "unavailable", URL: "http://ocsp.example.com"},
+			wantStrings: []string{
+				"OCSP:         unavailable (http://ocsp.example.com)",
+			},
+		},
+		{
+			name: "OCSP unknown",
+			ocsp: &OCSPResult{Status: "unknown", URL: "http://ocsp.example.com"},
+			wantStrings: []string{
+				"OCSP:         unknown (responder does not recognize this certificate)",
+			},
+		},
+		{
+			name: "OCSP skipped",
+			ocsp: &OCSPResult{Status: "skipped", Detail: "certificate has no OCSP responder URL"},
+			wantStrings: []string{
+				"OCSP:         skipped (certificate has no OCSP responder URL)",
+			},
+		},
+		{
+			name: "CRL good",
+			crl:  &CRLCheckResult{Status: "good", URL: "http://crl.example.com/ca.crl"},
+			wantStrings: []string{
+				"CRL:          good (http://crl.example.com/ca.crl)",
+			},
+		},
+		{
+			name: "CRL unavailable",
+			crl:  &CRLCheckResult{Status: "unavailable", Detail: "certificate has no CRL distribution points"},
+			wantStrings: []string{
+				"CRL:          unavailable (certificate has no CRL distribution points)",
+			},
+		},
 	}
 
-	output := FormatConnectResult(result)
-	if output == "" {
-		t.Fatal("FormatConnectResult returned empty string")
-	}
-
-	// Check key sections are present
-	for _, want := range []string{"Host:", "Protocol:", "Cipher Suite:", "Server Name:", "Verify:", "Certificate chain", "test.example.com"} {
-		if !strings.Contains(output, want) {
-			t.Errorf("output missing %q", want)
-		}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result := &ConnectResult{
+				Host:        "test.example.com",
+				Port:        "443",
+				Protocol:    "TLS 1.3",
+				CipherSuite: "TLS_AES_128_GCM_SHA256",
+				ServerName:  "test.example.com",
+				PeerChain:   []*x509.Certificate{cert},
+				Diagnostics: tt.diagnostics,
+				AIAFetched:  tt.aiaFetched,
+				OCSP:        tt.ocsp,
+				CRL:         tt.crl,
+			}
+			output := FormatConnectResult(result)
+			for _, want := range tt.wantStrings {
+				if !strings.Contains(output, want) {
+					t.Errorf("output missing %q\ngot:\n%s", want, output)
+				}
+			}
+			for _, notWant := range tt.notWantStrings {
+				if strings.Contains(output, notWant) {
+					t.Errorf("output contains unexpected %q\ngot:\n%s", notWant, output)
+				}
+			}
+		})
 	}
 }
 
@@ -321,9 +429,10 @@ func TestDiagnoseConnectChain(t *testing.T) {
 	root, intermediates, leaf := buildChain(t, 3)
 
 	tests := []struct {
-		name       string
-		peerChain  []*x509.Certificate
-		wantChecks []string // expected diagnostic check names
+		name               string
+		peerChain          []*x509.Certificate
+		wantChecks         []string   // expected diagnostic check names
+		wantDetailContains [][]string // per-diagnostic substrings to check in Detail
 	}{
 		{
 			name:       "clean chain (leaf + intermediate)",
@@ -331,14 +440,16 @@ func TestDiagnoseConnectChain(t *testing.T) {
 			wantChecks: nil,
 		},
 		{
-			name:       "root-in-chain detected",
-			peerChain:  []*x509.Certificate{leaf, intermediates[0], root},
-			wantChecks: []string{"root-in-chain"},
+			name:               "root-in-chain detected",
+			peerChain:          []*x509.Certificate{leaf, intermediates[0], root},
+			wantChecks:         []string{"root-in-chain"},
+			wantDetailContains: [][]string{{"Chain Root CA", "position 2"}},
 		},
 		{
-			name:       "duplicate-cert detected",
-			peerChain:  []*x509.Certificate{leaf, intermediates[0], intermediates[0]},
-			wantChecks: []string{"duplicate-cert"},
+			name:               "duplicate-cert detected",
+			peerChain:          []*x509.Certificate{leaf, intermediates[0], intermediates[0]},
+			wantChecks:         []string{"duplicate-cert"},
+			wantDetailContains: [][]string{{FormatDN(intermediates[0].Subject), "positions 1 and 2"}},
 		},
 		{
 			name:       "leaf-only chain",
@@ -369,6 +480,13 @@ func TestDiagnoseConnectChain(t *testing.T) {
 				}
 				if diags[i].Detail == "" {
 					t.Errorf("diag[%d].Detail is empty", i)
+				}
+				if i < len(tt.wantDetailContains) {
+					for _, substr := range tt.wantDetailContains[i] {
+						if !strings.Contains(diags[i].Detail, substr) {
+							t.Errorf("diag[%d].Detail missing %q, got: %s", i, substr, diags[i].Detail)
+						}
+					}
 				}
 			}
 		})
@@ -599,145 +717,569 @@ func TestConnectTLS_AIAFetch_DisableAIA(t *testing.T) {
 	}
 }
 
-func TestFormatConnectResult_Diagnostics(t *testing.T) {
+func TestConnectTLS_OCSP(t *testing.T) {
 	t.Parallel()
 
-	// WHY: Verify that diagnostics and AIA status are rendered in text output.
+	// Integration test: verify ConnectTLS wires OCSP check into result.
+	// Detailed good/revoked mapping is tested in TestCheckOCSP_MockResponse (ocsp_test.go).
+	ca := generateTestCA(t, "OCSP Connect CA")
 
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	respTemplate := ocsp.Response{
+		Status:       ocsp.Good,
+		SerialNumber: big.NewInt(100),
+		ThisUpdate:   time.Now().Add(-time.Hour),
+		NextUpdate:   time.Now().Add(time.Hour),
+	}
+	ocspRespBytes, err := ocsp.CreateResponse(ca.Cert, ca.Cert, respTemplate, ca.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "test.example.com"},
-		DNSNames:     []string{"test.example.com"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	ocspServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/ocsp-response")
+		_, _ = w.Write(ocspRespBytes)
+	}))
+	defer ocspServer.Close()
+
+	leaf := generateTestLeafCert(t, ca,
+		withSerial(big.NewInt(100)),
+		withOCSPServer(strings.Replace(ocspServer.URL, "127.0.0.1", "localhost", 1)),
+	)
+	port := startTLSServer(t, [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
+
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(ca.Cert)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	result, err := ConnectTLS(ctx, ConnectTLSInput{
+		Host:    "127.0.0.1",
+		Port:    port,
+		RootCAs: rootPool,
+	})
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("ConnectTLS failed: %v", err)
 	}
-	cert, err := x509.ParseCertificate(certDER)
-	if err != nil {
-		t.Fatal(err)
+
+	if result.OCSP == nil {
+		t.Fatal("OCSP result is nil, expected a response")
 	}
+	if result.OCSP.Status != "good" {
+		t.Errorf("OCSP.Status = %q, want %q", result.OCSP.Status, "good")
+	}
+	if result.OCSP.SerialNumber != "64" { // 100 decimal = 64 hex
+		t.Errorf("OCSP.SerialNumber = %q, want %q", result.OCSP.SerialNumber, "64")
+	}
+}
+
+func TestConnectTLS_OCSP_SkipAndFailure(t *testing.T) {
+	t.Parallel()
+
+	// Table-driven test for DisableOCSP (nil result, no server hit) and
+	// best-effort failure (unavailable result, server hit).
+	ca := generateTestCA(t, "OCSP Skip CA")
 
 	tests := []struct {
-		name        string
-		diagnostics []ChainDiagnostic
-		aiaFetched  bool
-		wantStrings []string
+		name          string
+		disableOCSP   bool
+		wantNil       bool   // expect result.OCSP == nil
+		wantStatus    string // checked only when !wantNil
+		wantServerHit bool
 	}{
 		{
-			name: "diagnostics section rendered",
-			diagnostics: []ChainDiagnostic{
-				{Check: "root-in-chain", Status: "warn", Detail: `server sent root certificate "CN=Root CA" (position 2)`},
-			},
-			wantStrings: []string{
-				"Diagnostics:",
-				"[WARN] root-in-chain:",
-				"Verify:       OK\n",
-			},
+			name:          "disabled - no server contact",
+			disableOCSP:   true,
+			wantNil:       true,
+			wantServerHit: false,
 		},
 		{
-			name:       "AIA-aware verify line",
-			aiaFetched: true,
-			diagnostics: []ChainDiagnostic{
-				{Check: "missing-intermediate", Status: "warn", Detail: "server does not send intermediate certificates; chain was completed via AIA"},
-			},
-			wantStrings: []string{
-				"Verify:       OK (intermediates fetched via AIA)",
-				"[WARN] missing-intermediate:",
-			},
-		},
-		{
-			name:        "no diagnostics section when empty",
-			diagnostics: nil,
-			wantStrings: []string{"Verify:       OK\n"},
+			name:          "best-effort failure - unavailable",
+			disableOCSP:   false,
+			wantNil:       false,
+			wantStatus:    "unavailable",
+			wantServerHit: true,
 		},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			result := &ConnectResult{
-				Host:        "test.example.com",
-				Port:        "443",
-				Protocol:    "TLS 1.3",
-				CipherSuite: "TLS_AES_128_GCM_SHA256",
-				ServerName:  "test.example.com",
-				PeerChain:   []*x509.Certificate{cert},
-				Diagnostics: tt.diagnostics,
-				AIAFetched:  tt.aiaFetched,
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var hits atomic.Int64
+			ocspServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				hits.Add(1)
+				http.Error(w, "broken", http.StatusInternalServerError)
+			}))
+			defer ocspServer.Close()
+
+			leaf := generateTestLeafCert(t, ca,
+				withOCSPServer(strings.Replace(ocspServer.URL, "127.0.0.1", "localhost", 1)),
+			)
+			port := startTLSServer(t, [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			rootPool := x509.NewCertPool()
+			rootPool.AddCert(ca.Cert)
+
+			result, err := ConnectTLS(ctx, ConnectTLSInput{
+				Host:        "127.0.0.1",
+				Port:        port,
+				RootCAs:     rootPool,
+				DisableOCSP: tc.disableOCSP,
+			})
+			if err != nil {
+				t.Fatalf("ConnectTLS failed: %v", err)
 			}
-			output := FormatConnectResult(result)
-			for _, want := range tt.wantStrings {
-				if !strings.Contains(output, want) {
-					t.Errorf("output missing %q\ngot:\n%s", want, output)
+
+			if tc.wantNil {
+				if result.OCSP != nil {
+					t.Errorf("OCSP = %+v, want nil", result.OCSP)
+				}
+			} else {
+				if result.OCSP == nil {
+					t.Fatal("OCSP result is nil, expected non-nil")
+				}
+				if result.OCSP.Status != tc.wantStatus {
+					t.Errorf("OCSP.Status = %q, want %q", result.OCSP.Status, tc.wantStatus)
 				}
 			}
 
-			// When no diagnostics, "Diagnostics:" section should not appear.
-			if tt.diagnostics == nil && strings.Contains(output, "Diagnostics:") {
-				t.Error("unexpected Diagnostics section in output")
+			if tc.wantServerHit && hits.Load() == 0 {
+				t.Error("OCSP server was not contacted")
+			}
+			if !tc.wantServerHit && hits.Load() != 0 {
+				t.Error("OCSP server was contacted despite DisableOCSP")
 			}
 		})
 	}
 }
 
-func TestDiagnoseConnectChain_DetailContent(t *testing.T) {
+func TestConnectTLS_CRL(t *testing.T) {
 	t.Parallel()
 
-	// WHY: Verify diagnostic detail messages include subject and position info.
+	// Integration test: verify ConnectTLS wires CRL check into result.
+	// CRLContainsCertificate good/revoked mapping is tested in crl_test.go.
+	// Signature verification and freshness are tested in TestCheckLeafCRL.
+	revokedSerial := big.NewInt(200)
+	now := time.Now()
 
-	root, intermediates, leaf := buildChain(t, 3)
-
-	t.Run("root-in-chain includes subject and position", func(t *testing.T) {
-		t.Parallel()
-		diags := DiagnoseConnectChain(DiagnoseConnectChainInput{
-			PeerChain: []*x509.Certificate{leaf, intermediates[0], root},
-		})
-
-		var found bool
-		for _, d := range diags {
-			if d.Check == "root-in-chain" {
-				found = true
-				if !strings.Contains(d.Detail, "Chain Root CA") {
-					t.Errorf("detail missing subject, got: %s", d.Detail)
+	tests := []struct {
+		name         string
+		setupCRL     func(t *testing.T, ca *testCA) (crlDER []byte, signer *testCA)
+		leafSerial   *big.Int
+		wantStatus   string
+		wantContains string // substring expected in Detail
+	}{
+		{
+			name: "revoked",
+			setupCRL: func(t *testing.T, ca *testCA) ([]byte, *testCA) {
+				der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+					Number:     big.NewInt(1),
+					ThisUpdate: now.Add(-time.Hour),
+					NextUpdate: now.Add(time.Hour),
+					RevokedCertificateEntries: []x509.RevocationListEntry{
+						{SerialNumber: revokedSerial, RevocationTime: now.Add(-6 * time.Hour)},
+					},
+				}, ca.Cert, ca.Key)
+				if err != nil {
+					t.Fatal(err)
 				}
-				if !strings.Contains(d.Detail, "position 2") {
-					t.Errorf("detail missing position, got: %s", d.Detail)
+				return der, ca
+			},
+			leafSerial:   revokedSerial,
+			wantStatus:   "revoked",
+			wantContains: revokedSerial.Text(16),
+		},
+		{
+			name: "good",
+			setupCRL: func(t *testing.T, ca *testCA) ([]byte, *testCA) {
+				der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+					Number:     big.NewInt(1),
+					ThisUpdate: now.Add(-time.Hour),
+					NextUpdate: now.Add(time.Hour),
+					RevokedCertificateEntries: []x509.RevocationListEntry{
+						{SerialNumber: big.NewInt(999), RevocationTime: now.Add(-6 * time.Hour)},
+					},
+				}, ca.Cert, ca.Key)
+				if err != nil {
+					t.Fatal(err)
 				}
+				return der, ca
+			},
+			leafSerial: big.NewInt(100),
+			wantStatus: "good",
+		},
+		{
+			name: "wrong issuer",
+			setupCRL: func(t *testing.T, ca *testCA) ([]byte, *testCA) {
+				wrongCA := generateTestCA(t, "CRL Wrong CA")
+				der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+					Number:     big.NewInt(1),
+					ThisUpdate: now.Add(-time.Hour),
+					NextUpdate: now.Add(time.Hour),
+					RevokedCertificateEntries: []x509.RevocationListEntry{
+						{SerialNumber: revokedSerial, RevocationTime: now.Add(-6 * time.Hour)},
+					},
+				}, wrongCA.Cert, wrongCA.Key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return der, wrongCA
+			},
+			leafSerial:   revokedSerial,
+			wantStatus:   "unavailable",
+			wantContains: "signature verification failed",
+		},
+		{
+			name: "expired CRL",
+			setupCRL: func(t *testing.T, ca *testCA) ([]byte, *testCA) {
+				der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+					Number:     big.NewInt(1),
+					ThisUpdate: now.Add(-48 * time.Hour),
+					NextUpdate: now.Add(-24 * time.Hour),
+				}, ca.Cert, ca.Key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return der, ca
+			},
+			leafSerial:   big.NewInt(100),
+			wantStatus:   "unavailable",
+			wantContains: "CRL expired",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ca := generateTestCA(t, "CRL Connect CA")
+			crlDER, _ := tc.setupCRL(t, ca)
+
+			crlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/pkix-crl")
+				_, _ = w.Write(crlDER)
+			}))
+			t.Cleanup(crlServer.Close)
+
+			cdpURL := strings.Replace(crlServer.URL, "127.0.0.1", "localhost", 1)
+			leaf := generateTestLeafCert(t, ca,
+				withSerial(tc.leafSerial),
+				withCRLDistributionPoints(cdpURL),
+			)
+			port := startTLSServer(t, [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			rootPool := x509.NewCertPool()
+			rootPool.AddCert(ca.Cert)
+
+			result, err := ConnectTLS(ctx, ConnectTLSInput{
+				Host:        "127.0.0.1",
+				Port:        port,
+				RootCAs:     rootPool,
+				CheckCRL:    true,
+				DisableOCSP: true,
+			})
+			if err != nil {
+				t.Fatalf("ConnectTLS failed: %v", err)
 			}
-		}
-		if !found {
-			t.Error("root-in-chain diagnostic not found")
-		}
-	})
 
-	t.Run("duplicate-cert includes subject and positions", func(t *testing.T) {
-		t.Parallel()
-		diags := DiagnoseConnectChain(DiagnoseConnectChainInput{
-			PeerChain: []*x509.Certificate{leaf, intermediates[0], intermediates[0]},
-		})
-
-		var found bool
-		for _, d := range diags {
-			if d.Check == "duplicate-cert" {
-				found = true
-				subject := FormatDN(intermediates[0].Subject)
-				if !strings.Contains(d.Detail, subject) {
-					t.Errorf("detail missing subject %q, got: %s", subject, d.Detail)
-				}
-				if !strings.Contains(d.Detail, fmt.Sprintf("positions %d and %d", 1, 2)) {
-					t.Errorf("detail missing both positions, got: %s", d.Detail)
-				}
+			if result.CRL == nil {
+				t.Fatal("CRL result is nil")
 			}
-		}
-		if !found {
-			t.Error("duplicate-cert diagnostic not found")
-		}
+			if result.CRL.Status != tc.wantStatus {
+				t.Errorf("CRL.Status = %q, want %q", result.CRL.Status, tc.wantStatus)
+			}
+			if tc.wantContains != "" && !strings.Contains(result.CRL.Detail, tc.wantContains) {
+				t.Errorf("CRL.Detail = %q, want substring %q", result.CRL.Detail, tc.wantContains)
+			}
+		})
+	}
+}
+
+func TestConnectTLS_CRL_Unavailable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		cdps         []string // CRL distribution points on the leaf cert
+		singleCert   bool     // send only leaf (no issuer) in TLS chain
+		wantStatus   string
+		wantContains string // substring expected in Detail
+	}{
+		{
+			name:         "no issuer in chain",
+			cdps:         nil,
+			singleCert:   true,
+			wantStatus:   "unavailable",
+			wantContains: "no issuer certificate",
+		},
+		{
+			name:         "no CRL distribution points",
+			cdps:         nil,
+			singleCert:   false, // issuer present, so checkLeafCRL is called
+			wantStatus:   "unavailable",
+			wantContains: "no CRL distribution points",
+		},
+		{
+			name:         "non-HTTP CDPs only",
+			cdps:         []string{"ldap://ldap.example.com/cn=CRL"},
+			wantStatus:   "unavailable",
+			wantContains: "no HTTP CRL distribution point",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			ca := generateTestCA(t, "CRL Unavail CA")
+			leaf := generateTestLeafCert(t, ca, withCRLDistributionPoints(tc.cdps...))
+
+			var chain [][]byte
+			if tc.singleCert {
+				chain = [][]byte{leaf.DER}
+			} else {
+				chain = [][]byte{leaf.DER, ca.CertDER}
+			}
+			port := startTLSServer(t, chain, leaf.Key)
+
+			input := ConnectTLSInput{
+				Host:        "127.0.0.1",
+				Port:        port,
+				CheckCRL:    true,
+				DisableOCSP: true,
+			}
+			// Provide RootCAs so chain verification succeeds when the CA is
+			// in the chain. The singleCert case deliberately omits the issuer
+			// AND the root pool, so both PeerCertificates and VerifiedChains
+			// lack an issuer.
+			if !tc.singleCert {
+				rootPool := x509.NewCertPool()
+				rootPool.AddCert(ca.Cert)
+				input.RootCAs = rootPool
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			result, err := ConnectTLS(ctx, input)
+			if err != nil {
+				t.Fatalf("ConnectTLS failed: %v", err)
+			}
+
+			if result.CRL == nil {
+				t.Fatal("CRL is nil, expected 'unavailable' result")
+			}
+			if result.CRL.Status != tc.wantStatus {
+				t.Errorf("CRL.Status = %q, want %q", result.CRL.Status, tc.wantStatus)
+			}
+			if !strings.Contains(result.CRL.Detail, tc.wantContains) {
+				t.Errorf("CRL.Detail = %q, want substring %q", result.CRL.Detail, tc.wantContains)
+			}
+		})
+	}
+}
+
+func TestConnectTLS_CRL_AIAFetchedIssuer(t *testing.T) {
+	t.Parallel()
+
+	// WHY: When the server sends only a leaf cert (no intermediates), the issuer
+	// must be obtained from VerifiedChains (populated by AIA walking) for CRL
+	// signature verification. This test verifies issuer resolution from
+	// VerifiedChains[0][1].
+
+	// Build 3-tier PKI: root -> intermediate -> leaf.
+	root := generateTestCA(t, "AIA CRL Root CA")
+	intermediate := generateIntermediateCA(t, root, "AIA CRL Intermediate CA")
+
+	revokedSerial := big.NewInt(500)
+
+	// CRL signed by the intermediate CA containing the leaf serial.
+	crlDER, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+		Number:     big.NewInt(1),
+		ThisUpdate: time.Now().Add(-time.Hour),
+		NextUpdate: time.Now().Add(time.Hour),
+		RevokedCertificateEntries: []x509.RevocationListEntry{
+			{SerialNumber: revokedSerial, RevocationTime: time.Now().Add(-6 * time.Hour)},
+		},
+	}, intermediate.Cert, intermediate.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	crlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pkix-crl")
+		_, _ = w.Write(crlDER)
+	}))
+	t.Cleanup(crlServer.Close)
+
+	// AIA server serves the intermediate cert.
+	aiaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pkix-cert")
+		_, _ = w.Write(intermediate.CertDER)
+	}))
+	t.Cleanup(aiaServer.Close)
+
+	cdpURL := strings.Replace(crlServer.URL, "127.0.0.1", "localhost", 1)
+	aiaURL := strings.Replace(aiaServer.URL, "127.0.0.1", "localhost", 1)
+
+	leaf := generateTestLeafCert(t, intermediate,
+		withSerial(revokedSerial),
+		withCRLDistributionPoints(cdpURL),
+		withAIA(aiaURL),
+	)
+
+	// Server sends ONLY the leaf — no intermediate in the chain.
+	port := startTLSServer(t, [][]byte{leaf.DER}, leaf.Key)
+
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(root.Cert)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	result, err := ConnectTLS(ctx, ConnectTLSInput{
+		Host:        "127.0.0.1",
+		Port:        port,
+		CheckCRL:    true,
+		DisableOCSP: true,
+		RootCAs:     rootPool,
 	})
+	if err != nil {
+		t.Fatalf("ConnectTLS failed: %v", err)
+	}
+
+	// Chain should verify via AIA-fetched intermediate.
+	if result.VerifyError != "" {
+		t.Fatalf("expected chain to verify via AIA, got error: %s", result.VerifyError)
+	}
+	if !result.AIAFetched {
+		t.Error("expected AIAFetched=true")
+	}
+
+	// CRL check should use the AIA-fetched intermediate as issuer.
+	if result.CRL == nil {
+		t.Fatal("CRL result is nil — issuer fallback to VerifiedChains failed")
+	}
+	if result.CRL.Status != "revoked" {
+		t.Errorf("CRL.Status = %q, want %q", result.CRL.Status, "revoked")
+	}
+}
+
+func TestConnectTLS_CRL_DuplicateLeafInChain(t *testing.T) {
+	t.Parallel()
+
+	// WHY: When a server sends [leaf, leaf, intermediate] (duplicate leaf at
+	// position 1), PeerCertificates[1] is the duplicate leaf — not the actual
+	// issuer. Issuer resolution must prefer VerifiedChains[0][1] (the
+	// cryptographically validated intermediate) so both OCSP and CRL signature
+	// verification succeed.
+
+	root := generateTestCA(t, "DupLeaf Root CA")
+	intermediate := generateIntermediateCA(t, root, "DupLeaf Intermediate CA")
+
+	revokedSerial := big.NewInt(600)
+
+	// CRL signed by intermediate containing the leaf serial.
+	crlDER, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+		Number:     big.NewInt(1),
+		ThisUpdate: time.Now().Add(-time.Hour),
+		NextUpdate: time.Now().Add(time.Hour),
+		RevokedCertificateEntries: []x509.RevocationListEntry{
+			{SerialNumber: revokedSerial, RevocationTime: time.Now().Add(-6 * time.Hour)},
+		},
+	}, intermediate.Cert, intermediate.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	crlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pkix-crl")
+		_, _ = w.Write(crlDER)
+	}))
+	t.Cleanup(crlServer.Close)
+
+	// OCSP responder signed by intermediate.
+	ocspRespTemplate := ocsp.Response{
+		Status:       ocsp.Good,
+		SerialNumber: revokedSerial,
+		ThisUpdate:   time.Now().Add(-time.Hour),
+		NextUpdate:   time.Now().Add(time.Hour),
+	}
+	ocspRespBytes, err := ocsp.CreateResponse(intermediate.Cert, intermediate.Cert, ocspRespTemplate, intermediate.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ocspServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/ocsp-response")
+		_, _ = w.Write(ocspRespBytes)
+	}))
+	t.Cleanup(ocspServer.Close)
+
+	cdpURL := strings.Replace(crlServer.URL, "127.0.0.1", "localhost", 1)
+	ocspURL := strings.Replace(ocspServer.URL, "127.0.0.1", "localhost", 1)
+	leaf := generateTestLeafCert(t, intermediate,
+		withSerial(revokedSerial),
+		withCRLDistributionPoints(cdpURL),
+		withOCSPServer(ocspURL),
+	)
+
+	// Server sends [leaf, leaf(dup), intermediate] — duplicate leaf at position 1.
+	port := startTLSServer(t, [][]byte{leaf.DER, leaf.DER, intermediate.CertDER}, leaf.Key)
+
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(root.Cert)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	result, err := ConnectTLS(ctx, ConnectTLSInput{
+		Host:     "127.0.0.1",
+		Port:     port,
+		CheckCRL: true,
+		RootCAs:  rootPool,
+	})
+	if err != nil {
+		t.Fatalf("ConnectTLS failed: %v", err)
+	}
+
+	// Chain should verify despite the duplicate.
+	if result.VerifyError != "" {
+		t.Fatalf("expected chain to verify, got error: %s", result.VerifyError)
+	}
+
+	// Duplicate-cert diagnostic should be present.
+	hasDupDiag := false
+	for _, d := range result.Diagnostics {
+		if d.Check == "duplicate-cert" {
+			hasDupDiag = true
+			break
+		}
+	}
+	if !hasDupDiag {
+		t.Error("expected duplicate-cert diagnostic")
+	}
+
+	// OCSP check must succeed — the issuer should be the intermediate from
+	// VerifiedChains, not the duplicate leaf from PeerCertificates[1].
+	if result.OCSP == nil {
+		t.Fatal("OCSP result is nil — issuer resolution failed")
+	}
+	if result.OCSP.Status != "good" {
+		t.Errorf("OCSP.Status = %q, want %q (detail: %s)", result.OCSP.Status, "good", result.OCSP.Detail)
+	}
+
+	// CRL check must also succeed with the correct issuer.
+	if result.CRL == nil {
+		t.Fatal("CRL result is nil — issuer resolution failed")
+	}
+	if result.CRL.Status != "revoked" {
+		t.Errorf("CRL.Status = %q, want %q (detail: %s)", result.CRL.Status, "revoked", result.CRL.Detail)
+	}
+	if !strings.Contains(result.CRL.Detail, revokedSerial.Text(16)) {
+		t.Errorf("CRL.Detail = %q, want substring %q", result.CRL.Detail, revokedSerial.Text(16))
+	}
 }

@@ -1,9 +1,12 @@
 package certkit
 
 import (
+	"context"
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"io"
+	"net/http"
 	"time"
 )
 
@@ -24,6 +27,64 @@ type CRLInfo struct {
 	CRLNumber string `json:"crl_number,omitempty"`
 	// AKI is the authority key identifier (omitted when not present).
 	AKI string `json:"authority_key_id,omitempty"`
+}
+
+// FetchCRLInput holds parameters for FetchCRL.
+type FetchCRLInput struct {
+	// URL is the HTTP or HTTPS URL to download the CRL from.
+	URL string
+	// AllowPrivateNetworks bypasses SSRF validation for the initial URL and
+	// redirects. Set to true when the URL is user-provided (CLI), false when
+	// it comes from a certificate extension (automated revocation checking).
+	AllowPrivateNetworks bool
+}
+
+// FetchCRL downloads a CRL from an HTTP or HTTPS URL.
+// By default, the URL is validated against SSRF (literal private/loopback IPs
+// are blocked; hostnames are allowed). Set AllowPrivateNetworks to bypass this
+// for user-provided URLs.
+// The response is limited to 10 MB.
+func FetchCRL(ctx context.Context, input FetchCRLInput) ([]byte, error) {
+	if !input.AllowPrivateNetworks {
+		if err := ValidateAIAURL(input.URL); err != nil {
+			return nil, fmt.Errorf("validating CRL URL: %w", err)
+		}
+	}
+
+	const maxRedirects = 3
+	client := &http.Client{
+		Timeout: 10 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= maxRedirects {
+				return fmt.Errorf("stopped after %d redirects", maxRedirects)
+			}
+			if !input.AllowPrivateNetworks {
+				if err := ValidateAIAURL(req.URL.String()); err != nil {
+					return fmt.Errorf("redirect blocked: %w", err)
+				}
+			}
+			return nil
+		},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, input.URL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating CRL request: %w", err)
+	}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("downloading CRL from %s: %w", input.URL, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("CRL server returned HTTP %d from %s", resp.StatusCode, input.URL)
+	}
+
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // 10MB limit
+	if err != nil {
+		return nil, fmt.Errorf("reading CRL response: %w", err)
+	}
+	return data, nil
 }
 
 // ParseCRL parses a CRL from PEM or DER data. Returns the parsed
