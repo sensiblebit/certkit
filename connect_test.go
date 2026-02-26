@@ -1018,3 +1018,54 @@ func TestConnectTLS_CRL_WrongIssuer(t *testing.T) {
 		t.Errorf("CRL.Detail = %q, want substring %q", result.CRL.Detail, "signature verification failed")
 	}
 }
+
+func TestConnectTLS_CRL_Expired(t *testing.T) {
+	t.Parallel()
+
+	// An expired but validly-signed CRL should be rejected to prevent
+	// replay attacks over HTTP CRL distribution points.
+	ca := generateTestCA(t, "CRL Expired CA")
+
+	crlTemplate := &x509.RevocationList{
+		Number:     big.NewInt(1),
+		ThisUpdate: time.Now().Add(-48 * time.Hour),
+		NextUpdate: time.Now().Add(-24 * time.Hour), // expired 24h ago
+	}
+	crlDER, err := x509.CreateRevocationList(rand.Reader, crlTemplate, ca.Cert, ca.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	crlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pkix-crl")
+		_, _ = w.Write(crlDER)
+	}))
+	defer crlServer.Close()
+
+	cdpURL := strings.Replace(crlServer.URL, "127.0.0.1", "localhost", 1)
+	leaf := generateTestLeafCert(t, ca, withCRLDistributionPoints(cdpURL))
+	port := startTLSServer(t, [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	result, err := ConnectTLS(ctx, ConnectTLSInput{
+		Host:        "127.0.0.1",
+		Port:        port,
+		CheckCRL:    true,
+		DisableOCSP: true,
+	})
+	if err != nil {
+		t.Fatalf("ConnectTLS failed: %v", err)
+	}
+
+	if result.CRL == nil {
+		t.Fatal("CRL is nil")
+	}
+	if result.CRL.Status != "unavailable" {
+		t.Errorf("CRL.Status = %q, want %q (expired CRL should be rejected)", result.CRL.Status, "unavailable")
+	}
+	if !strings.Contains(result.CRL.Detail, "CRL expired") {
+		t.Errorf("CRL.Detail = %q, want substring %q", result.CRL.Detail, "CRL expired")
+	}
+}

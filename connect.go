@@ -318,7 +318,11 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 	if input.CheckCRL && len(state.PeerCertificates) >= 2 {
 		leaf := state.PeerCertificates[0]
 		issuer := state.PeerCertificates[1]
-		result.CRL = checkLeafCRL(ctx, leaf, issuer, input.CRLTimeout)
+		result.CRL = checkLeafCRL(ctx, checkLeafCRLInput{
+			Leaf:    leaf,
+			Issuer:  issuer,
+			Timeout: input.CRLTimeout,
+		})
 	} else if input.CheckCRL && len(state.PeerCertificates) == 1 {
 		result.CRL = &CRLCheckResult{
 			Status: "unavailable",
@@ -329,12 +333,22 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 	return result, nil
 }
 
+// checkLeafCRLInput holds parameters for checkLeafCRL.
+type checkLeafCRLInput struct {
+	// Leaf is the certificate to check for revocation.
+	Leaf *x509.Certificate
+	// Issuer is the issuer certificate used to verify the CRL signature.
+	Issuer *x509.Certificate
+	// Timeout is the timeout for fetching the CRL (default: 5s).
+	Timeout time.Duration
+}
+
 // checkLeafCRL fetches the first HTTP CRL distribution point and checks whether
 // the leaf certificate is revoked. The CRL signature is verified against the
 // issuer certificate. Returns a best-effort result (never nil when called, but
 // Status may be "unavailable").
-func checkLeafCRL(ctx context.Context, leaf, issuer *x509.Certificate, timeout time.Duration) *CRLCheckResult {
-	if len(leaf.CRLDistributionPoints) == 0 {
+func checkLeafCRL(ctx context.Context, input checkLeafCRLInput) *CRLCheckResult {
+	if len(input.Leaf.CRLDistributionPoints) == 0 {
 		return &CRLCheckResult{
 			Status: "unavailable",
 			Detail: "certificate has no CRL distribution points",
@@ -343,7 +357,7 @@ func checkLeafCRL(ctx context.Context, leaf, issuer *x509.Certificate, timeout t
 
 	// Find the first HTTP(S) URL.
 	var cdpURL string
-	for _, u := range leaf.CRLDistributionPoints {
+	for _, u := range input.Leaf.CRLDistributionPoints {
 		if strings.HasPrefix(u, "http://") || strings.HasPrefix(u, "https://") {
 			cdpURL = u
 			break
@@ -356,6 +370,7 @@ func checkLeafCRL(ctx context.Context, leaf, issuer *x509.Certificate, timeout t
 		}
 	}
 
+	timeout := input.Timeout
 	if timeout == 0 {
 		timeout = 5 * time.Second
 	}
@@ -382,7 +397,7 @@ func checkLeafCRL(ctx context.Context, leaf, issuer *x509.Certificate, timeout t
 		}
 	}
 
-	if err := crl.CheckSignatureFrom(issuer); err != nil {
+	if err := crl.CheckSignatureFrom(input.Issuer); err != nil {
 		slog.Debug("CRL signature verification failed", "url", cdpURL, "error", err)
 		return &CRLCheckResult{
 			Status:            "unavailable",
@@ -391,11 +406,21 @@ func checkLeafCRL(ctx context.Context, leaf, issuer *x509.Certificate, timeout t
 		}
 	}
 
-	if CRLContainsCertificate(crl, leaf) {
+	// Reject expired CRLs to prevent replay of stale data over HTTP.
+	if !crl.NextUpdate.IsZero() && time.Now().After(crl.NextUpdate) {
+		slog.Debug("CRL is expired", "url", cdpURL, "next_update", crl.NextUpdate)
+		return &CRLCheckResult{
+			Status:            "unavailable",
+			DistributionPoint: cdpURL,
+			Detail:            fmt.Sprintf("CRL expired at %s", crl.NextUpdate.UTC().Format(time.RFC3339)),
+		}
+	}
+
+	if CRLContainsCertificate(crl, input.Leaf) {
 		return &CRLCheckResult{
 			Status:            "revoked",
 			DistributionPoint: cdpURL,
-			Detail:            fmt.Sprintf("serial %s found in CRL", leaf.SerialNumber.Text(16)),
+			Detail:            fmt.Sprintf("serial %s found in CRL", input.Leaf.SerialNumber.Text(16)),
 		}
 	}
 

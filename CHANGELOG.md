@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `FetchCRL` library function for downloading CRLs from HTTP URLs with SSRF validation ([#78])
 - `connect` exits with code 2 when OCSP or CRL reports a revoked certificate ([#78])
 - `connect --crl` verifies CRL signatures against the issuer certificate — rejects CRLs signed by a different CA ([#78])
+- `connect --crl` rejects expired CRLs (past `NextUpdate`) to prevent replay of stale revocation data ([#78])
 - Add `MarshalSANExtension` for building complete SAN extensions with OtherName support (UPN, XMPP, SRV, SmtpUTF8Mailbox, arbitrary OIDs) ([#74])
 - Add `ResolveOtherNameOID` for resolving OtherName labels or dotted-decimal OID strings ([#74])
 - Add `OtherNameSAN` and `MarshalSANExtensionInput` types for OtherName SAN generation ([#74])
@@ -51,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Add 10-second HTTP client timeout to OCSP and CRL fetchers — prevents indefinite hangs during DNS/connection phases ([#78])
 - Fix `--save-db` error messages formatting `*big.Int` serial numbers with `%s` instead of calling `.String()` ([#76])
 - Fix potential panic in TLS connection handling during remote certificate fetch ([#76])
 - Fix `--save-db` silently writing incomplete SAN data when JSON encoding fails — now returns an error ([#76])

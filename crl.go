@@ -39,6 +39,7 @@ func FetchCRL(ctx context.Context, url string) ([]byte, error) {
 
 	const maxRedirects = 3
 	client := &http.Client{
+		Timeout: 10 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= maxRedirects {
 				return fmt.Errorf("stopped after %d redirects", maxRedirects)
