@@ -817,8 +817,8 @@ Initial release.
 [`3569926`]: https://github.com/sensiblebit/certkit/commit/3569926
 [#74]: https://github.com/sensiblebit/certkit/pull/74
 [#75]: https://github.com/sensiblebit/certkit/pull/75
-[#78]: https://github.com/sensiblebit/certkit/pull/78
 [#76]: https://github.com/sensiblebit/certkit/pull/76
+[#78]: https://github.com/sensiblebit/certkit/pull/78
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63

@@ -282,6 +282,12 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 		}
 	}
 
+	// No peer certificates means TLS completed without sending certs (unlikely
+	// but possible on a partially-completed handshake). Return early.
+	if len(state.PeerCertificates) == 0 {
+		return result, nil
+	}
+
 	// Resolve the issuer certificate for revocation checks.
 	// Prefer VerifiedChains (cryptographically validated) over PeerCertificates
 	// (raw server-sent, may contain duplicates or be out of order).
