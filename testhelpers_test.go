@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
@@ -271,4 +272,125 @@ func generateLeafWithSANs(t *testing.T) (*x509.Certificate, *ecdsa.PrivateKey) {
 		t.Fatal(err)
 	}
 	return cert, key
+}
+
+// testCA holds a test CA certificate and key pair.
+type testCA struct {
+	Cert    *x509.Certificate
+	CertDER []byte
+	Key     *ecdsa.PrivateKey
+}
+
+// generateTestCA creates a self-signed ECDSA P-256 CA certificate for tests.
+func generateTestCA(t *testing.T, cn string) *testCA {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: cn},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &testCA{Cert: cert, CertDER: der, Key: key}
+}
+
+// testLeafOption configures a leaf certificate created by generateTestLeafCert.
+type testLeafOption func(*x509.Certificate)
+
+// withOCSPServer sets the leaf's OCSP responder URLs.
+func withOCSPServer(urls ...string) testLeafOption {
+	return func(tmpl *x509.Certificate) { tmpl.OCSPServer = urls }
+}
+
+// withCRLDistributionPoints sets the leaf's CRL distribution points.
+func withCRLDistributionPoints(urls ...string) testLeafOption {
+	return func(tmpl *x509.Certificate) { tmpl.CRLDistributionPoints = urls }
+}
+
+// withSerial sets the leaf certificate serial number.
+func withSerial(n *big.Int) testLeafOption {
+	return func(tmpl *x509.Certificate) { tmpl.SerialNumber = n }
+}
+
+// testLeaf holds a test leaf certificate, its DER encoding, and key.
+type testLeaf struct {
+	DER []byte
+	Key *ecdsa.PrivateKey
+}
+
+// generateTestLeafCert creates a leaf certificate signed by the given CA.
+func generateTestLeafCert(t *testing.T, ca *testCA, opts ...testLeafOption) *testLeaf {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{
+		SerialNumber: randomSerial(t),
+		Subject:      pkix.Name{CommonName: "localhost"},
+		DNSNames:     []string{"localhost"},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	for _, opt := range opts {
+		opt(tmpl)
+	}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, ca.Cert, &key.PublicKey, ca.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &testLeaf{DER: der, Key: key}
+}
+
+// startTLSServer starts a TLS server with the given certificate chain (DER-encoded)
+// and private key. Returns the listener port. The server is stopped via t.Cleanup.
+func startTLSServer(t *testing.T, certChain [][]byte, key *ecdsa.PrivateKey) string {
+	t.Helper()
+	tlsCert := tls.Certificate{
+		Certificate: certChain,
+		PrivateKey:  key,
+	}
+	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		Certificates: []tls.Certificate{tlsCert},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			if tlsConn, ok := conn.(*tls.Conn); ok {
+				_ = tlsConn.Handshake()
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return port
 }

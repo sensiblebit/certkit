@@ -99,9 +99,11 @@ type ClientAuthInfo struct {
 // CRLCheckResult contains the result of a CRL revocation check during a TLS connection probe.
 type CRLCheckResult struct {
 	// Status is the check result: "good", "revoked", or "unavailable".
+	// Unlike OCSPResult's "unknown" (an explicit responder status), "unavailable"
+	// means the CRL could not be fetched, parsed, or verified.
 	Status string `json:"status"`
-	// URL is the CRL distribution point that was fetched.
-	URL string `json:"url,omitempty"`
+	// DistributionPoint is the CRL distribution point URL that was fetched.
+	DistributionPoint string `json:"distribution_point,omitempty"`
 	// Detail provides context when Status is "unavailable" (the error message)
 	// or "revoked" (the serial number).
 	Detail string `json:"detail,omitempty"`
@@ -133,9 +135,13 @@ type ConnectResult struct {
 	Diagnostics []ChainDiagnostic `json:"diagnostics,omitempty"`
 	// AIAFetched is true when missing intermediates were successfully fetched via AIA.
 	AIAFetched bool `json:"aia_fetched,omitempty"`
-	// OCSP contains the leaf certificate's OCSP revocation status (nil when unavailable or disabled).
+	// OCSP contains the leaf certificate's OCSP revocation status.
+	// Nil when OCSP is disabled, when no issuer is available (single-cert chain),
+	// or when the leaf has no OCSP responder URL. A non-nil result with Status
+	// "unavailable" means the OCSP query was attempted but failed.
 	OCSP *OCSPResult `json:"ocsp,omitempty"`
-	// CRL contains the leaf certificate's CRL revocation status (nil when not requested or unavailable).
+	// CRL contains the leaf certificate's CRL revocation status.
+	// Nil when CRL checking is not requested (CheckCRL is false).
 	CRL *CRLCheckResult `json:"crl,omitempty"`
 }
 
@@ -288,6 +294,10 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 			ocspCancel()
 			if ocspErr != nil {
 				slog.Debug("OCSP check failed", "error", ocspErr)
+				result.OCSP = &OCSPResult{
+					Status:       "unavailable",
+					ResponderURL: leaf.OCSPServer[0],
+				}
 			} else {
 				result.OCSP = ocspResult
 			}
@@ -295,18 +305,25 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 	}
 
 	// Opt-in CRL check on the leaf certificate.
-	if input.CheckCRL && len(state.PeerCertificates) > 0 {
+	if input.CheckCRL && len(state.PeerCertificates) >= 2 {
 		leaf := state.PeerCertificates[0]
-		result.CRL = checkLeafCRL(ctx, leaf, input.CRLTimeout)
+		issuer := state.PeerCertificates[1]
+		result.CRL = checkLeafCRL(ctx, leaf, issuer, input.CRLTimeout)
+	} else if input.CheckCRL && len(state.PeerCertificates) == 1 {
+		result.CRL = &CRLCheckResult{
+			Status: "unavailable",
+			Detail: "no issuer certificate available to verify CRL signature",
+		}
 	}
 
 	return result, nil
 }
 
 // checkLeafCRL fetches the first HTTP CRL distribution point and checks whether
-// the leaf certificate is revoked. Returns a best-effort result (never nil when
-// called, but Status may be "unavailable").
-func checkLeafCRL(ctx context.Context, leaf *x509.Certificate, timeout time.Duration) *CRLCheckResult {
+// the leaf certificate is revoked. The CRL signature is verified against the
+// issuer certificate. Returns a best-effort result (never nil when called, but
+// Status may be "unavailable").
+func checkLeafCRL(ctx context.Context, leaf, issuer *x509.Certificate, timeout time.Duration) *CRLCheckResult {
 	if len(leaf.CRLDistributionPoints) == 0 {
 		return &CRLCheckResult{
 			Status: "unavailable",
@@ -339,9 +356,9 @@ func checkLeafCRL(ctx context.Context, leaf *x509.Certificate, timeout time.Dura
 	if err != nil {
 		slog.Debug("CRL fetch failed", "url", cdpURL, "error", err)
 		return &CRLCheckResult{
-			Status: "unavailable",
-			URL:    cdpURL,
-			Detail: err.Error(),
+			Status:            "unavailable",
+			DistributionPoint: cdpURL,
+			Detail:            err.Error(),
 		}
 	}
 
@@ -349,23 +366,32 @@ func checkLeafCRL(ctx context.Context, leaf *x509.Certificate, timeout time.Dura
 	if err != nil {
 		slog.Debug("CRL parse failed", "url", cdpURL, "error", err)
 		return &CRLCheckResult{
-			Status: "unavailable",
-			URL:    cdpURL,
-			Detail: err.Error(),
+			Status:            "unavailable",
+			DistributionPoint: cdpURL,
+			Detail:            err.Error(),
+		}
+	}
+
+	if err := crl.CheckSignatureFrom(issuer); err != nil {
+		slog.Debug("CRL signature verification failed", "url", cdpURL, "error", err)
+		return &CRLCheckResult{
+			Status:            "unavailable",
+			DistributionPoint: cdpURL,
+			Detail:            fmt.Sprintf("CRL signature verification failed: %v", err),
 		}
 	}
 
 	if CRLContainsCertificate(crl, leaf) {
 		return &CRLCheckResult{
-			Status: "revoked",
-			URL:    cdpURL,
-			Detail: fmt.Sprintf("serial %s found in CRL", leaf.SerialNumber.Text(16)),
+			Status:            "revoked",
+			DistributionPoint: cdpURL,
+			Detail:            fmt.Sprintf("serial %s found in CRL", leaf.SerialNumber.Text(16)),
 		}
 	}
 
 	return &CRLCheckResult{
-		Status: "good",
-		URL:    cdpURL,
+		Status:            "good",
+		DistributionPoint: cdpURL,
 	}
 }
 
@@ -454,6 +480,8 @@ func FormatConnectResult(r *ConnectResult) string {
 				detail += ", reason: " + *r.OCSP.RevocationReason
 			}
 			fmt.Fprintf(&out, "OCSP:         %s\n", detail)
+		case "unavailable":
+			fmt.Fprintf(&out, "OCSP:         unavailable (%s)\n", r.OCSP.ResponderURL)
 		default:
 			fmt.Fprintf(&out, "OCSP:         %s\n", r.OCSP.Status)
 		}
@@ -462,7 +490,7 @@ func FormatConnectResult(r *ConnectResult) string {
 	if r.CRL != nil {
 		switch r.CRL.Status {
 		case "good":
-			fmt.Fprintf(&out, "CRL:          good (%s)\n", r.CRL.URL)
+			fmt.Fprintf(&out, "CRL:          good (%s)\n", r.CRL.DistributionPoint)
 		case "revoked":
 			fmt.Fprintf(&out, "CRL:          revoked (%s)\n", r.CRL.Detail)
 		case "unavailable":

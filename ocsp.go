@@ -54,6 +54,10 @@ func CheckOCSP(ctx context.Context, input CheckOCSPInput) (*OCSPResult, error) {
 
 	responderURL := input.Cert.OCSPServer[0]
 
+	if err := ValidateAIAURL(responderURL); err != nil {
+		return nil, fmt.Errorf("validating OCSP responder URL: %w", err)
+	}
+
 	reqBytes, err := ocsp.CreateRequest(input.Cert, input.Issuer, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating OCSP request: %w", err)
@@ -65,7 +69,18 @@ func CheckOCSP(ctx context.Context, input CheckOCSPInput) (*OCSPResult, error) {
 	}
 	httpReq.Header.Set("Content-Type", "application/ocsp-request")
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	const maxRedirects = 3
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= maxRedirects {
+				return fmt.Errorf("stopped after %d redirects", maxRedirects)
+			}
+			if err := ValidateAIAURL(req.URL.String()); err != nil {
+				return fmt.Errorf("redirect blocked: %w", err)
+			}
+			return nil
+		},
+	}
 	httpResp, err := client.Do(httpReq)
 	if err != nil {
 		return nil, fmt.Errorf("querying OCSP responder %s: %w", responderURL, err)

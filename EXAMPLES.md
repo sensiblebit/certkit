@@ -168,7 +168,7 @@ Connect to a server and see its certificate chain, negotiated protocol, and ciph
 certkit connect example.com
 ```
 
-certkit shows the full chain with trust status, client auth requirements, and ALPN protocol. Missing intermediates are fetched via AIA automatically. OCSP revocation status is checked on the leaf certificate (best-effort -- if the responder is unavailable, it's silently skipped).
+certkit shows the full chain with trust status, client auth requirements, and ALPN protocol. Missing intermediates are fetched via AIA automatically. OCSP revocation status is checked on the leaf certificate (best-effort -- if the responder is unavailable, the output shows "OCSP: unavailable").
 
 To also check CRL distribution points:
 

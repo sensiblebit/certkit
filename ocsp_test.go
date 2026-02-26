@@ -105,7 +105,7 @@ func TestCheckOCSP_MockResponse(t *testing.T) {
 				Subject:      pkix.Name{CommonName: "ocsp-test.example.com"},
 				NotBefore:    time.Now().Add(-time.Hour),
 				NotAfter:     time.Now().Add(24 * time.Hour),
-				OCSPServer:   []string{server.URL},
+				OCSPServer:   []string{strings.Replace(server.URL, "127.0.0.1", "localhost", 1)},
 			}
 			leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, ca, &leafKey.PublicKey, caKey)
 			if err != nil {
@@ -144,8 +144,9 @@ func TestCheckOCSP_MockResponse(t *testing.T) {
 					t.Errorf("reason = %q, want %q", *result.RevocationReason, tc.wantReason)
 				}
 			}
-			if result.ResponderURL != server.URL {
-				t.Errorf("ResponderURL = %q, want %q", result.ResponderURL, server.URL)
+			wantURL := strings.Replace(server.URL, "127.0.0.1", "localhost", 1)
+			if result.ResponderURL != wantURL {
+				t.Errorf("ResponderURL = %q, want %q", result.ResponderURL, wantURL)
 			}
 		})
 	}

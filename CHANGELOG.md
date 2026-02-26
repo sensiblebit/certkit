@@ -9,10 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `connect` automatically checks OCSP revocation status on the leaf certificate (best-effort; silent on failure)
+- `connect` automatically checks OCSP revocation status on the leaf certificate (best-effort; shows "unavailable" on failure)
 - Add `--crl` flag to `connect` for opt-in CRL revocation checking via distribution points
-- Add `FetchCRL` library function for downloading CRLs from HTTP URLs
+- Add `FetchCRL` library function for downloading CRLs from HTTP URLs with SSRF validation
 - `connect` exits with code 2 when OCSP or CRL reports a revoked certificate
+- `connect --crl` verifies CRL signatures against the issuer certificate — rejects CRLs signed by a different CA
 - Add `MarshalSANExtension` for building complete SAN extensions with OtherName support (UPN, XMPP, SRV, SmtpUTF8Mailbox, arbitrary OIDs) ([#74])
 - Add `ResolveOtherNameOID` for resolving OtherName labels or dotted-decimal OID strings ([#74])
 - Add `OtherNameSAN` and `MarshalSANExtensionInput` types for OtherName SAN generation ([#74])
@@ -40,7 +41,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** Rename `CRLCheckResult.URL` to `CRLCheckResult.DistributionPoint` (JSON: `distribution_point`) for accuracy and CLI-4 consistency
 - Improve error messages when AIA certificate fetching fails — errors now include the URL and operation context ([#76])
+
+### Security
+
+- Add SSRF validation (`ValidateAIAURL`) to OCSP responder URLs and CRL distribution point URLs — previously only AIA certificate URLs were validated
+- Add `CheckRedirect` handlers to OCSP and CRL HTTP clients — prevents redirect-based SSRF bypass to internal networks
 
 ### Fixed
 

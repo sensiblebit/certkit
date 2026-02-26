@@ -215,6 +215,8 @@ func formatConnectVerbose(r *certkit.ConnectResult, now time.Time) string {
 				detail += ", reason: " + *r.OCSP.RevocationReason
 			}
 			fmt.Fprintf(&out, "OCSP:         %s\n", detail)
+		case "unavailable":
+			fmt.Fprintf(&out, "OCSP:         unavailable (%s)\n", r.OCSP.ResponderURL)
 		default:
 			fmt.Fprintf(&out, "OCSP:         %s\n", r.OCSP.Status)
 		}
@@ -223,7 +225,7 @@ func formatConnectVerbose(r *certkit.ConnectResult, now time.Time) string {
 	if r.CRL != nil {
 		switch r.CRL.Status {
 		case "good":
-			fmt.Fprintf(&out, "CRL:          good (%s)\n", r.CRL.URL)
+			fmt.Fprintf(&out, "CRL:          good (%s)\n", r.CRL.DistributionPoint)
 		case "revoked":
 			fmt.Fprintf(&out, "CRL:          revoked (%s)\n", r.CRL.Detail)
 		case "unavailable":

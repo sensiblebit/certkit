@@ -30,9 +30,25 @@ type CRLInfo struct {
 }
 
 // FetchCRL downloads a CRL from an HTTP or HTTPS URL.
+// The URL is validated against SSRF (private/loopback IPs are blocked).
 // The response is limited to 10 MB.
 func FetchCRL(ctx context.Context, url string) ([]byte, error) {
-	client := &http.Client{Timeout: 10 * time.Second}
+	if err := ValidateAIAURL(url); err != nil {
+		return nil, fmt.Errorf("validating CRL URL: %w", err)
+	}
+
+	const maxRedirects = 3
+	client := &http.Client{
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= maxRedirects {
+				return fmt.Errorf("stopped after %d redirects", maxRedirects)
+			}
+			if err := ValidateAIAURL(req.URL.String()); err != nil {
+				return fmt.Errorf("redirect blocked: %w", err)
+			}
+			return nil
+		},
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating CRL request: %w", err)
