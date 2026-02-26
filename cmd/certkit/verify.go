@@ -55,8 +55,8 @@ func init() {
 	verifyCmd.Flags().StringVar(&verifyTrustStore, "trust-store", "mozilla", "Trust store for chain validation: system, mozilla")
 	verifyCmd.Flags().StringVar(&verifyFormat, "format", "text", "Output format: text or json")
 	verifyCmd.Flags().BoolVar(&verifyDiagnose, "diagnose", false, "Show diagnostics when verification fails")
-	verifyCmd.Flags().BoolVar(&verifyOCSP, "ocsp", false, "Check OCSP revocation status (requires network)")
-	verifyCmd.Flags().BoolVar(&verifyCRL, "crl", false, "Check CRL distribution points for revocation (requires network)")
+	verifyCmd.Flags().BoolVar(&verifyOCSP, "ocsp", false, "Check OCSP revocation status (requires network and valid chain)")
+	verifyCmd.Flags().BoolVar(&verifyCRL, "crl", false, "Check CRL distribution points for revocation (requires network and valid chain)")
 
 	registerCompletion(verifyCmd, completionInput{"format", fixedCompletion("text", "json")})
 	registerCompletion(verifyCmd, completionInput{"trust-store", fixedCompletion("system", "mozilla")})

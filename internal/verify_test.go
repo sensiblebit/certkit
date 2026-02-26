@@ -580,3 +580,148 @@ func TestFormatDiagnoses(t *testing.T) {
 		t.Error("output missing [OK] marker")
 	}
 }
+
+func TestVerifyCert_OCSPSkippedNoURL(t *testing.T) {
+	// WHY: When CheckOCSP=true but the certificate has no OCSP responder URL,
+	// the result should show "skipped" rather than failing or returning nil.
+	t.Parallel()
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "no-ocsp.example.com", []string{"no-ocsp.example.com"}, nil)
+
+	result, err := VerifyCert(context.Background(), &VerifyInput{
+		Cert:        leaf.cert,
+		CheckChain:  true,
+		TrustStore:  "custom",
+		CustomRoots: []*x509.Certificate{ca.cert},
+		CheckOCSP:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.OCSP == nil {
+		t.Fatal("expected OCSP result when CheckOCSP=true")
+	}
+	if result.OCSP.Status != "skipped" {
+		t.Errorf("OCSP.Status = %q, want %q", result.OCSP.Status, "skipped")
+	}
+	if !strings.Contains(result.OCSP.Detail, "no OCSP responder URL") {
+		t.Errorf("OCSP.Detail = %q, want substring about no OCSP URL", result.OCSP.Detail)
+	}
+}
+
+func TestVerifyCert_CRLSkippedNoCDP(t *testing.T) {
+	// WHY: When CheckCRL=true but the certificate has no CRL distribution points,
+	// the result should show "unavailable" with an explanation.
+	t.Parallel()
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "no-cdp.example.com", []string{"no-cdp.example.com"}, nil)
+
+	result, err := VerifyCert(context.Background(), &VerifyInput{
+		Cert:        leaf.cert,
+		CheckChain:  true,
+		TrustStore:  "custom",
+		CustomRoots: []*x509.Certificate{ca.cert},
+		CheckCRL:    true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.CRL == nil {
+		t.Fatal("expected CRL result when CheckCRL=true")
+	}
+	if result.CRL.Status != "unavailable" {
+		t.Errorf("CRL.Status = %q, want %q", result.CRL.Status, "unavailable")
+	}
+	if !strings.Contains(result.CRL.Detail, "no CRL distribution points") {
+		t.Errorf("CRL.Detail = %q, want substring about no CDPs", result.CRL.Detail)
+	}
+}
+
+func TestVerifyCert_RevocationSkippedInvalidChain(t *testing.T) {
+	// WHY: When the chain is invalid, revocation checks must not run (no issuer
+	// to verify signatures against). OCSP/CRL should be nil (not populated at all).
+	t.Parallel()
+	ca := newRSACA(t)
+	wrongCA := newRSACA(t)
+	leaf := newRSALeaf(t, wrongCA, "wrong-chain.example.com", []string{"wrong-chain.example.com"}, nil)
+
+	result, err := VerifyCert(context.Background(), &VerifyInput{
+		Cert:        leaf.cert,
+		CheckChain:  true,
+		TrustStore:  "custom",
+		CustomRoots: []*x509.Certificate{ca.cert},
+		CheckOCSP:   true,
+		CheckCRL:    true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ChainValid == nil || *result.ChainValid {
+		t.Fatal("expected chain to be invalid")
+	}
+	if result.OCSP != nil {
+		t.Errorf("expected OCSP to be nil when chain is invalid, got %+v", result.OCSP)
+	}
+	if result.CRL != nil {
+		t.Errorf("expected CRL to be nil when chain is invalid, got %+v", result.CRL)
+	}
+}
+
+func TestVerifyCert_RevocationNilWhenDisabled(t *testing.T) {
+	// WHY: When CheckOCSP and CheckCRL are both false (defaults), the OCSP and
+	// CRL fields must be nil so they don't appear in JSON output.
+	t.Parallel()
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "default.example.com", []string{"default.example.com"}, nil)
+
+	result, err := VerifyCert(context.Background(), &VerifyInput{
+		Cert:        leaf.cert,
+		CheckChain:  true,
+		TrustStore:  "custom",
+		CustomRoots: []*x509.Certificate{ca.cert},
+		CheckOCSP:   false,
+		CheckCRL:    false,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.OCSP != nil {
+		t.Errorf("expected OCSP to be nil when disabled, got %+v", result.OCSP)
+	}
+	if result.CRL != nil {
+		t.Errorf("expected CRL to be nil when disabled, got %+v", result.CRL)
+	}
+}
+
+func TestFormatVerifyOCSPAndCRL(t *testing.T) {
+	// WHY: formatVerifyOCSP and formatVerifyCRL must produce output that aligns
+	// with the verify command's label style and covers all status branches.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "fmt.example.com", []string{"fmt.example.com"}, nil)
+
+	// Test OCSP skipped output appears in formatted result.
+	result, err := VerifyCert(context.Background(), &VerifyInput{
+		Cert:        leaf.cert,
+		CheckChain:  true,
+		TrustStore:  "custom",
+		CustomRoots: []*x509.Certificate{ca.cert},
+		CheckOCSP:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	output := FormatVerifyResult(result)
+	if !strings.Contains(output, "OCSP:") {
+		t.Errorf("formatted output missing OCSP line\ngot:\n%s", output)
+	}
+	if !strings.Contains(output, "skipped") {
+		t.Errorf("formatted output missing 'skipped' status\ngot:\n%s", output)
+	}
+	// CRL should not appear when not requested.
+	if strings.Contains(output, "CRL:") {
+		t.Errorf("formatted output should not contain CRL when not requested\ngot:\n%s", output)
+	}
+}

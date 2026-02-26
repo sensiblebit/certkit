@@ -59,6 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `verify --ocsp` revocation error now includes revocation time and reason instead of a generic "certificate is revoked (OCSP)" message ([#78])
 - Add 10-second HTTP client timeout to OCSP and CRL fetchers — prevents indefinite hangs during DNS/connection phases ([#78])
 - Fix `--save-db` error messages formatting `*big.Int` serial numbers with `%s` instead of calling `.String()` ([#76])
 - Fix potential panic in TLS connection handling during remote certificate fetch ([#76])
@@ -117,6 +118,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Tests
 
+- Add `TestFetchCRL` unit tests for HTTP handling, redirect limits, SSRF blocking, and error paths ([#78])
+- Add `TestCheckLeafCRL` table-driven tests covering revoked, good, expired CRL, wrong issuer, no CDPs, and non-HTTP CDPs ([#78])
+- Add `TestVerifyCert_OCSP*` and `TestVerifyCert_CRL*` tests for `verify --ocsp`/`--crl` code paths — skipped, unavailable, disabled, and chain-invalid scenarios ([#78])
+- Add `TestFormatCRLLine` covering all status branches including unknown fallback ([#78])
 - Add `TestFindAllKeyLeafPairs` and `TestBuildChainFromPool` tests for `convert --key` matching logic — single/multi match, nil certs, CA fallback, leaf priority, chain building, cycle termination ([#75])
 - Fix `TestConnectTLS_AIAFetch` false positive — add atomic request counter to verify AIA HTTP server is actually contacted ([#75])
 - Strengthen `TestEncodeJKSEntries` round-trip assertions — verify cert CN identity survives encode/decode ([#75])

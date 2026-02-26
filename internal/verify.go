@@ -160,7 +160,14 @@ func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) 
 			if input.CheckOCSP {
 				result.OCSP = checkVerifyOCSP(ctx, cert, issuer)
 				if result.OCSP.Status == "revoked" {
-					result.Errors = append(result.Errors, "certificate is revoked (OCSP)")
+					msg := "certificate is revoked (OCSP)"
+					if result.OCSP.RevokedAt != nil {
+						msg += " at " + *result.OCSP.RevokedAt
+					}
+					if result.OCSP.RevocationReason != nil {
+						msg += ", reason: " + *result.OCSP.RevocationReason
+					}
+					result.Errors = append(result.Errors, msg)
 				}
 			}
 			if input.CheckCRL {
@@ -169,7 +176,7 @@ func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) 
 					Issuer: issuer,
 				})
 				if result.CRL.Status == "revoked" {
-					result.Errors = append(result.Errors, "certificate is revoked (CRL)")
+					result.Errors = append(result.Errors, fmt.Sprintf("certificate is revoked (CRL, %s)", result.CRL.Detail))
 				}
 			}
 		} else {
