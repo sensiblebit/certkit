@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fix `convert` hard-failing on key-only PEM input — PEM output now allows key-only conversions without requiring a certificate ([#75])
+- Fix `connect` fingerprint using lowercase hex without colons instead of OpenSSL-style colon-separated format — now uses `CertFingerprintColonSHA256` for consistency with `inspect` and `verify` ([#75])
+- Fix `verify --diagnose` running chain diagnostics on non-chain errors (key mismatch, expiry warnings) — now gates on `chain_valid == false` only ([#75])
+- Fix silent `continue` in `connect` mTLS CA DN parsing when `asn1.Unmarshal` fails — now logs with `slog.Debug` (ERR-5) ([#75])
 - Fix `convert --key` only using first key from multi-key PEM file and including all certs in output — now matches the key to its leaf certificate and extracts only the chain for that leaf
 - Fix AIA proxy rejecting `cacerts.geotrust.com` and `cacerts.thawte.com` — consolidate all per-host CA entries into suffix matches for broader coverage of CA subdomains
 - Fix `marshalOtherNameGN` encoding non-SRV OtherName values as PrintableString instead of UTF8String ([#74])

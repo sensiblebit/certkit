@@ -146,9 +146,13 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 		InsecureSkipVerify: true, //nolint:gosec // We do our own verification below.
 		GetClientCertificate: func(cri *tls.CertificateRequestInfo) (*tls.Certificate, error) {
 			info := &ClientAuthInfo{Requested: true}
-			for _, rawDN := range cri.AcceptableCAs {
+			for i, rawDN := range cri.AcceptableCAs {
 				var rdnSeq pkix.RDNSequence
 				if _, err := asn1.Unmarshal(rawDN, &rdnSeq); err != nil {
+					slog.Debug("failed to unmarshal acceptable CA DN",
+						slog.Int("index", i),
+						slog.Any("error", err),
+					)
 					continue
 				}
 				var name pkix.Name
@@ -346,7 +350,7 @@ func FormatConnectResult(r *ConnectResult) string {
 		fmt.Fprintf(&out, "     Issuer:      %s\n", FormatDN(cert.Issuer))
 		fmt.Fprintf(&out, "     Not Before:  %s\n", cert.NotBefore.UTC().Format(time.RFC3339))
 		fmt.Fprintf(&out, "     Not After:   %s\n", cert.NotAfter.UTC().Format(time.RFC3339))
-		fmt.Fprintf(&out, "     Fingerprint: %s\n", CertFingerprint(cert))
+		fmt.Fprintf(&out, "     Fingerprint: %s\n", CertFingerprintColonSHA256(cert))
 		if len(cert.DNSNames) > 0 {
 			fmt.Fprintf(&out, "     SANs:        %s\n", strings.Join(cert.DNSNames, ", "))
 		}

@@ -125,8 +125,9 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("verifying certificate: %w", err)
 	}
 
-	// Compute diagnoses before output so JSON emits a single object
-	if verifyDiagnose && len(result.Errors) > 0 {
+	// Compute diagnoses only when the chain itself is invalid — not for
+	// unrelated errors like key mismatch or expiry warnings.
+	if verifyDiagnose && result.ChainValid != nil && !*result.ChainValid {
 		result.Diagnoses = internal.DiagnoseChain(internal.DiagnoseChainInput{
 			Cert:       contents.Leaf,
 			ExtraCerts: contents.ExtraCerts,

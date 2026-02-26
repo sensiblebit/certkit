@@ -110,7 +110,15 @@ func runConvert(cmd *cobra.Command, args []string) error {
 	allCerts = append(allCerts, contents.ExtraCerts...)
 
 	if len(allCerts) == 0 {
-		return fmt.Errorf("no certificates found in %s", args[0])
+		switch convertTo {
+		case "pem":
+			// Allow key-only PEM conversions when a private key is present
+			if contents.Key == nil {
+				return fmt.Errorf("no certificates or keys found in %s", args[0])
+			}
+		default:
+			return fmt.Errorf("no certificates found in %s", args[0])
+		}
 	}
 
 	isBinary := convertTo == "p12" || convertTo == "jks" || convertTo == "der" || convertTo == "p7b"
