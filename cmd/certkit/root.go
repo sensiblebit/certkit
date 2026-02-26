@@ -10,6 +10,7 @@ var (
 	passwordList []string
 	passwordFile string
 	allowExpired bool
+	verbose      bool
 )
 
 var rootCmd = &cobra.Command{
@@ -29,6 +30,7 @@ func init() {
 	rootCmd.PersistentFlags().StringSliceVarP(&passwordList, "passwords", "p", nil, "Comma-separated passwords for encrypted keys")
 	rootCmd.PersistentFlags().StringVar(&passwordFile, "password-file", "", "File containing passwords, one per line")
 	rootCmd.PersistentFlags().BoolVar(&allowExpired, "allow-expired", false, "Include expired certificates")
+	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Show detailed output")
 
 	registerCompletion(rootCmd, completionInput{"log-level", fixedCompletion("debug", "info", "warn", "error")})
 
@@ -38,4 +40,9 @@ func init() {
 	rootCmd.AddCommand(verifyCmd)
 	rootCmd.AddCommand(keygenCmd)
 	rootCmd.AddCommand(csrCmd)
+	rootCmd.AddCommand(convertCmd)
+	rootCmd.AddCommand(signCmd)
+	rootCmd.AddCommand(connectCmd)
+	rootCmd.AddCommand(ocspCmd)
+	rootCmd.AddCommand(crlCmd)
 }

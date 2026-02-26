@@ -274,11 +274,24 @@ func runScan(cmd *cobra.Command, args []string) error {
 		})
 		switch scanFormat {
 		case "json":
-			data, err := json.MarshalIndent(summary, "", "  ")
-			if err != nil {
-				return fmt.Errorf("marshaling JSON: %w", err)
+			if verbose {
+				verboseOutput := scanVerboseJSON{
+					ScanSummary:  summary,
+					Certificates: buildScanCertList(store),
+					Keys:         buildScanKeyList(store),
+				}
+				data, err := json.MarshalIndent(verboseOutput, "", "  ")
+				if err != nil {
+					return fmt.Errorf("marshaling JSON: %w", err)
+				}
+				fmt.Println(string(data))
+			} else {
+				data, err := json.MarshalIndent(summary, "", "  ")
+				if err != nil {
+					return fmt.Errorf("marshaling JSON: %w", err)
+				}
+				fmt.Println(string(data))
 			}
-			fmt.Println(string(data))
 		case "text":
 			total := summary.Roots + summary.Intermediates + summary.Leaves
 			fmt.Printf("\nFound %d certificate(s) and %d key(s)\n", total, summary.Keys)
@@ -293,6 +306,9 @@ func runScan(cmd *cobra.Command, args []string) error {
 			if summary.Keys > 0 {
 				fmt.Printf("  Key-cert pairs: %d\n", summary.Matched)
 			}
+			if verbose {
+				printScanVerboseText(store)
+			}
 		default:
 			return fmt.Errorf("unsupported output format %q (use text or json)", scanFormat)
 		}
@@ -305,6 +321,109 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+// scanCertEntry holds per-certificate details for verbose scan output.
+type scanCertEntry struct {
+	Subject   string `json:"subject"`
+	CertType  string `json:"cert_type"`
+	NotBefore string `json:"not_before"`
+	NotAfter  string `json:"not_after"`
+	Expired   bool   `json:"expired"`
+	KeyAlgo   string `json:"key_algorithm"`
+	KeySize   string `json:"key_size"`
+	SigAlg    string `json:"signature_algorithm"`
+	SKI       string `json:"subject_key_id,omitempty"`
+	Source    string `json:"source,omitempty"`
+}
+
+// scanKeyEntry holds per-key details for verbose scan output.
+type scanKeyEntry struct {
+	KeyType string `json:"key_type"`
+	Size    string `json:"key_size"`
+	SKI     string `json:"subject_key_id,omitempty"`
+	Source  string `json:"source,omitempty"`
+}
+
+// scanVerboseJSON wraps the scan summary with per-cert and per-key details.
+type scanVerboseJSON struct {
+	certstore.ScanSummary
+	Certificates []scanCertEntry `json:"certificates"`
+	Keys         []scanKeyEntry  `json:"keys"`
+}
+
+func buildScanCertList(store *certstore.MemStore) []scanCertEntry {
+	now := time.Now()
+	certs := store.AllCertsFlat()
+	entries := make([]scanCertEntry, 0, len(certs))
+	for _, rec := range certs {
+		c := rec.Cert
+		entries = append(entries, scanCertEntry{
+			Subject:   certkit.FormatDN(c.Subject),
+			CertType:  rec.CertType,
+			NotBefore: c.NotBefore.UTC().Format(time.RFC3339),
+			NotAfter:  c.NotAfter.UTC().Format(time.RFC3339),
+			Expired:   now.After(c.NotAfter),
+			KeyAlgo:   certkit.PublicKeyAlgorithmName(c.PublicKey),
+			KeySize:   publicKeySize(c.PublicKey),
+			SigAlg:    c.SignatureAlgorithm.String(),
+			SKI:       certkit.CertSKIEmbedded(c),
+			Source:    rec.Source,
+		})
+	}
+	return entries
+}
+
+func buildScanKeyList(store *certstore.MemStore) []scanKeyEntry {
+	keys := store.AllKeysFlat()
+	entries := make([]scanKeyEntry, 0, len(keys))
+	for _, rec := range keys {
+		entries = append(entries, scanKeyEntry{
+			KeyType: rec.KeyType,
+			Size:    fmt.Sprintf("%d", rec.BitLength),
+			SKI:     rec.SKI,
+			Source:  rec.Source,
+		})
+	}
+	return entries
+}
+
+func printScanVerboseText(store *certstore.MemStore) {
+	now := time.Now()
+	certs := store.AllCertsFlat()
+	if len(certs) > 0 {
+		fmt.Printf("\nCertificates:\n")
+		for _, rec := range certs {
+			c := rec.Cert
+			expired := ""
+			if now.After(c.NotAfter) {
+				expired = " [EXPIRED]"
+			}
+			fmt.Printf("  %s (%s)%s\n", certkit.FormatDN(c.Subject), rec.CertType, expired)
+			fmt.Printf("    Not After:  %s\n", c.NotAfter.UTC().Format(time.RFC3339))
+			fmt.Printf("    Key:        %s %s\n", certkit.PublicKeyAlgorithmName(c.PublicKey), publicKeySize(c.PublicKey))
+			fmt.Printf("    Signature:  %s\n", c.SignatureAlgorithm)
+			if ski := certkit.CertSKIEmbedded(c); ski != "" {
+				fmt.Printf("    SKI:        %s\n", ski)
+			}
+			if rec.Source != "" {
+				fmt.Printf("    Source:     %s\n", rec.Source)
+			}
+		}
+	}
+	keys := store.AllKeysFlat()
+	if len(keys) > 0 {
+		fmt.Printf("\nKeys:\n")
+		for _, rec := range keys {
+			fmt.Printf("  %s %d bits\n", rec.KeyType, rec.BitLength)
+			if rec.SKI != "" {
+				fmt.Printf("    SKI:    %s\n", rec.SKI)
+			}
+			if rec.Source != "" {
+				fmt.Printf("    Source: %s\n", rec.Source)
+			}
+		}
+	}
 }
 
 // aiaHTTPClient is reused across AIA fetches to enable TCP connection reuse.

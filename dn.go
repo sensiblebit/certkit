@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -480,6 +481,23 @@ func ParseOtherNameSANs(extensions []pkix.Extension) []string {
 		return parseOtherNamesFromSANBytes(ext.Value)
 	}
 	return nil
+}
+
+// CollectCertificateSANs returns all Subject Alternative Names from a
+// certificate: DNS names, IP addresses, email addresses, URIs, and OtherName
+// extensions. This is the canonical SAN aggregation used across all CLI
+// commands for CLI-4 consistency.
+func CollectCertificateSANs(cert *x509.Certificate) []string {
+	sans := slices.Clone(cert.DNSNames)
+	for _, ip := range cert.IPAddresses {
+		sans = append(sans, ip.String())
+	}
+	sans = append(sans, cert.EmailAddresses...)
+	for _, uri := range cert.URIs {
+		sans = append(sans, uri.String())
+	}
+	sans = append(sans, ParseOtherNameSANs(cert.Extensions)...)
+	return sans
 }
 
 func parseOtherNamesFromSANBytes(raw []byte) []string {

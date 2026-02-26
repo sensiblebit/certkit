@@ -7,19 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Added
-
-- Add `MarshalSANExtension` for building complete SAN extensions with OtherName support (UPN, XMPP, SRV, SmtpUTF8Mailbox, arbitrary OIDs) ([#74])
-- Add `ResolveOtherNameOID` for resolving OtherName labels or dotted-decimal OID strings ([#74])
-- Add `OtherNameSAN` and `MarshalSANExtensionInput` types for OtherName SAN generation ([#74])
-- Add `other_names` field to `CSRTemplate` for mTLS user identity certificate CSRs ([#74])
-- Add OtherName SAN preservation in `GenerateCSRFromCSR` — string-typed OtherName entries survive CSR-to-CSR key rotation; binary-typed OtherNames are silently skipped ([#74])
-- Add `ErrUnknownOtherNameType` sentinel error for invalid OtherName type strings ([#74])
-- Add `ErrEmptySANExtension` sentinel error for empty SAN extension input ([#74])
-- Add `aia_fetched` field to inspect results and "via aia" badge in web UI for AIA-fetched certificates ([#73])
-
 ### Fixed
 
+- Fix `buildChainFromPool` infinite loop on circular issuer chains — add visited-set cycle guard ([#75])
+- Fix `convert --key` P12 multi-match and key-mismatch errors returning exit code 1 instead of 2 — wrap in `ValidationError` (CLI-6) ([#75])
+- Fix `convert --key` duplicating `ParsePEMPrivateKeys` logic via internal `parseKeyBlocks` — consolidate to shared library function ([#75])
+- Fix `ParsePEMPrivateKeys` missing `ENCRYPTED PRIVATE KEY` PEM block type — PKCS#8 encrypted keys are now recognized ([#75])
+- Fix `convert --key` error reporting nil certificates in match count — now filters nil entries ([#75])
+- Fix `convert --key` constructing `[nil, ...]` certificate slice when input has no leaf — filter nil before passing to matcher ([#75])
+- Fix `convert` hard-failing on key-only PEM input — PEM output now allows key-only conversions without requiring a certificate ([#75])
+- Fix `connect` fingerprint using lowercase hex without colons instead of OpenSSL-style colon-separated format — now uses `CertFingerprintColonSHA256` for consistency with `inspect` and `verify` ([#75])
+- Fix `connect` JSON `sans` field containing only DNS names instead of all SAN types — now uses `CollectCertificateSANs` for CLI-4 consistency with `inspect` and `verify` ([#75])
+- **Breaking:** Rename `CRLContainsCert` to `CRLContainsCertificate` — exported function names must not abbreviate per CS-2 ([#75])
+- Fix `verify --diagnose` running chain diagnostics on non-chain errors (key mismatch, expiry warnings) — now gates on `chain_valid == false` only ([#75])
+- Fix silent `continue` in `connect` mTLS CA DN parsing when `asn1.Unmarshal` fails — now logs with `slog.Debug` (ERR-5) ([#75])
+- Fix `convert --key` only using first key from multi-key PEM file and including all certs in output — now matches the key to its leaf certificate and extracts only the chain for that leaf
 - Fix AIA proxy rejecting `cacerts.geotrust.com` and `cacerts.thawte.com` — consolidate all per-host CA entries into suffix matches for broader coverage of CA subdomains
 - Fix `marshalOtherNameGN` encoding non-SRV OtherName values as PrintableString instead of UTF8String ([#74])
 - Fix `MarshalSANExtension` accepting nil URI entries and invalid IP addresses without validation ([#74])
@@ -34,9 +36,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix `marshalOtherNameGN` accepting non-ASCII SRV OtherName values — validate IA5String before encoding ([#74])
 - Fix `ResolveOtherNameOID` returning mutable reference to global `otherNameOIDs` map — return a defensive copy ([#74])
 - Fix camelCase `otherName` in error strings — use lowercase `othername` per ERR-4 ([#74])
+- Fix bare `return err` without context wrapping (ERR-1) in `sign`, `convert`, `crl`, and `connect` commands ([#75])
+- Fix `verify --diagnose --format json` emitting two JSON objects to stdout — diagnoses are now embedded in the verify result (CLI-7) ([#75])
+- Fix `CRLInfo` and `OCSPResult` time fields marshaling as RFC3339Nano instead of RFC3339 — change to pre-formatted strings (CLI-5) ([#75])
+- Fix misleading "Defaults to true" doc comments on `SelfSignedInput.IsCA` and `SignCSRInput.CopySANs` — Go zero value is false; the CLI sets defaults ([#75])
+- Fix unused `DiagnoseChainInput.TrustStore` field — remove dead field and fix self-signed diagnostic message ([#75])
+- Fix misleading `issuer` variable name in `ocsp` command — rename to `ocspInput` to match its `*CheckOCSPInput` type ([#75])
+- Fix `formatConvertOutput` taking 4 positional args — extract into `formatConvertInput` struct (CS-5) ([#75])
+- Fix `connect` command JSON using `CommonName` for subject/issuer while other commands use full DN — now uses `FormatDN` for CLI-4 consistency ([#75])
+- Fix `FormatConnectResult` SANs formatted with `%v` instead of `strings.Join` — now matches other command output style ([#75])
+- Fix custom `contains`/`searchString` test helpers reimplementing `strings.Contains` — replace with stdlib ([#75])
+- Fix `parseHostPort` mis-parsing trailing colon (`host:`) and double-bracketing bare IPv6 (`[::1]`) addresses ([#75])
+- Fix `convert` command error message saying `--p12` instead of referencing the `--to` format flag ([#75])
+- Fix `verify` command nil panic when input file contains only a key and no certificate ([#75])
+- Fix `DiagnoseChain` nil panic when called with nil certificate ([#75])
+- Fix `formatConvertOutput` returning unwrapped errors from PKCS#12, JKS, and PKCS#7 encoding (ERR-1) ([#75])
+- Fix `DiagnoseChain` using bare `CommonName` instead of `FormatDN` in intermediate-expired and missing-intermediate diagnostics — now shows full DN for CLI-4 consistency ([#75])
+- Fix verbose `connect` output using `cert.DNSNames` instead of `CollectCertificateSANs` for SANs — now includes all SAN types for CLI-4 consistency ([#75])
+- Fix `connect` command JSON using `fingerprint_sha256`, `type`, and `dns_names` field names instead of codebase-standard `sha256_fingerprint`, `cert_type`, and `sans` (CLI-4) ([#75])
+- Fix `convert` command performing encoding before checking if `-o` is required for binary formats — binary format error is now returned immediately ([#75])
+- Fix `crl --check` verdict written to stderr instead of stdout (CLI-1) and absent from JSON output (CLI-3) — check result now included as `check_result` in JSON and printed to stdout in text mode ([#75])
+
+### Added
+
+- Add `MarshalSANExtension` for building complete SAN extensions with OtherName support (UPN, XMPP, SRV, SmtpUTF8Mailbox, arbitrary OIDs) ([#74])
+- Add `ResolveOtherNameOID` for resolving OtherName labels or dotted-decimal OID strings ([#74])
+- Add `OtherNameSAN` and `MarshalSANExtensionInput` types for OtherName SAN generation ([#74])
+- Add `other_names` field to `CSRTemplate` for mTLS user identity certificate CSRs ([#74])
+- Add OtherName SAN preservation in `GenerateCSRFromCSR` — string-typed OtherName entries survive CSR-to-CSR key rotation; binary-typed OtherNames are silently skipped ([#74])
+- Add `ErrUnknownOtherNameType` sentinel error for invalid OtherName type strings ([#74])
+- Add `ErrEmptySANExtension` sentinel error for empty SAN extension input ([#74])
+- Add `aia_fetched` field to inspect results and "via aia" badge in web UI for AIA-fetched certificates ([#73])
+- Add multi-entry JKS support to `convert --key` — when multiple keys match different certificates, JKS output creates a multi-alias keystore with one `PrivateKeyEntry` per match
+- Add `EncodeJKSEntries` library function for creating multi-entry JKS keystores with alias sanitization and deduplication
+- Add `CollectCertificateSANs` library function for canonical SAN aggregation (DNS, IP, email, URI, OtherName) across all commands
+- Add `ParsePEMPrivateKeys` library function for extracting all private keys from a multi-key PEM bundle, skipping non-key blocks
+- Add chain diagnostics to `connect` command — detect root certificates in chain (RFC 8446 §4.4.2) and duplicate certificates
+- Add AIA walking to `connect` command — automatically fetch missing intermediates when server sends leaf-only chain, with `missing-intermediate` diagnostic warning
+- Add mTLS detection to `connect` command — shows whether the server requests a client certificate, acceptable CAs, and accepted signature algorithms
+- Add ALPN (negotiated application protocol) to `connect` command output
+- Add `--verbose` / `-v` global flag for extended certificate details in `connect`, `verify`, `scan`, and `ocsp` output (serial, key info, signature algorithm, key usage, EKU, fingerprints, SKI/AKI)
+- Add CRL number and authority key identifier to `crl` output
+- Add `convert` command for converting between PEM, DER, PKCS#12, JKS, and PKCS#7 formats
+- Add `sign` command with `self-signed` and `csr` subcommands for certificate signing
+- Add `connect` command for TLS connection testing with certificate chain display
+- Add `--diagnose` flag to `verify` command for chain failure diagnostics
+- Add `ocsp` command for checking certificate revocation status via OCSP
+- Add `crl` command for parsing and inspecting Certificate Revocation Lists
+- Add `CreateSelfSigned` and `SignCSR` library functions for certificate signing
+- Add `ConnectTLS` library function for TLS connection probing
+- Add `CheckOCSP` library function for OCSP revocation checking
+- Add `ParseCRL`, `CRLContainsCertificate`, and `CRLInfoFromList` library functions for CRL handling
+- Add chain diagnostic checks (`--diagnose` flag) for `verify` command
 
 ### Tests
 
+- Add `TestFindAllKeyLeafPairs` and `TestBuildChainFromPool` tests for `convert --key` matching logic — single/multi match, nil certs, CA fallback, leaf priority, chain building, cycle termination ([#75])
+- Fix `TestConnectTLS_AIAFetch` false positive — add atomic request counter to verify AIA HTTP server is actually contacted ([#75])
+- Strengthen `TestEncodeJKSEntries` round-trip assertions — verify cert CN identity survives encode/decode ([#75])
+- Remove duplicate `TestEncodeJKS_RoundTripWithCAChain` — covered by `TestEncodeJKSEntries/SingleEntry` (T-14) ([#75])
 - Add `TestMarshalSANExtension` table-driven tests covering UPN, SRV (IA5String), DNS+UPN mixed, all types combined, multiple OtherNames, arbitrary OIDs, IPv4+IPv6 ([#74])
 - Add `TestMarshalSANExtension_CertificateRoundTrip` — full encode→decode round-trip through `x509.CreateCertificate` ([#74])
 - Add `TestResolveOtherNameOID` table-driven tests for known labels, dotted OIDs, and error cases ([#74])
@@ -48,6 +106,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add standard SAN type assertions to `TestMarshalSANExtension_CertificateRoundTrip` — DNS, email, IP, URI round-trip per T-6 ([#74])
 - Remove T-9-violating key rotation assertion from `TestGenerateCSRFromCSR_PreservesOtherNames` ([#74])
 - Add `TestMarshalSANExtension_ValidationErrors` — rejects empty and non-ASCII DNS, email, URI values ([#74])
+- Add `TestCreateSelfSigned` and `TestSignCSR` table-driven tests for certificate signing
+- Add `TestSignCSR_ChainVerifies` round-trip chain verification test
+- Add `TestConnectTLS` with mock TLS server for connection probing
+- Add `TestCheckOCSP_MockResponse` table-driven test with mock OCSP server covering good and revoked responses
+- Add `TestParseCRL`, `TestCRLContainsCertificate`, and `TestCRLInfoFromList` for CRL handling
+- Add `TestDiagnoseChain` table-driven tests for chain diagnostics
 
 ## [0.8.1] - 2026-02-25
 
@@ -711,6 +775,7 @@ Initial release.
 [`8cf81d9`]: https://github.com/sensiblebit/certkit/commit/8cf81d9
 [`3569926`]: https://github.com/sensiblebit/certkit/commit/3569926
 [#74]: https://github.com/sensiblebit/certkit/pull/74
+[#75]: https://github.com/sensiblebit/certkit/pull/75
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63

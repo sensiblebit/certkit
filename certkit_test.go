@@ -398,6 +398,107 @@ func TestParsePEMPrivateKeyWithPasswords_Encrypted(t *testing.T) {
 	}
 }
 
+func TestParsePEMPrivateKeys(t *testing.T) {
+	// WHY: Multi-key PEM files are common when operators concatenate keys for
+	// different certificates. ParsePEMPrivateKeys must return all keys,
+	// skip non-key blocks, and fail clearly on empty/keyless input.
+	t.Parallel()
+
+	// Generate test keys of different types
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rsaDER, err := x509.MarshalPKCS8PrivateKey(rsaKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ecDER, err := x509.MarshalPKCS8PrivateKey(ecKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rsaPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: rsaDER})
+	ecPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: ecDER})
+
+	// A certificate PEM to mix in
+	certTemplate := &x509.Certificate{
+		SerialNumber: randomSerial(t),
+		Subject:      pkix.Name{CommonName: "test"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, certTemplate, certTemplate, &ecKey.PublicKey, ecKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+
+	tests := []struct {
+		name     string
+		input    []byte
+		wantKeys int
+		wantErr  string
+	}{
+		{
+			name:     "single key",
+			input:    rsaPEM,
+			wantKeys: 1,
+		},
+		{
+			name:     "two keys mixed types",
+			input:    slices.Concat(rsaPEM, ecPEM),
+			wantKeys: 2,
+		},
+		{
+			name:     "key and cert skips cert",
+			input:    slices.Concat(certPEM, ecPEM),
+			wantKeys: 1,
+		},
+		{
+			name:     "cert and two keys",
+			input:    slices.Concat(certPEM, rsaPEM, ecPEM),
+			wantKeys: 2,
+		},
+		{
+			name:    "empty input",
+			input:   nil,
+			wantErr: "no private keys found",
+		},
+		{
+			name:    "only certificates",
+			input:   certPEM,
+			wantErr: "no private keys found",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			keys, err := ParsePEMPrivateKeys(tt.input, nil)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("error %q does not contain %q", err.Error(), tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if len(keys) != tt.wantKeys {
+				t.Errorf("got %d keys, want %d", len(keys), tt.wantKeys)
+			}
+		})
+	}
+}
+
 func TestParsePEMCertificateRequest_errors(t *testing.T) {
 	// WHY: Each CSR parse failure mode (no PEM, wrong block type, corrupt DER) needs a distinct error message for user diagnostics.
 	t.Parallel()

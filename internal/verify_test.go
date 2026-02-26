@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"strings"
 	"testing"
 	"time"
@@ -422,5 +423,160 @@ func TestVerifyCert_ChainOnlyNoKeyMatch(t *testing.T) {
 	lastEntry := result.Chain[len(result.Chain)-1]
 	if !lastEntry.IsRoot {
 		t.Error("last chain entry should be marked as root")
+	}
+}
+
+func TestDiagnoseChain(t *testing.T) {
+	t.Parallel()
+
+	ca := newRSACA(t)
+
+	// Build an expired intermediate for intermediate-expired test.
+	expIntKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	expIntTmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "Expired Intermediate", Organization: []string{"TestOrg"}},
+		NotBefore:             time.Now().Add(-2 * 365 * 24 * time.Hour),
+		NotAfter:              time.Now().Add(-24 * time.Hour), // expired yesterday
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		SubjectKeyId:          []byte{0xee, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13},
+		AuthorityKeyId:        ca.cert.SubjectKeyId,
+	}
+	expIntDER, err := x509.CreateCertificate(rand.Reader, expIntTmpl, ca.cert, &expIntKey.PublicKey, ca.key.(*rsa.PrivateKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	expInt, err := x509.ParseCertificate(expIntDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name             string
+		input            DiagnoseChainInput
+		wantChecks       map[string]string // check -> expected status
+		wantDetailSubstr map[string]string // check -> substring expected in Detail
+	}{
+		{
+			name: "valid leaf with intermediates",
+			input: DiagnoseChainInput{
+				Cert:       newRSALeaf(t, ca, "valid.example.com", []string{"valid.example.com"}, nil).cert,
+				ExtraCerts: []*x509.Certificate{ca.cert},
+			},
+			wantChecks: map[string]string{
+				"expired": "pass",
+			},
+		},
+		{
+			name: "expired leaf",
+			input: DiagnoseChainInput{
+				Cert:       newExpiredLeaf(t, ca).cert,
+				ExtraCerts: []*x509.Certificate{ca.cert},
+			},
+			wantChecks: map[string]string{
+				"expired": "fail",
+			},
+		},
+		{
+			name: "self-signed leaf",
+			input: DiagnoseChainInput{
+				Cert: ca.cert, // CA cert is self-signed
+			},
+			wantChecks: map[string]string{
+				"self-signed": "warn",
+			},
+		},
+		{
+			name: "missing intermediate",
+			input: DiagnoseChainInput{
+				Cert: newRSALeaf(t, ca, "missing.example.com", []string{"missing.example.com"}, nil).cert,
+				// No extra certs — intermediate is missing
+			},
+			wantChecks: map[string]string{
+				"missing-intermediate": "fail",
+			},
+			wantDetailSubstr: map[string]string{
+				// Detail must use FormatDN (full DN), not bare CommonName
+				"missing-intermediate": "CN=Test RSA Root CA,O=TestOrg",
+			},
+		},
+		{
+			name: "expired intermediate",
+			input: DiagnoseChainInput{
+				Cert:       newRSALeaf(t, ca, "leaf.example.com", []string{"leaf.example.com"}, nil).cert,
+				ExtraCerts: []*x509.Certificate{expInt, ca.cert},
+			},
+			wantChecks: map[string]string{
+				"intermediate-expired": "fail",
+			},
+			wantDetailSubstr: map[string]string{
+				// Detail must use FormatDN (full DN), not bare CommonName
+				"intermediate-expired": "CN=Expired Intermediate,O=TestOrg",
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			diags := DiagnoseChain(tc.input)
+
+			diagMap := make(map[string]string)
+			detailMap := make(map[string]string)
+			for _, d := range diags {
+				diagMap[d.Check] = d.Status
+				detailMap[d.Check] = d.Detail
+			}
+
+			for check, wantStatus := range tc.wantChecks {
+				gotStatus, found := diagMap[check]
+				if !found {
+					t.Errorf("expected check %q not found in diagnostics", check)
+					continue
+				}
+				if gotStatus != wantStatus {
+					t.Errorf("check %q: status = %q, want %q", check, gotStatus, wantStatus)
+				}
+			}
+
+			for check, wantSubstr := range tc.wantDetailSubstr {
+				detail, found := detailMap[check]
+				if !found {
+					t.Errorf("expected check %q not found for detail assertion", check)
+					continue
+				}
+				if !strings.Contains(detail, wantSubstr) {
+					t.Errorf("check %q: detail = %q, want substring %q", check, detail, wantSubstr)
+				}
+			}
+		})
+	}
+}
+
+func TestFormatDiagnoses(t *testing.T) {
+	t.Parallel()
+	diags := []Diagnosis{
+		{Check: "expired", Status: "fail", Detail: "leaf certificate expired"},
+		{Check: "self-signed", Status: "warn", Detail: "self-signed leaf"},
+		{Check: "missing-intermediate", Status: "pass", Detail: "intermediate found"},
+	}
+
+	output := FormatDiagnoses(diags)
+	if !strings.Contains(output, "Diagnostics:") {
+		t.Error("output missing 'Diagnostics:' header")
+	}
+	if !strings.Contains(output, "[FAIL]") {
+		t.Error("output missing [FAIL] marker")
+	}
+	if !strings.Contains(output, "[WARN]") {
+		t.Error("output missing [WARN] marker")
+	}
+	if !strings.Contains(output, "[OK]") {
+		t.Error("output missing [OK] marker")
 	}
 }

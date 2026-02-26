@@ -1,5 +1,7 @@
 # certkit
 
+> **Note:** certkit is under active development. CLI flags, output formats, and library APIs may change between releases. Do not rely on interface stability for scripting or automation until a 1.0 release.
+
 A Swiss Army knife for TLS/SSL certificates. Inspect, verify, bundle, scan, and generate certificates and keys -- all from a single tool.
 
 ## What can it do?

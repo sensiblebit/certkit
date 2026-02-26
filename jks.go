@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/pavlo-v-chernykh/keystore-go/v4"
@@ -84,36 +85,56 @@ func DecodeJKS(data []byte, passwords []string) ([]*x509.Certificate, []crypto.P
 	return certs, keys, nil
 }
 
-// EncodeJKS creates a Java KeyStore (JKS) containing a private key entry with
-// its certificate chain. The leaf certificate and intermediates form the chain
-// stored under the alias "server". The same password protects both the store
-// and the key entry (standard Java convention).
-func EncodeJKS(privateKey crypto.PrivateKey, leaf *x509.Certificate, caCerts []*x509.Certificate, password string) ([]byte, error) {
-	if leaf == nil {
-		return nil, errors.New("leaf certificate cannot be nil")
-	}
-	pkcs8Key, err := x509.MarshalPKCS8PrivateKey(normalizeKey(privateKey))
-	if err != nil {
-		return nil, fmt.Errorf("marshaling private key to PKCS#8: %w", err)
-	}
+// JKSEntry describes a single private key entry for EncodeJKSEntries.
+type JKSEntry struct {
+	PrivateKey crypto.PrivateKey
+	Leaf       *x509.Certificate
+	CACerts    []*x509.Certificate
+	Alias      string
+}
 
-	chain := []keystore.Certificate{
-		{Type: "X.509", Content: leaf.Raw},
-	}
-	for _, ca := range caCerts {
-		chain = append(chain, keystore.Certificate{
-			Type:    "X.509",
-			Content: ca.Raw,
-		})
+// EncodeJKSEntries creates a Java KeyStore (JKS) containing one or more
+// private key entries, each with its certificate chain. Aliases are sanitized
+// to lowercase alphanumeric+hyphen form. Duplicate aliases get a numeric
+// suffix (e.g. "server", "server-2"). The same password protects both the
+// store and all key entries (standard Java convention).
+func EncodeJKSEntries(entries []JKSEntry, password string) ([]byte, error) {
+	if len(entries) == 0 {
+		return nil, errors.New("at least one JKS entry is required")
 	}
 
 	ks := keystore.New()
-	if err := ks.SetPrivateKeyEntry("server", keystore.PrivateKeyEntry{
-		CreationTime:     time.Now(),
-		PrivateKey:       pkcs8Key,
-		CertificateChain: chain,
-	}, []byte(password)); err != nil {
-		return nil, fmt.Errorf("setting JKS private key entry: %w", err)
+	usedAliases := make(map[string]int)
+
+	for i, entry := range entries {
+		if entry.Leaf == nil {
+			return nil, fmt.Errorf("entry %d: leaf certificate cannot be nil", i)
+		}
+		pkcs8Key, err := x509.MarshalPKCS8PrivateKey(normalizeKey(entry.PrivateKey))
+		if err != nil {
+			return nil, fmt.Errorf("entry %d: marshaling private key to PKCS#8: %w", i, err)
+		}
+
+		chain := []keystore.Certificate{
+			{Type: "X.509", Content: entry.Leaf.Raw},
+		}
+		for _, ca := range entry.CACerts {
+			chain = append(chain, keystore.Certificate{
+				Type:    "X.509",
+				Content: ca.Raw,
+			})
+		}
+
+		alias := sanitizeJKSAlias(entry.Alias)
+		alias = deduplicateAlias(alias, usedAliases)
+
+		if err := ks.SetPrivateKeyEntry(alias, keystore.PrivateKeyEntry{
+			CreationTime:     time.Now(),
+			PrivateKey:       pkcs8Key,
+			CertificateChain: chain,
+		}, []byte(password)); err != nil {
+			return nil, fmt.Errorf("setting JKS private key entry %q: %w", alias, err)
+		}
 	}
 
 	var buf bytes.Buffer
@@ -122,4 +143,45 @@ func EncodeJKS(privateKey crypto.PrivateKey, leaf *x509.Certificate, caCerts []*
 	}
 
 	return buf.Bytes(), nil
+}
+
+// EncodeJKS creates a Java KeyStore (JKS) containing a private key entry with
+// its certificate chain. The leaf certificate and intermediates form the chain
+// stored under the alias "server". The same password protects both the store
+// and the key entry (standard Java convention).
+func EncodeJKS(privateKey crypto.PrivateKey, leaf *x509.Certificate, caCerts []*x509.Certificate, password string) ([]byte, error) {
+	return EncodeJKSEntries([]JKSEntry{{
+		PrivateKey: privateKey,
+		Leaf:       leaf,
+		CACerts:    caCerts,
+		Alias:      "server",
+	}}, password)
+}
+
+// sanitizeJKSAlias converts a string to a JKS-friendly alias: lowercase,
+// alphanumeric and hyphens only.
+func sanitizeJKSAlias(s string) string {
+	s = strings.ToLower(s)
+	var b strings.Builder
+	for _, r := range s {
+		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' {
+			b.WriteRune(r)
+		} else if r == ' ' || r == '_' || r == '.' {
+			b.WriteByte('-')
+		}
+	}
+	result := b.String()
+	if result == "" {
+		return "entry"
+	}
+	return result
+}
+
+// deduplicateAlias ensures uniqueness by appending "-N" on collision.
+func deduplicateAlias(alias string, used map[string]int) string {
+	used[alias]++
+	if used[alias] == 1 {
+		return alias
+	}
+	return fmt.Sprintf("%s-%d", alias, used[alias])
 }

@@ -19,6 +19,7 @@ var (
 	verifyExpiry     string
 	verifyTrustStore string
 	verifyFormat     string
+	verifyDiagnose   bool
 )
 
 var verifyCmd = &cobra.Command{
@@ -46,6 +47,7 @@ func init() {
 	verifyCmd.Flags().StringVarP(&verifyExpiry, "expiry", "e", "", "Check if cert expires within duration (e.g., 30d, 720h)")
 	verifyCmd.Flags().StringVar(&verifyTrustStore, "trust-store", "mozilla", "Trust store for chain validation: system, mozilla")
 	verifyCmd.Flags().StringVar(&verifyFormat, "format", "text", "Output format: text or json")
+	verifyCmd.Flags().BoolVar(&verifyDiagnose, "diagnose", false, "Show diagnostics when verification fails")
 
 	registerCompletion(verifyCmd, completionInput{"format", fixedCompletion("text", "json")})
 	registerCompletion(verifyCmd, completionInput{"trust-store", fixedCompletion("system", "mozilla")})
@@ -84,7 +86,11 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("loading %s: %w", args[0], err)
 	}
 
-	if !allowExpired && contents.Leaf != nil && time.Now().After(contents.Leaf.NotAfter) {
+	if contents.Leaf == nil {
+		return fmt.Errorf("no certificate found in %s", args[0])
+	}
+
+	if !allowExpired && time.Now().After(contents.Leaf.NotAfter) {
 		return &ValidationError{Message: fmt.Sprintf("certificate expired on %s (use --allow-expired to proceed)", contents.Leaf.NotAfter.UTC().Format(time.RFC3339))}
 	}
 
@@ -111,11 +117,21 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		CheckChain:     true, // Always verify chain
 		ExpiryDuration: expiryDuration,
 		TrustStore:     verifyTrustStore,
+		Verbose:        verbose,
 	}
 
 	result, err := internal.VerifyCert(cmd.Context(), input)
 	if err != nil {
 		return fmt.Errorf("verifying certificate: %w", err)
+	}
+
+	// Compute diagnoses only when the chain itself is invalid — not for
+	// unrelated errors like key mismatch or expiry warnings.
+	if verifyDiagnose && result.ChainValid != nil && !*result.ChainValid {
+		result.Diagnoses = internal.DiagnoseChain(internal.DiagnoseChainInput{
+			Cert:       contents.Leaf,
+			ExtraCerts: contents.ExtraCerts,
+		})
 	}
 
 	switch verifyFormat {
@@ -127,6 +143,9 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		fmt.Println(string(data))
 	case "text":
 		fmt.Print(internal.FormatVerifyResult(result))
+		if len(result.Diagnoses) > 0 {
+			fmt.Print(internal.FormatDiagnoses(result.Diagnoses))
+		}
 	default:
 		return fmt.Errorf("unsupported output format %q (use text or json)", verifyFormat)
 	}

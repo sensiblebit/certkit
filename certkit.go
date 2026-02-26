@@ -207,6 +207,46 @@ func ParsePEMPrivateKeyWithPasswords(pemData []byte, passwords []string) (crypto
 	return nil, errors.New("decrypting private key with any provided password")
 }
 
+// keyBlockTypes is the set of PEM block types that represent private keys.
+var keyBlockTypes = map[string]bool{
+	"RSA PRIVATE KEY":       true,
+	"EC PRIVATE KEY":        true,
+	"PRIVATE KEY":           true,
+	"ENCRYPTED PRIVATE KEY": true,
+	"OPENSSH PRIVATE KEY":   true,
+}
+
+// ParsePEMPrivateKeys parses all private keys from a PEM bundle, trying each
+// password for encrypted blocks. Non-key PEM blocks (e.g., CERTIFICATE) are
+// silently skipped. Returns an error if a key block fails to parse or if no
+// keys are found at all.
+func ParsePEMPrivateKeys(pemData []byte, passwords []string) ([]crypto.PrivateKey, error) {
+	var keys []crypto.PrivateKey
+	rest := pemData
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if !keyBlockTypes[block.Type] {
+			continue
+		}
+
+		// Re-encode the single block so existing parsers work on it
+		singlePEM := pem.EncodeToMemory(block)
+		key, err := ParsePEMPrivateKeyWithPasswords(singlePEM, passwords)
+		if err != nil {
+			return nil, fmt.Errorf("parsing private key (block type %q): %w", block.Type, err)
+		}
+		keys = append(keys, key)
+	}
+	if len(keys) == 0 {
+		return nil, errors.New("no private keys found in PEM data")
+	}
+	return keys, nil
+}
+
 // ParsePEMCertificateRequest parses a single certificate request from PEM data.
 func ParsePEMCertificateRequest(pemData []byte) (*x509.CertificateRequest, error) {
 	block, _ := pem.Decode(pemData)

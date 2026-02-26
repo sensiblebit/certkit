@@ -6,7 +6,12 @@ Stateless utility functions. No database, no file I/O. This is the public librar
 
 - `certkit.go` — PEM parsing, key generation, fingerprints, SKI computation. `DeduplicatePasswords()`, `ParseCertificatesAny()` (DER/PEM/PKCS#7).
 - `bundle.go` — Certificate chain resolution via AIA, trust store verification. `BundleResult`/`BundleOptions` types, `DefaultOptions()`, `FetchLeafFromURL()`, `FetchAIACertificates()`, `Bundle()`. `MozillaRootPool()` (`sync.Once`-cached), `MozillaRootPEM()`.
-- `csr.go` — CSR generation from certs, templates, or existing CSRs
+- `connect.go` — TLS connection probing and chain diagnostics. `ConnectTLS()` connects to a server and returns negotiated protocol, cipher suite, peer chain, mTLS info, and verification result with automatic AIA walking for missing intermediates. `DiagnoseConnectChain()` detects root-in-chain (RFC 8446 §4.4.2), duplicate certs, and missing intermediates. `FormatConnectResult()` for text output. Types: `ConnectTLSInput`, `ConnectResult`, `ClientAuthInfo`, `ChainDiagnostic`.
+- `sign.go` — Certificate signing. `CreateSelfSigned()` generates self-signed certificates. `SignCSR()` signs a CSR with a CA certificate and key. Types: `SelfSignedInput`, `SignCSRInput`.
+- `ocsp.go` — OCSP revocation checking. `CheckOCSP()` queries an OCSP responder. `FormatOCSPResult()` for text output. Types: `CheckOCSPInput`, `OCSPResult`.
+- `crl.go` — CRL parsing and inspection. `ParseCRL()` parses PEM/DER CRLs. `CRLContainsCertificate()` checks revocation. `CRLInfoFromList()` extracts display info. `FormatCRLInfo()` for text output. Type: `CRLInfo`.
+- `dn.go` — Distinguished name and extension formatting. `FormatDN()` renders `pkix.Name` with human-readable OID labels (e.g., `emailAddress`). `FormatEKUs()`, `FormatEKUOIDs()`, `FormatKeyUsage()`, `FormatKeyUsageBitString()`, `ParseOtherNameSANs()`, `CollectCertificateSANs()`.
+- `csr.go` — CSR generation from certs, templates, or existing CSRs. `MarshalSANExtension()` for OtherName SAN support.
 - `pkcs.go` — PKCS#12 and PKCS#7 encode/decode
 - `jks.go` — Java KeyStore encode/decode
 
@@ -19,6 +24,8 @@ Certificate/key processing, in-memory storage, and persistence. Used by both CLI
 - `memstore.go` — `MemStore`: in-memory `CertHandler` implementation and primary runtime store. `CertRecord`/`KeyRecord` types. Stores multiple certs per SKI via composite key (serial + AKI). Provides `ScanSummary()`, `AllCertsFlat()`, `AllKeysFlat()`, `CertsByBundleName()`, `BundleNames()`, `DumpDebug()`.
 - `summary.go` — `ScanSummary` struct (roots, intermediates, leaves, keys, matched pairs).
 - `export.go` — `GenerateBundleFiles()`: creates all output files for a bundle (PEM variants, key, P12, K8s YAML, JSON, YAML, CSR). `GenerateJSON`, `GenerateYAML`, `GenerateCSR` also exported individually. `BundleWriter` interface and `ExportMatchedBundles()` provide shared export orchestration for both CLI and WASM.
+- `validate.go` — Certificate validation checks. `RunValidation()` orchestrates all checks for a certificate. `CheckExpiration()`, `CheckKeyStrength()`, `CheckSignature()`, `CheckTrustChain()` for individual validation steps. Types: `RunValidationInput`, `ValidationResult`, `ValidationCheck`, `CheckTrustChainInput`.
+- `aia.go` — Store-aware AIA resolution. `ResolveAIA()` fetches missing intermediates via AIA URLs using an `AIAFetcher` callback. `HasUnresolvedIssuers()` checks if any certs need issuer resolution. Type: `ResolveAIAInput`.
 - `helpers.go` — `GetKeyType`, `HasBinaryExtension`, `FormatCN`, `SanitizeFileName`, `FormatIPAddresses`.
 - `container.go` — `ContainerContents` struct and `ParseContainerData()`: extracts leaf cert, key, and extra certs from PKCS#12, JKS, PKCS#7, PEM, or DER input. Shared by CLI and WASM.
 - `sqlite.go` — SQLite persistence (`//go:build !js`). `SaveToSQLite(store, path)` and `LoadFromSQLite(store, path)` for `--save-db`/`--load-db` flags. Self-contained: opens in-memory SQLite, transfers data, uses `VACUUM INTO` to write.
@@ -30,8 +37,9 @@ CLI business logic and file I/O. Delegates to `internal/certstore/` for processi
 - `crypto.go` — File ingestion pipeline. `ProcessFile()` and `ProcessData()` delegate to `certstore.ProcessData()` with `MemStore` as the handler. Also handles CSR detection for CLI logging.
 - `exporter.go` — Bundle export. `ExportBundles()` iterates `MemStore` bundle names, finds matching certs/keys, builds chains via `certstore.ExportMatchedBundles()`. `filesystemWriter` implements `certstore.BundleWriter` to write results to disk with appropriate permissions (0600 for sensitive files).
 - `bundleconfig.go` — YAML config parsing. Supports `defaultSubject` inheritance.
-- `inspect.go` — Certificate/key/CSR inspection with text and JSON output.
-- `verify.go` — Chain validation, key-cert matching, expiry checking.
+- `inspect.go` — Certificate/key/CSR inspection. `InspectFile()` and `InspectData()` produce `InspectResult` structs. `ResolveInspectAIA()` fetches missing intermediates for trust annotation. `AnnotateInspectTrust()` marks trusted/untrusted. `FormatInspectResults()` renders text or JSON output.
+- `verify.go` — Chain validation and diagnostics. `VerifyCert()` checks chains, key matches, and expiry. `DiagnoseChain()` analyzes chain failures. `FormatVerifyResult()` and `FormatDiagnoses()` for output. Types: `VerifyInput`, `VerifyResult`, `ChainCert`, `Diagnosis`, `DiagnoseChainInput`.
+- `format.go` — Shared formatting helpers. `CertAnnotation()` for scan summary annotations (expired/untrusted counts).
 - `keygen.go` — Key pair generation (RSA/ECDSA/Ed25519) with optional CSR.
 - `csr.go` — CSR generation from templates, certs, or existing CSRs.
 - `passwords.go` — Password aggregation and deduplication.
@@ -44,13 +52,19 @@ CLI business logic and file I/O. Delegates to `internal/certstore/` for processi
 Thin CLI layer. Each file is one Cobra command. Flag variables are package-level (standard Cobra pattern). Commands delegate to `internal/` functions.
 
 - `main.go` — Entry point. CLI version string, memory limit enforcement, exit code handling (0 success, 1 general error, 2 `ValidationError`).
-- `root.go` — Root Cobra command with shared flags: `--log-level`, `--passwords`, `--password-file`, `--allow-expired`. Registers all subcommands.
-- `scan.go` — Main scanning command with `--dump-keys`, `--dump-certs`, `--max-file-size`, `--bundle-path` flags. Contains `formatDN()` helper for OpenSSL-style distinguished name formatting.
+- `root.go` — Root Cobra command with shared flags: `--log-level`, `--passwords`, `--password-file`, `--allow-expired`, `--verbose`. Registers all subcommands.
+- `scan.go` — Main scanning command with `--dump-keys`, `--dump-certs`, `--max-file-size`, `--bundle-path` flags.
 - `bundle.go` — Build verified certificate chains from leaf certs; resolves intermediates via AIA; outputs PEM, chain, fullchain, PKCS#12, or JKS with `--key`, `--force`, `--trust-store` flags.
 - `inspect.go` — Display detailed certificate, key, or CSR information with text or JSON output (`--format`); filters expired items unless `--allow-expired`.
-- `verify.go` — Verify certificate chains, key matches, and expiry windows; returns exit code 2 on validation failures; `--key`, `--expiry`, `--trust-store`, `--format` flags.
+- `verify.go` — Verify certificate chains, key matches, and expiry windows; returns exit code 2 on validation failures; `--key`, `--expiry`, `--trust-store`, `--diagnose`, `--format` flags.
+- `connect.go` — Test TLS connections and display certificate chain details; chain diagnostics (root-in-chain, duplicate-cert) and AIA walking for missing intermediates; `--servername`, `--format` flags.
+- `sign.go` — Sign certificates. Parent command with `self-signed` and `csr` subcommands for creating self-signed certs and signing CSRs with a CA.
+- `ocsp.go` — Check certificate revocation status via OCSP; `--format` flag.
+- `crl.go` — Parse and inspect Certificate Revocation Lists; `--check` to verify a cert against the CRL; `--format` flag.
+- `convert.go` — Convert certificates and keys between PEM, DER, PKCS#12, JKS, and PKCS#7 formats; `--to`, `-o` flags.
 - `keygen.go` — Generate RSA, ECDSA, or Ed25519 key pairs with optional CSR and SANs; outputs to stdout or directory with `-o`.
 - `csr.go` — Generate CSRs from JSON templates, existing certificates, or existing CSRs with configurable algorithms; outputs to stdout or directory with `-o`.
+- `completions.go` — Shell tab completion helpers. `completionInput` type and `registerCompletion()` for enum flags, directory flags, and file flags.
 
 ## `cmd/wasm/`
 
@@ -60,6 +74,8 @@ WASM build target (`//go:build js && wasm`). Exposes certkit as a JavaScript lib
 - `store.go` — Initializes global in-memory `MemStore` singleton shared across all JS function calls.
 - `aia.go` — Resolves missing intermediates via AIA CA Issuers URLs up to depth 5; delegates fetching to JavaScript `certkitFetchURL()` (handles CORS proxying); skips certs already in store or issued by Mozilla roots. Uses `certkit.ParseCertificateAny()` and `sync.Once`-protected Mozilla root subject set.
 - `export.go` — ZIP `BundleWriter` implementation; delegates to shared `certstore.ExportMatchedBundles()` for bundle orchestration; supports SKI-based filtering.
+- `inspect.go` — Stateless certificate/key/CSR inspection. `certkitInspect()` JS function processes files without accumulating into the global store; returns JSON results with trust annotations and AIA resolution.
+- `validate.go` — Certificate validation. `certkitValidateCert(ski)` JS function looks up a certificate by SKI in the global store and runs validation checks (expiration, key strength, signature, trust chain).
 
 ## `web/`
 

@@ -2,6 +2,7 @@ package certkit
 
 import (
 	"bytes"
+	"crypto"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -694,19 +695,19 @@ func TestDecodeJKS_PrivateKeyEntry_EmptyCertChain(t *testing.T) {
 	}
 }
 
-func TestEncodeJKS_RoundTripWithCAChain(t *testing.T) {
-	// WHY: EncodeJKS appends CA certs to the PrivateKeyEntry chain (jks.go:103-108).
-	// This path was untested — a bug there would silently drop intermediates from
-	// JKS exports. Per T-6, every encode/decode path needs a round-trip test.
+func TestEncodeJKSEntries(t *testing.T) {
+	// WHY: EncodeJKSEntries is the multi-entry JKS encoder. Each subtest
+	// round-trips through DecodeJKS to verify all keys and certs survive.
 	t.Parallel()
 
+	// Shared CA for chain-building subtests
 	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
 		t.Fatal(err)
 	}
 	caTmpl := &x509.Certificate{
 		SerialNumber:          randomSerial(t),
-		Subject:               pkix.Name{CommonName: "JKS RT CA"},
+		Subject:               pkix.Name{CommonName: "JKS Entries CA"},
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(10 * 365 * 24 * time.Hour),
 		KeyUsage:              x509.KeyUsageCertSign,
@@ -722,60 +723,236 @@ func TestEncodeJKS_RoundTripWithCAChain(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	leafKey, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leafTmpl := &x509.Certificate{
-		SerialNumber: randomSerial(t),
-		Subject:      pkix.Name{CommonName: "jks-rt-leaf.example.com"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(365 * 24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-	}
-	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, caCert, &leafKey.PublicKey, caKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leafCert, err := x509.ParseCertificate(leafDER)
-	if err != nil {
-		t.Fatal(err)
-	}
-
 	password := "changeit"
-	jksData, err := EncodeJKS(leafKey, leafCert, []*x509.Certificate{caCert}, password)
-	if err != nil {
-		t.Fatalf("EncodeJKS: %v", err)
+
+	tests := []struct {
+		name      string
+		entries   func(t *testing.T) []JKSEntry
+		wantKeys  int
+		wantCerts int
+		wantCNs   []string // expected cert CNs after round-trip (order-independent)
+		wantErr   string
+	}{
+		{
+			name: "SingleEntry",
+			entries: func(t *testing.T) []JKSEntry {
+				t.Helper()
+				key, err := rsa.GenerateKey(rand.Reader, 2048)
+				if err != nil {
+					t.Fatal(err)
+				}
+				tmpl := &x509.Certificate{
+					SerialNumber: randomSerial(t),
+					Subject:      pkix.Name{CommonName: "single.example.com"},
+					NotBefore:    time.Now().Add(-time.Hour),
+					NotAfter:     time.Now().Add(24 * time.Hour),
+				}
+				leafDER, err := x509.CreateCertificate(rand.Reader, tmpl, caCert, &key.PublicKey, caKey)
+				if err != nil {
+					t.Fatal(err)
+				}
+				leaf, err := x509.ParseCertificate(leafDER)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return []JKSEntry{{
+					PrivateKey: key,
+					Leaf:       leaf,
+					CACerts:    []*x509.Certificate{caCert},
+					Alias:      "server",
+				}}
+			},
+			wantKeys:  1,
+			wantCerts: 2, // leaf + CA
+			wantCNs:   []string{"single.example.com", "JKS Entries CA"},
+		},
+		{
+			name: "TwoEntriesDifferentKeyTypes",
+			entries: func(t *testing.T) []JKSEntry {
+				t.Helper()
+				rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+				if err != nil {
+					t.Fatal(err)
+				}
+				tmpl1 := &x509.Certificate{
+					SerialNumber: randomSerial(t),
+					Subject:      pkix.Name{CommonName: "rsa.example.com"},
+					NotBefore:    time.Now().Add(-time.Hour),
+					NotAfter:     time.Now().Add(24 * time.Hour),
+				}
+				rsaLeafDER, err := x509.CreateCertificate(rand.Reader, tmpl1, caCert, &rsaKey.PublicKey, caKey)
+				if err != nil {
+					t.Fatal(err)
+				}
+				rsaLeaf, err := x509.ParseCertificate(rsaLeafDER)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				tmpl2 := &x509.Certificate{
+					SerialNumber: randomSerial(t),
+					Subject:      pkix.Name{CommonName: "ecdsa.example.com"},
+					NotBefore:    time.Now().Add(-time.Hour),
+					NotAfter:     time.Now().Add(24 * time.Hour),
+				}
+				ecLeafDER, err := x509.CreateCertificate(rand.Reader, tmpl2, caCert, &ecKey.PublicKey, caKey)
+				if err != nil {
+					t.Fatal(err)
+				}
+				ecLeaf, err := x509.ParseCertificate(ecLeafDER)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				return []JKSEntry{
+					{PrivateKey: rsaKey, Leaf: rsaLeaf, CACerts: []*x509.Certificate{caCert}, Alias: "rsa-server"},
+					{PrivateKey: ecKey, Leaf: ecLeaf, CACerts: []*x509.Certificate{caCert}, Alias: "ec-server"},
+				}
+			},
+			wantKeys:  2,
+			wantCerts: 4, // 2 leaves + 2 CA copies (one per chain)
+			wantCNs:   []string{"rsa.example.com", "ecdsa.example.com"},
+		},
+		{
+			name: "DuplicateCNAlias",
+			entries: func(t *testing.T) []JKSEntry {
+				t.Helper()
+				key1, err := rsa.GenerateKey(rand.Reader, 2048)
+				if err != nil {
+					t.Fatal(err)
+				}
+				tmpl1 := &x509.Certificate{
+					SerialNumber: randomSerial(t),
+					Subject:      pkix.Name{CommonName: "server"},
+					NotBefore:    time.Now().Add(-time.Hour),
+					NotAfter:     time.Now().Add(24 * time.Hour),
+				}
+				leaf1DER, err := x509.CreateCertificate(rand.Reader, tmpl1, tmpl1, &key1.PublicKey, key1)
+				if err != nil {
+					t.Fatal(err)
+				}
+				leaf1, err := x509.ParseCertificate(leaf1DER)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				key2, err := rsa.GenerateKey(rand.Reader, 2048)
+				if err != nil {
+					t.Fatal(err)
+				}
+				tmpl2 := &x509.Certificate{
+					SerialNumber: randomSerial(t),
+					Subject:      pkix.Name{CommonName: "server"},
+					NotBefore:    time.Now().Add(-time.Hour),
+					NotAfter:     time.Now().Add(24 * time.Hour),
+				}
+				leaf2DER, err := x509.CreateCertificate(rand.Reader, tmpl2, tmpl2, &key2.PublicKey, key2)
+				if err != nil {
+					t.Fatal(err)
+				}
+				leaf2, err := x509.ParseCertificate(leaf2DER)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				return []JKSEntry{
+					{PrivateKey: key1, Leaf: leaf1, Alias: "server"},
+					{PrivateKey: key2, Leaf: leaf2, Alias: "server"},
+				}
+			},
+			wantKeys:  2,
+			wantCerts: 2,
+			wantCNs:   []string{"server", "server"},
+		},
+		{
+			name: "EmptyEntries",
+			entries: func(t *testing.T) []JKSEntry {
+				t.Helper()
+				return nil
+			},
+			wantErr: "at least one JKS entry is required",
+		},
+		{
+			name: "NilLeaf",
+			entries: func(t *testing.T) []JKSEntry {
+				t.Helper()
+				key, err := rsa.GenerateKey(rand.Reader, 2048)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return []JKSEntry{{PrivateKey: key, Leaf: nil, Alias: "bad"}}
+			},
+			wantErr: "leaf certificate cannot be nil",
+		},
 	}
 
-	certs, keys, err := DecodeJKS(jksData, []string{password})
-	if err != nil {
-		t.Fatalf("DecodeJKS: %v", err)
-	}
-	if len(keys) != 1 {
-		t.Fatalf("expected 1 key, got %d", len(keys))
-	}
-	if !leafKey.Equal(keys[0]) {
-		t.Error("decoded key does not match original")
-	}
-	if len(certs) != 2 {
-		t.Fatalf("expected 2 certs (leaf + CA), got %d", len(certs))
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			entries := tt.entries(t)
 
-	// Verify both leaf and CA survived the round-trip.
-	foundLeaf, foundCA := false, false
-	for _, c := range certs {
-		if c.Subject.CommonName == "jks-rt-leaf.example.com" {
-			foundLeaf = true
-		}
-		if c.Subject.CommonName == "JKS RT CA" {
-			foundCA = true
-		}
-	}
-	if !foundLeaf {
-		t.Error("leaf cert not found after JKS round-trip")
-	}
-	if !foundCA {
-		t.Error("CA cert not found after JKS round-trip")
+			data, err := EncodeJKSEntries(entries, password)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("error %q should contain %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("EncodeJKSEntries: %v", err)
+			}
+
+			// Round-trip through DecodeJKS
+			certs, keys, err := DecodeJKS(data, []string{password})
+			if err != nil {
+				t.Fatalf("DecodeJKS: %v", err)
+			}
+			if len(keys) != tt.wantKeys {
+				t.Errorf("keys: got %d, want %d", len(keys), tt.wantKeys)
+			}
+			if len(certs) != tt.wantCerts {
+				t.Errorf("certs: got %d, want %d", len(certs), tt.wantCerts)
+			}
+
+			// Verify all original keys survive the round-trip
+			for i, entry := range entries {
+				found := false
+				for _, k := range keys {
+					type equalKey interface{ Equal(crypto.PrivateKey) bool }
+					if eq, ok := entry.PrivateKey.(equalKey); ok && eq.Equal(k) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("entry %d key not found after round-trip", i)
+				}
+			}
+
+			// Verify expected cert CNs survive the round-trip
+			for _, wantCN := range tt.wantCNs {
+				found := false
+				for _, c := range certs {
+					if c.Subject.CommonName == wantCN {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("cert CN %q not found after round-trip", wantCN)
+				}
+			}
+		})
 	}
 }
+
+// TestEncodeJKS_RoundTripWithCAChain removed: duplicate of
+// TestEncodeJKSEntries/SingleEntry which covers the same leaf+CA chain
+// round-trip path with CN verification (T-14).
