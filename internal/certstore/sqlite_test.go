@@ -4,7 +4,9 @@ package certstore
 
 import (
 	"encoding/hex"
+	"net"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -185,5 +187,38 @@ func TestLoadFromSQLite_MergesWithExisting(t *testing.T) {
 	}
 	if !cns["Test ECDSA Root CA"] {
 		t.Error("ECDSA CA cert missing after merge")
+	}
+}
+
+func TestSaveToSQLite_DoesNotMutateDNSNames(t *testing.T) {
+	// WHY: SaveToSQLite concatenates DNSNames and IPAddresses for the SANs
+	// column. Before the slices.Concat fix, append could mutate the
+	// certificate's DNSNames backing array if it had spare capacity.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeafWithIPSANs(t, ca, "alias.example.com",
+		[]string{"alias.example.com", "www.alias.example.com"},
+		[]net.IP{net.IPv4(10, 0, 0, 1), net.ParseIP("::1")},
+	)
+
+	store := NewMemStore()
+	if err := store.HandleCertificate(ca.cert, "test"); err != nil {
+		t.Fatalf("store CA cert: %v", err)
+	}
+	if err := store.HandleCertificate(leaf.cert, "test"); err != nil {
+		t.Fatalf("store leaf cert: %v", err)
+	}
+
+	origDNS := slices.Clone(leaf.cert.DNSNames)
+
+	dbPath := filepath.Join(t.TempDir(), "alias.db")
+	if err := SaveToSQLite(store, dbPath); err != nil {
+		t.Fatalf("SaveToSQLite: %v", err)
+	}
+
+	if !slices.Equal(leaf.cert.DNSNames, origDNS) {
+		t.Errorf("SaveToSQLite mutated cert.DNSNames: got %v, want %v",
+			leaf.cert.DNSNames, origDNS)
 	}
 }
