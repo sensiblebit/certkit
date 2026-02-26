@@ -9,12 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Fix unchecked type assertion `conn.(*tls.Conn)` in `FetchLeafFromURL` — add ok check for safety
-- Fix bare `return err` without context wrapping (ERR-1) in `fetchCertificatesFromURL` AIA fetcher
-- Fix unchecked `json.Marshal` error in `SaveToSQLite` SAN serialization — now logs and falls back to empty SANs instead of dropping the certificate
-- Fix `SaveToSQLite` `append(rec.Cert.DNSNames, ...)` slice aliasing — use `slices.Concat` to prevent mutating the certificate's backing array
-- Fix uint64→int64 overflow in ZIP archive extraction — entries claiming >MaxInt64 bytes bypassed all size limits
-- Fix `marshalOtherNameGN` appending to `oidBytes` slice and assigning to different variable — use `slices.Concat` to prevent aliasing
+- Fix unchecked type assertion `conn.(*tls.Conn)` in `FetchLeafFromURL` — add ok check for safety ([#76])
+- Fix bare `return err` without context wrapping (ERR-1) in `fetchCertificatesFromURL` AIA fetcher ([#76])
+- Fix `SaveToSQLite` `json.Marshal` SAN failure now returns error instead of silently dropping data (ERR-6) ([#76])
+- Fix `SaveToSQLite` `append(rec.Cert.DNSNames, ...)` slice aliasing — use `slices.Concat` to prevent mutating the certificate's backing array ([#76])
+- Fix uint64→int64 overflow in ZIP archive extraction — guard both `UncompressedSize64` and `CompressedSize64` against `MaxInt64` wrap ([#76])
+- Fix `marshalOtherNameGN` appending to `oidBytes` slice and assigning to different variable — use `slices.Concat` to prevent aliasing ([#76])
 - Fix `buildChainFromPool` infinite loop on circular issuer chains — add visited-set cycle guard ([#75])
 - Fix `convert --key` P12 multi-match and key-mismatch errors returning exit code 1 instead of 2 — wrap in `ValidationError` (CLI-6) ([#75])
 - Fix `convert --key` duplicating `ParsePEMPrivateKeys` logic via internal `parseKeyBlocks` — consolidate to shared library function ([#75])
@@ -782,6 +782,7 @@ Initial release.
 [`3569926`]: https://github.com/sensiblebit/certkit/commit/3569926
 [#74]: https://github.com/sensiblebit/certkit/pull/74
 [#75]: https://github.com/sensiblebit/certkit/pull/75
+[#76]: https://github.com/sensiblebit/certkit/pull/76
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63

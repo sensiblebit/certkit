@@ -128,10 +128,10 @@ func processZipArchive(input ProcessArchiveInput) (int, error) {
 
 		// Guard against uint64→int64 overflow: any ZIP entry claiming more
 		// than MaxInt64 bytes exceeds every int64 limit we check below.
-		if f.UncompressedSize64 > math.MaxInt64 {
-			slog.Warn("skipping ZIP entry with overflowing uncompressed size",
+		if f.UncompressedSize64 > math.MaxInt64 || f.CompressedSize64 > math.MaxInt64 {
+			slog.Debug("skipping ZIP entry with overflowing size",
 				"archive", input.ArchivePath, "entry", f.Name,
-				"size", f.UncompressedSize64)
+				"uncompressed", f.UncompressedSize64, "compressed", f.CompressedSize64)
 			continue
 		}
 

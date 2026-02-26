@@ -399,7 +399,12 @@ func fetchCertificatesFromURL(ctx context.Context, client *http.Client, certURL 
 		return nil, fmt.Errorf("reading response from %s: %w", certURL, err)
 	}
 
-	return ParseCertificatesAny(body)
+	certs, err := ParseCertificatesAny(body)
+	if err != nil {
+		return nil, fmt.Errorf("parsing certificates from %s: %w", certURL, err)
+	}
+
+	return certs, nil
 }
 
 // detectAndSwapLeaf checks if the first cert is a CA and exactly one non-CA

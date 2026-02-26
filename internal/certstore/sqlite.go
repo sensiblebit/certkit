@@ -209,8 +209,7 @@ func SaveToSQLite(store *MemStore, dbPath string) error {
 		sans := slices.Concat(rec.Cert.DNSNames, FormatIPAddresses(rec.Cert.IPAddresses))
 		sansJSON, err := json.Marshal(sans)
 		if err != nil {
-			slog.Warn("marshaling SANs to JSON", "serial", rec.Cert.SerialNumber, "error", err)
-			sansJSON = []byte("[]")
+			return fmt.Errorf("marshaling SANs for serial %s: %w", rec.Cert.SerialNumber, err)
 		}
 
 		notBefore := rec.NotBefore
