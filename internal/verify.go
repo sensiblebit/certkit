@@ -149,12 +149,14 @@ func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) 
 	}
 
 	// Revocation checks (require a valid chain to obtain the issuer).
-	if (input.CheckOCSP || input.CheckCRL) && bundle != nil {
+	if input.CheckOCSP || input.CheckCRL {
 		var issuer *x509.Certificate
-		if len(bundle.Intermediates) > 0 {
-			issuer = bundle.Intermediates[0]
-		} else if len(bundle.Roots) > 0 {
-			issuer = bundle.Roots[0]
+		if bundle != nil {
+			if len(bundle.Intermediates) > 0 {
+				issuer = bundle.Intermediates[0]
+			} else if len(bundle.Roots) > 0 {
+				issuer = bundle.Roots[0]
+			}
 		}
 		if issuer != nil {
 			if input.CheckOCSP {
@@ -180,16 +182,21 @@ func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) 
 				}
 			}
 		} else {
+			// Chain validation failed or issuer not found — report skipped.
+			skipDetail := "no issuer certificate found in chain"
+			if bundle == nil && input.CheckChain {
+				skipDetail = "chain validation failed; cannot determine issuer"
+			}
 			if input.CheckOCSP {
 				result.OCSP = &certkit.OCSPResult{
 					Status: "skipped",
-					Detail: "no issuer certificate found in chain",
+					Detail: skipDetail,
 				}
 			}
 			if input.CheckCRL {
 				result.CRL = &certkit.CRLCheckResult{
-					Status: "unavailable",
-					Detail: "no issuer certificate found in chain",
+					Status: "skipped",
+					Detail: skipDetail,
 				}
 			}
 		}

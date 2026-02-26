@@ -195,10 +195,11 @@ func TestFetchCRL(t *testing.T) {
 	}
 
 	tests := []struct {
-		name       string
-		handler    http.HandlerFunc
-		wantErr    string
-		wantLength int
+		name        string
+		handler     http.HandlerFunc // nil = no server needed (use overrideURL)
+		overrideURL string           // direct URL (bypasses test server)
+		wantErr     string
+		wantLength  int
 	}{
 		{
 			name: "success",
@@ -229,18 +230,31 @@ func TestFetchCRL(t *testing.T) {
 			},
 			wantErr: "stopped after 3 redirects",
 		},
+		{
+			name:        "SSRF blocked loopback IP",
+			overrideURL: "http://127.0.0.1/crl",
+			wantErr:     "validating CRL URL",
+		},
+		{
+			name:        "invalid scheme",
+			overrideURL: "ftp://example.com/crl",
+			wantErr:     "validating CRL URL",
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			srv := httptest.NewServer(tc.handler)
-			t.Cleanup(srv.Close)
 
-			// Replace 127.0.0.1 with localhost to pass SSRF validation.
-			srvURL := strings.Replace(srv.URL, "127.0.0.1", "localhost", 1)
+			fetchURL := tc.overrideURL
+			if tc.handler != nil {
+				srv := httptest.NewServer(tc.handler)
+				t.Cleanup(srv.Close)
+				// Replace 127.0.0.1 with localhost to pass SSRF validation.
+				fetchURL = strings.Replace(srv.URL, "127.0.0.1", "localhost", 1)
+			}
 
-			data, err := FetchCRL(context.Background(), srvURL)
+			data, err := FetchCRL(context.Background(), FetchCRLInput{URL: fetchURL})
 			if tc.wantErr != "" {
 				if err == nil {
 					t.Fatalf("expected error containing %q, got nil", tc.wantErr)
@@ -260,25 +274,38 @@ func TestFetchCRL(t *testing.T) {
 	}
 }
 
-func TestFetchCRL_SSRFBlocked(t *testing.T) {
+func TestFetchCRL_AllowPrivateNetworks(t *testing.T) {
 	t.Parallel()
-	_, err := FetchCRL(context.Background(), "http://127.0.0.1/crl")
-	if err == nil {
-		t.Fatal("expected SSRF validation error, got nil")
-	}
-	if !strings.Contains(err.Error(), "validating CRL URL") {
-		t.Errorf("error = %q, want SSRF validation error", err.Error())
-	}
-}
 
-func TestFetchCRL_InvalidURL(t *testing.T) {
-	t.Parallel()
-	_, err := FetchCRL(context.Background(), "ftp://example.com/crl")
-	if err == nil {
-		t.Fatal("expected error for non-HTTP scheme, got nil")
+	// WHY: When AllowPrivateNetworks is true, FetchCRL should succeed even for
+	// loopback IPs. This is used by the `crl` CLI command where the URL is
+	// user-provided, not from an untrusted certificate extension.
+	ca := generateTestCA(t, "FetchCRL Private CA")
+	now := time.Now()
+	crlDER, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+		Number:     big.NewInt(1),
+		ThisUpdate: now,
+		NextUpdate: now.Add(24 * time.Hour),
+	}, ca.Cert, ca.Key)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(err.Error(), "validating CRL URL") {
-		t.Errorf("error = %q, want scheme validation error", err.Error())
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(crlDER)
+	}))
+	t.Cleanup(srv.Close)
+
+	// Use raw 127.0.0.1 URL — would be blocked without AllowPrivateNetworks.
+	data, err := FetchCRL(context.Background(), FetchCRLInput{
+		URL:                  srv.URL,
+		AllowPrivateNetworks: true,
+	})
+	if err != nil {
+		t.Fatalf("FetchCRL with AllowPrivateNetworks failed: %v", err)
+	}
+	if len(data) != len(crlDER) {
+		t.Errorf("got %d bytes, want %d", len(data), len(crlDER))
 	}
 }
 
@@ -293,7 +320,7 @@ func TestCheckLeafCRL(t *testing.T) {
 		name       string
 		crlFunc    func(t *testing.T, srv *httptest.Server) []byte
 		leafSerial *big.Int
-		useWrongCA bool
+		cdps       []string // override CDPs directly (no server needed)
 		wantStatus string
 		wantDetail string
 	}{
@@ -378,13 +405,21 @@ func TestCheckLeafCRL(t *testing.T) {
 			wantStatus: "unavailable",
 			wantDetail: "no CRL distribution points",
 		},
+		{
+			name:       "non-HTTP CDP",
+			crlFunc:    nil,
+			leafSerial: big.NewInt(100),
+			cdps:       []string{"ldap://example.com/crl"},
+			wantStatus: "unavailable",
+			wantDetail: "no HTTP CRL distribution point",
+		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			var cdpURL string
+			var cdps []string
 			if tc.crlFunc != nil {
 				var crlData []byte
 				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -392,12 +427,14 @@ func TestCheckLeafCRL(t *testing.T) {
 				}))
 				t.Cleanup(srv.Close)
 				crlData = tc.crlFunc(t, srv)
-				cdpURL = strings.Replace(srv.URL, "127.0.0.1", "localhost", 1)
+				cdps = []string{strings.Replace(srv.URL, "127.0.0.1", "localhost", 1)}
+			} else if tc.cdps != nil {
+				cdps = tc.cdps
 			}
 
 			leaf := &x509.Certificate{SerialNumber: tc.leafSerial}
-			if cdpURL != "" {
-				leaf.CRLDistributionPoints = []string{cdpURL}
+			if len(cdps) > 0 {
+				leaf.CRLDistributionPoints = cdps
 			}
 
 			result := CheckLeafCRL(context.Background(), CheckLeafCRLInput{
@@ -411,27 +448,6 @@ func TestCheckLeafCRL(t *testing.T) {
 				t.Errorf("Detail = %q, want substring %q", result.Detail, tc.wantDetail)
 			}
 		})
-	}
-}
-
-func TestCheckLeafCRL_NonHTTPDistributionPoint(t *testing.T) {
-	t.Parallel()
-
-	ca := generateTestCA(t, "NonHTTP CDP CA")
-	leaf := &x509.Certificate{
-		SerialNumber:          big.NewInt(1),
-		CRLDistributionPoints: []string{"ldap://example.com/crl"},
-	}
-
-	result := CheckLeafCRL(context.Background(), CheckLeafCRLInput{
-		Leaf:   leaf,
-		Issuer: ca.Cert,
-	})
-	if result.Status != "unavailable" {
-		t.Errorf("Status = %q, want %q", result.Status, "unavailable")
-	}
-	if !strings.Contains(result.Detail, "no HTTP CRL distribution point") {
-		t.Errorf("Detail = %q, want substring about non-HTTP CDP", result.Detail)
 	}
 }
 

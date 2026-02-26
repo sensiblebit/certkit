@@ -84,6 +84,9 @@ type ConnectTLSInput struct {
 	CheckCRL bool
 	// CRLTimeout is the timeout for CRL fetching (default: 5s).
 	CRLTimeout time.Duration
+	// RootCAs overrides system roots for chain verification. When nil,
+	// the system root pool is used. Useful for testing against private CAs.
+	RootCAs *x509.CertPool
 }
 
 // ClientAuthInfo describes the server's client certificate request (mTLS).
@@ -241,6 +244,7 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 		opts := x509.VerifyOptions{
 			DNSName:       serverName,
 			Intermediates: x509.NewCertPool(),
+			Roots:         input.RootCAs,
 		}
 		for _, cert := range state.PeerCertificates[1:] {
 			opts.Intermediates.AddCert(cert)
@@ -278,21 +282,31 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 		}
 	}
 
+	// Resolve the issuer certificate for revocation checks.
+	// Prefer PeerCertificates[1] (server-sent), fall back to VerifiedChains
+	// (populated when AIA walking fetched the missing intermediate).
+	leaf := state.PeerCertificates[0]
+	var issuer *x509.Certificate
+	if len(state.PeerCertificates) >= 2 {
+		issuer = state.PeerCertificates[1]
+	} else if len(result.VerifiedChains) > 0 && len(result.VerifiedChains[0]) > 1 {
+		issuer = result.VerifiedChains[0][1]
+	}
+
 	// Best-effort OCSP check on the leaf certificate.
 	if input.DisableOCSP {
 		// User explicitly disabled — no output.
-	} else if len(state.PeerCertificates) < 2 {
+	} else if issuer == nil {
 		result.OCSP = &OCSPResult{
 			Status: "skipped",
 			Detail: "no issuer certificate in chain",
 		}
-	} else if leaf := state.PeerCertificates[0]; len(leaf.OCSPServer) == 0 {
+	} else if len(leaf.OCSPServer) == 0 {
 		result.OCSP = &OCSPResult{
 			Status: "skipped",
 			Detail: "certificate has no OCSP responder URL",
 		}
 	} else {
-		issuer := state.PeerCertificates[1]
 		ocspTimeout := input.OCSPTimeout
 		if ocspTimeout == 0 {
 			ocspTimeout = 5 * time.Second
@@ -316,15 +330,13 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 	}
 
 	// Opt-in CRL check on the leaf certificate.
-	if input.CheckCRL && len(state.PeerCertificates) >= 2 {
-		leaf := state.PeerCertificates[0]
-		issuer := state.PeerCertificates[1]
+	if input.CheckCRL && issuer != nil {
 		result.CRL = CheckLeafCRL(ctx, CheckLeafCRLInput{
 			Leaf:    leaf,
 			Issuer:  issuer,
 			Timeout: input.CRLTimeout,
 		})
-	} else if input.CheckCRL && len(state.PeerCertificates) == 1 {
+	} else if input.CheckCRL {
 		result.CRL = &CRLCheckResult{
 			Status: "unavailable",
 			Detail: "no issuer certificate available to verify CRL signature",
@@ -378,7 +390,7 @@ func CheckLeafCRL(ctx context.Context, input CheckLeafCRLInput) *CRLCheckResult 
 	crlCtx, crlCancel := context.WithTimeout(ctx, timeout)
 	defer crlCancel()
 
-	data, err := FetchCRL(crlCtx, cdpURL)
+	data, err := FetchCRL(crlCtx, FetchCRLInput{URL: cdpURL})
 	if err != nil {
 		slog.Debug("CRL fetch failed", "url", cdpURL, "error", err)
 		return &CRLCheckResult{
@@ -408,7 +420,11 @@ func CheckLeafCRL(ctx context.Context, input CheckLeafCRLInput) *CRLCheckResult 
 	}
 
 	// Reject expired CRLs to prevent replay of stale data over HTTP.
-	if !crl.NextUpdate.IsZero() && time.Now().After(crl.NextUpdate) {
+	// A zero NextUpdate is accepted per RFC 5280 §5.1.2.5 (field is OPTIONAL)
+	// but logged as a warning since it means no freshness guarantee.
+	if crl.NextUpdate.IsZero() {
+		slog.Debug("CRL has no NextUpdate field — freshness cannot be verified", "url", cdpURL)
+	} else if time.Now().After(crl.NextUpdate) {
 		slog.Debug("CRL is expired", "url", cdpURL, "next_update", crl.NextUpdate)
 		return &CRLCheckResult{
 			Status:            "unavailable",

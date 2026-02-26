@@ -58,7 +58,10 @@ func runCRL(cmd *cobra.Command, args []string) error {
 	var err error
 
 	if strings.HasPrefix(source, "http://") || strings.HasPrefix(source, "https://") {
-		data, err = certkit.FetchCRL(cmd.Context(), source)
+		data, err = certkit.FetchCRL(cmd.Context(), certkit.FetchCRLInput{
+			URL:                  source,
+			AllowPrivateNetworks: true,
+		})
 		if err != nil {
 			return fmt.Errorf("fetching CRL: %w", err)
 		}

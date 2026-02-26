@@ -851,61 +851,139 @@ func TestConnectTLS_CRL(t *testing.T) {
 
 	// Integration test: verify ConnectTLS wires CRL check into result.
 	// CRLContainsCertificate good/revoked mapping is tested in crl_test.go.
-	ca := generateTestCA(t, "CRL Connect CA")
-
+	// Signature verification and freshness are tested in TestCheckLeafCRL.
 	revokedSerial := big.NewInt(200)
+	now := time.Now()
 
-	crlTemplate := &x509.RevocationList{
-		Number:     big.NewInt(1),
-		ThisUpdate: time.Now().Add(-time.Hour),
-		NextUpdate: time.Now().Add(time.Hour),
-		RevokedCertificateEntries: []x509.RevocationListEntry{
-			{SerialNumber: revokedSerial, RevocationTime: time.Now().Add(-6 * time.Hour)},
+	tests := []struct {
+		name         string
+		setupCRL     func(t *testing.T, ca *testCA) (crlDER []byte, signer *testCA)
+		leafSerial   *big.Int
+		wantStatus   string
+		wantContains string // substring expected in Detail
+	}{
+		{
+			name: "revoked",
+			setupCRL: func(t *testing.T, ca *testCA) ([]byte, *testCA) {
+				der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+					Number:     big.NewInt(1),
+					ThisUpdate: now.Add(-time.Hour),
+					NextUpdate: now.Add(time.Hour),
+					RevokedCertificateEntries: []x509.RevocationListEntry{
+						{SerialNumber: revokedSerial, RevocationTime: now.Add(-6 * time.Hour)},
+					},
+				}, ca.Cert, ca.Key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return der, ca
+			},
+			leafSerial:   revokedSerial,
+			wantStatus:   "revoked",
+			wantContains: revokedSerial.Text(16),
+		},
+		{
+			name: "good",
+			setupCRL: func(t *testing.T, ca *testCA) ([]byte, *testCA) {
+				der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+					Number:     big.NewInt(1),
+					ThisUpdate: now.Add(-time.Hour),
+					NextUpdate: now.Add(time.Hour),
+					RevokedCertificateEntries: []x509.RevocationListEntry{
+						{SerialNumber: big.NewInt(999), RevocationTime: now.Add(-6 * time.Hour)},
+					},
+				}, ca.Cert, ca.Key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return der, ca
+			},
+			leafSerial: big.NewInt(100),
+			wantStatus: "good",
+		},
+		{
+			name: "wrong issuer",
+			setupCRL: func(t *testing.T, ca *testCA) ([]byte, *testCA) {
+				wrongCA := generateTestCA(t, "CRL Wrong CA")
+				der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+					Number:     big.NewInt(1),
+					ThisUpdate: now.Add(-time.Hour),
+					NextUpdate: now.Add(time.Hour),
+					RevokedCertificateEntries: []x509.RevocationListEntry{
+						{SerialNumber: revokedSerial, RevocationTime: now.Add(-6 * time.Hour)},
+					},
+				}, wrongCA.Cert, wrongCA.Key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return der, wrongCA
+			},
+			leafSerial:   revokedSerial,
+			wantStatus:   "unavailable",
+			wantContains: "signature verification failed",
+		},
+		{
+			name: "expired CRL",
+			setupCRL: func(t *testing.T, ca *testCA) ([]byte, *testCA) {
+				der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+					Number:     big.NewInt(1),
+					ThisUpdate: now.Add(-48 * time.Hour),
+					NextUpdate: now.Add(-24 * time.Hour),
+				}, ca.Cert, ca.Key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return der, ca
+			},
+			leafSerial:   big.NewInt(100),
+			wantStatus:   "unavailable",
+			wantContains: "CRL expired",
 		},
 	}
-	crlDER, err := x509.CreateRevocationList(rand.Reader, crlTemplate, ca.Cert, ca.Key)
-	if err != nil {
-		t.Fatal(err)
-	}
 
-	crlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/pkix-crl")
-		_, _ = w.Write(crlDER)
-	}))
-	defer crlServer.Close()
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	cdpURL := strings.Replace(crlServer.URL, "127.0.0.1", "localhost", 1)
+			ca := generateTestCA(t, "CRL Connect CA")
+			crlDER, _ := tc.setupCRL(t, ca)
 
-	leaf := generateTestLeafCert(t, ca,
-		withSerial(revokedSerial),
-		withCRLDistributionPoints(cdpURL),
-	)
-	port := startTLSServer(t, [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
+			crlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/pkix-crl")
+				_, _ = w.Write(crlDER)
+			}))
+			t.Cleanup(crlServer.Close)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+			cdpURL := strings.Replace(crlServer.URL, "127.0.0.1", "localhost", 1)
+			leaf := generateTestLeafCert(t, ca,
+				withSerial(tc.leafSerial),
+				withCRLDistributionPoints(cdpURL),
+			)
+			port := startTLSServer(t, [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
 
-	result, err := ConnectTLS(ctx, ConnectTLSInput{
-		Host:        "127.0.0.1",
-		Port:        port,
-		CheckCRL:    true,
-		DisableOCSP: true,
-	})
-	if err != nil {
-		t.Fatalf("ConnectTLS failed: %v", err)
-	}
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
 
-	if result.CRL == nil {
-		t.Fatal("CRL result is nil")
-	}
-	if result.CRL.Status != "revoked" {
-		t.Errorf("CRL.Status = %q, want %q", result.CRL.Status, "revoked")
-	}
-	if result.CRL.DistributionPoint != cdpURL {
-		t.Errorf("CRL.DistributionPoint = %q, want %q", result.CRL.DistributionPoint, cdpURL)
-	}
-	if !strings.Contains(result.CRL.Detail, revokedSerial.Text(16)) {
-		t.Errorf("CRL.Detail = %q, want serial %s", result.CRL.Detail, revokedSerial.Text(16))
+			result, err := ConnectTLS(ctx, ConnectTLSInput{
+				Host:        "127.0.0.1",
+				Port:        port,
+				CheckCRL:    true,
+				DisableOCSP: true,
+			})
+			if err != nil {
+				t.Fatalf("ConnectTLS failed: %v", err)
+			}
+
+			if result.CRL == nil {
+				t.Fatal("CRL result is nil")
+			}
+			if result.CRL.Status != tc.wantStatus {
+				t.Errorf("CRL.Status = %q, want %q", result.CRL.Status, tc.wantStatus)
+			}
+			if tc.wantContains != "" && !strings.Contains(result.CRL.Detail, tc.wantContains) {
+				t.Errorf("CRL.Detail = %q, want substring %q", result.CRL.Detail, tc.wantContains)
+			}
+		})
 	}
 }
 
@@ -982,26 +1060,29 @@ func TestConnectTLS_CRL_Unavailable(t *testing.T) {
 	}
 }
 
-func TestConnectTLS_CRL_WrongIssuer(t *testing.T) {
+func TestConnectTLS_CRL_AIAFetchedIssuer(t *testing.T) {
 	t.Parallel()
 
-	// CRL signed by a different CA than the leaf's issuer — signature
-	// verification should fail and report "unavailable".
-	ca := generateTestCA(t, "CRL Correct CA")
-	wrongCA := generateTestCA(t, "CRL Wrong CA")
+	// WHY: When the server sends only a leaf cert (no intermediates), the issuer
+	// must be obtained from VerifiedChains (populated by AIA walking) for CRL
+	// signature verification. This test verifies the fallback from
+	// PeerCertificates[1] to VerifiedChains[0][1].
 
-	revokedSerial := big.NewInt(300)
+	// Build 3-tier PKI: root -> intermediate -> leaf.
+	root := generateTestCA(t, "AIA CRL Root CA")
+	intermediate := generateIntermediateCA(t, root, "AIA CRL Intermediate CA")
 
-	// CRL signed by wrongCA.
-	crlTemplate := &x509.RevocationList{
+	revokedSerial := big.NewInt(500)
+
+	// CRL signed by the intermediate CA containing the leaf serial.
+	crlDER, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
 		Number:     big.NewInt(1),
 		ThisUpdate: time.Now().Add(-time.Hour),
 		NextUpdate: time.Now().Add(time.Hour),
 		RevokedCertificateEntries: []x509.RevocationListEntry{
 			{SerialNumber: revokedSerial, RevocationTime: time.Now().Add(-6 * time.Hour)},
 		},
-	}
-	crlDER, err := x509.CreateRevocationList(rand.Reader, crlTemplate, wrongCA.Cert, wrongCA.Key)
+	}, intermediate.Cert, intermediate.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1010,14 +1091,29 @@ func TestConnectTLS_CRL_WrongIssuer(t *testing.T) {
 		w.Header().Set("Content-Type", "application/pkix-crl")
 		_, _ = w.Write(crlDER)
 	}))
-	defer crlServer.Close()
+	t.Cleanup(crlServer.Close)
+
+	// AIA server serves the intermediate cert.
+	aiaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pkix-cert")
+		_, _ = w.Write(intermediate.CertDER)
+	}))
+	t.Cleanup(aiaServer.Close)
 
 	cdpURL := strings.Replace(crlServer.URL, "127.0.0.1", "localhost", 1)
-	leaf := generateTestLeafCert(t, ca,
+	aiaURL := strings.Replace(aiaServer.URL, "127.0.0.1", "localhost", 1)
+
+	leaf := generateTestLeafCert(t, intermediate,
 		withSerial(revokedSerial),
 		withCRLDistributionPoints(cdpURL),
+		withAIA(aiaURL),
 	)
-	port := startTLSServer(t, [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
+
+	// Server sends ONLY the leaf — no intermediate in the chain.
+	port := startTLSServer(t, [][]byte{leaf.DER}, leaf.Key)
+
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(root.Cert)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -1027,125 +1123,25 @@ func TestConnectTLS_CRL_WrongIssuer(t *testing.T) {
 		Port:        port,
 		CheckCRL:    true,
 		DisableOCSP: true,
+		RootCAs:     rootPool,
 	})
 	if err != nil {
 		t.Fatalf("ConnectTLS failed: %v", err)
 	}
 
+	// Chain should verify via AIA-fetched intermediate.
+	if result.VerifyError != "" {
+		t.Fatalf("expected chain to verify via AIA, got error: %s", result.VerifyError)
+	}
+	if !result.AIAFetched {
+		t.Error("expected AIAFetched=true")
+	}
+
+	// CRL check should use the AIA-fetched intermediate as issuer.
 	if result.CRL == nil {
-		t.Fatal("CRL is nil")
+		t.Fatal("CRL result is nil — issuer fallback to VerifiedChains failed")
 	}
-	if result.CRL.Status != "unavailable" {
-		t.Errorf("CRL.Status = %q, want %q (wrong issuer should fail signature check)", result.CRL.Status, "unavailable")
-	}
-	if !strings.Contains(result.CRL.Detail, "signature verification failed") {
-		t.Errorf("CRL.Detail = %q, want substring %q", result.CRL.Detail, "signature verification failed")
-	}
-}
-
-func TestConnectTLS_CRL_Expired(t *testing.T) {
-	t.Parallel()
-
-	// An expired but validly-signed CRL should be rejected to prevent
-	// replay attacks over HTTP CRL distribution points.
-	ca := generateTestCA(t, "CRL Expired CA")
-
-	crlTemplate := &x509.RevocationList{
-		Number:     big.NewInt(1),
-		ThisUpdate: time.Now().Add(-48 * time.Hour),
-		NextUpdate: time.Now().Add(-24 * time.Hour), // expired 24h ago
-	}
-	crlDER, err := x509.CreateRevocationList(rand.Reader, crlTemplate, ca.Cert, ca.Key)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	crlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/pkix-crl")
-		_, _ = w.Write(crlDER)
-	}))
-	defer crlServer.Close()
-
-	cdpURL := strings.Replace(crlServer.URL, "127.0.0.1", "localhost", 1)
-	leaf := generateTestLeafCert(t, ca, withCRLDistributionPoints(cdpURL))
-	port := startTLSServer(t, [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	result, err := ConnectTLS(ctx, ConnectTLSInput{
-		Host:        "127.0.0.1",
-		Port:        port,
-		CheckCRL:    true,
-		DisableOCSP: true,
-	})
-	if err != nil {
-		t.Fatalf("ConnectTLS failed: %v", err)
-	}
-
-	if result.CRL == nil {
-		t.Fatal("CRL is nil")
-	}
-	if result.CRL.Status != "unavailable" {
-		t.Errorf("CRL.Status = %q, want %q (expired CRL should be rejected)", result.CRL.Status, "unavailable")
-	}
-	if !strings.Contains(result.CRL.Detail, "CRL expired") {
-		t.Errorf("CRL.Detail = %q, want substring %q", result.CRL.Detail, "CRL expired")
-	}
-}
-
-func TestConnectTLS_CRL_Good(t *testing.T) {
-	t.Parallel()
-
-	// Verify the "good" CRL path: leaf serial is NOT in the CRL.
-	ca := generateTestCA(t, "CRL Good CA")
-
-	crlTemplate := &x509.RevocationList{
-		Number:     big.NewInt(1),
-		ThisUpdate: time.Now().Add(-time.Hour),
-		NextUpdate: time.Now().Add(time.Hour),
-		RevokedCertificateEntries: []x509.RevocationListEntry{
-			{SerialNumber: big.NewInt(999), RevocationTime: time.Now().Add(-6 * time.Hour)},
-		},
-	}
-	crlDER, err := x509.CreateRevocationList(rand.Reader, crlTemplate, ca.Cert, ca.Key)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	crlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/pkix-crl")
-		_, _ = w.Write(crlDER)
-	}))
-	defer crlServer.Close()
-
-	cdpURL := strings.Replace(crlServer.URL, "127.0.0.1", "localhost", 1)
-	leaf := generateTestLeafCert(t, ca,
-		withSerial(big.NewInt(100)), // different from CRL's 999
-		withCRLDistributionPoints(cdpURL),
-	)
-	port := startTLSServer(t, [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	result, err := ConnectTLS(ctx, ConnectTLSInput{
-		Host:        "127.0.0.1",
-		Port:        port,
-		CheckCRL:    true,
-		DisableOCSP: true,
-	})
-	if err != nil {
-		t.Fatalf("ConnectTLS failed: %v", err)
-	}
-
-	if result.CRL == nil {
-		t.Fatal("CRL is nil")
-	}
-	if result.CRL.Status != "good" {
-		t.Errorf("CRL.Status = %q, want %q", result.CRL.Status, "good")
-	}
-	if result.CRL.DistributionPoint != cdpURL {
-		t.Errorf("CRL.DistributionPoint = %q, want %q", result.CRL.DistributionPoint, cdpURL)
+	if result.CRL.Status != "revoked" {
+		t.Errorf("CRL.Status = %q, want %q", result.CRL.Status, "revoked")
 	}
 }

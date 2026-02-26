@@ -308,6 +308,33 @@ func generateTestCA(t *testing.T, cn string) *testCA {
 	return &testCA{Cert: cert, CertDER: der, Key: key}
 }
 
+// generateIntermediateCA creates a CA certificate signed by parent, for 3-tier chain tests.
+func generateIntermediateCA(t *testing.T, parent *testCA, cn string) *testCA {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: cn},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, parent.Cert, &key.PublicKey, parent.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &testCA{Cert: cert, CertDER: der, Key: key}
+}
+
 // testLeafOption configures a leaf certificate created by generateTestLeafCert.
 type testLeafOption func(*x509.Certificate)
 
@@ -324,6 +351,11 @@ func withCRLDistributionPoints(urls ...string) testLeafOption {
 // withSerial sets the leaf certificate serial number.
 func withSerial(n *big.Int) testLeafOption {
 	return func(tmpl *x509.Certificate) { tmpl.SerialNumber = n }
+}
+
+// withAIA sets the leaf's Authority Information Access (IssuingCertificateURL).
+func withAIA(urls ...string) testLeafOption {
+	return func(tmpl *x509.Certificate) { tmpl.IssuingCertificateURL = urls }
 }
 
 // testLeaf holds a test leaf certificate, its DER encoding, and key.

@@ -581,115 +581,116 @@ func TestFormatDiagnoses(t *testing.T) {
 	}
 }
 
-func TestVerifyCert_OCSPSkippedNoURL(t *testing.T) {
-	// WHY: When CheckOCSP=true but the certificate has no OCSP responder URL,
-	// the result should show "skipped" rather than failing or returning nil.
+func TestVerifyCert_RevocationBehavior(t *testing.T) {
+	// WHY: Table-driven test for revocation flag combinations — verifies that
+	// OCSP/CRL results are correctly populated, skipped, or nil based on flags
+	// and chain validity.
 	t.Parallel()
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "no-ocsp.example.com", []string{"no-ocsp.example.com"}, nil)
 
-	result, err := VerifyCert(context.Background(), &VerifyInput{
-		Cert:        leaf.cert,
-		CheckChain:  true,
-		TrustStore:  "custom",
-		CustomRoots: []*x509.Certificate{ca.cert},
-		CheckOCSP:   true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.OCSP == nil {
-		t.Fatal("expected OCSP result when CheckOCSP=true")
-	}
-	if result.OCSP.Status != "skipped" {
-		t.Errorf("OCSP.Status = %q, want %q", result.OCSP.Status, "skipped")
-	}
-	if !strings.Contains(result.OCSP.Detail, "no OCSP responder URL") {
-		t.Errorf("OCSP.Detail = %q, want substring about no OCSP URL", result.OCSP.Detail)
-	}
-}
-
-func TestVerifyCert_CRLSkippedNoCDP(t *testing.T) {
-	// WHY: When CheckCRL=true but the certificate has no CRL distribution points,
-	// the result should show "unavailable" with an explanation.
-	t.Parallel()
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "no-cdp.example.com", []string{"no-cdp.example.com"}, nil)
-
-	result, err := VerifyCert(context.Background(), &VerifyInput{
-		Cert:        leaf.cert,
-		CheckChain:  true,
-		TrustStore:  "custom",
-		CustomRoots: []*x509.Certificate{ca.cert},
-		CheckCRL:    true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.CRL == nil {
-		t.Fatal("expected CRL result when CheckCRL=true")
-	}
-	if result.CRL.Status != "unavailable" {
-		t.Errorf("CRL.Status = %q, want %q", result.CRL.Status, "unavailable")
-	}
-	if !strings.Contains(result.CRL.Detail, "no CRL distribution points") {
-		t.Errorf("CRL.Detail = %q, want substring about no CDPs", result.CRL.Detail)
-	}
-}
-
-func TestVerifyCert_RevocationSkippedInvalidChain(t *testing.T) {
-	// WHY: When the chain is invalid, revocation checks must not run (no issuer
-	// to verify signatures against). OCSP/CRL should be nil (not populated at all).
-	t.Parallel()
 	ca := newRSACA(t)
 	wrongCA := newRSACA(t)
-	leaf := newRSALeaf(t, wrongCA, "wrong-chain.example.com", []string{"wrong-chain.example.com"}, nil)
 
-	result, err := VerifyCert(context.Background(), &VerifyInput{
-		Cert:        leaf.cert,
-		CheckChain:  true,
-		TrustStore:  "custom",
-		CustomRoots: []*x509.Certificate{ca.cert},
-		CheckOCSP:   true,
-		CheckCRL:    true,
-	})
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name           string
+		useWrongCA     bool // sign leaf with wrongCA (chain will fail)
+		checkOCSP      bool
+		checkCRL       bool
+		wantOCSPNil    bool
+		wantOCSPStatus string
+		wantOCSPDetail string
+		wantCRLNil     bool
+		wantCRLStatus  string
+		wantCRLDetail  string
+	}{
+		{
+			name:           "OCSP skipped no responder URL",
+			checkOCSP:      true,
+			wantOCSPStatus: "skipped",
+			wantOCSPDetail: "no OCSP responder URL",
+			wantCRLNil:     true,
+		},
+		{
+			name:          "CRL unavailable no CDPs",
+			checkCRL:      true,
+			wantOCSPNil:   true,
+			wantCRLStatus: "unavailable",
+			wantCRLDetail: "no CRL distribution points",
+		},
+		{
+			name:           "invalid chain skips revocation",
+			useWrongCA:     true,
+			checkOCSP:      true,
+			checkCRL:       true,
+			wantOCSPStatus: "skipped",
+			wantOCSPDetail: "chain validation failed",
+			wantCRLStatus:  "skipped",
+			wantCRLDetail:  "chain validation failed",
+		},
+		{
+			name:        "disabled returns nil",
+			checkOCSP:   false,
+			checkCRL:    false,
+			wantOCSPNil: true,
+			wantCRLNil:  true,
+		},
 	}
-	if result.ChainValid == nil || *result.ChainValid {
-		t.Fatal("expected chain to be invalid")
-	}
-	if result.OCSP != nil {
-		t.Errorf("expected OCSP to be nil when chain is invalid, got %+v", result.OCSP)
-	}
-	if result.CRL != nil {
-		t.Errorf("expected CRL to be nil when chain is invalid, got %+v", result.CRL)
-	}
-}
 
-func TestVerifyCert_RevocationNilWhenDisabled(t *testing.T) {
-	// WHY: When CheckOCSP and CheckCRL are both false (defaults), the OCSP and
-	// CRL fields must be nil so they don't appear in JSON output.
-	t.Parallel()
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "default.example.com", []string{"default.example.com"}, nil)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-	result, err := VerifyCert(context.Background(), &VerifyInput{
-		Cert:        leaf.cert,
-		CheckChain:  true,
-		TrustStore:  "custom",
-		CustomRoots: []*x509.Certificate{ca.cert},
-		CheckOCSP:   false,
-		CheckCRL:    false,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.OCSP != nil {
-		t.Errorf("expected OCSP to be nil when disabled, got %+v", result.OCSP)
-	}
-	if result.CRL != nil {
-		t.Errorf("expected CRL to be nil when disabled, got %+v", result.CRL)
+			signer := ca
+			if tc.useWrongCA {
+				signer = wrongCA
+			}
+			leaf := newRSALeaf(t, signer, "test.example.com", []string{"test.example.com"}, nil)
+
+			result, err := VerifyCert(context.Background(), &VerifyInput{
+				Cert:        leaf.cert,
+				CheckChain:  true,
+				TrustStore:  "custom",
+				CustomRoots: []*x509.Certificate{ca.cert},
+				CheckOCSP:   tc.checkOCSP,
+				CheckCRL:    tc.checkCRL,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// Check OCSP
+			if tc.wantOCSPNil {
+				if result.OCSP != nil {
+					t.Errorf("expected OCSP nil, got %+v", result.OCSP)
+				}
+			} else {
+				if result.OCSP == nil {
+					t.Fatal("expected OCSP result, got nil")
+				}
+				if result.OCSP.Status != tc.wantOCSPStatus {
+					t.Errorf("OCSP.Status = %q, want %q", result.OCSP.Status, tc.wantOCSPStatus)
+				}
+				if tc.wantOCSPDetail != "" && !strings.Contains(result.OCSP.Detail, tc.wantOCSPDetail) {
+					t.Errorf("OCSP.Detail = %q, want substring %q", result.OCSP.Detail, tc.wantOCSPDetail)
+				}
+			}
+
+			// Check CRL
+			if tc.wantCRLNil {
+				if result.CRL != nil {
+					t.Errorf("expected CRL nil, got %+v", result.CRL)
+				}
+			} else {
+				if result.CRL == nil {
+					t.Fatal("expected CRL result, got nil")
+				}
+				if result.CRL.Status != tc.wantCRLStatus {
+					t.Errorf("CRL.Status = %q, want %q", result.CRL.Status, tc.wantCRLStatus)
+				}
+				if tc.wantCRLDetail != "" && !strings.Contains(result.CRL.Detail, tc.wantCRLDetail) {
+					t.Errorf("CRL.Detail = %q, want substring %q", result.CRL.Detail, tc.wantCRLDetail)
+				}
+			}
+		})
 	}
 }
 

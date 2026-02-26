@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `connect` OCSP "unknown" output now explains the status: "responder does not recognize this certificate" ([#78])
 - Add `--no-ocsp` flag to `connect` to disable automatic OCSP revocation check ([#78])
 - Add `--ocsp` and `--crl` flags to `verify` for revocation checking against OCSP responders and CRL distribution points ([#78])
+- Add `RootCAs` field to `ConnectTLSInput` for chain verification against custom root pools ([#78])
+- Add `FetchCRLInput` struct with `AllowPrivateNetworks` flag — `certkit crl` now accepts private/loopback IPs for user-provided URLs ([#78])
 - Add `MarshalSANExtension` for building complete SAN extensions with OtherName support (UPN, XMPP, SRV, SmtpUTF8Mailbox, arbitrary OIDs) ([#74])
 - Add `ResolveOtherNameOID` for resolving OtherName labels or dotted-decimal OID strings ([#74])
 - Add `OtherNameSAN` and `MarshalSANExtensionInput` types for OtherName SAN generation ([#74])
@@ -49,6 +51,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Breaking:** Rename `CRLCheckResult.URL` to `CRLCheckResult.DistributionPoint` (JSON: `distribution_point`) for accuracy and CLI-4 consistency ([#78])
 - **Breaking:** Rename OCSP JSON field `serial_number` to `serial` for CLI-4 consistency with all other commands ([#78])
+- **Breaking:** `FetchCRL` now takes `FetchCRLInput` struct instead of a URL string — enables `AllowPrivateNetworks` for user-provided URLs ([#78])
 - Export `CheckLeafCRL` and `CheckLeafCRLInput` for use by `verify` command — previously unexported ([#78])
 - Improve error messages when AIA certificate fetching fails — errors now include the URL and operation context ([#76])
 
@@ -59,6 +62,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fix `connect` OCSP/CRL checks ignoring AIA-fetched issuer — when server sends leaf-only chain, revocation checks now fall back to `VerifiedChains` for the issuer ([#78])
+- Fix `certkit crl` rejecting private/loopback IPs — SSRF validation is now skipped for user-provided URLs ([#78])
+- `verify --ocsp`/`--crl` now reports "skipped" status when chain validation fails instead of silently omitting results ([#78])
 - `verify --ocsp` revocation error now includes revocation time and reason instead of a generic "certificate is revoked (OCSP)" message ([#78])
 - Add 10-second HTTP client timeout to OCSP and CRL fetchers — prevents indefinite hangs during DNS/connection phases ([#78])
 - Fix `--save-db` error messages formatting `*big.Int` serial numbers with `%s` instead of calling `.String()` ([#76])
@@ -118,9 +124,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Tests
 
+- Add `TestConnectTLS_CRL_AIAFetchedIssuer` — verifies CRL checking works when issuer is obtained via AIA walking ([#78])
+- Add `TestFetchCRL_AllowPrivateNetworks` — verifies loopback IPs succeed with `AllowPrivateNetworks` ([#78])
 - Add `TestFetchCRL` unit tests for HTTP handling, redirect limits, SSRF blocking, and error paths ([#78])
 - Add `TestCheckLeafCRL` table-driven tests covering revoked, good, expired CRL, wrong issuer, no CDPs, and non-HTTP CDPs ([#78])
-- Add `TestVerifyCert_OCSP*` and `TestVerifyCert_CRL*` tests for `verify --ocsp`/`--crl` code paths — skipped, unavailable, disabled, and chain-invalid scenarios ([#78])
+- Consolidate `TestVerifyCert_RevocationBehavior` table-driven test replacing 4 standalone verify revocation tests (T-12) ([#78])
+- Consolidate `TestConnectTLS_CRL` into single table-driven test with 4 cases replacing standalone WrongIssuer/Expired/Good tests (T-12) ([#78])
 - Add `TestFormatCRLLine` covering all status branches including unknown fallback ([#78])
 - Add `TestFindAllKeyLeafPairs` and `TestBuildChainFromPool` tests for `convert --key` matching logic — single/multi match, nil certs, CA fallback, leaf priority, chain building, cycle termination ([#75])
 - Fix `TestConnectTLS_AIAFetch` false positive — add atomic request counter to verify AIA HTTP server is actually contacted ([#75])
