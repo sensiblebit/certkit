@@ -62,6 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fix `connect` OCSP/CRL checks failing when the server sends a duplicate leaf certificate in the chain (e.g., `[leaf, leaf, intermediate]`) — issuer resolution now prefers the cryptographically verified chain over the raw server-sent chain ([`2693116`])
 - Fix `connect` OCSP/CRL checks ignoring AIA-fetched issuer — when server sends leaf-only chain, revocation checks now fall back to `VerifiedChains` for the issuer ([#78])
 - Fix `certkit crl` rejecting private/loopback IPs — SSRF validation is now skipped for user-provided URLs ([#78])
 - `verify --ocsp`/`--crl` now reports "skipped" status when chain validation fails instead of silently omitting results ([#78])
@@ -755,6 +756,7 @@ Initial release.
 [0.1.2]: https://github.com/sensiblebit/certkit/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/sensiblebit/certkit/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/sensiblebit/certkit/releases/tag/v0.1.0
+[`2693116`]: https://github.com/sensiblebit/certkit/commit/2693116
 [`84c4edf`]: https://github.com/sensiblebit/certkit/commit/84c4edf
 [`2b8cb8c`]: https://github.com/sensiblebit/certkit/commit/2b8cb8c
 [`392878a`]: https://github.com/sensiblebit/certkit/commit/392878a

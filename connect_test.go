@@ -1145,3 +1145,88 @@ func TestConnectTLS_CRL_AIAFetchedIssuer(t *testing.T) {
 		t.Errorf("CRL.Status = %q, want %q", result.CRL.Status, "revoked")
 	}
 }
+
+func TestConnectTLS_CRL_DuplicateLeafInChain(t *testing.T) {
+	t.Parallel()
+
+	// WHY: When a server sends [leaf, leaf, intermediate] (duplicate leaf at
+	// position 1), PeerCertificates[1] is the duplicate leaf — not the actual
+	// issuer. Issuer resolution must prefer VerifiedChains[0][1] (the
+	// cryptographically validated intermediate) so CRL signature verification
+	// succeeds.
+
+	root := generateTestCA(t, "DupLeaf Root CA")
+	intermediate := generateIntermediateCA(t, root, "DupLeaf Intermediate CA")
+
+	revokedSerial := big.NewInt(600)
+
+	crlDER, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+		Number:     big.NewInt(1),
+		ThisUpdate: time.Now().Add(-time.Hour),
+		NextUpdate: time.Now().Add(time.Hour),
+		RevokedCertificateEntries: []x509.RevocationListEntry{
+			{SerialNumber: revokedSerial, RevocationTime: time.Now().Add(-6 * time.Hour)},
+		},
+	}, intermediate.Cert, intermediate.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	crlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pkix-crl")
+		_, _ = w.Write(crlDER)
+	}))
+	t.Cleanup(crlServer.Close)
+
+	cdpURL := strings.Replace(crlServer.URL, "127.0.0.1", "localhost", 1)
+	leaf := generateTestLeafCert(t, intermediate,
+		withSerial(revokedSerial),
+		withCRLDistributionPoints(cdpURL),
+	)
+
+	// Server sends [leaf, leaf(dup), intermediate] — duplicate leaf at position 1.
+	port := startTLSServer(t, [][]byte{leaf.DER, leaf.DER, intermediate.CertDER}, leaf.Key)
+
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(root.Cert)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	result, err := ConnectTLS(ctx, ConnectTLSInput{
+		Host:        "127.0.0.1",
+		Port:        port,
+		CheckCRL:    true,
+		DisableOCSP: true,
+		RootCAs:     rootPool,
+	})
+	if err != nil {
+		t.Fatalf("ConnectTLS failed: %v", err)
+	}
+
+	// Chain should verify despite the duplicate.
+	if result.VerifyError != "" {
+		t.Fatalf("expected chain to verify, got error: %s", result.VerifyError)
+	}
+
+	// Duplicate-cert diagnostic should be present.
+	hasDupDiag := false
+	for _, d := range result.Diagnostics {
+		if d.Check == "duplicate-cert" {
+			hasDupDiag = true
+			break
+		}
+	}
+	if !hasDupDiag {
+		t.Error("expected duplicate-cert diagnostic")
+	}
+
+	// CRL check must succeed — the issuer should be the intermediate from
+	// VerifiedChains, not the duplicate leaf from PeerCertificates[1].
+	if result.CRL == nil {
+		t.Fatal("CRL result is nil — issuer resolution failed")
+	}
+	if result.CRL.Status != "revoked" {
+		t.Errorf("CRL.Status = %q, want %q (detail: %s)", result.CRL.Status, "revoked", result.CRL.Detail)
+	}
+}

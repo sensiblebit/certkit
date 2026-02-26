@@ -283,14 +283,14 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 	}
 
 	// Resolve the issuer certificate for revocation checks.
-	// Prefer PeerCertificates[1] (server-sent), fall back to VerifiedChains
-	// (populated when AIA walking fetched the missing intermediate).
+	// Prefer VerifiedChains (cryptographically validated) over PeerCertificates
+	// (raw server-sent, may contain duplicates or be out of order).
 	leaf := state.PeerCertificates[0]
 	var issuer *x509.Certificate
-	if len(state.PeerCertificates) >= 2 {
-		issuer = state.PeerCertificates[1]
-	} else if len(result.VerifiedChains) > 0 && len(result.VerifiedChains[0]) > 1 {
+	if len(result.VerifiedChains) > 0 && len(result.VerifiedChains[0]) > 1 {
 		issuer = result.VerifiedChains[0][1]
+	} else if len(state.PeerCertificates) >= 2 {
+		issuer = state.PeerCertificates[1]
 	}
 
 	// Best-effort OCSP check on the leaf certificate.
