@@ -1,13 +1,11 @@
 package certkit
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
-	"crypto/x509/pkix"
 	"encoding/pem"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 )
@@ -15,19 +13,7 @@ import (
 func TestParseCRL(t *testing.T) {
 	t.Parallel()
 
-	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ca, err := CreateSelfSigned(SelfSignedInput{
-		Signer:  caKey,
-		Subject: pkix.Name{CommonName: "CRL Test CA"},
-		Days:    3650,
-		IsCA:    true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	ca := generateTestCA(t, "CRL Test CA")
 
 	now := time.Now()
 	crlTemplate := &x509.RevocationList{
@@ -39,7 +25,7 @@ func TestParseCRL(t *testing.T) {
 			{SerialNumber: big.NewInt(99), RevocationTime: now.Add(-2 * time.Hour)},
 		},
 	}
-	crlDER, err := x509.CreateRevocationList(rand.Reader, crlTemplate, ca, caKey)
+	crlDER, err := x509.CreateRevocationList(rand.Reader, crlTemplate, ca.Cert, ca.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,53 +73,55 @@ func TestParseCRL(t *testing.T) {
 func TestCRLContainsCertificate(t *testing.T) {
 	t.Parallel()
 
-	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ca, err := CreateSelfSigned(SelfSignedInput{
-		Signer:  caKey,
-		Subject: pkix.Name{CommonName: "CRL Contains CA"},
-		Days:    3650,
-		IsCA:    true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	ca := generateTestCA(t, "CRL Contains CA")
 
 	now := time.Now()
-	crlTemplate := &x509.RevocationList{
+	populatedCRL, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
 		Number:     big.NewInt(1),
 		ThisUpdate: now,
 		NextUpdate: now.Add(24 * time.Hour),
 		RevokedCertificateEntries: []x509.RevocationListEntry{
 			{SerialNumber: big.NewInt(42), RevocationTime: now},
 		},
-	}
-	crlDER, err := x509.CreateRevocationList(rand.Reader, crlTemplate, ca, caKey)
+	}, ca.Cert, ca.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
-	crl, err := ParseCRL(crlDER)
+	crl, err := ParseCRL(populatedCRL)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	emptyCRL, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+		Number:     big.NewInt(2),
+		ThisUpdate: now,
+		NextUpdate: now.Add(24 * time.Hour),
+	}, ca.Cert, ca.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	emptyCRLParsed, err := ParseCRL(emptyCRL)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	tests := []struct {
 		name   string
+		crl    *x509.RevocationList
 		serial *big.Int
 		want   bool
 	}{
-		{"revoked cert", big.NewInt(42), true},
-		{"non-revoked cert", big.NewInt(100), false},
-		{"zero serial", big.NewInt(0), false},
+		{"revoked cert", crl, big.NewInt(42), true},
+		{"non-revoked cert", crl, big.NewInt(100), false},
+		{"zero serial", crl, big.NewInt(0), false},
+		{"empty CRL", emptyCRLParsed, big.NewInt(1), false},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 			cert := &x509.Certificate{SerialNumber: tc.serial}
-			got := CRLContainsCertificate(crl, cert)
+			got := CRLContainsCertificate(tc.crl, cert)
 			if got != tc.want {
 				t.Errorf("CRLContainsCertificate = %v, want %v", got, tc.want)
 			}
@@ -141,58 +129,10 @@ func TestCRLContainsCertificate(t *testing.T) {
 	}
 }
 
-func TestCRLContainsCertificate_EmptyCRL(t *testing.T) {
-	t.Parallel()
-
-	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ca, err := CreateSelfSigned(SelfSignedInput{
-		Signer:  caKey,
-		Subject: pkix.Name{CommonName: "Empty CRL CA"},
-		Days:    1,
-		IsCA:    true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	now := time.Now()
-	crlDER, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
-		Number:     big.NewInt(1),
-		ThisUpdate: now,
-		NextUpdate: now.Add(24 * time.Hour),
-	}, ca, caKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	crl, err := ParseCRL(crlDER)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	if CRLContainsCertificate(crl, &x509.Certificate{SerialNumber: big.NewInt(1)}) {
-		t.Error("empty CRL should not contain any certificate")
-	}
-}
-
 func TestCRLInfoFromList(t *testing.T) {
 	t.Parallel()
 
-	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ca, err := CreateSelfSigned(SelfSignedInput{
-		Signer:  caKey,
-		Subject: pkix.Name{CommonName: "CRL Info CA"},
-		Days:    3650,
-		IsCA:    true,
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
+	ca := generateTestCA(t, "CRL Info CA")
 
 	now := time.Now()
 	crlTemplate := &x509.RevocationList{
@@ -205,7 +145,7 @@ func TestCRLInfoFromList(t *testing.T) {
 			{SerialNumber: big.NewInt(3), RevocationTime: now},
 		},
 	}
-	crlDER, err := x509.CreateRevocationList(rand.Reader, crlTemplate, ca, caKey)
+	crlDER, err := x509.CreateRevocationList(rand.Reader, crlTemplate, ca.Cert, ca.Key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -221,10 +161,18 @@ func TestCRLInfoFromList(t *testing.T) {
 	if info.SignatureAlgorithm == "" {
 		t.Error("SignatureAlgorithm is empty")
 	}
+	if info.CRLNumber != "1" {
+		t.Errorf("CRLNumber = %q, want %q", info.CRLNumber, "1")
+	}
 
-	// FormatCRLInfo should produce non-empty output
 	output := FormatCRLInfo(info)
-	if output == "" {
-		t.Fatal("FormatCRLInfo returned empty string")
+	for _, want := range []string{
+		"Issuer:",
+		"CRL Number:  1",
+		"Entries:     3",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("output missing %q\ngot:\n%s", want, output)
+		}
 	}
 }

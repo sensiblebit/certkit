@@ -104,6 +104,11 @@ func CheckOCSP(ctx context.Context, input CheckOCSPInput) (*OCSPResult, error) {
 		return nil, fmt.Errorf("parsing OCSP response: %w", err)
 	}
 
+	// Reject expired OCSP responses to prevent replay of stale data over HTTP.
+	if !resp.NextUpdate.IsZero() && time.Now().After(resp.NextUpdate) {
+		return nil, fmt.Errorf("OCSP response expired at %s", resp.NextUpdate.UTC().Format(time.RFC3339))
+	}
+
 	result := &OCSPResult{
 		SerialNumber: input.Cert.SerialNumber.Text(16),
 		ResponderURL: responderURL,

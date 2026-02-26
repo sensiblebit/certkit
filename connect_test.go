@@ -347,10 +347,24 @@ func TestFormatConnectResult(t *testing.T) {
 			},
 		},
 		{
-			name: "OCSP unavailable",
+			name: "OCSP unavailable with detail",
+			ocsp: &OCSPResult{Status: "unavailable", ResponderURL: "http://ocsp.example.com", Detail: "connection refused"},
+			wantStrings: []string{
+				"OCSP:         unavailable (connection refused)",
+			},
+		},
+		{
+			name: "OCSP unavailable without detail",
 			ocsp: &OCSPResult{Status: "unavailable", ResponderURL: "http://ocsp.example.com"},
 			wantStrings: []string{
 				"OCSP:         unavailable (http://ocsp.example.com)",
+			},
+		},
+		{
+			name: "OCSP unknown",
+			ocsp: &OCSPResult{Status: "unknown", ResponderURL: "http://ocsp.example.com"},
+			wantStrings: []string{
+				"OCSP:         unknown (responder does not recognize this certificate)",
 			},
 		},
 		{
@@ -749,6 +763,9 @@ func TestConnectTLS_OCSP(t *testing.T) {
 	if result.OCSP.Status != "good" {
 		t.Errorf("OCSP.Status = %q, want %q", result.OCSP.Status, "good")
 	}
+	if result.OCSP.SerialNumber != "64" { // 100 decimal = 64 hex
+		t.Errorf("OCSP.SerialNumber = %q, want %q", result.OCSP.SerialNumber, "64")
+	}
 }
 
 func TestConnectTLS_OCSP_SkipAndFailure(t *testing.T) {
@@ -903,11 +920,18 @@ func TestConnectTLS_CRL_Unavailable(t *testing.T) {
 		wantContains string // substring expected in Detail
 	}{
 		{
-			name:         "no CRL distribution points",
+			name:         "no issuer in chain",
 			cdps:         nil,
 			singleCert:   true,
 			wantStatus:   "unavailable",
 			wantContains: "no issuer certificate",
+		},
+		{
+			name:         "no CRL distribution points",
+			cdps:         nil,
+			singleCert:   false, // issuer present, so checkLeafCRL is called
+			wantStatus:   "unavailable",
+			wantContains: "no CRL distribution points",
 		},
 		{
 			name:         "non-HTTP CDPs only",
@@ -1067,5 +1091,61 @@ func TestConnectTLS_CRL_Expired(t *testing.T) {
 	}
 	if !strings.Contains(result.CRL.Detail, "CRL expired") {
 		t.Errorf("CRL.Detail = %q, want substring %q", result.CRL.Detail, "CRL expired")
+	}
+}
+
+func TestConnectTLS_CRL_Good(t *testing.T) {
+	t.Parallel()
+
+	// Verify the "good" CRL path: leaf serial is NOT in the CRL.
+	ca := generateTestCA(t, "CRL Good CA")
+
+	crlTemplate := &x509.RevocationList{
+		Number:     big.NewInt(1),
+		ThisUpdate: time.Now().Add(-time.Hour),
+		NextUpdate: time.Now().Add(time.Hour),
+		RevokedCertificateEntries: []x509.RevocationListEntry{
+			{SerialNumber: big.NewInt(999), RevocationTime: time.Now().Add(-6 * time.Hour)},
+		},
+	}
+	crlDER, err := x509.CreateRevocationList(rand.Reader, crlTemplate, ca.Cert, ca.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	crlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pkix-crl")
+		_, _ = w.Write(crlDER)
+	}))
+	defer crlServer.Close()
+
+	cdpURL := strings.Replace(crlServer.URL, "127.0.0.1", "localhost", 1)
+	leaf := generateTestLeafCert(t, ca,
+		withSerial(big.NewInt(100)), // different from CRL's 999
+		withCRLDistributionPoints(cdpURL),
+	)
+	port := startTLSServer(t, [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	result, err := ConnectTLS(ctx, ConnectTLSInput{
+		Host:        "127.0.0.1",
+		Port:        port,
+		CheckCRL:    true,
+		DisableOCSP: true,
+	})
+	if err != nil {
+		t.Fatalf("ConnectTLS failed: %v", err)
+	}
+
+	if result.CRL == nil {
+		t.Fatal("CRL is nil")
+	}
+	if result.CRL.Status != "good" {
+		t.Errorf("CRL.Status = %q, want %q", result.CRL.Status, "good")
+	}
+	if result.CRL.DistributionPoint != cdpURL {
+		t.Errorf("CRL.DistributionPoint = %q, want %q", result.CRL.DistributionPoint, cdpURL)
 	}
 }

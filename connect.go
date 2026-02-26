@@ -308,6 +308,7 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 			result.OCSP = &OCSPResult{
 				Status:       "unavailable",
 				ResponderURL: leaf.OCSPServer[0],
+				Detail:       ocspErr.Error(),
 			}
 		} else {
 			result.OCSP = ocspResult
@@ -499,9 +500,14 @@ func FormatOCSPLine(r *OCSPResult) string {
 		}
 		return fmt.Sprintf("OCSP:         %s\n", detail)
 	case "unavailable":
+		if r.Detail != "" {
+			return fmt.Sprintf("OCSP:         unavailable (%s)\n", r.Detail)
+		}
 		return fmt.Sprintf("OCSP:         unavailable (%s)\n", r.ResponderURL)
 	case "skipped":
 		return fmt.Sprintf("OCSP:         skipped (%s)\n", r.Detail)
+	case "unknown":
+		return "OCSP:         unknown (responder does not recognize this certificate)\n"
 	default:
 		return fmt.Sprintf("OCSP:         %s\n", r.Status)
 	}
@@ -519,7 +525,7 @@ func FormatCRLLine(r *CRLCheckResult) string {
 	case "unavailable":
 		return fmt.Sprintf("CRL:          unavailable (%s)\n", r.Detail)
 	default:
-		return ""
+		return fmt.Sprintf("CRL:          %s\n", r.Status)
 	}
 }
 
