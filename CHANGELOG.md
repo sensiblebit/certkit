@@ -9,12 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Fix unchecked type assertion `conn.(*tls.Conn)` in `FetchLeafFromURL` — add ok check for safety ([#76])
-- Fix bare `return err` without context wrapping (ERR-1) in `fetchCertificatesFromURL` AIA fetcher ([#76])
-- Fix `SaveToSQLite` `json.Marshal` SAN failure now returns error instead of silently dropping data (ERR-6) ([#76])
-- Fix `SaveToSQLite` `append(rec.Cert.DNSNames, ...)` slice aliasing — use `slices.Concat` to prevent mutating the certificate's backing array ([#76])
-- Fix uint64→int64 overflow in ZIP archive extraction — guard both `UncompressedSize64` and `CompressedSize64` against `MaxInt64` wrap ([#76])
-- Fix `marshalOtherNameGN` appending to `oidBytes` slice and assigning to different variable — use `slices.Concat` to prevent aliasing ([#76])
+- Fix potential panic in TLS connection handling during remote certificate fetch ([#76])
+- Improve error messages when AIA certificate fetching fails — errors now include the URL and operation context ([#76])
+- Fix `--save-db` silently writing incomplete SAN data when JSON encoding fails — now returns an error ([#76])
+- Fix `--save-db` potentially mutating in-memory certificate SAN data during database export ([#76])
+- Fix ZIP archive extraction bypassing size limits when entry headers contain extremely large sizes ([#76])
+- Fix potential data corruption when generating OtherName SAN extensions ([#76])
 - Fix `buildChainFromPool` infinite loop on circular issuer chains — add visited-set cycle guard ([#75])
 - Fix `convert --key` P12 multi-match and key-mismatch errors returning exit code 1 instead of 2 — wrap in `ValidationError` (CLI-6) ([#75])
 - Fix `convert --key` duplicating `ParsePEMPrivateKeys` logic via internal `parseKeyBlocks` — consolidate to shared library function ([#75])
