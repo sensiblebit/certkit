@@ -63,6 +63,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fix data race in `TestCheckLeafCRL` — CRL bytes are now generated before starting the test HTTP server (CC-3) ([#78])
+- Fix `CheckLeafCRL` panic on nil `Leaf` or `Issuer` — now returns "unavailable" result instead of panicking ([#78])
+- Fix `verify` help text claiming "Exits with code 2 if revoked" — actually exits 2 for any verification error including revocation ([#78])
 - Fix `connect` `FormatCRLLine` dropping `Detail` for "skipped" status — previously fell through to default which omitted the reason ([#78])
 - Fix `formatVerifyCRL` in `verify` missing "skipped" case — now delegates to shared `FormatCRLStatusLine` helper ([#78])
 - Fix silent error discard in test TLS server — `Handshake()` and `Close()` errors now logged with `slog.Debug` (ERR-5) ([#78])

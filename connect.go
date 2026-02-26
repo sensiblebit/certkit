@@ -366,6 +366,12 @@ type CheckLeafCRLInput struct {
 // issuer certificate. Returns a best-effort result (never nil when called, but
 // Status may be "unavailable").
 func CheckLeafCRL(ctx context.Context, input CheckLeafCRLInput) *CRLCheckResult {
+	if input.Leaf == nil || input.Issuer == nil {
+		return &CRLCheckResult{
+			Status: "unavailable",
+			Detail: "leaf and issuer certificates are required",
+		}
+	}
 	if len(input.Leaf.CRLDistributionPoints) == 0 {
 		return &CRLCheckResult{
 			Status: "unavailable",

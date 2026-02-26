@@ -421,12 +421,14 @@ func TestCheckLeafCRL(t *testing.T) {
 
 			var cdps []string
 			if tc.crlFunc != nil {
-				var crlData []byte
+				// Generate CRL data before starting the server to avoid a data
+				// race between the handler goroutine reading crlData and the
+				// test goroutine writing it.
+				crlData := tc.crlFunc(t, nil)
 				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					_, _ = w.Write(crlData)
 				}))
 				t.Cleanup(srv.Close)
-				crlData = tc.crlFunc(t, srv)
 				cdps = []string{strings.Replace(srv.URL, "127.0.0.1", "localhost", 1)}
 			} else if tc.cdps != nil {
 				cdps = tc.cdps

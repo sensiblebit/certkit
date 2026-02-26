@@ -36,7 +36,7 @@ is checked automatically. Use --key to check against an external key file.
 
 Use --ocsp to check OCSP revocation status, and --crl to check CRL distribution
 points. Both require network access and a valid chain (the issuer certificate
-is needed to verify the response). Exits with code 2 if revoked.`,
+is needed to verify the response). Exits with code 2 if verification finds any errors (including revocation).`,
 	Example: `  certkit verify cert.pem
   certkit verify cert.pem --key key.pem
   certkit verify cert.pem --expiry 30d
