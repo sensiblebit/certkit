@@ -65,6 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add multi-entry JKS support to `convert --key` — when multiple keys match different certificates, JKS output creates a multi-alias keystore with one `PrivateKeyEntry` per match
 - Add `EncodeJKSEntries` library function for creating multi-entry JKS keystores with alias sanitization and deduplication
 - Add `CollectCertificateSANs` library function for canonical SAN aggregation (DNS, IP, email, URI, OtherName) across all commands
+- Add `ParsePEMPrivateKeys` library function for extracting all private keys from a multi-key PEM bundle, skipping non-key blocks
 - Add chain diagnostics to `connect` command — detect root certificates in chain (RFC 8446 §4.4.2) and duplicate certificates
 - Add AIA walking to `connect` command — automatically fetch missing intermediates when server sends leaf-only chain, with `missing-intermediate` diagnostic warning
 - Add mTLS detection to `connect` command — shows whether the server requests a client certificate, acceptable CAs, and accepted signature algorithms
