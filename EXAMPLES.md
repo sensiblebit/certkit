@@ -78,7 +78,7 @@ This shows the subject (who it belongs to), issuer (who signed it), validity dat
 For machine-readable output:
 
 ```sh
-certkit inspect cert.pem --format json
+certkit inspect cert.pem --json
 ```
 
 ### Inspecting keys and CSRs
@@ -143,7 +143,7 @@ certkit verify cert.pem --key key.pem --expiry 30d
 For machine-readable output:
 
 ```sh
-certkit verify cert.pem --format json
+certkit verify cert.pem --json
 ```
 
 ### Diagnosing chain failures
@@ -181,7 +181,7 @@ certkit exits with code 2 if the certificate is revoked (via OCSP or CRL).
 For machine-readable output:
 
 ```sh
-certkit connect example.com --format json
+certkit connect example.com --json
 ```
 
 ### Check a non-standard port
@@ -255,19 +255,19 @@ Convert certificates and keys between PEM, DER, PKCS#12, JKS, and PKCS#7:
 
 ```sh
 # DER to PEM
-certkit convert cert.der --to pem
+certkit convert cert.der --format pem
 
 # PEM to DER
-certkit convert cert.pem --to der -o cert.der
+certkit convert cert.pem --format der -o cert.der
 
 # PEM cert + key to PKCS#12
-certkit convert cert.pem --key key.pem --to p12 -o bundle.p12
+certkit convert cert.pem --key key.pem --format p12 -o bundle.p12
 
 # PKCS#12 to PEM
-certkit convert bundle.p12 --to pem
+certkit convert bundle.p12 --format pem
 
 # PEM to PKCS#7
-certkit convert cert.pem --to p7b -o certs.p7b
+certkit convert cert.pem --format p7b -o certs.p7b
 ```
 
 Input format is auto-detected. PEM output goes to stdout; binary formats (DER, P12, JKS, P7B) require `-o`.
@@ -275,7 +275,7 @@ Input format is auto-detected. PEM output goes to stdout; binary formats (DER, P
 ### Convert PKCS#12 to JKS
 
 ```sh
-certkit convert bundle.p12 --to jks -o keystore.jks
+certkit convert bundle.p12 --format jks -o keystore.jks
 ```
 
 Multiple key/cert pairs in the input produce multiple aliases in the JKS keystore.
@@ -307,7 +307,7 @@ This recursively walks the directory and handles PEM, DER, PKCS#12, JKS, and PKC
 For machine-readable output:
 
 ```sh
-certkit scan /path/to/certs/ --format json
+certkit scan /path/to/certs/ --json
 ```
 
 Save scan results to a SQLite database for later analysis:
@@ -495,7 +495,7 @@ certkit ocsp bundle.p12
 For machine-readable output:
 
 ```sh
-certkit ocsp cert.pem --issuer issuer.pem --format json
+certkit ocsp cert.pem --issuer issuer.pem --json
 ```
 
 certkit exits with code 2 if the certificate is revoked.
@@ -523,7 +523,7 @@ certkit exits with code 2 if the certificate is found in the CRL.
 For machine-readable output:
 
 ```sh
-certkit crl revoked.crl --format json
+certkit crl revoked.crl --json
 ```
 
 ---
@@ -578,20 +578,20 @@ certkit uses meaningful exit codes:
 | **1**     | General error (bad input, missing file, etc.)                      |
 | **2**     | Validation failure (chain invalid, key mismatch, expired, revoked) |
 
-Use `--format json` on any command for machine-readable output. Data always goes to stdout, warnings and progress to stderr, so piping works cleanly:
+Use `--json` on any command for machine-readable output. Data always goes to stdout, warnings and progress to stderr, so piping works cleanly:
 
 ```sh
 # Check cert in CI -- fails with exit code 2 if expiring within 30 days
 certkit verify cert.pem --expiry 30d
 
 # Parse cert info programmatically
-certkit inspect cert.pem --format json | jq '.subject'
+certkit inspect cert.pem --json | jq '.subject'
 
 # Verify and capture result
-certkit verify cert.pem --format json > result.json
+certkit verify cert.pem --json > result.json
 
 # Check revocation in a pipeline
-certkit ocsp cert.pem --issuer issuer.pem --format json | jq '.status'
+certkit ocsp cert.pem --issuer issuer.pem --json | jq '.status'
 ```
 
 ### Verbose output

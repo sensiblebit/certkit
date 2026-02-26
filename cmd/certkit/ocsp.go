@@ -10,10 +10,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	ocspIssuerPath string
-	ocspFormat     string
-)
+var ocspIssuerPath string
 
 var ocspCmd = &cobra.Command{
 	Use:   "ocsp <cert-file>",
@@ -26,18 +23,16 @@ in the input file.
 
 Exits with code 2 if the certificate is revoked.`,
 	Example: `  certkit ocsp cert.pem --issuer issuer.pem
-  certkit ocsp cert.pem --issuer issuer.pem --format json
+  certkit ocsp cert.pem --issuer issuer.pem --json
   certkit ocsp bundle.p12`,
 	Args: cobra.ExactArgs(1),
 	RunE: runOCSP,
 }
 
 func init() {
-	ocspCmd.Flags().StringVar(&ocspIssuerPath, "issuer", "", "Issuer certificate file (PEM)")
-	ocspCmd.Flags().StringVar(&ocspFormat, "format", "text", "Output format: text or json")
+	ocspCmd.Flags().StringVar(&ocspIssuerPath, "issuer", "", "Issuer certificate file (PEM); auto-resolved from input if omitted")
 
 	registerCompletion(ocspCmd, completionInput{"issuer", fileCompletion})
-	registerCompletion(ocspCmd, completionInput{"format", fixedCompletion("text", "json")})
 }
 
 // ocspVerboseJSON wraps OCSPResult with certificate context for verbose JSON output.
@@ -92,8 +87,7 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("checking OCSP: %w", err)
 	}
 
-	switch ocspFormat {
-	case "json":
+	if jsonOutput {
 		if verbose {
 			verboseResult := ocspVerboseJSON{
 				OCSPResult:  result,
@@ -112,14 +106,12 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 			}
 			fmt.Println(string(data))
 		}
-	case "text":
+	} else {
 		if verbose {
 			fmt.Printf("Subject:      %s\n", certkit.FormatDN(contents.Leaf.Subject))
 			fmt.Printf("Issuer:       %s\n", certkit.FormatDN(contents.Leaf.Issuer))
 		}
 		fmt.Print(certkit.FormatOCSPResult(result))
-	default:
-		return fmt.Errorf("unsupported output format %q (use text or json)", ocspFormat)
 	}
 
 	if result.Status == "revoked" {

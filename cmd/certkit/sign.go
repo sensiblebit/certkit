@@ -69,13 +69,14 @@ SANs from the CSR are copied to the issued certificate by default.`,
 
 func init() {
 	// self-signed flags
+	signSelfSignedCmd.Flags().StringVar(&selfSignedCN, "cn", "", "Common Name for the certificate")
 	signSelfSignedCmd.Flags().StringVar(&selfSignedKeyPath, "key", "", "Existing private key file (generates EC P-256 if omitted)")
-	signSelfSignedCmd.Flags().StringVar(&selfSignedCN, "cn", "", "Common Name for the certificate (required)")
 	signSelfSignedCmd.Flags().IntVar(&selfSignedDays, "days", 3650, "Validity period in days")
 	signSelfSignedCmd.Flags().BoolVar(&selfSignedIsCA, "is-ca", true, "Set CA:TRUE basic constraint")
-	signSelfSignedCmd.Flags().StringVarP(&selfSignedOutFile, "out-file", "o", "", "Output file (default: stdout)")
+	signSelfSignedCmd.Flags().StringVarP(&selfSignedOutFile, "out-file", "o", "", "Output file")
 
 	_ = signSelfSignedCmd.MarkFlagRequired("cn")
+	signSelfSignedCmd.Flags().Lookup("out-file").Annotations = map[string][]string{"readme_default": {"_(stdout)_"}}
 	registerCompletion(signSelfSignedCmd, completionInput{"key", fileCompletion})
 	registerCompletion(signSelfSignedCmd, completionInput{"out-file", fileCompletion})
 
@@ -83,8 +84,10 @@ func init() {
 	signCSRCmd.Flags().StringVar(&signCSRCAPath, "ca", "", "CA certificate file (PEM)")
 	signCSRCmd.Flags().StringVar(&signCSRKeyPath, "ca-key", "", "CA private key file (PEM)")
 	signCSRCmd.Flags().IntVar(&signCSRDays, "days", 365, "Validity period in days")
-	signCSRCmd.Flags().BoolVar(&signCSRCopySAN, "copy-sans", true, "Copy SANs from CSR to certificate")
-	signCSRCmd.Flags().StringVarP(&signCSROutFile, "out-file", "o", "", "Output file (default: stdout)")
+	signCSRCmd.Flags().BoolVar(&signCSRCopySAN, "copy-sans", true, "Copy SANs from CSR to issued certificate")
+	signCSRCmd.Flags().StringVarP(&signCSROutFile, "out-file", "o", "", "Output file")
+
+	signCSRCmd.Flags().Lookup("out-file").Annotations = map[string][]string{"readme_default": {"_(stdout)_"}}
 
 	_ = signCSRCmd.MarkFlagRequired("ca")
 	_ = signCSRCmd.MarkFlagRequired("ca-key")

@@ -9,23 +9,15 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var inspectFormat string
-
 var inspectCmd = &cobra.Command{
 	Use:   "inspect <file>",
 	Short: "Display certificate, key, or CSR information",
 	Long:  "Show detailed information about certificates, private keys, or CSRs in a file (similar to openssl x509 -text).",
 	Example: `  certkit inspect cert.pem
   certkit inspect key.pem
-  certkit inspect cert.pem --format json`,
+  certkit inspect cert.pem --json`,
 	Args: cobra.ExactArgs(1),
 	RunE: runInspect,
-}
-
-func init() {
-	inspectCmd.Flags().StringVar(&inspectFormat, "format", "text", "Output format: text or json")
-
-	registerCompletion(inspectCmd, completionInput{"format", fixedCompletion("text", "json")})
 }
 
 func runInspect(cmd *cobra.Command, args []string) error {
@@ -58,7 +50,12 @@ func runInspect(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	output, err := internal.FormatInspectResults(results, inspectFormat)
+	format := "text"
+	if jsonOutput {
+		format = "json"
+	}
+
+	output, err := internal.FormatInspectResults(results, format)
 	if err != nil {
 		return fmt.Errorf("formatting inspect results: %w", err)
 	}

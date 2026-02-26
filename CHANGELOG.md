@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Auto-generate CLI flag tables in README from Cobra command definitions via `go generate` ([#79])
+- Add `gendocs` pre-commit hook and CI check to verify flag tables stay in sync ([#79])
 - `connect` automatically checks OCSP revocation status on the leaf certificate (best-effort; shows "skipped" or "unavailable" when check cannot complete) ([#78])
 - Add `--crl` flag to `connect` for opt-in CRL revocation checking via distribution points ([#78])
 - Add `FetchCRL` library function for downloading CRLs from HTTP URLs with SSRF validation ([#78])
@@ -49,6 +51,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** Replace per-command `--format` flag with global `--json` flag on `inspect`, `verify`, `connect`, `scan`, `ocsp`, and `crl` commands
+- **Breaking:** Rename `convert --to` to `convert --format` for consistency with `bundle --format`
 - **Breaking:** Rename `CRLCheckResult.DistributionPoint` to `CRLCheckResult.URL` (JSON: `url`) and `OCSPResult.ResponderURL` to `OCSPResult.URL` (JSON: `url`) — consistent field name for the checked endpoint across both revocation types (CLI-4) ([#78])
 - **Breaking:** Rename OCSP JSON field `serial_number` to `serial` for CLI-4 consistency with all other commands ([#78])
 - **Breaking:** `FetchCRL` now takes `FetchCRLInput` struct instead of a URL string — enables `AllowPrivateNetworks` for user-provided URLs ([#78])
@@ -828,6 +832,7 @@ Initial release.
 [#75]: https://github.com/sensiblebit/certkit/pull/75
 [#76]: https://github.com/sensiblebit/certkit/pull/76
 [#78]: https://github.com/sensiblebit/certkit/pull/78
+[#79]: https://github.com/sensiblebit/certkit/pull/79
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63

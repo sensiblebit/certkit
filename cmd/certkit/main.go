@@ -1,3 +1,5 @@
+//go:build !gendocs
+
 package main
 
 import (
@@ -14,14 +16,6 @@ func init() {
 	// pathological ASN.1 allocations. 1GB is generous for any cert operation.
 	debug.SetMemoryLimit(1 << 30)
 }
-
-// ValidationError indicates a certificate validation failure (chain invalid,
-// key mismatch, expired). Commands return this to signal exit code 2.
-type ValidationError struct {
-	Message string
-}
-
-func (e *ValidationError) Error() string { return e.Message }
 
 func main() {
 	rootCmd.Version = version

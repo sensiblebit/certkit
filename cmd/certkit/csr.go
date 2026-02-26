@@ -37,12 +37,14 @@ by default (PEM format). Use -o to write files to a directory instead.`,
 func init() {
 	csrCmd.Flags().StringVar(&csrTemplatePath, "template", "", "JSON template file for CSR generation")
 	csrCmd.Flags().StringVar(&csrCertPath, "cert", "", "PEM certificate to use as CSR template")
-	csrCmd.Flags().StringVar(&csrFromCSR, "from-csr", "", "PEM CSR to re-sign with a new key")
-	csrCmd.Flags().StringVar(&csrKeyPath, "key", "", "Existing private key file (PEM)")
-	csrCmd.Flags().StringVarP(&csrAlgorithm, "algorithm", "a", "ecdsa", "Key algorithm: rsa, ecdsa, or ed25519")
+	csrCmd.Flags().StringVar(&csrFromCSR, "from-csr", "", "Existing PEM CSR to re-sign with a new key")
+	csrCmd.Flags().StringVar(&csrKeyPath, "key", "", "Existing private key file (PEM); generates new if omitted")
+	csrCmd.Flags().StringVarP(&csrAlgorithm, "algorithm", "a", "ecdsa", "Key algorithm for generated keys")
 	csrCmd.Flags().IntVarP(&csrBits, "bits", "b", 4096, "RSA key size in bits")
-	csrCmd.Flags().StringVar(&csrCurve, "curve", "P-256", "ECDSA curve: P-256, P-384, or P-521")
-	csrCmd.Flags().StringVarP(&csrOutPath, "out-path", "o", "", "Output directory (default: print to stdout)")
+	csrCmd.Flags().StringVar(&csrCurve, "curve", "P-256", "ECDSA curve")
+	csrCmd.Flags().StringVarP(&csrOutPath, "out-path", "o", "", "Output directory")
+
+	csrCmd.Flags().Lookup("out-path").Annotations = map[string][]string{"readme_default": {"_(stdout)_"}}
 
 	registerCompletion(csrCmd, completionInput{"algorithm", fixedCompletion("rsa", "ecdsa", "ed25519")})
 	registerCompletion(csrCmd, completionInput{"curve", fixedCompletion("P-256", "P-384", "P-521")})

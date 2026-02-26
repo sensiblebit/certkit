@@ -20,6 +20,16 @@ repos:
       - id: go-build
       - id: go-test
 
+  # ── Docs ──
+  - repo: local
+    hooks:
+      - id: gendocs
+        name: gendocs
+        entry: bash -c 'go generate ./... && git diff --exit-code README.md'
+        language: system
+        files: (^cmd/certkit/.*\.go$|^README\.md$|^doc\.go$)
+        pass_filenames: false
+
   # ── JS / TS ──
   - repo: local
     hooks:

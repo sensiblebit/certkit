@@ -32,12 +32,14 @@ Output is printed to stdout by default (PEM format). Use -o to write files to a 
 }
 
 func init() {
-	keygenCmd.Flags().StringVarP(&keygenAlgorithm, "algorithm", "a", "ecdsa", "Key algorithm: rsa, ecdsa, or ed25519")
+	keygenCmd.Flags().StringVarP(&keygenAlgorithm, "algorithm", "a", "ecdsa", "Key algorithm: `rsa`, `ecdsa`, `ed25519`")
 	keygenCmd.Flags().IntVarP(&keygenBits, "bits", "b", 4096, "RSA key size in bits")
-	keygenCmd.Flags().StringVar(&keygenCurve, "curve", "P-256", "ECDSA curve: P-256, P-384, or P-521")
-	keygenCmd.Flags().StringVarP(&keygenOutPath, "out-path", "o", "", "Output directory (default: print to stdout)")
-	keygenCmd.Flags().StringVar(&keygenCN, "cn", "", "Common Name for CSR generation")
-	keygenCmd.Flags().StringSliceVar(&keygenSANs, "sans", nil, "Comma-separated SANs for CSR generation")
+	keygenCmd.Flags().StringVar(&keygenCurve, "curve", "P-256", "ECDSA curve: `P-256`, `P-384`, `P-521`")
+	keygenCmd.Flags().StringVarP(&keygenOutPath, "out-path", "o", "", "Output directory")
+	keygenCmd.Flags().StringVar(&keygenCN, "cn", "", "Common Name (triggers CSR generation)")
+	keygenCmd.Flags().StringSliceVar(&keygenSANs, "sans", nil, "Comma-separated SANs (triggers CSR generation)")
+
+	keygenCmd.Flags().Lookup("out-path").Annotations = map[string][]string{"readme_default": {"_(stdout)_"}}
 
 	registerCompletion(keygenCmd, completionInput{"algorithm", fixedCompletion("rsa", "ecdsa", "ed25519")})
 	registerCompletion(keygenCmd, completionInput{"curve", fixedCompletion("P-256", "P-384", "P-521")})
