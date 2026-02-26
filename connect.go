@@ -319,7 +319,7 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 	if input.CheckCRL && len(state.PeerCertificates) >= 2 {
 		leaf := state.PeerCertificates[0]
 		issuer := state.PeerCertificates[1]
-		result.CRL = checkLeafCRL(ctx, checkLeafCRLInput{
+		result.CRL = CheckLeafCRL(ctx, CheckLeafCRLInput{
 			Leaf:    leaf,
 			Issuer:  issuer,
 			Timeout: input.CRLTimeout,
@@ -334,8 +334,8 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 	return result, nil
 }
 
-// checkLeafCRLInput holds parameters for checkLeafCRL.
-type checkLeafCRLInput struct {
+// CheckLeafCRLInput holds parameters for CheckLeafCRL.
+type CheckLeafCRLInput struct {
 	// Leaf is the certificate to check for revocation.
 	Leaf *x509.Certificate
 	// Issuer is the issuer certificate used to verify the CRL signature.
@@ -344,11 +344,11 @@ type checkLeafCRLInput struct {
 	Timeout time.Duration
 }
 
-// checkLeafCRL fetches the first HTTP CRL distribution point and checks whether
+// CheckLeafCRL fetches the first HTTP CRL distribution point and checks whether
 // the leaf certificate is revoked. The CRL signature is verified against the
 // issuer certificate. Returns a best-effort result (never nil when called, but
 // Status may be "unavailable").
-func checkLeafCRL(ctx context.Context, input checkLeafCRLInput) *CRLCheckResult {
+func CheckLeafCRL(ctx context.Context, input CheckLeafCRLInput) *CRLCheckResult {
 	if len(input.Leaf.CRLDistributionPoints) == 0 {
 		return &CRLCheckResult{
 			Status: "unavailable",

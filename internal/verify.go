@@ -24,6 +24,8 @@ type VerifyInput struct {
 	ExpiryDuration time.Duration
 	TrustStore     string
 	Verbose        bool
+	CheckOCSP      bool
+	CheckCRL       bool
 }
 
 // ChainCert holds display information for one certificate in the chain.
@@ -50,20 +52,22 @@ type ChainCert struct {
 
 // VerifyResult holds the results of certificate verification checks.
 type VerifyResult struct {
-	Subject     string      `json:"subject"`
-	SANs        []string    `json:"sans,omitempty"`
-	NotAfter    string      `json:"not_after"`
-	SKI         string      `json:"subject_key_id,omitempty"`
-	KeyMatch    *bool       `json:"key_match,omitempty"`
-	KeyMatchErr string      `json:"key_match_error,omitempty"`
-	KeyInfo     string      `json:"key_info,omitempty"`
-	ChainValid  *bool       `json:"chain_valid,omitempty"`
-	ChainErr    string      `json:"chain_error,omitempty"`
-	Chain       []ChainCert `json:"chain,omitempty"`
-	Expiry      *bool       `json:"expires_within,omitempty"`
-	ExpiryInfo  string      `json:"expiry_info,omitempty"`
-	Errors      []string    `json:"errors,omitempty"`
-	Diagnoses   []Diagnosis `json:"diagnoses,omitempty"`
+	Subject     string                  `json:"subject"`
+	SANs        []string                `json:"sans,omitempty"`
+	NotAfter    string                  `json:"not_after"`
+	SKI         string                  `json:"subject_key_id,omitempty"`
+	KeyMatch    *bool                   `json:"key_match,omitempty"`
+	KeyMatchErr string                  `json:"key_match_error,omitempty"`
+	KeyInfo     string                  `json:"key_info,omitempty"`
+	ChainValid  *bool                   `json:"chain_valid,omitempty"`
+	ChainErr    string                  `json:"chain_error,omitempty"`
+	Chain       []ChainCert             `json:"chain,omitempty"`
+	OCSP        *certkit.OCSPResult     `json:"ocsp,omitempty"`
+	CRL         *certkit.CRLCheckResult `json:"crl,omitempty"`
+	Expiry      *bool                   `json:"expires_within,omitempty"`
+	ExpiryInfo  string                  `json:"expiry_info,omitempty"`
+	Errors      []string                `json:"errors,omitempty"`
+	Diagnoses   []Diagnosis             `json:"diagnoses,omitempty"`
 
 	// Verbose-only fields (populated when VerifyInput.Verbose is true).
 	Issuer    string   `json:"issuer,omitempty"`
@@ -125,20 +129,62 @@ func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) 
 	}
 
 	// Chain validation
+	var bundle *certkit.BundleResult
 	if input.CheckChain {
 		opts := certkit.DefaultOptions()
 		opts.TrustStore = input.TrustStore
 		opts.ExtraIntermediates = input.ExtraCerts
 		opts.CustomRoots = input.CustomRoots
-		bundle, err := certkit.Bundle(ctx, cert, opts)
-		valid := err == nil
+		var bundleErr error
+		bundle, bundleErr = certkit.Bundle(ctx, cert, opts)
+		valid := bundleErr == nil
 		result.ChainValid = &valid
-		if err != nil {
-			result.ChainErr = err.Error()
-			result.Errors = append(result.Errors, fmt.Sprintf("chain validation: %s", err.Error()))
+		if bundleErr != nil {
+			result.ChainErr = bundleErr.Error()
+			result.Errors = append(result.Errors, fmt.Sprintf("chain validation: %s", bundleErr.Error()))
 		}
 		if bundle != nil {
 			result.Chain = buildChainDisplay(bundle, input.Verbose)
+		}
+	}
+
+	// Revocation checks (require a valid chain to obtain the issuer).
+	if (input.CheckOCSP || input.CheckCRL) && bundle != nil {
+		var issuer *x509.Certificate
+		if len(bundle.Intermediates) > 0 {
+			issuer = bundle.Intermediates[0]
+		} else if len(bundle.Roots) > 0 {
+			issuer = bundle.Roots[0]
+		}
+		if issuer != nil {
+			if input.CheckOCSP {
+				result.OCSP = checkVerifyOCSP(ctx, cert, issuer)
+				if result.OCSP.Status == "revoked" {
+					result.Errors = append(result.Errors, "certificate is revoked (OCSP)")
+				}
+			}
+			if input.CheckCRL {
+				result.CRL = certkit.CheckLeafCRL(ctx, certkit.CheckLeafCRLInput{
+					Leaf:   cert,
+					Issuer: issuer,
+				})
+				if result.CRL.Status == "revoked" {
+					result.Errors = append(result.Errors, "certificate is revoked (CRL)")
+				}
+			}
+		} else {
+			if input.CheckOCSP {
+				result.OCSP = &certkit.OCSPResult{
+					Status: "skipped",
+					Detail: "no issuer certificate found in chain",
+				}
+			}
+			if input.CheckCRL {
+				result.CRL = &certkit.CRLCheckResult{
+					Status: "unavailable",
+					Detail: "no issuer certificate found in chain",
+				}
+			}
 		}
 	}
 
@@ -155,6 +201,31 @@ func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) 
 	}
 
 	return result, nil
+}
+
+// checkVerifyOCSP performs a best-effort OCSP check, returning a result that
+// is always non-nil. Mirrors the connect.go OCSP logic.
+func checkVerifyOCSP(ctx context.Context, cert, issuer *x509.Certificate) *certkit.OCSPResult {
+	if len(cert.OCSPServer) == 0 {
+		return &certkit.OCSPResult{
+			Status: "skipped",
+			Detail: "certificate has no OCSP responder URL",
+		}
+	}
+	ocspCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	ocspResult, err := certkit.CheckOCSP(ocspCtx, certkit.CheckOCSPInput{
+		Cert:   cert,
+		Issuer: issuer,
+	})
+	if err != nil {
+		return &certkit.OCSPResult{
+			Status:       "unavailable",
+			ResponderURL: cert.OCSPServer[0],
+			Detail:       err.Error(),
+		}
+	}
+	return ocspResult
 }
 
 // buildChainDisplay creates the display chain from a BundleResult.
@@ -438,6 +509,13 @@ func FormatVerifyResult(r *VerifyResult) string {
 		}
 	}
 
+	if r.OCSP != nil {
+		sb.WriteString(formatVerifyOCSP(r.OCSP))
+	}
+	if r.CRL != nil {
+		sb.WriteString(formatVerifyCRL(r.CRL))
+	}
+
 	if r.Expiry != nil {
 		fmt.Fprintf(&sb, "\n  Expiry: %s\n", r.ExpiryInfo)
 	}
@@ -449,4 +527,46 @@ func FormatVerifyResult(r *VerifyResult) string {
 	}
 
 	return sb.String()
+}
+
+// formatVerifyOCSP formats an OCSP result line in verify output style.
+func formatVerifyOCSP(r *certkit.OCSPResult) string {
+	switch r.Status {
+	case "good":
+		return fmt.Sprintf("       OCSP: good (%s)\n", r.ResponderURL)
+	case "revoked":
+		detail := "revoked"
+		if r.RevokedAt != nil {
+			detail += " at " + *r.RevokedAt
+		}
+		if r.RevocationReason != nil {
+			detail += ", reason: " + *r.RevocationReason
+		}
+		return fmt.Sprintf("       OCSP: %s\n", detail)
+	case "unavailable":
+		if r.Detail != "" {
+			return fmt.Sprintf("       OCSP: unavailable (%s)\n", r.Detail)
+		}
+		return fmt.Sprintf("       OCSP: unavailable (%s)\n", r.ResponderURL)
+	case "skipped":
+		return fmt.Sprintf("       OCSP: skipped (%s)\n", r.Detail)
+	case "unknown":
+		return "       OCSP: unknown (responder does not recognize this certificate)\n"
+	default:
+		return fmt.Sprintf("       OCSP: %s\n", r.Status)
+	}
+}
+
+// formatVerifyCRL formats a CRL result line in verify output style.
+func formatVerifyCRL(r *certkit.CRLCheckResult) string {
+	switch r.Status {
+	case "good":
+		return fmt.Sprintf("        CRL: good (%s)\n", r.DistributionPoint)
+	case "revoked":
+		return fmt.Sprintf("        CRL: revoked (%s)\n", r.Detail)
+	case "unavailable":
+		return fmt.Sprintf("        CRL: unavailable (%s)\n", r.Detail)
+	default:
+		return fmt.Sprintf("        CRL: %s\n", r.Status)
+	}
 }
