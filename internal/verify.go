@@ -160,7 +160,7 @@ func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) 
 		}
 		if issuer != nil {
 			if input.CheckOCSP {
-				result.OCSP = checkVerifyOCSP(ctx, cert, issuer)
+				result.OCSP = checkVerifyOCSP(ctx, certkit.CheckOCSPInput{Cert: cert, Issuer: issuer})
 				if result.OCSP.Status == "revoked" {
 					msg := "certificate is revoked (OCSP)"
 					if result.OCSP.RevokedAt != nil {
@@ -219,8 +219,8 @@ func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) 
 
 // checkVerifyOCSP performs a best-effort OCSP check, returning a result that
 // is always non-nil. Mirrors the connect.go OCSP logic.
-func checkVerifyOCSP(ctx context.Context, cert, issuer *x509.Certificate) *certkit.OCSPResult {
-	if len(cert.OCSPServer) == 0 {
+func checkVerifyOCSP(ctx context.Context, input certkit.CheckOCSPInput) *certkit.OCSPResult {
+	if len(input.Cert.OCSPServer) == 0 {
 		return &certkit.OCSPResult{
 			Status: "skipped",
 			Detail: "certificate has no OCSP responder URL",
@@ -228,14 +228,11 @@ func checkVerifyOCSP(ctx context.Context, cert, issuer *x509.Certificate) *certk
 	}
 	ocspCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	ocspResult, err := certkit.CheckOCSP(ocspCtx, certkit.CheckOCSPInput{
-		Cert:   cert,
-		Issuer: issuer,
-	})
+	ocspResult, err := certkit.CheckOCSP(ocspCtx, input)
 	if err != nil {
 		return &certkit.OCSPResult{
 			Status: "unavailable",
-			URL:    cert.OCSPServer[0],
+			URL:    input.Cert.OCSPServer[0],
 			Detail: err.Error(),
 		}
 	}
@@ -545,42 +542,10 @@ func FormatVerifyResult(r *VerifyResult) string {
 
 // formatVerifyOCSP formats an OCSP result line in verify output style.
 func formatVerifyOCSP(r *certkit.OCSPResult) string {
-	switch r.Status {
-	case "good":
-		return fmt.Sprintf("       OCSP: good (%s)\n", r.URL)
-	case "revoked":
-		detail := "revoked"
-		if r.RevokedAt != nil {
-			detail += " at " + *r.RevokedAt
-		}
-		if r.RevocationReason != nil {
-			detail += ", reason: " + *r.RevocationReason
-		}
-		return fmt.Sprintf("       OCSP: %s\n", detail)
-	case "unavailable":
-		if r.Detail != "" {
-			return fmt.Sprintf("       OCSP: unavailable (%s)\n", r.Detail)
-		}
-		return fmt.Sprintf("       OCSP: unavailable (%s)\n", r.URL)
-	case "skipped":
-		return fmt.Sprintf("       OCSP: skipped (%s)\n", r.Detail)
-	case "unknown":
-		return "       OCSP: unknown (responder does not recognize this certificate)\n"
-	default:
-		return fmt.Sprintf("       OCSP: %s\n", r.Status)
-	}
+	return certkit.FormatOCSPStatusLine("       OCSP: ", r)
 }
 
 // formatVerifyCRL formats a CRL result line in verify output style.
 func formatVerifyCRL(r *certkit.CRLCheckResult) string {
-	switch r.Status {
-	case "good":
-		return fmt.Sprintf("        CRL: good (%s)\n", r.URL)
-	case "revoked":
-		return fmt.Sprintf("        CRL: revoked (%s)\n", r.Detail)
-	case "unavailable":
-		return fmt.Sprintf("        CRL: unavailable (%s)\n", r.Detail)
-	default:
-		return fmt.Sprintf("        CRL: %s\n", r.Status)
-	}
+	return certkit.FormatCRLStatusLine("        CRL: ", r)
 }

@@ -289,14 +289,13 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 	}
 
 	// Resolve the issuer certificate for revocation checks.
-	// Prefer VerifiedChains (cryptographically validated) over PeerCertificates
-	// (raw server-sent, may contain duplicates or be out of order).
+	// Only use VerifiedChains (cryptographically validated). Do not fall back
+	// to PeerCertificates — those are raw, unverified certs from the server and
+	// using them would let an attacker forge valid OCSP/CRL responses.
 	leaf := state.PeerCertificates[0]
 	var issuer *x509.Certificate
 	if len(result.VerifiedChains) > 0 && len(result.VerifiedChains[0]) > 1 {
 		issuer = result.VerifiedChains[0][1]
-	} else if len(state.PeerCertificates) >= 2 {
-		issuer = state.PeerCertificates[1]
 	}
 
 	// Best-effort OCSP check on the leaf certificate.
@@ -505,13 +504,14 @@ func tlsVersionString(version uint16) string {
 	}
 }
 
-// FormatOCSPLine formats an OCSPResult as a single line for connect output.
-// Used by both FormatConnectResult and the CLI's verbose formatter to avoid
-// duplicating status-to-text logic.
-func FormatOCSPLine(r *OCSPResult) string {
+// FormatOCSPStatusLine formats an OCSPResult as a single line with the given
+// label prefix (e.g. "OCSP:         " for connect output, "       OCSP: " for
+// verify output). Both FormatOCSPLine and internal/verify.go delegate to this
+// to avoid duplicating status-to-text logic.
+func FormatOCSPStatusLine(prefix string, r *OCSPResult) string {
 	switch r.Status {
 	case "good":
-		return fmt.Sprintf("OCSP:         good (%s)\n", r.URL)
+		return fmt.Sprintf("%sgood (%s)\n", prefix, r.URL)
 	case "revoked":
 		detail := "revoked"
 		if r.RevokedAt != nil {
@@ -520,35 +520,47 @@ func FormatOCSPLine(r *OCSPResult) string {
 		if r.RevocationReason != nil {
 			detail += ", reason: " + *r.RevocationReason
 		}
-		return fmt.Sprintf("OCSP:         %s\n", detail)
+		return fmt.Sprintf("%s%s\n", prefix, detail)
 	case "unavailable":
 		if r.Detail != "" {
-			return fmt.Sprintf("OCSP:         unavailable (%s)\n", r.Detail)
+			return fmt.Sprintf("%sunavailable (%s)\n", prefix, r.Detail)
 		}
-		return fmt.Sprintf("OCSP:         unavailable (%s)\n", r.URL)
+		return fmt.Sprintf("%sunavailable (%s)\n", prefix, r.URL)
 	case "skipped":
-		return fmt.Sprintf("OCSP:         skipped (%s)\n", r.Detail)
+		return fmt.Sprintf("%sskipped (%s)\n", prefix, r.Detail)
 	case "unknown":
-		return "OCSP:         unknown (responder does not recognize this certificate)\n"
+		return fmt.Sprintf("%sunknown (responder does not recognize this certificate)\n", prefix)
 	default:
-		return fmt.Sprintf("OCSP:         %s\n", r.Status)
+		return fmt.Sprintf("%s%s\n", prefix, r.Status)
+	}
+}
+
+// FormatOCSPLine formats an OCSPResult as a single line for connect output.
+func FormatOCSPLine(r *OCSPResult) string {
+	return FormatOCSPStatusLine("OCSP:         ", r)
+}
+
+// FormatCRLStatusLine formats a CRLCheckResult as a single line with the given
+// label prefix. Both FormatCRLLine and internal/verify.go delegate to this to
+// avoid duplicating status-to-text logic.
+func FormatCRLStatusLine(prefix string, r *CRLCheckResult) string {
+	switch r.Status {
+	case "good":
+		return fmt.Sprintf("%sgood (%s)\n", prefix, r.URL)
+	case "revoked":
+		return fmt.Sprintf("%srevoked (%s)\n", prefix, r.Detail)
+	case "unavailable":
+		return fmt.Sprintf("%sunavailable (%s)\n", prefix, r.Detail)
+	case "skipped":
+		return fmt.Sprintf("%sskipped (%s)\n", prefix, r.Detail)
+	default:
+		return fmt.Sprintf("%s%s\n", prefix, r.Status)
 	}
 }
 
 // FormatCRLLine formats a CRLCheckResult as a single line for connect output.
-// Used by both FormatConnectResult and the CLI's verbose formatter to avoid
-// duplicating status-to-text logic.
 func FormatCRLLine(r *CRLCheckResult) string {
-	switch r.Status {
-	case "good":
-		return fmt.Sprintf("CRL:          good (%s)\n", r.URL)
-	case "revoked":
-		return fmt.Sprintf("CRL:          revoked (%s)\n", r.Detail)
-	case "unavailable":
-		return fmt.Sprintf("CRL:          unavailable (%s)\n", r.Detail)
-	default:
-		return fmt.Sprintf("CRL:          %s\n", r.Status)
-	}
+	return FormatCRLStatusLine("CRL:          ", r)
 }
 
 // FormatConnectResult formats a ConnectResult as human-readable text.

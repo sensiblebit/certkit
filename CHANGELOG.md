@@ -59,9 +59,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Add SSRF validation (`ValidateAIAURL`) to OCSP responder URLs and CRL distribution point URLs — previously only AIA certificate URLs were validated ([#78])
 - Add `CheckRedirect` handlers to OCSP and CRL HTTP clients — prevents redirect-based SSRF bypass to internal networks ([#78])
+- Fix `connect` OCSP/CRL checks using unverified issuer from `PeerCertificates` when chain verification fails — a malicious server could forge valid revocation responses; now only uses cryptographically verified issuer from `VerifiedChains` ([#78])
 
 ### Fixed
 
+- Fix `connect` `FormatCRLLine` dropping `Detail` for "skipped" status — previously fell through to default which omitted the reason ([#78])
+- Fix `formatVerifyCRL` in `verify` missing "skipped" case — now delegates to shared `FormatCRLStatusLine` helper ([#78])
+- Fix silent error discard in test TLS server — `Handshake()` and `Close()` errors now logged with `slog.Debug` (ERR-5) ([#78])
+- Fix `checkVerifyOCSP` taking 3 positional arguments — now uses `CheckOCSPInput` struct (CS-5) ([#78])
+- Fix `formatVerifyOCSP`/`formatVerifyCRL` duplicating `FormatOCSPLine`/`FormatCRLLine` logic — extract shared `FormatOCSPStatusLine` and `FormatCRLStatusLine` helpers ([#78])
 - Fix `connect` OCSP/CRL checks failing when the server sends a duplicate leaf certificate in the chain (e.g., `[leaf, leaf, intermediate]`) — issuer resolution now prefers the cryptographically verified chain over the raw server-sent chain ([`2693116`])
 - Fix `connect` OCSP/CRL checks ignoring AIA-fetched issuer — when server sends leaf-only chain, revocation checks now fall back to `VerifiedChains` for the issuer ([#78])
 - Fix `certkit crl` rejecting private/loopback IPs — SSRF validation is now skipped for user-provided URLs ([#78])

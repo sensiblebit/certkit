@@ -746,12 +746,16 @@ func TestConnectTLS_OCSP(t *testing.T) {
 	)
 	port := startTLSServer(t, [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
 
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(ca.Cert)
+
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
 	result, err := ConnectTLS(ctx, ConnectTLSInput{
-		Host: "127.0.0.1",
-		Port: port,
+		Host:    "127.0.0.1",
+		Port:    port,
+		RootCAs: rootPool,
 	})
 	if err != nil {
 		t.Fatalf("ConnectTLS failed: %v", err)
@@ -814,9 +818,13 @@ func TestConnectTLS_OCSP_SkipAndFailure(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 
+			rootPool := x509.NewCertPool()
+			rootPool.AddCert(ca.Cert)
+
 			result, err := ConnectTLS(ctx, ConnectTLSInput{
 				Host:        "127.0.0.1",
 				Port:        port,
+				RootCAs:     rootPool,
 				DisableOCSP: tc.disableOCSP,
 			})
 			if err != nil {
@@ -964,9 +972,13 @@ func TestConnectTLS_CRL(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 
+			rootPool := x509.NewCertPool()
+			rootPool.AddCert(ca.Cert)
+
 			result, err := ConnectTLS(ctx, ConnectTLSInput{
 				Host:        "127.0.0.1",
 				Port:        port,
+				RootCAs:     rootPool,
 				CheckCRL:    true,
 				DisableOCSP: true,
 			})
@@ -1034,15 +1046,26 @@ func TestConnectTLS_CRL_Unavailable(t *testing.T) {
 			}
 			port := startTLSServer(t, chain, leaf.Key)
 
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-
-			result, err := ConnectTLS(ctx, ConnectTLSInput{
+			input := ConnectTLSInput{
 				Host:        "127.0.0.1",
 				Port:        port,
 				CheckCRL:    true,
 				DisableOCSP: true,
-			})
+			}
+			// Provide RootCAs so chain verification succeeds when the CA is
+			// in the chain. The singleCert case deliberately omits the issuer
+			// AND the root pool, so both PeerCertificates and VerifiedChains
+			// lack an issuer.
+			if !tc.singleCert {
+				rootPool := x509.NewCertPool()
+				rootPool.AddCert(ca.Cert)
+				input.RootCAs = rootPool
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			result, err := ConnectTLS(ctx, input)
 			if err != nil {
 				t.Fatalf("ConnectTLS failed: %v", err)
 			}
@@ -1065,8 +1088,8 @@ func TestConnectTLS_CRL_AIAFetchedIssuer(t *testing.T) {
 
 	// WHY: When the server sends only a leaf cert (no intermediates), the issuer
 	// must be obtained from VerifiedChains (populated by AIA walking) for CRL
-	// signature verification. This test verifies the fallback from
-	// PeerCertificates[1] to VerifiedChains[0][1].
+	// signature verification. This test verifies issuer resolution from
+	// VerifiedChains[0][1].
 
 	// Build 3-tier PKI: root -> intermediate -> leaf.
 	root := generateTestCA(t, "AIA CRL Root CA")

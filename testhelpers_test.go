@@ -10,6 +10,7 @@ import (
 	"encoding/asn1"
 	"encoding/pem"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"net"
 	"net/url"
@@ -414,9 +415,13 @@ func startTLSServer(t *testing.T, certChain [][]byte, key *ecdsa.PrivateKey) str
 				return
 			}
 			if tlsConn, ok := conn.(*tls.Conn); ok {
-				_ = tlsConn.Handshake()
+				if err := tlsConn.Handshake(); err != nil {
+					slog.Debug("startTLSServer: handshake error (expected during test teardown)", "error", err)
+				}
 			}
-			_ = conn.Close()
+			if err := conn.Close(); err != nil {
+				slog.Debug("startTLSServer: connection close error", "error", err)
+			}
 		}
 	}()
 
