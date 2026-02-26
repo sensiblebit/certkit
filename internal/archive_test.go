@@ -671,27 +671,41 @@ func TestProcessArchive_DecompressionRatioLimit(t *testing.T) {
 	}
 }
 
-func TestProcessArchive_ZipOverflowUncompressedSize(t *testing.T) {
-	// WHY: Verifies that ZIP entries with UncompressedSize64 > math.MaxInt64
-	// are skipped. Without the overflow guard, the uint64→int64 cast wraps
-	// negative, bypassing decompression ratio and size limit checks.
+func TestProcessArchive_ZipOverflowSize(t *testing.T) {
+	// WHY: Verifies that ZIP entries with UncompressedSize64 or CompressedSize64
+	// > math.MaxInt64 are skipped. Without the overflow guard, the uint64→int64
+	// cast wraps negative, bypassing decompression ratio and size limit checks.
 	t.Parallel()
 
-	zipData := createZipWithOverflowSize(t, "overflow.pem", math.MaxInt64+1)
-
-	cfg := newTestConfig(t)
-	n, err := ProcessArchive(ProcessArchiveInput{
-		ArchivePath: "test.zip",
-		Data:        zipData,
-		Format:      "zip",
-		Limits:      DefaultArchiveLimits(),
-		Store:       cfg.Store, Passwords: cfg.Passwords,
-	})
-	if err != nil {
-		t.Fatalf("ProcessArchive: %v", err)
+	tests := []struct {
+		name             string
+		uncompressedSize uint64
+		compressedSize   uint64
+	}{
+		{"uncompressed overflow", math.MaxInt64 + 1, 0},
+		{"compressed overflow", 0, math.MaxInt64 + 1},
 	}
-	if n != 0 {
-		t.Errorf("processed %d entries, want 0 (overflow entry should be skipped)", n)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			zipData := createZipWithOverflowSize(t, "overflow.pem", tc.uncompressedSize, tc.compressedSize)
+
+			cfg := newTestConfig(t)
+			n, err := ProcessArchive(ProcessArchiveInput{
+				ArchivePath: "test.zip",
+				Data:        zipData,
+				Format:      "zip",
+				Limits:      DefaultArchiveLimits(),
+				Store:       cfg.Store, Passwords: cfg.Passwords,
+			})
+			if err != nil {
+				t.Fatalf("ProcessArchive: %v", err)
+			}
+			if n != 0 {
+				t.Errorf("processed %d entries, want 0 (overflow entry should be skipped)", n)
+			}
+		})
 	}
 }
 
@@ -742,17 +756,18 @@ func TestProcessArchive_TarPartialCorruption(t *testing.T) {
 // single entry whose central-directory UncompressedSize64 is set to the given
 // value via a ZIP64 extended information extra field. This cannot be done with
 // archive/zip.Writer because it writes actual data sizes.
-func createZipWithOverflowSize(t *testing.T, name string, uncompressedSize uint64) []byte {
+func createZipWithOverflowSize(t *testing.T, name string, uncompressedSize, compressedSize uint64) []byte {
 	t.Helper()
 
 	nameBytes := []byte(name)
 	nameLen := len(nameBytes)
 
-	// ZIP64 extended information extra field
-	zip64Extra := make([]byte, 12)
+	// ZIP64 extended information extra field — encode both sizes (16 bytes)
+	zip64Extra := make([]byte, 20)
 	binary.LittleEndian.PutUint16(zip64Extra[0:2], 0x0001) // ZIP64 header ID
-	binary.LittleEndian.PutUint16(zip64Extra[2:4], 8)      // data size (one 8-byte field)
+	binary.LittleEndian.PutUint16(zip64Extra[2:4], 16)     // data size (two 8-byte fields)
 	binary.LittleEndian.PutUint64(zip64Extra[4:12], uncompressedSize)
+	binary.LittleEndian.PutUint64(zip64Extra[12:20], compressedSize)
 
 	var buf bytes.Buffer
 
@@ -771,6 +786,7 @@ func createZipWithOverflowSize(t *testing.T, name string, uncompressedSize uint6
 	binary.LittleEndian.PutUint32(cd[0:4], 0x02014b50)   // signature
 	binary.LittleEndian.PutUint16(cd[4:6], 45)           // version made by
 	binary.LittleEndian.PutUint16(cd[6:8], 45)           // version needed
+	binary.LittleEndian.PutUint32(cd[20:24], 0xFFFFFFFF) // compressed size → ZIP64
 	binary.LittleEndian.PutUint32(cd[24:28], 0xFFFFFFFF) // uncompressed size → ZIP64
 	binary.LittleEndian.PutUint16(cd[28:30], uint16(nameLen))
 	binary.LittleEndian.PutUint16(cd[30:32], uint16(len(zip64Extra)))

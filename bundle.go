@@ -368,7 +368,7 @@ func FetchAIACertificates(ctx context.Context, cert *x509.Certificate, timeout t
 
 			certs, err := fetchCertificatesFromURL(ctx, client, aiaURL)
 			if err != nil {
-				warnings = append(warnings, fmt.Sprintf("AIA fetch failed for %s: %v", aiaURL, err))
+				warnings = append(warnings, fmt.Sprintf("AIA fetch failed: %v", err))
 				continue
 			}
 			fetched = append(fetched, certs...)
