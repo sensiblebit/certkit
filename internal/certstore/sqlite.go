@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"fmt"
 	"log/slog"
+	"slices"
 	"strings"
 	"time"
 
@@ -205,8 +206,11 @@ func SaveToSQLite(store *MemStore, dbPath string) error {
 	for _, rec := range store.AllCertsFlat() {
 		certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rec.Cert.Raw})
 
-		sans := append(rec.Cert.DNSNames, FormatIPAddresses(rec.Cert.IPAddresses)...)
-		sansJSON, _ := json.Marshal(sans)
+		sans := slices.Concat(rec.Cert.DNSNames, FormatIPAddresses(rec.Cert.IPAddresses))
+		sansJSON, err := json.Marshal(sans)
+		if err != nil {
+			return fmt.Errorf("marshaling SANs for serial %s: %w", rec.Cert.SerialNumber.String(), err)
+		}
 
 		notBefore := rec.NotBefore
 		row := sqliteCertRow{
@@ -222,12 +226,11 @@ func SaveToSQLite(store *MemStore, dbPath string) error {
 			CommonName:             sql.NullString{String: rec.Cert.Subject.CommonName, Valid: rec.Cert.Subject.CommonName != ""},
 			BundleName:             rec.BundleName,
 		}
-		_, err := db.NamedExec(`
+		if _, err = db.NamedExec(`
 			INSERT OR IGNORE INTO certificates (serial_number, authority_key_identifier, cert_type, key_type, expiry, not_before, metadata, sans, common_name, bundle_name, subject_key_identifier, pem)
 			VALUES (:serial_number, :authority_key_identifier, :cert_type, :key_type, :expiry, :not_before, :metadata, :sans, :common_name, :bundle_name, :subject_key_identifier, :pem)
-		`, row)
-		if err != nil {
-			slog.Warn("saving cert to DB", "serial", rec.Cert.SerialNumber, "error", err)
+		`, row); err != nil {
+			return fmt.Errorf("saving cert to DB (serial %s): %w", row.SerialNumber, err)
 		}
 	}
 
@@ -246,12 +249,11 @@ func SaveToSQLite(store *MemStore, dbPath string) error {
 		case *ecdsa.PrivateKey:
 			row.Curve = k.Curve.Params().Name
 		}
-		_, err := db.NamedExec(`
+		if _, err := db.NamedExec(`
 			INSERT OR IGNORE INTO keys (subject_key_identifier, key_type, bit_length, public_exponent, modulus, curve, key_data)
 			VALUES (:subject_key_identifier, :key_type, :bit_length, :public_exponent, :modulus, :curve, :key_data)
-		`, row)
-		if err != nil {
-			slog.Warn("saving key to DB", "ski", rec.SKI, "error", err)
+		`, row); err != nil {
+			return fmt.Errorf("saving key to DB (SKI %s): %w", rec.SKI, err)
 		}
 	}
 

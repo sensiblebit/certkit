@@ -4,6 +4,7 @@ package certstore
 
 import (
 	"encoding/hex"
+	"net"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -185,5 +186,49 @@ func TestLoadFromSQLite_MergesWithExisting(t *testing.T) {
 	}
 	if !cns["Test ECDSA Root CA"] {
 		t.Error("ECDSA CA cert missing after merge")
+	}
+}
+
+func TestSaveToSQLite_DoesNotMutateDNSNames(t *testing.T) {
+	// WHY: SaveToSQLite concatenates DNSNames and IPAddresses for the SANs
+	// column. Before the slices.Concat fix, append could write IP addresses
+	// into the DNSNames backing array's spare capacity, corrupting any
+	// sibling slices sharing that array.
+	//
+	// We detect this by placing sentinel values in the backing array beyond
+	// DNSNames' length. If append is used instead of slices.Concat, the
+	// sentinels get overwritten by IP address strings.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeafWithIPSANs(t, ca, "alias.example.com",
+		[]string{"alias.example.com", "www.alias.example.com"},
+		[]net.IP{net.IPv4(10, 0, 0, 1), net.ParseIP("::1")},
+	)
+
+	// Give DNSNames a backing array with sentinel values beyond len.
+	// x509.ParseCertificate returns cap==len, so without this the bug
+	// is undetectable (append always allocates a new array).
+	backing := []string{"alias.example.com", "www.alias.example.com", "SENTINEL", "SENTINEL"}
+	leaf.cert.DNSNames = backing[:2:4]
+
+	store := NewMemStore()
+	if err := store.HandleCertificate(ca.cert, "test"); err != nil {
+		t.Fatalf("store CA cert: %v", err)
+	}
+	if err := store.HandleCertificate(leaf.cert, "test"); err != nil {
+		t.Fatalf("store leaf cert: %v", err)
+	}
+
+	dbPath := filepath.Join(t.TempDir(), "alias.db")
+	if err := SaveToSQLite(store, dbPath); err != nil {
+		t.Fatalf("SaveToSQLite: %v", err)
+	}
+
+	// With the old append code, backing[2:] would contain IP addresses
+	// instead of sentinels.
+	if backing[2] != "SENTINEL" || backing[3] != "SENTINEL" {
+		t.Errorf("SaveToSQLite corrupted DNSNames backing array: got %v, want sentinels",
+			backing[2:])
 	}
 }

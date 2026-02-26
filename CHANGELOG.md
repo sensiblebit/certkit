@@ -7,8 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Improve error messages when AIA certificate fetching fails — errors now include the URL and operation context ([#76])
+
 ### Fixed
 
+- Fix `--save-db` error messages formatting `*big.Int` serial numbers with `%s` instead of calling `.String()` ([#76])
+- Fix potential panic in TLS connection handling during remote certificate fetch ([#76])
+- Fix `--save-db` silently writing incomplete SAN data when JSON encoding fails — now returns an error ([#76])
+- Fix `--save-db` silently dropping certificates or keys when database INSERT fails — now returns an error ([#76])
+- Fix `--save-db` corrupting subsequent operations by modifying certificate SAN data during export ([#76])
+- Fix ZIP archive extraction bypassing size limits when entry headers contain extremely large sizes ([#76])
+- Fix potential data corruption when generating OtherName SAN extensions ([#76])
 - Fix `buildChainFromPool` infinite loop on circular issuer chains — add visited-set cycle guard ([#75])
 - Fix `convert --key` P12 multi-match and key-mismatch errors returning exit code 1 instead of 2 — wrap in `ValidationError` (CLI-6) ([#75])
 - Fix `convert --key` duplicating `ParsePEMPrivateKeys` logic via internal `parseKeyBlocks` — consolidate to shared library function ([#75])
@@ -776,6 +787,7 @@ Initial release.
 [`3569926`]: https://github.com/sensiblebit/certkit/commit/3569926
 [#74]: https://github.com/sensiblebit/certkit/pull/74
 [#75]: https://github.com/sensiblebit/certkit/pull/75
+[#76]: https://github.com/sensiblebit/certkit/pull/76
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63

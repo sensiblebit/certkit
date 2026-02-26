@@ -237,7 +237,7 @@ func TestFetchLeafFromURL_Errors(t *testing.T) {
 		url     string
 		wantErr string
 	}{
-		{"non-existent host", "https://this-does-not-exist.invalid", "tls dial to"},
+		{"non-existent host", "https://this-does-not-exist.invalid", "TLS dial to"},
 		{"malformed URL", "://bad", "parsing URL"},
 	}
 	for _, tt := range tests {
