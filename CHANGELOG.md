@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fix `--save-db` error messages formatting `*big.Int` serial numbers with `%s` instead of calling `.String()` ([#76])
 - Fix potential panic in TLS connection handling during remote certificate fetch ([#76])
 - Fix `--save-db` silently writing incomplete SAN data when JSON encoding fails — now returns an error ([#76])
 - Fix `--save-db` silently dropping certificates or keys when database INSERT fails — now returns an error ([#76])

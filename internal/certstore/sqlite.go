@@ -209,7 +209,7 @@ func SaveToSQLite(store *MemStore, dbPath string) error {
 		sans := slices.Concat(rec.Cert.DNSNames, FormatIPAddresses(rec.Cert.IPAddresses))
 		sansJSON, err := json.Marshal(sans)
 		if err != nil {
-			return fmt.Errorf("marshaling SANs for serial %s: %w", rec.Cert.SerialNumber, err)
+			return fmt.Errorf("marshaling SANs for serial %s: %w", rec.Cert.SerialNumber.String(), err)
 		}
 
 		notBefore := rec.NotBefore
@@ -230,7 +230,7 @@ func SaveToSQLite(store *MemStore, dbPath string) error {
 			INSERT OR IGNORE INTO certificates (serial_number, authority_key_identifier, cert_type, key_type, expiry, not_before, metadata, sans, common_name, bundle_name, subject_key_identifier, pem)
 			VALUES (:serial_number, :authority_key_identifier, :cert_type, :key_type, :expiry, :not_before, :metadata, :sans, :common_name, :bundle_name, :subject_key_identifier, :pem)
 		`, row); err != nil {
-			return fmt.Errorf("saving cert to DB (serial %s): %w", rec.Cert.SerialNumber, err)
+			return fmt.Errorf("saving cert to DB (serial %s): %w", row.SerialNumber, err)
 		}
 	}
 
