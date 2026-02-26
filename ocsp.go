@@ -26,8 +26,8 @@ type OCSPResult struct {
 	Status string `json:"status"`
 	// SerialNumber is the certificate serial in hex.
 	SerialNumber string `json:"serial,omitempty"`
-	// ResponderURL is the OCSP responder that was queried.
-	ResponderURL string `json:"responder_url,omitempty"`
+	// URL is the OCSP responder that was queried.
+	URL string `json:"url,omitempty"`
 	// ThisUpdate is when the OCSP response was generated (RFC 3339).
 	ThisUpdate string `json:"this_update,omitempty"`
 	// NextUpdate is when the OCSP response expires (RFC 3339).
@@ -111,7 +111,7 @@ func CheckOCSP(ctx context.Context, input CheckOCSPInput) (*OCSPResult, error) {
 
 	result := &OCSPResult{
 		SerialNumber: input.Cert.SerialNumber.Text(16),
-		ResponderURL: responderURL,
+		URL:          responderURL,
 		ThisUpdate:   resp.ThisUpdate.UTC().Format(time.RFC3339),
 		NextUpdate:   resp.NextUpdate.UTC().Format(time.RFC3339),
 	}
@@ -157,7 +157,7 @@ func FormatOCSPResult(r *OCSPResult) string {
 	var out string
 	out += fmt.Sprintf("Serial:       %s\n", r.SerialNumber)
 	out += fmt.Sprintf("Status:       %s\n", r.Status)
-	out += fmt.Sprintf("Responder:    %s\n", r.ResponderURL)
+	out += fmt.Sprintf("Responder:    %s\n", r.URL)
 	out += fmt.Sprintf("This Update:  %s\n", r.ThisUpdate)
 	out += fmt.Sprintf("Next Update:  %s\n", r.NextUpdate)
 	if r.RevokedAt != nil {

@@ -329,7 +329,7 @@ func TestFormatConnectResult(t *testing.T) {
 		},
 		{
 			name: "OCSP good",
-			ocsp: &OCSPResult{Status: "good", ResponderURL: "http://ocsp.example.com"},
+			ocsp: &OCSPResult{Status: "good", URL: "http://ocsp.example.com"},
 			wantStrings: []string{
 				"OCSP:         good (http://ocsp.example.com)",
 			},
@@ -338,7 +338,7 @@ func TestFormatConnectResult(t *testing.T) {
 			name: "OCSP revoked",
 			ocsp: &OCSPResult{
 				Status:           "revoked",
-				ResponderURL:     "http://ocsp.example.com",
+				URL:              "http://ocsp.example.com",
 				RevokedAt:        new("2025-01-15T00:00:00Z"),
 				RevocationReason: new("key compromise"),
 			},
@@ -348,21 +348,21 @@ func TestFormatConnectResult(t *testing.T) {
 		},
 		{
 			name: "OCSP unavailable with detail",
-			ocsp: &OCSPResult{Status: "unavailable", ResponderURL: "http://ocsp.example.com", Detail: "connection refused"},
+			ocsp: &OCSPResult{Status: "unavailable", URL: "http://ocsp.example.com", Detail: "connection refused"},
 			wantStrings: []string{
 				"OCSP:         unavailable (connection refused)",
 			},
 		},
 		{
 			name: "OCSP unavailable without detail",
-			ocsp: &OCSPResult{Status: "unavailable", ResponderURL: "http://ocsp.example.com"},
+			ocsp: &OCSPResult{Status: "unavailable", URL: "http://ocsp.example.com"},
 			wantStrings: []string{
 				"OCSP:         unavailable (http://ocsp.example.com)",
 			},
 		},
 		{
 			name: "OCSP unknown",
-			ocsp: &OCSPResult{Status: "unknown", ResponderURL: "http://ocsp.example.com"},
+			ocsp: &OCSPResult{Status: "unknown", URL: "http://ocsp.example.com"},
 			wantStrings: []string{
 				"OCSP:         unknown (responder does not recognize this certificate)",
 			},
@@ -376,7 +376,7 @@ func TestFormatConnectResult(t *testing.T) {
 		},
 		{
 			name: "CRL good",
-			crl:  &CRLCheckResult{Status: "good", DistributionPoint: "http://crl.example.com/ca.crl"},
+			crl:  &CRLCheckResult{Status: "good", URL: "http://crl.example.com/ca.crl"},
 			wantStrings: []string{
 				"CRL:          good (http://crl.example.com/ca.crl)",
 			},

@@ -105,8 +105,8 @@ type CRLCheckResult struct {
 	// Unlike OCSPResult's "unknown" (an explicit responder status), "unavailable"
 	// means the CRL could not be fetched, parsed, or verified.
 	Status string `json:"status"`
-	// DistributionPoint is the CRL distribution point URL that was fetched.
-	DistributionPoint string `json:"distribution_point,omitempty"`
+	// URL is the CRL distribution point that was fetched.
+	URL string `json:"url,omitempty"`
 	// Detail provides context when Status is "unavailable" (the error message)
 	// or "revoked" (the serial number).
 	Detail string `json:"detail,omitempty"`
@@ -320,9 +320,9 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 		if ocspErr != nil {
 			slog.Debug("OCSP check failed", "error", ocspErr)
 			result.OCSP = &OCSPResult{
-				Status:       "unavailable",
-				ResponderURL: leaf.OCSPServer[0],
-				Detail:       ocspErr.Error(),
+				Status: "unavailable",
+				URL:    leaf.OCSPServer[0],
+				Detail: ocspErr.Error(),
 			}
 		} else {
 			result.OCSP = ocspResult
@@ -394,9 +394,9 @@ func CheckLeafCRL(ctx context.Context, input CheckLeafCRLInput) *CRLCheckResult 
 	if err != nil {
 		slog.Debug("CRL fetch failed", "url", cdpURL, "error", err)
 		return &CRLCheckResult{
-			Status:            "unavailable",
-			DistributionPoint: cdpURL,
-			Detail:            err.Error(),
+			Status: "unavailable",
+			URL:    cdpURL,
+			Detail: err.Error(),
 		}
 	}
 
@@ -404,18 +404,18 @@ func CheckLeafCRL(ctx context.Context, input CheckLeafCRLInput) *CRLCheckResult 
 	if err != nil {
 		slog.Debug("CRL parse failed", "url", cdpURL, "error", err)
 		return &CRLCheckResult{
-			Status:            "unavailable",
-			DistributionPoint: cdpURL,
-			Detail:            err.Error(),
+			Status: "unavailable",
+			URL:    cdpURL,
+			Detail: err.Error(),
 		}
 	}
 
 	if err := crl.CheckSignatureFrom(input.Issuer); err != nil {
 		slog.Debug("CRL signature verification failed", "url", cdpURL, "error", err)
 		return &CRLCheckResult{
-			Status:            "unavailable",
-			DistributionPoint: cdpURL,
-			Detail:            fmt.Sprintf("CRL signature verification failed: %v", err),
+			Status: "unavailable",
+			URL:    cdpURL,
+			Detail: fmt.Sprintf("CRL signature verification failed: %v", err),
 		}
 	}
 
@@ -427,23 +427,23 @@ func CheckLeafCRL(ctx context.Context, input CheckLeafCRLInput) *CRLCheckResult 
 	} else if time.Now().After(crl.NextUpdate) {
 		slog.Debug("CRL is expired", "url", cdpURL, "next_update", crl.NextUpdate)
 		return &CRLCheckResult{
-			Status:            "unavailable",
-			DistributionPoint: cdpURL,
-			Detail:            fmt.Sprintf("CRL expired at %s", crl.NextUpdate.UTC().Format(time.RFC3339)),
+			Status: "unavailable",
+			URL:    cdpURL,
+			Detail: fmt.Sprintf("CRL expired at %s", crl.NextUpdate.UTC().Format(time.RFC3339)),
 		}
 	}
 
 	if CRLContainsCertificate(crl, input.Leaf) {
 		return &CRLCheckResult{
-			Status:            "revoked",
-			DistributionPoint: cdpURL,
-			Detail:            fmt.Sprintf("serial %s found in CRL", input.Leaf.SerialNumber.Text(16)),
+			Status: "revoked",
+			URL:    cdpURL,
+			Detail: fmt.Sprintf("serial %s found in CRL", input.Leaf.SerialNumber.Text(16)),
 		}
 	}
 
 	return &CRLCheckResult{
-		Status:            "good",
-		DistributionPoint: cdpURL,
+		Status: "good",
+		URL:    cdpURL,
 	}
 }
 
@@ -505,7 +505,7 @@ func tlsVersionString(version uint16) string {
 func FormatOCSPLine(r *OCSPResult) string {
 	switch r.Status {
 	case "good":
-		return fmt.Sprintf("OCSP:         good (%s)\n", r.ResponderURL)
+		return fmt.Sprintf("OCSP:         good (%s)\n", r.URL)
 	case "revoked":
 		detail := "revoked"
 		if r.RevokedAt != nil {
@@ -519,7 +519,7 @@ func FormatOCSPLine(r *OCSPResult) string {
 		if r.Detail != "" {
 			return fmt.Sprintf("OCSP:         unavailable (%s)\n", r.Detail)
 		}
-		return fmt.Sprintf("OCSP:         unavailable (%s)\n", r.ResponderURL)
+		return fmt.Sprintf("OCSP:         unavailable (%s)\n", r.URL)
 	case "skipped":
 		return fmt.Sprintf("OCSP:         skipped (%s)\n", r.Detail)
 	case "unknown":
@@ -535,7 +535,7 @@ func FormatOCSPLine(r *OCSPResult) string {
 func FormatCRLLine(r *CRLCheckResult) string {
 	switch r.Status {
 	case "good":
-		return fmt.Sprintf("CRL:          good (%s)\n", r.DistributionPoint)
+		return fmt.Sprintf("CRL:          good (%s)\n", r.URL)
 	case "revoked":
 		return fmt.Sprintf("CRL:          revoked (%s)\n", r.Detail)
 	case "unavailable":

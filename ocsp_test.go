@@ -114,8 +114,8 @@ func TestCheckOCSP_MockResponse(t *testing.T) {
 				}
 			}
 			wantURL := strings.Replace(server.URL, "127.0.0.1", "localhost", 1)
-			if result.ResponderURL != wantURL {
-				t.Errorf("ResponderURL = %q, want %q", result.ResponderURL, wantURL)
+			if result.URL != wantURL {
+				t.Errorf("URL = %q, want %q", result.URL, wantURL)
 			}
 		})
 	}
@@ -148,7 +148,7 @@ func TestFormatOCSPResult(t *testing.T) {
 	result := &OCSPResult{
 		Status:       "good",
 		SerialNumber: "64",
-		ResponderURL: "http://ocsp.example.com",
+		URL:          "http://ocsp.example.com",
 		ThisUpdate:   now.UTC().Format(time.RFC3339),
 		NextUpdate:   now.Add(24 * time.Hour).UTC().Format(time.RFC3339),
 	}

@@ -461,7 +461,7 @@ func TestFormatCRLLine(t *testing.T) {
 	}{
 		{
 			name:   "good",
-			result: &CRLCheckResult{Status: "good", DistributionPoint: "http://crl.example.com/ca.crl"},
+			result: &CRLCheckResult{Status: "good", URL: "http://crl.example.com/ca.crl"},
 			want:   "CRL:          good (http://crl.example.com/ca.crl)\n",
 		},
 		{

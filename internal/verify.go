@@ -234,9 +234,9 @@ func checkVerifyOCSP(ctx context.Context, cert, issuer *x509.Certificate) *certk
 	})
 	if err != nil {
 		return &certkit.OCSPResult{
-			Status:       "unavailable",
-			ResponderURL: cert.OCSPServer[0],
-			Detail:       err.Error(),
+			Status: "unavailable",
+			URL:    cert.OCSPServer[0],
+			Detail: err.Error(),
 		}
 	}
 	return ocspResult
@@ -547,7 +547,7 @@ func FormatVerifyResult(r *VerifyResult) string {
 func formatVerifyOCSP(r *certkit.OCSPResult) string {
 	switch r.Status {
 	case "good":
-		return fmt.Sprintf("       OCSP: good (%s)\n", r.ResponderURL)
+		return fmt.Sprintf("       OCSP: good (%s)\n", r.URL)
 	case "revoked":
 		detail := "revoked"
 		if r.RevokedAt != nil {
@@ -561,7 +561,7 @@ func formatVerifyOCSP(r *certkit.OCSPResult) string {
 		if r.Detail != "" {
 			return fmt.Sprintf("       OCSP: unavailable (%s)\n", r.Detail)
 		}
-		return fmt.Sprintf("       OCSP: unavailable (%s)\n", r.ResponderURL)
+		return fmt.Sprintf("       OCSP: unavailable (%s)\n", r.URL)
 	case "skipped":
 		return fmt.Sprintf("       OCSP: skipped (%s)\n", r.Detail)
 	case "unknown":
@@ -575,7 +575,7 @@ func formatVerifyOCSP(r *certkit.OCSPResult) string {
 func formatVerifyCRL(r *certkit.CRLCheckResult) string {
 	switch r.Status {
 	case "good":
-		return fmt.Sprintf("        CRL: good (%s)\n", r.DistributionPoint)
+		return fmt.Sprintf("        CRL: good (%s)\n", r.URL)
 	case "revoked":
 		return fmt.Sprintf("        CRL: revoked (%s)\n", r.Detail)
 	case "unavailable":
