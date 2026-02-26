@@ -203,34 +203,11 @@ func formatConnectVerbose(r *certkit.ConnectResult, now time.Time) string {
 	}
 
 	if r.OCSP != nil {
-		switch r.OCSP.Status {
-		case "good":
-			fmt.Fprintf(&out, "OCSP:         good (%s)\n", r.OCSP.ResponderURL)
-		case "revoked":
-			detail := "revoked"
-			if r.OCSP.RevokedAt != nil {
-				detail += " at " + *r.OCSP.RevokedAt
-			}
-			if r.OCSP.RevocationReason != nil {
-				detail += ", reason: " + *r.OCSP.RevocationReason
-			}
-			fmt.Fprintf(&out, "OCSP:         %s\n", detail)
-		case "unavailable":
-			fmt.Fprintf(&out, "OCSP:         unavailable (%s)\n", r.OCSP.ResponderURL)
-		default:
-			fmt.Fprintf(&out, "OCSP:         %s\n", r.OCSP.Status)
-		}
+		out.WriteString(certkit.FormatOCSPLine(r.OCSP))
 	}
 
 	if r.CRL != nil {
-		switch r.CRL.Status {
-		case "good":
-			fmt.Fprintf(&out, "CRL:          good (%s)\n", r.CRL.DistributionPoint)
-		case "revoked":
-			fmt.Fprintf(&out, "CRL:          revoked (%s)\n", r.CRL.Detail)
-		case "unavailable":
-			fmt.Fprintf(&out, "CRL:          unavailable (%s)\n", r.CRL.Detail)
-		}
+		out.WriteString(certkit.FormatCRLLine(r.CRL))
 	}
 
 	if r.ClientAuth != nil && r.ClientAuth.Requested {

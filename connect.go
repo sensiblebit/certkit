@@ -447,6 +447,41 @@ func tlsVersionString(version uint16) string {
 	}
 }
 
+// FormatOCSPLine formats an OCSPResult as a single line for connect output.
+func FormatOCSPLine(r *OCSPResult) string {
+	switch r.Status {
+	case "good":
+		return fmt.Sprintf("OCSP:         good (%s)\n", r.ResponderURL)
+	case "revoked":
+		detail := "revoked"
+		if r.RevokedAt != nil {
+			detail += " at " + *r.RevokedAt
+		}
+		if r.RevocationReason != nil {
+			detail += ", reason: " + *r.RevocationReason
+		}
+		return fmt.Sprintf("OCSP:         %s\n", detail)
+	case "unavailable":
+		return fmt.Sprintf("OCSP:         unavailable (%s)\n", r.ResponderURL)
+	default:
+		return fmt.Sprintf("OCSP:         %s\n", r.Status)
+	}
+}
+
+// FormatCRLLine formats a CRLCheckResult as a single line for connect output.
+func FormatCRLLine(r *CRLCheckResult) string {
+	switch r.Status {
+	case "good":
+		return fmt.Sprintf("CRL:          good (%s)\n", r.DistributionPoint)
+	case "revoked":
+		return fmt.Sprintf("CRL:          revoked (%s)\n", r.Detail)
+	case "unavailable":
+		return fmt.Sprintf("CRL:          unavailable (%s)\n", r.Detail)
+	default:
+		return ""
+	}
+}
+
 // FormatConnectResult formats a ConnectResult as human-readable text.
 func FormatConnectResult(r *ConnectResult) string {
 	var out strings.Builder
@@ -468,34 +503,11 @@ func FormatConnectResult(r *ConnectResult) string {
 	}
 
 	if r.OCSP != nil {
-		switch r.OCSP.Status {
-		case "good":
-			fmt.Fprintf(&out, "OCSP:         good (%s)\n", r.OCSP.ResponderURL)
-		case "revoked":
-			detail := "revoked"
-			if r.OCSP.RevokedAt != nil {
-				detail += " at " + *r.OCSP.RevokedAt
-			}
-			if r.OCSP.RevocationReason != nil {
-				detail += ", reason: " + *r.OCSP.RevocationReason
-			}
-			fmt.Fprintf(&out, "OCSP:         %s\n", detail)
-		case "unavailable":
-			fmt.Fprintf(&out, "OCSP:         unavailable (%s)\n", r.OCSP.ResponderURL)
-		default:
-			fmt.Fprintf(&out, "OCSP:         %s\n", r.OCSP.Status)
-		}
+		out.WriteString(FormatOCSPLine(r.OCSP))
 	}
 
 	if r.CRL != nil {
-		switch r.CRL.Status {
-		case "good":
-			fmt.Fprintf(&out, "CRL:          good (%s)\n", r.CRL.DistributionPoint)
-		case "revoked":
-			fmt.Fprintf(&out, "CRL:          revoked (%s)\n", r.CRL.Detail)
-		case "unavailable":
-			fmt.Fprintf(&out, "CRL:          unavailable (%s)\n", r.CRL.Detail)
-		}
+		out.WriteString(FormatCRLLine(r.CRL))
 	}
 
 	if r.ClientAuth != nil && r.ClientAuth.Requested {
