@@ -262,7 +262,7 @@ func DiagnoseChain(input DiagnoseChainInput) []Diagnosis {
 			diags = append(diags, Diagnosis{
 				Check:  "intermediate-expired",
 				Status: "fail",
-				Detail: fmt.Sprintf("intermediate %q expired on %s", extra.Subject.CommonName, extra.NotAfter.UTC().Format(time.RFC3339)),
+				Detail: fmt.Sprintf("intermediate %q expired on %s", certkit.FormatDN(extra.Subject), extra.NotAfter.UTC().Format(time.RFC3339)),
 			})
 		}
 	}
@@ -280,7 +280,7 @@ func DiagnoseChain(input DiagnoseChainInput) []Diagnosis {
 			diags = append(diags, Diagnosis{
 				Check:  "missing-intermediate",
 				Status: "fail",
-				Detail: fmt.Sprintf("no intermediate certificate found for issuer %q", input.Cert.Issuer.CommonName),
+				Detail: fmt.Sprintf("no intermediate certificate found for issuer %q", certkit.FormatDN(input.Cert.Issuer)),
 			})
 		}
 	}

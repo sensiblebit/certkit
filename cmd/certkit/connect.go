@@ -232,8 +232,8 @@ func formatConnectVerbose(r *certkit.ConnectResult, now time.Time) string {
 		if ekus := certkit.FormatEKUs(cert.ExtKeyUsage); len(ekus) > 0 {
 			fmt.Fprintf(&out, "     EKU:         %s\n", strings.Join(ekus, ", "))
 		}
-		if len(cert.DNSNames) > 0 {
-			fmt.Fprintf(&out, "     SANs:        %s\n", strings.Join(cert.DNSNames, ", "))
+		if sans := certkit.CollectCertificateSANs(cert); len(sans) > 0 {
+			fmt.Fprintf(&out, "     SANs:        %s\n", strings.Join(sans, ", "))
 		}
 		fmt.Fprintf(&out, "     SHA-256:     %s\n", certkit.CertFingerprintColonSHA256(cert))
 		fmt.Fprintf(&out, "     SHA-1:       %s\n", certkit.CertFingerprintColonSHA1(cert))

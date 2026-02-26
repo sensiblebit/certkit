@@ -62,6 +62,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix `verify` command nil panic when input file contains only a key and no certificate ([#75])
 - Fix `DiagnoseChain` nil panic when called with nil certificate ([#75])
 - Fix `formatConvertOutput` returning unwrapped errors from PKCS#12, JKS, and PKCS#7 encoding (ERR-1) ([#75])
+- Fix `DiagnoseChain` using bare `CommonName` instead of `FormatDN` in intermediate-expired and missing-intermediate diagnostics — now shows full DN for CLI-4 consistency ([#75])
+- Fix verbose `connect` output using `cert.DNSNames` instead of `CollectCertificateSANs` for SANs — now includes all SAN types for CLI-4 consistency ([#75])
 - Fix `connect` command JSON using `fingerprint_sha256`, `type`, and `dns_names` field names instead of codebase-standard `sha256_fingerprint`, `cert_type`, and `sans` (CLI-4) ([#75])
 - Fix `convert` command performing encoding before checking if `-o` is required for binary formats — binary format error is now returned immediately ([#75])
 - Fix `crl --check` verdict written to stderr instead of stdout (CLI-1) and absent from JSON output (CLI-3) — check result now included as `check_result` in JSON and printed to stdout in text mode ([#75])
