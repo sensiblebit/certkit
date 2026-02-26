@@ -8,10 +8,13 @@ A Swiss Army knife for TLS/SSL certificates. Inspect, verify, bundle, scan, and 
 
 - **Inspect** any certificate, key, or CSR and see exactly what's in it
 - **Verify** that a cert chains to a trusted root, matches its key, and isn't about to expire
+- **Connect** to a TLS server and display its certificate chain, cipher suite, and ALPN
 - **Bundle** a leaf cert into a full chain for your web server (nginx, Apache, HAProxy, etc.)
+- **Convert** between PEM, DER, PKCS#12, JKS, PKCS#7, and Kubernetes Secrets
+- **Sign** certificates -- self-signed CAs or issue certs from CSRs
 - **Scan** a directory full of certs and keys to understand what you have
 - **Generate** new key pairs and CSRs for certificate renewals
-- **Convert** between formats -- PEM, PKCS#12, JKS, PKCS#7, DER, Kubernetes Secrets
+- **Check revocation** via OCSP or CRL
 
 Works with every common format out of the box. No OpenSSL gymnastics required.
 
@@ -87,14 +90,20 @@ See [EXAMPLES.md](EXAMPLES.md) for a complete walkthrough of every command with 
 
 ## Commands
 
-| Command | What it does |
-|---|---|
-| `certkit inspect <file>` | Show what's in a cert, key, or CSR |
-| `certkit verify <file>` | Check chain, key match, and expiry |
-| `certkit bundle <file>` | Build a certificate chain from a leaf cert |
-| `certkit scan <path>` | Scan a directory and catalog everything found |
-| `certkit keygen` | Generate a new key pair (and optionally a CSR) |
-| `certkit csr` | Generate a CSR from a template, cert, or existing CSR |
+| Command                     | What it does                                            |
+| --------------------------- | ------------------------------------------------------- |
+| `certkit inspect <file>`    | Show what's in a cert, key, or CSR                      |
+| `certkit verify <file>`     | Check chain, key match, and expiry                      |
+| `certkit connect <host>`    | Test a TLS connection and display the certificate chain |
+| `certkit bundle <file>`     | Build a certificate chain from a leaf cert              |
+| `certkit convert <file>`    | Convert between PEM, DER, PKCS#12, JKS, and PKCS#7      |
+| `certkit sign self-signed`  | Create a self-signed certificate                        |
+| `certkit sign csr <file>`   | Sign a CSR with a CA certificate and key                |
+| `certkit scan <path>`       | Scan a directory and catalog everything found           |
+| `certkit keygen`            | Generate a new key pair (and optionally a CSR)          |
+| `certkit csr`               | Generate a CSR from a template, cert, or existing CSR   |
+| `certkit ocsp <file>`       | Check certificate revocation status via OCSP            |
+| `certkit crl <file-or-url>` | Parse a CRL and check for revoked certificates          |
 
 ## License
 
@@ -106,90 +115,149 @@ See [EXAMPLES.md](EXAMPLES.md) for a complete walkthrough of every command with 
 
 ### Global Flags
 
-| Flag | Default | Description |
-|---|---|---|
-| `--log-level`, `-l` | `info` | Log level: `debug`, `info`, `warn`, `error` |
-| `--passwords`, `-p` | | Comma-separated passwords for encrypted keys |
-| `--password-file` | | File containing passwords, one per line |
-| `--allow-expired` | `false` | Include expired certificates |
+| Flag                | Default | Description                                                                        |
+| ------------------- | ------- | ---------------------------------------------------------------------------------- |
+| `--log-level`, `-l` | `info`  | Log level: `debug`, `info`, `warn`, `error`                                        |
+| `--passwords`, `-p` |         | Comma-separated passwords for encrypted keys                                       |
+| `--password-file`   |         | File containing passwords, one per line                                            |
+| `--allow-expired`   | `false` | Include expired certificates                                                       |
+| `--verbose`, `-v`   | `false` | Extended details in output (serial, key info, signature algorithm, key usage, EKU) |
 
 Common passwords (`""`, `"password"`, `"changeit"`, `"keypassword"`) are always tried automatically.
 
 ### Inspect Flags
 
-| Flag | Default | Description |
-|---|---|---|
-| `--format` | `text` | Output format: `text`, `json` |
+| Flag       | Default | Description                   |
+| ---------- | ------- | ----------------------------- |
+| `--format` | `text`  | Output format: `text`, `json` |
 
 ### Verify Flags
 
-| Flag | Default | Description |
-|---|---|---|
-| `--key` | | Private key file to check against the certificate |
-| `--expiry`, `-e` | | Check if cert expires within duration (e.g., `30d`, `720h`) |
-| `--trust-store` | `mozilla` | Trust store: `system`, `mozilla` |
-| `--format` | `text` | Output format: `text`, `json` |
+| Flag             | Default   | Description                                                 |
+| ---------------- | --------- | ----------------------------------------------------------- |
+| `--key`          |           | Private key file to check against the certificate           |
+| `--expiry`, `-e` |           | Check if cert expires within duration (e.g., `30d`, `720h`) |
+| `--trust-store`  | `mozilla` | Trust store: `system`, `mozilla`                            |
+| `--format`       | `text`    | Output format: `text`, `json`                               |
+| `--diagnose`     | `false`   | Show diagnostics when chain verification fails              |
 
 Chain verification is always performed. When the input contains an embedded private key (PKCS#12, JKS), key match is checked automatically.
 
+### Connect Flags
+
+| Flag           | Default | Description                              |
+| -------------- | ------- | ---------------------------------------- |
+| `--servername` |         | Override SNI hostname (defaults to host) |
+| `--format`     | `text`  | Output format: `text`, `json`            |
+
+Port defaults to 443 if not specified. Use `--verbose` for extended details (serial, key info, signature algorithm, key usage, EKU).
+
 ### Bundle Flags
 
-| Flag | Default | Description |
-|---|---|---|
-| `--key` | | Private key file (PEM) |
-| `--out-file`, `-o` | *(stdout)* | Output file |
-| `--format` | `pem` | Output format: `pem`, `chain`, `fullchain`, `p12`, `jks` |
-| `--force`, `-f` | `false` | Skip chain verification |
-| `--trust-store` | `mozilla` | Trust store: `system`, `mozilla` |
+| Flag               | Default    | Description                                              |
+| ------------------ | ---------- | -------------------------------------------------------- |
+| `--key`            |            | Private key file (PEM)                                   |
+| `--out-file`, `-o` | _(stdout)_ | Output file                                              |
+| `--format`         | `pem`      | Output format: `pem`, `chain`, `fullchain`, `p12`, `jks` |
+| `--force`, `-f`    | `false`    | Skip chain verification                                  |
+| `--trust-store`    | `mozilla`  | Trust store: `system`, `mozilla`                         |
+
+### Convert Flags
+
+| Flag               | Default            | Description                                      |
+| ------------------ | ------------------ | ------------------------------------------------ |
+| `--to`             | _(required)_       | Output format: `pem`, `der`, `p12`, `jks`, `p7b` |
+| `--key`            |                    | Private key file (PEM)                           |
+| `--out-file`, `-o` | _(stdout for PEM)_ | Output file (required for binary formats)        |
+
+Input format is auto-detected.
+
+### Sign Self-Signed Flags
+
+| Flag               | Default      | Description                                               |
+| ------------------ | ------------ | --------------------------------------------------------- |
+| `--cn`             | _(required)_ | Common Name for the certificate                           |
+| `--key`            |              | Existing private key file (generates EC P-256 if omitted) |
+| `--days`           | `3650`       | Validity period in days                                   |
+| `--is-ca`          | `true`       | Set CA:TRUE basic constraint                              |
+| `--out-file`, `-o` | _(stdout)_   | Output file                                               |
+
+### Sign CSR Flags
+
+| Flag               | Default      | Description                              |
+| ------------------ | ------------ | ---------------------------------------- |
+| `--ca`             | _(required)_ | CA certificate file (PEM)                |
+| `--ca-key`         | _(required)_ | CA private key file (PEM)                |
+| `--days`           | `365`        | Validity period in days                  |
+| `--copy-sans`      | `true`       | Copy SANs from CSR to issued certificate |
+| `--out-file`, `-o` | _(stdout)_   | Output file                              |
 
 ### Scan Flags
 
-| Flag | Default | Description |
-|---|---|---|
-| `--bundle-path` | | Export bundles to this directory |
-| `--config`, `-c` | `./bundles.yaml` | Path to bundle config YAML |
-| `--force`, `-f` | `false` | Allow export of untrusted certificate bundles |
-| `--duplicates` | `false` | Export all certificates per bundle, not just the newest |
-| `--dump-keys` | | Dump all discovered keys to a single PEM file |
-| `--dump-certs` | | Dump all discovered certificates to a single PEM file |
-| `--max-file-size` | `10485760` | Skip files larger than this size in bytes (0 to disable) |
-| `--save-db` | | Save the in-memory database to disk after scanning |
-| `--load-db` | | Load an existing database into memory before scanning |
-| `--format` | `text` | Output format: `text`, `json` |
+| Flag              | Default          | Description                                              |
+| ----------------- | ---------------- | -------------------------------------------------------- |
+| `--bundle-path`   |                  | Export bundles to this directory                         |
+| `--config`, `-c`  | `./bundles.yaml` | Path to bundle config YAML                               |
+| `--force`, `-f`   | `false`          | Allow export of untrusted certificate bundles            |
+| `--duplicates`    | `false`          | Export all certificates per bundle, not just the newest  |
+| `--dump-keys`     |                  | Dump all discovered keys to a single PEM file            |
+| `--dump-certs`    |                  | Dump all discovered certificates to a single PEM file    |
+| `--max-file-size` | `10485760`       | Skip files larger than this size in bytes (0 to disable) |
+| `--save-db`       |                  | Save the in-memory database to disk after scanning       |
+| `--load-db`       |                  | Load an existing database into memory before scanning    |
+| `--format`        | `text`           | Output format: `text`, `json`                            |
 
 ### Keygen Flags
 
-| Flag | Default | Description |
-|---|---|---|
-| `--algorithm`, `-a` | `ecdsa` | Key algorithm: `rsa`, `ecdsa`, `ed25519` |
-| `--bits`, `-b` | `4096` | RSA key size in bits |
-| `--curve` | `P-256` | ECDSA curve: `P-256`, `P-384`, `P-521` |
-| `--out-path`, `-o` | *(stdout)* | Output directory |
-| `--cn` | | Common Name (triggers CSR generation) |
-| `--sans` | | Comma-separated SANs (triggers CSR generation) |
+| Flag                | Default    | Description                                    |
+| ------------------- | ---------- | ---------------------------------------------- |
+| `--algorithm`, `-a` | `ecdsa`    | Key algorithm: `rsa`, `ecdsa`, `ed25519`       |
+| `--bits`, `-b`      | `4096`     | RSA key size in bits                           |
+| `--curve`           | `P-256`    | ECDSA curve: `P-256`, `P-384`, `P-521`         |
+| `--out-path`, `-o`  | _(stdout)_ | Output directory                               |
+| `--cn`              |            | Common Name (triggers CSR generation)          |
+| `--sans`            |            | Comma-separated SANs (triggers CSR generation) |
 
 ### CSR Flags
 
-| Flag | Default | Description |
-|---|---|---|
-| `--template` | | JSON template file for CSR generation |
-| `--cert` | | PEM certificate to use as CSR template |
-| `--from-csr` | | Existing PEM CSR to re-sign with a new key |
-| `--key` | | Existing private key file (PEM); generates new if omitted |
-| `--algorithm`, `-a` | `ecdsa` | Key algorithm for generated keys |
-| `--bits`, `-b` | `4096` | RSA key size in bits |
-| `--curve` | `P-256` | ECDSA curve |
-| `--out-path`, `-o` | *(stdout)* | Output directory |
+| Flag                | Default    | Description                                               |
+| ------------------- | ---------- | --------------------------------------------------------- |
+| `--template`        |            | JSON template file for CSR generation                     |
+| `--cert`            |            | PEM certificate to use as CSR template                    |
+| `--from-csr`        |            | Existing PEM CSR to re-sign with a new key                |
+| `--key`             |            | Existing private key file (PEM); generates new if omitted |
+| `--algorithm`, `-a` | `ecdsa`    | Key algorithm for generated keys                          |
+| `--bits`, `-b`      | `4096`     | RSA key size in bits                                      |
+| `--curve`           | `P-256`    | ECDSA curve                                               |
+| `--out-path`, `-o`  | _(stdout)_ | Output directory                                          |
 
 Exactly one of `--template`, `--cert`, or `--from-csr` is required.
 
+### OCSP Flags
+
+| Flag       | Default | Description                                                        |
+| ---------- | ------- | ------------------------------------------------------------------ |
+| `--issuer` |         | Issuer certificate file (PEM); auto-resolved from input if omitted |
+| `--format` | `text`  | Output format: `text`, `json`                                      |
+
+The OCSP responder URL is read from the certificate's AIA extension.
+
+### CRL Flags
+
+| Flag       | Default | Description                               |
+| ---------- | ------- | ----------------------------------------- |
+| `--check`  |         | Certificate file to check against the CRL |
+| `--format` | `text`  | Output format: `text`, `json`             |
+
+Accepts local files (PEM or DER) or HTTP URLs.
+
 ### Exit Codes
 
-| Code | Meaning |
-|---|---|
-| `0` | Success |
-| `1` | General error (bad input, missing file, etc.) |
-| `2` | Validation failure (chain invalid, key mismatch, expired) |
+| Code | Meaning                                                            |
+| ---- | ------------------------------------------------------------------ |
+| `0`  | Success                                                            |
+| `1`  | General error (bad input, missing file, etc.)                      |
+| `2`  | Validation failure (chain invalid, key mismatch, expired, revoked) |
 
 ### Bundle Configuration
 
@@ -206,14 +274,14 @@ defaultSubject:
 bundles:
   - bundleName: examplecom-tls
     commonNames:
-      - '*.example.com'
+      - "*.example.com"
       - example.com
 
   - bundleName: exampleio-tls
     commonNames:
-      - '*.example.io'
+      - "*.example.io"
       - example.io
-    subject:  # overrides defaultSubject for this bundle
+    subject: # overrides defaultSubject for this bundle
       country: [GB]
       province: [London]
       locality: [London]
@@ -227,20 +295,20 @@ Bundles without an explicit `subject` block inherit from `defaultSubject`. Certi
 
 When running `certkit scan --bundle-path`, each bundle produces the following files under `<dir>/<bundleName>/`:
 
-| File | Contents |
-|---|---|
-| `<cn>.pem` | Leaf certificate |
-| `<cn>.chain.pem` | Leaf + intermediates |
-| `<cn>.fullchain.pem` | Leaf + intermediates + root |
-| `<cn>.intermediates.pem` | Intermediate certificates |
-| `<cn>.root.pem` | Root certificate |
-| `<cn>.key` | Private key (PEM, mode 0600) |
-| `<cn>.p12` | PKCS#12 archive (default password: `changeit`, override via `--passwords`, mode 0600) |
-| `<cn>.k8s.yaml` | Kubernetes `kubernetes.io/tls` Secret (mode 0600) |
-| `<cn>.json` | Certificate metadata |
-| `<cn>.yaml` | Certificate and key metadata |
-| `<cn>.csr` | Certificate Signing Request |
-| `<cn>.csr.json` | CSR details (subject, SANs, key algorithm) |
+| File                     | Contents                                                                              |
+| ------------------------ | ------------------------------------------------------------------------------------- |
+| `<cn>.pem`               | Leaf certificate                                                                      |
+| `<cn>.chain.pem`         | Leaf + intermediates                                                                  |
+| `<cn>.fullchain.pem`     | Leaf + intermediates + root                                                           |
+| `<cn>.intermediates.pem` | Intermediate certificates                                                             |
+| `<cn>.root.pem`          | Root certificate                                                                      |
+| `<cn>.key`               | Private key (PEM, mode 0600)                                                          |
+| `<cn>.p12`               | PKCS#12 archive (default password: `changeit`, override via `--passwords`, mode 0600) |
+| `<cn>.k8s.yaml`          | Kubernetes `kubernetes.io/tls` Secret (mode 0600)                                     |
+| `<cn>.json`              | Certificate metadata                                                                  |
+| `<cn>.yaml`              | Certificate and key metadata                                                          |
+| `<cn>.csr`               | Certificate Signing Request                                                           |
+| `<cn>.csr.json`          | CSR details (subject, SANs, key algorithm)                                            |
 
 Wildcard characters in the CN are replaced with `_` in filenames (e.g., `*.example.com` becomes `_.example.com`). The `.intermediates.pem` and `.root.pem` files are only created when those certificates exist in the chain.
 
@@ -276,6 +344,16 @@ rsaKey, _ := certkit.GenerateRSAKey(4096)
 
 // Generate CSRs
 csrPEM, keyPEM, _ := certkit.GenerateCSR(leaf, nil) // auto-generates EC P-256 key
+
+// Sign certificates
+selfSigned, _ := certkit.CreateSelfSigned(certkit.SelfSignedInput{Signer: caKey, Subject: pkix.Name{CommonName: "My CA"}, IsCA: true})
+issued, _ := certkit.SignCSR(certkit.SignCSRInput{CSR: csr, CACert: caCert, CAKey: caKey, Days: 365})
+
+// TLS connection probing
+result, _ := certkit.ConnectTLS(ctx, certkit.ConnectTLSInput{Host: "example.com"})
+
+// Revocation checking
+ocspResp, _ := certkit.CheckOCSP(ctx, certkit.CheckOCSPInput{Cert: cert, Issuer: issuer})
 
 // PKCS operations
 p12, _ := certkit.EncodePKCS12(key, leaf, intermediates, "password")
