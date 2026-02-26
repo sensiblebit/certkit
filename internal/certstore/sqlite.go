@@ -206,7 +206,11 @@ func SaveToSQLite(store *MemStore, dbPath string) error {
 		certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: rec.Cert.Raw})
 
 		sans := append(rec.Cert.DNSNames, FormatIPAddresses(rec.Cert.IPAddresses)...)
-		sansJSON, _ := json.Marshal(sans)
+		sansJSON, err := json.Marshal(sans)
+		if err != nil {
+			slog.Warn("marshaling SANs to JSON", "serial", rec.Cert.SerialNumber, "error", err)
+			continue
+		}
 
 		notBefore := rec.NotBefore
 		row := sqliteCertRow{
@@ -222,11 +226,10 @@ func SaveToSQLite(store *MemStore, dbPath string) error {
 			CommonName:             sql.NullString{String: rec.Cert.Subject.CommonName, Valid: rec.Cert.Subject.CommonName != ""},
 			BundleName:             rec.BundleName,
 		}
-		_, err := db.NamedExec(`
+		if _, err = db.NamedExec(`
 			INSERT OR IGNORE INTO certificates (serial_number, authority_key_identifier, cert_type, key_type, expiry, not_before, metadata, sans, common_name, bundle_name, subject_key_identifier, pem)
 			VALUES (:serial_number, :authority_key_identifier, :cert_type, :key_type, :expiry, :not_before, :metadata, :sans, :common_name, :bundle_name, :subject_key_identifier, :pem)
-		`, row)
-		if err != nil {
+		`, row); err != nil {
 			slog.Warn("saving cert to DB", "serial", rec.Cert.SerialNumber, "error", err)
 		}
 	}

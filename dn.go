@@ -380,7 +380,7 @@ func marshalOtherNameGN(on OtherNameSAN) ([]byte, error) {
 		return nil, fmt.Errorf("marshaling othername explicit wrapper: %w", err)
 	}
 
-	seqContent := append(oidBytes, explicitBytes...)
+	seqContent := slices.Concat(oidBytes, explicitBytes)
 
 	gnBytes, err := asn1.Marshal(asn1.RawValue{
 		Class:      asn1.ClassContextSpecific,

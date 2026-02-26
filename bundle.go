@@ -319,7 +319,10 @@ func FetchLeafFromURL(ctx context.Context, rawURL string, timeout time.Duration)
 	}
 	defer func() { _ = conn.Close() }()
 
-	tlsConn := conn.(*tls.Conn)
+	tlsConn, ok := conn.(*tls.Conn)
+	if !ok {
+		return nil, fmt.Errorf("tls dial to %s:%s: connection is not TLS", host, port)
+	}
 	certs := tlsConn.ConnectionState().PeerCertificates
 	if len(certs) == 0 {
 		return nil, fmt.Errorf("no certificates returned by %s:%s", host, port)
@@ -379,11 +382,11 @@ func FetchAIACertificates(ctx context.Context, cert *x509.Certificate, timeout t
 func fetchCertificatesFromURL(ctx context.Context, client *http.Client, certURL string) ([]*x509.Certificate, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, certURL, nil)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("creating request for %s: %w", certURL, err)
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("fetching %s: %w", certURL, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -393,7 +396,7 @@ func fetchCertificatesFromURL(ctx context.Context, client *http.Client, certURL 
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1MB limit
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading response from %s: %w", certURL, err)
 	}
 
 	return ParseCertificatesAny(body)
