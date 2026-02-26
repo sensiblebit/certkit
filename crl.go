@@ -40,8 +40,9 @@ type FetchCRLInput struct {
 }
 
 // FetchCRL downloads a CRL from an HTTP or HTTPS URL.
-// By default, the URL is validated against SSRF (private/loopback IPs are
-// blocked). Set AllowPrivateNetworks to bypass this for user-provided URLs.
+// By default, the URL is validated against SSRF (literal private/loopback IPs
+// are blocked; hostnames are allowed). Set AllowPrivateNetworks to bypass this
+// for user-provided URLs.
 // The response is limited to 10 MB.
 func FetchCRL(ctx context.Context, input FetchCRLInput) ([]byte, error) {
 	if !input.AllowPrivateNetworks {
