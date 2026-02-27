@@ -3,12 +3,15 @@ package certkit
 import (
 	"bytes"
 	"context"
+	"crypto/aes"
+	"crypto/cipher"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/binary"
 	"encoding/hex"
 	"math/big"
 	"net"
@@ -1194,95 +1197,54 @@ func TestConnectTLS_CRL_AIAFetchedIssuer(t *testing.T) {
 func TestRateCipherSuite(t *testing.T) {
 	t.Parallel()
 
+	// One entry per distinct code path in RateCipherSuite (T-12).
 	tests := []struct {
 		name       string
 		cipherID   uint16
 		tlsVersion uint16
 		want       CipherRating
 	}{
-		// TLS 1.3 — always excellent.
+		// TLS 1.3 — always good (all suites are AEAD).
 		{
-			name:       "TLS 1.3 AES-128-GCM",
+			name:       "TLS 1.3 always good",
 			cipherID:   tls.TLS_AES_128_GCM_SHA256,
 			tlsVersion: tls.VersionTLS13,
 			want:       CipherRatingGood,
 		},
+		// TLS 1.2 ECDHE + GCM — good (forward secrecy + AEAD).
 		{
-			name:       "TLS 1.3 AES-256-GCM",
-			cipherID:   tls.TLS_AES_256_GCM_SHA384,
-			tlsVersion: tls.VersionTLS13,
-			want:       CipherRatingGood,
-		},
-		{
-			name:       "TLS 1.3 CHACHA20-POLY1305",
-			cipherID:   tls.TLS_CHACHA20_POLY1305_SHA256,
-			tlsVersion: tls.VersionTLS13,
-			want:       CipherRatingGood,
-		},
-		// TLS 1.2 ECDHE + AEAD — excellent.
-		{
-			name:       "TLS 1.2 ECDHE-RSA-AES128-GCM",
+			name:       "TLS 1.2 ECDHE+GCM good",
 			cipherID:   tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
 			tlsVersion: tls.VersionTLS12,
 			want:       CipherRatingGood,
 		},
+		// TLS 1.2 ECDHE + ChaCha20 — good (forward secrecy + AEAD).
 		{
-			name:       "TLS 1.2 ECDHE-ECDSA-AES256-GCM",
-			cipherID:   tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
-			tlsVersion: tls.VersionTLS12,
-			want:       CipherRatingGood,
-		},
-		{
-			name:       "TLS 1.2 ECDHE-RSA-CHACHA20-POLY1305",
+			name:       "TLS 1.2 ECDHE+CHACHA20 good",
 			cipherID:   tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
 			tlsVersion: tls.VersionTLS12,
 			want:       CipherRatingGood,
 		},
-		// TLS 1.2 ECDHE + CBC — insecure.
+		// TLS 1.2 ECDHE + CBC — weak (padding oracle attacks).
 		{
-			name:       "TLS 1.2 ECDHE-RSA-AES128-CBC-SHA256",
+			name:       "TLS 1.2 ECDHE+CBC weak",
 			cipherID:   tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256,
 			tlsVersion: tls.VersionTLS12,
 			want:       CipherRatingWeak,
 		},
+		// TLS 1.2 static RSA — weak (no forward secrecy).
 		{
-			name:       "TLS 1.2 ECDHE-ECDSA-AES128-CBC-SHA",
-			cipherID:   tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA,
-			tlsVersion: tls.VersionTLS12,
-			want:       CipherRatingWeak,
-		},
-		// TLS 1.2 static RSA — insecure (no forward secrecy).
-		{
-			name:       "TLS 1.2 RSA-AES128-GCM",
+			name:       "TLS 1.2 static RSA weak",
 			cipherID:   tls.TLS_RSA_WITH_AES_128_GCM_SHA256,
 			tlsVersion: tls.VersionTLS12,
 			want:       CipherRatingWeak,
 		},
-		// Insecure cipher suites (from tls.InsecureCipherSuites).
+		// InsecureCipherSuites list — weak (RC4).
 		{
-			name:       "TLS 1.2 RSA-RC4-SHA (insecure list)",
+			name:       "TLS 1.2 insecure list RC4 weak",
 			cipherID:   tls.TLS_RSA_WITH_RC4_128_SHA,
 			tlsVersion: tls.VersionTLS12,
 			want:       CipherRatingWeak,
-		},
-		{
-			name:       "TLS 1.2 RSA-3DES-EDE-CBC-SHA (insecure list)",
-			cipherID:   tls.TLS_RSA_WITH_3DES_EDE_CBC_SHA,
-			tlsVersion: tls.VersionTLS12,
-			want:       CipherRatingWeak,
-		},
-		{
-			name:       "TLS 1.2 ECDHE-RSA-RC4-SHA (insecure list)",
-			cipherID:   tls.TLS_ECDHE_RSA_WITH_RC4_128_SHA,
-			tlsVersion: tls.VersionTLS12,
-			want:       CipherRatingWeak,
-		},
-		// TLS 1.0 ECDHE + GCM — still excellent (GCM is good regardless of TLS version).
-		{
-			name:       "TLS 1.0 ECDHE-RSA-AES128-GCM",
-			cipherID:   tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
-			tlsVersion: tls.VersionTLS10,
-			want:       CipherRatingGood,
 		},
 	}
 
@@ -1336,15 +1298,16 @@ func TestScanCipherSuites(t *testing.T) {
 		t.Fatal("no ciphers detected")
 	}
 
-	// Should detect TLS 1.3 suites (all 3).
+	// Should detect at least one TLS 1.3 suite (Go supports 3 standard suites;
+	// exact count may change if Go adds CCM support).
 	tls13Count := 0
 	for _, c := range result.Ciphers {
 		if c.Version == "TLS 1.3" {
 			tls13Count++
 		}
 	}
-	if tls13Count != 3 {
-		t.Errorf("expected 3 TLS 1.3 ciphers, got %d", tls13Count)
+	if tls13Count == 0 {
+		t.Error("expected at least one TLS 1.3 cipher, got 0")
 	}
 
 	// Should detect the two TLS 1.2 ECDHE-ECDSA-GCM ciphers we configured.
@@ -1378,6 +1341,25 @@ func TestScanCipherSuites(t *testing.T) {
 	// SupportedVersions should include both TLS 1.3 and TLS 1.2.
 	if len(result.SupportedVersions) < 2 {
 		t.Errorf("SupportedVersions = %v, want at least TLS 1.3 and TLS 1.2", result.SupportedVersions)
+	}
+
+	// Key exchange groups: Go's TLS server should accept at least X25519.
+	if len(result.KeyExchanges) == 0 {
+		t.Fatal("no key exchange groups detected")
+	}
+	kxNames := make(map[string]bool)
+	for _, kx := range result.KeyExchanges {
+		kxNames[kx.Name] = true
+		if kx.Name == "X25519MLKEM768" || kx.Name == "SecP256r1MLKEM768" || kx.Name == "SecP384r1MLKEM1024" {
+			if !kx.PostQuantum {
+				t.Errorf("key exchange %s should be PostQuantum", kx.Name)
+			}
+		} else if kx.PostQuantum {
+			t.Errorf("key exchange %s should not be PostQuantum", kx.Name)
+		}
+	}
+	if !kxNames["X25519"] {
+		t.Error("expected X25519 in key exchange results")
 	}
 }
 
@@ -1924,12 +1906,62 @@ func TestBuildQUICInitialPacket(t *testing.T) {
 		t.Errorf("packet length = %d, want >= 1200", len(packet))
 	}
 
-	// Version field (bytes 1-4 after header protection) should be QUIC v1
-	// before header protection. We can't check after HP, but verify the packet
-	// is non-empty and has the long-header high bit set (after HP, bit may vary).
-	// The packet should at least be well-formed and non-trivially sized.
-	if len(packet) == 0 {
-		t.Fatal("empty packet")
+	// Version field (bytes 1-4) is not affected by header protection.
+	version := binary.BigEndian.Uint32(packet[1:5])
+	if version != 0x00000001 {
+		t.Errorf("version = 0x%08x, want 0x00000001 (QUIC v1)", version)
+	}
+
+	// DCID is embedded in the unprotected header.
+	if int(packet[5]) != len(dcid) {
+		t.Errorf("DCID length = %d, want %d", packet[5], len(dcid))
+	}
+	if !bytes.Equal(packet[6:6+len(dcid)], dcid) {
+		t.Error("DCID mismatch in packet header")
+	}
+
+	// SCID follows DCID.
+	scidOffset := 6 + len(dcid)
+	if int(packet[scidOffset]) != len(scid) {
+		t.Errorf("SCID length = %d, want %d", packet[scidOffset], len(scid))
+	}
+	if !bytes.Equal(packet[scidOffset+1:scidOffset+1+len(scid)], scid) {
+		t.Error("SCID mismatch in packet header")
+	}
+
+	// Round-trip: derive client keys and decrypt the payload to verify
+	// the CRYPTO frame contains the original ClientHello.
+	clientKeys, _, err := deriveQUICInitialKeys(dcid)
+	if err != nil {
+		t.Fatalf("deriveQUICInitialKeys: %v", err)
+	}
+	plaintext := decryptQUICInitialForTest(t, packet, clientKeys)
+
+	// Find CRYPTO frame (type 0x06) and verify data matches.
+	found := false
+	fpos := 0
+	for fpos < len(plaintext) {
+		if plaintext[fpos] == 0x00 {
+			fpos++
+			continue
+		}
+		if plaintext[fpos] != 0x06 {
+			break
+		}
+		fpos++
+		_, vl := decodeQUICVarint(plaintext[fpos:])
+		fpos += vl
+		dataLen, vl := decodeQUICVarint(plaintext[fpos:])
+		fpos += vl
+		cryptoData := plaintext[fpos : fpos+int(dataLen)]
+		if !bytes.Equal(cryptoData, msg) {
+			t.Errorf("CRYPTO frame data differs from original ClientHello (%d vs %d bytes)", len(cryptoData), len(msg))
+		}
+		found = true
+		break
+	}
+	if !found {
+		t.Error("no CRYPTO frame found in decrypted payload")
 	}
 }
 
@@ -1966,55 +1998,6 @@ func TestProbeTLS13Cipher_Concurrent(t *testing.T) {
 	}
 	wg.Wait()
 	// If the race detector doesn't fire, the test passes.
-}
-
-func TestScanCipherSuites_KeyExchanges(t *testing.T) {
-	t.Parallel()
-
-	ca := generateTestCA(t, "KX Scan CA")
-	leaf := generateTestLeafCert(t, ca)
-
-	tlsCert := tls.Certificate{
-		Certificate: [][]byte{leaf.DER, ca.CertDER},
-		PrivateKey:  leaf.Key,
-	}
-	port := startTLSServerWithConfig(t, &tls.Config{
-		Certificates: []tls.Certificate{tlsCert},
-	})
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	result, err := ScanCipherSuites(ctx, ScanCipherSuitesInput{
-		Host:        "127.0.0.1",
-		Port:        port,
-		Concurrency: 5,
-	})
-	if err != nil {
-		t.Fatalf("ScanCipherSuites failed: %v", err)
-	}
-
-	// Go's TLS server should accept at least X25519 and P-256.
-	if len(result.KeyExchanges) == 0 {
-		t.Fatal("no key exchange groups detected")
-	}
-
-	names := make(map[string]bool)
-	for _, kx := range result.KeyExchanges {
-		names[kx.Name] = true
-		// Verify PostQuantum flag is set correctly.
-		if kx.Name == "X25519MLKEM768" || kx.Name == "SecP256r1MLKEM768" || kx.Name == "SecP384r1MLKEM1024" {
-			if !kx.PostQuantum {
-				t.Errorf("key exchange %s should be PostQuantum", kx.Name)
-			}
-		} else if kx.PostQuantum {
-			t.Errorf("key exchange %s should not be PostQuantum", kx.Name)
-		}
-	}
-
-	if !names["X25519"] {
-		t.Error("expected X25519 in key exchange results")
-	}
 }
 
 // ---------- test helpers ----------
@@ -2101,4 +2084,58 @@ func hexDecode(t *testing.T, s string) []byte {
 		t.Fatalf("hex decode %q: %v", s, err)
 	}
 	return b
+}
+
+// decryptQUICInitialForTest removes header protection and decrypts a QUIC Initial
+// packet, returning the plaintext payload. Fails the test on any error.
+func decryptQUICInitialForTest(t *testing.T, packet []byte, keys quicInitialKeys) []byte {
+	t.Helper()
+
+	// Parse header to find packet number offset (same structure as parseQUICInitialResponse).
+	pos := 5 // skip first byte + version
+	dcidLen := int(packet[pos])
+	pos += 1 + dcidLen
+	scidLen := int(packet[pos])
+	pos += 1 + scidLen
+	tokenLen, tVL := decodeQUICVarint(packet[pos:])
+	pos += tVL + int(tokenLen)
+	_, pVL := decodeQUICVarint(packet[pos:])
+	pos += pVL
+	pnOffset := pos
+
+	// Remove header protection.
+	sample := packet[pnOffset+4 : pnOffset+4+16]
+	hpBlock, err := aes.NewCipher(keys.hp)
+	if err != nil {
+		t.Fatalf("HP cipher: %v", err)
+	}
+	mask := make([]byte, aes.BlockSize)
+	hpBlock.Encrypt(mask, sample)
+	packet[0] ^= mask[0] & 0x0f
+	pnLen := int(packet[0]&0x03) + 1
+	for i := range pnLen {
+		packet[pnOffset+i] ^= mask[1+i]
+	}
+
+	// Decrypt payload.
+	headerEnd := pnOffset + pnLen
+	block, err := aes.NewCipher(keys.key)
+	if err != nil {
+		t.Fatalf("AES cipher: %v", err)
+	}
+	gcm, err := cipher.NewGCM(block)
+	if err != nil {
+		t.Fatalf("GCM: %v", err)
+	}
+	nonce := make([]byte, 12)
+	copy(nonce, keys.iv)
+	pnBytes := packet[pnOffset:headerEnd]
+	for i, b := range pnBytes {
+		nonce[12-pnLen+i] ^= b
+	}
+	plaintext, err := gcm.Open(nil, nonce, packet[headerEnd:], packet[:headerEnd])
+	if err != nil {
+		t.Fatalf("QUIC decrypt: %v", err)
+	}
+	return plaintext
 }

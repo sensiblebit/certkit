@@ -983,6 +983,14 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 		return cmp.Compare(a.Name, b.Name)
 	})
 
+	// Ensure non-omitempty slices are never nil so JSON encodes [] not null.
+	if versions == nil {
+		versions = []string{}
+	}
+	if results == nil {
+		results = []CipherProbeResult{}
+	}
+
 	return &CipherScanResult{
 		SupportedVersions: versions,
 		Ciphers:           results,

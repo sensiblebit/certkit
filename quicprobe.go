@@ -261,7 +261,7 @@ func parseQUICInitialResponse(packet []byte, serverKeys quicInitialKeys) (*serve
 		return nil, fmt.Errorf("malformed token length varint")
 	}
 	pos += tokenVarLen
-	if pos+int(tokenLen) > len(packet) {
+	if tokenLen > uint64(len(packet)-pos) {
 		return nil, fmt.Errorf("packet truncated at token data")
 	}
 	pos += int(tokenLen)
@@ -278,6 +278,9 @@ func parseQUICInitialResponse(packet []byte, serverKeys quicInitialKeys) (*serve
 	pos += payloadVarLen
 
 	pnOffset := pos
+	if payloadLen > uint64(len(packet)-pnOffset) {
+		return nil, fmt.Errorf("payload length %d exceeds remaining packet", payloadLen)
+	}
 	payloadEnd := pnOffset + int(payloadLen)
 
 	// We need the sample for header protection removal.
@@ -379,26 +382,40 @@ func parseQUICInitialResponse(packet []byte, serverKeys quicInitialKeys) (*serve
 				break
 			}
 			fpos += varLen
+			// Cap rangeCount to avoid CPU exhaustion on malicious packets.
+			if rangeCount > uint64(len(plaintext)) {
+				break
+			}
+			malformed := false
 			for range rangeCount {
 				_, varLen = decodeQUICVarint(plaintext[fpos:]) // Gap
 				if varLen == 0 {
+					malformed = true
 					break
 				}
 				fpos += varLen
 				_, varLen = decodeQUICVarint(plaintext[fpos:]) // ACK Range Length
 				if varLen == 0 {
+					malformed = true
 					break
 				}
 				fpos += varLen
+			}
+			if malformed {
+				break
 			}
 			if frameType == 0x03 {
 				// ACK_ECN has 3 additional varints.
 				for range 3 {
 					_, varLen = decodeQUICVarint(plaintext[fpos:])
 					if varLen == 0 {
+						malformed = true
 						break
 					}
 					fpos += varLen
+				}
+				if malformed {
+					break
 				}
 			}
 			continue
@@ -422,7 +439,7 @@ func parseQUICInitialResponse(packet []byte, serverKeys quicInitialKeys) (*serve
 		}
 		fpos += varLen
 
-		if fpos+int(dataLen) > len(plaintext) {
+		if dataLen > uint64(len(plaintext)-fpos) {
 			return nil, fmt.Errorf("CRYPTO frame data truncated")
 		}
 		cryptoData := plaintext[fpos : fpos+int(dataLen)]
