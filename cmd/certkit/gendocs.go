@@ -60,6 +60,7 @@ func main() {
 			doc:         result,
 			name:        entry.marker,
 			replacement: table,
+			path:        readmePath,
 		})
 		if spliceErr != nil {
 			slog.Error("splicing marker", "marker", entry.marker, "err", spliceErr)
@@ -187,6 +188,7 @@ type spliceMarkerInput struct {
 	doc         string
 	name        string
 	replacement string
+	path        string
 }
 
 // spliceMarker replaces content between <!-- certkit:flags:NAME --> and
@@ -197,14 +199,14 @@ func spliceMarker(in spliceMarkerInput) (string, error) {
 
 	openIdx := strings.Index(in.doc, openTag)
 	if openIdx < 0 {
-		return "", fmt.Errorf("missing open marker %q in README.md", openTag)
+		return "", fmt.Errorf("missing open marker %q in %s", openTag, in.path)
 	}
 
 	// Find the close tag after the open tag.
 	afterOpen := openIdx + len(openTag)
 	closeIdx := strings.Index(in.doc[afterOpen:], closeTag)
 	if closeIdx < 0 {
-		return "", fmt.Errorf("missing close marker %q after %q in README.md", closeTag, openTag)
+		return "", fmt.Errorf("missing close marker %q after %q in %s", closeTag, openTag, in.path)
 	}
 	closeIdx += afterOpen
 
