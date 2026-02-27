@@ -316,9 +316,16 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 
 	handshakeErr := tlsConn.HandshakeContext(ctx)
 	if handshakeErr != nil && clientAuth == nil {
+		// Close the failed TLS connection before opening a new one.
+		// The deferred tlsConn.Close() will be a no-op after this.
 		_ = tlsConn.Close()
+
 		// Try raw legacy handshake to detect DHE/static-RSA-only servers.
-		legacyResult, legacyErr := legacyFallbackConnect(ctx, legacyFallbackInput{
+		// Use a dedicated timeout so a stalling server can't hold the
+		// fallback connection open indefinitely.
+		fallbackCtx, fallbackCancel := context.WithTimeout(ctx, 5*time.Second)
+		defer fallbackCancel()
+		legacyResult, legacyErr := legacyFallbackConnect(fallbackCtx, legacyFallbackInput{
 			addr:       addr,
 			serverName: serverName,
 		})
@@ -329,7 +336,7 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 			Host:        input.Host,
 			Port:        port,
 			Protocol:    tlsVersionString(legacyResult.version),
-			CipherSuite: legacyCipherSuiteName(legacyResult.cipherSuite),
+			CipherSuite: cipherSuiteName(legacyResult.cipherSuite),
 			ServerName:  serverName,
 			PeerChain:   legacyResult.certificates,
 			LegacyProbe: true,

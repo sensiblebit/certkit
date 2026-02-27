@@ -141,7 +141,21 @@ func runConnect(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("scanning cipher suites for %s: %w", args[0], scanErr)
 		}
 		result.CipherScan = cipherScan
-		result.Diagnostics = append(result.Diagnostics, certkit.DiagnoseCipherScan(cipherScan)...)
+		scanDiags := certkit.DiagnoseCipherScan(cipherScan)
+		// Scan diagnostics supersede negotiated-cipher diagnostics
+		// (same check names but more comprehensive — aggregate vs. single).
+		// Remove negotiated-cipher diagnostics that the scan covers.
+		scanChecks := make(map[string]bool, len(scanDiags))
+		for _, d := range scanDiags {
+			scanChecks[d.Check] = true
+		}
+		filtered := result.Diagnostics[:0]
+		for _, d := range result.Diagnostics {
+			if !scanChecks[d.Check] {
+				filtered = append(filtered, d)
+			}
+		}
+		result.Diagnostics = append(filtered, scanDiags...)
 	}
 
 	spin.Stop()

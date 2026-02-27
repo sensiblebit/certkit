@@ -355,15 +355,3 @@ func legacyFallbackConnect(ctx context.Context, input legacyFallbackInput) (*leg
 		certificates: certs,
 	}, nil
 }
-
-// legacyCipherSuiteName returns a human-readable name for a cipher suite,
-// checking the legacy cipher registry first, then falling back to
-// cipherSuiteName (which covers Go's known suites and TLS 1.3 CCM suites).
-func legacyCipherSuiteName(id uint16) string {
-	for _, def := range legacyCipherSuites {
-		if def.ID == id {
-			return def.Name
-		}
-	}
-	return cipherSuiteName(id)
-}

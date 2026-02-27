@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/binary"
+	"errors"
 	"math/big"
 	"net"
 	"testing"
@@ -287,13 +288,19 @@ func TestReadServerCertificates(t *testing.T) {
 	// Build a Certificate handshake message.
 	certMsg := buildCertificateHandshakeMessage(certDER)
 
+	// Build a Certificate handshake message that spans two records by splitting
+	// mid-message. This exercises the "incomplete message, need more records"
+	// branch in readServerCertificates.
+	certMsgSplit1 := certMsg[:len(certMsg)/2]
+	certMsgSplit2 := certMsg[len(certMsg)/2:]
+
 	tests := []struct {
 		name      string
 		records   []byte
 		wantCS    uint16
 		wantVer   uint16
 		wantCerts int
-		wantErr   bool
+		wantErr   error // nil means no error; non-nil checked with errors.Is
 	}{
 		{
 			name:      "single record with ServerHello + Certificate",
@@ -310,9 +317,19 @@ func TestReadServerCertificates(t *testing.T) {
 			wantCerts: 1,
 		},
 		{
+			name: "Certificate message spanning two records",
+			records: append(
+				wrapTLSRecord(serverHello),
+				append(wrapTLSRecord(certMsgSplit1), wrapTLSRecord(certMsgSplit2)...)...,
+			),
+			wantCS:    0x0033,
+			wantVer:   0x0303,
+			wantCerts: 1,
+		},
+		{
 			name:    "alert record",
 			records: buildAlertRecord(),
-			wantErr: true,
+			wantErr: errAlertReceived,
 		},
 	}
 
@@ -321,9 +338,9 @@ func TestReadServerCertificates(t *testing.T) {
 			t.Parallel()
 			r := bytes.NewReader(tt.records)
 			sh, certs, err := readServerCertificates(r)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatal("expected error, got nil")
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("error = %v, want %v", err, tt.wantErr)
 				}
 				return
 			}
@@ -466,7 +483,7 @@ func TestLegacyFallbackConnect(t *testing.T) {
 	}
 }
 
-func TestLegacyCipherSuiteName(t *testing.T) {
+func TestCipherSuiteNameLegacyIDs(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -476,15 +493,15 @@ func TestLegacyCipherSuiteName(t *testing.T) {
 		{0x0033, "TLS_DHE_RSA_WITH_AES_128_CBC_SHA"},
 		{0x009E, "TLS_DHE_RSA_WITH_AES_128_GCM_SHA256"},
 		{0x0032, "TLS_DHE_DSS_WITH_AES_128_CBC_SHA"},
-		{0x1301, "TLS_AES_128_GCM_SHA256"}, // Falls through to cipherSuiteName
+		{0x1301, "TLS_AES_128_GCM_SHA256"}, // Standard suite via Go's registry
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
 			t.Parallel()
-			got := legacyCipherSuiteName(tt.id)
+			got := cipherSuiteName(tt.id)
 			if got != tt.want {
-				t.Errorf("legacyCipherSuiteName(0x%04x) = %q, want %q", tt.id, got, tt.want)
+				t.Errorf("cipherSuiteName(0x%04x) = %q, want %q", tt.id, got, tt.want)
 			}
 		})
 	}
