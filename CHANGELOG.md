@@ -76,8 +76,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Use `slices.Concat` instead of `append` for cipher suite slice concatenation — prevents potential mutation of stdlib return value ([`pending`])
-- Show "Cipher suites: none detected" when cipher scan finds no supported suites instead of silent empty output ([`pending`])
+- Use `slices.Concat` instead of `append` for cipher suite slice concatenation — prevents potential mutation of stdlib return value ([`7a155c3`])
+- Show "Cipher suites: none detected" when cipher scan finds no supported suites instead of silent empty output ([`7a155c3`])
 - Fix QUIC varint `uint64`→`int` overflow in `parseQUICInitialResponse` — bounds checks now compare in `uint64` space to prevent truncation on malicious packets ([#82])
 - Fix ACK range loop inner `break` not propagating to outer frame parser in QUIC decoder — malformed ACK frames could corrupt subsequent frame parsing ([#82])
 - Cap ACK `rangeCount` to plaintext length to prevent CPU exhaustion on malicious QUIC packets ([#82])
@@ -162,8 +162,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix brittle `tls13Count != 3` assertion — use `>= 1` to tolerate future Go TLS 1.3 cipher additions ([#82])
 - Consolidate `FormatCipherScanResult` tests — merge QUIC and key exchange standalone tests into table-driven test ([#82])
 - Consolidate `BuildClientHello` tests — merge ALPN/QUIC test into subtests with session ID assertion ([#82])
-- Add nil and empty-ciphers test cases to `TestFormatCipherScanResult` — previously the empty case asserted nothing ([`pending`])
-- Consolidate `startTLSServer` to delegate to `startTLSServerWithConfig` — eliminates duplicated accept-loop code ([`pending`])
+- Add nil and empty-ciphers test cases to `TestFormatCipherScanResult` — previously the empty case asserted nothing ([`7a155c3`])
+- Consolidate `startTLSServer` to delegate to `startTLSServerWithConfig` — eliminates duplicated accept-loop code ([`7a155c3`])
 - Remove tests that validate upstream behavior rather than certkit logic: `TestDeriveQUICInitialKeys`, `TestGenerateKeyShare`, `TestIsPQKeyExchange` ([#82])
 - Add `parseServerHello` edge case tests — oversized session ID length, truncation at compression method ([#82])
 - Add `FormatConnectResult` tests for "Verify: FAILED" and "Client Auth: any CA" paths ([#82])
@@ -798,6 +798,7 @@ Initial release.
 [0.1.2]: https://github.com/sensiblebit/certkit/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/sensiblebit/certkit/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/sensiblebit/certkit/releases/tag/v0.1.0
+[`7a155c3`]: https://github.com/sensiblebit/certkit/commit/7a155c3
 [`2693116`]: https://github.com/sensiblebit/certkit/commit/2693116
 [`84c4edf`]: https://github.com/sensiblebit/certkit/commit/84c4edf
 [`2b8cb8c`]: https://github.com/sensiblebit/certkit/commit/2b8cb8c
