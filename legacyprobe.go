@@ -331,11 +331,11 @@ func legacyFallbackConnect(ctx context.Context, input legacyFallbackInput) (*leg
 		cipherSuites: allSuites,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("building legacy ClientHello: %w", err)
+		return nil, fmt.Errorf("building legacy client hello: %w", err)
 	}
 
 	if _, err := conn.Write(wrapTLSRecord(msg)); err != nil {
-		return nil, fmt.Errorf("sending legacy ClientHello: %w", err)
+		return nil, fmt.Errorf("sending legacy client hello: %w", err)
 	}
 
 	shResult, certs, err := readServerCertificates(conn)
@@ -343,7 +343,7 @@ func legacyFallbackConnect(ctx context.Context, input legacyFallbackInput) (*leg
 		return nil, fmt.Errorf("reading server certificates: %w", err)
 	}
 	if shResult == nil {
-		return nil, fmt.Errorf("no ServerHello received")
+		return nil, fmt.Errorf("no server hello received")
 	}
 	if len(certs) == 0 {
 		return nil, fmt.Errorf("no certificates received from server")

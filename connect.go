@@ -1170,6 +1170,7 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 			}
 		}
 		for _, r := range quicCiphers {
+			versionSet[r.Version] = true
 			if ratingRank(r.Rating) > ratingRank(overall) {
 				overall = r.Rating
 			}

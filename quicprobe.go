@@ -561,13 +561,14 @@ func appendQUICVarint(b []byte, v uint64) []byte {
 	}
 }
 
-// appendQUICVarint2 appends a 2-byte QUIC varint (for values < 16384).
-// Panics if v >= 16384 since that requires a 4-byte encoding.
+// appendQUICVarint2 appends a 2-byte QUIC varint when v < 16384.
+// Falls back to appendQUICVarint for larger values to avoid panicking
+// on unexpected input from untrusted servers.
 func appendQUICVarint2(b []byte, v uint64) []byte {
-	if v >= 16384 {
-		panic(fmt.Sprintf("appendQUICVarint2: value %d exceeds 2-byte varint capacity (max 16383)", v))
+	if v < 16384 {
+		return append(b, byte(0x40|v>>8), byte(v))
 	}
-	return append(b, byte(0x40|v>>8), byte(v))
+	return appendQUICVarint(b, v)
 }
 
 // decodeQUICVarint decodes a QUIC variable-length integer and returns

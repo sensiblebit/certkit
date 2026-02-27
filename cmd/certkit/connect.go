@@ -121,7 +121,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	})
 	if err != nil {
 		spin.Stop()
-		return fmt.Errorf("connecting to %s: %w", args[0], err)
+		return err
 	}
 
 	// Optional cipher suite enumeration.
@@ -138,7 +138,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		})
 		if scanErr != nil {
 			spin.Stop()
-			return fmt.Errorf("scanning cipher suites for %s: %w", args[0], scanErr)
+			return fmt.Errorf("cipher suite scan for %s: %w", args[0], scanErr)
 		}
 		result.CipherScan = cipherScan
 		scanDiags := certkit.DiagnoseCipherScan(cipherScan)
