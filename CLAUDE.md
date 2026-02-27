@@ -218,11 +218,11 @@ Invoke `/ralph` for comprehensive test validation. Full protocol in `.claude/ski
 
 - **CLI-1 (MUST)** Stdout is for data, stderr is for everything else. PEM output, JSON, scan summaries — anything a user might pipe goes to stdout. File paths, progress messages, warnings go to stderr. Follow the OpenSSL convention.
 - **CLI-2 (MUST)** Never write files without explicit consent. Commands that produce PEM output print to stdout by default. Files are only written when the user provides `-o`. Export requires `--bundle-path <dir>`. No silent writes to the current directory.
-- **CLI-3 (MUST)** Every command that displays certificate/key info must support `--format json`.
+- **CLI-3 (MUST)** Every command supports `--json` (global persistent flag). Display commands (`inspect`, `verify`, `connect`, `scan`, `ocsp`, `crl`) also support `--format json`. `--json` overrides `--format` when both are set.
 - **CLI-4 (MUST)** JSON field names must be consistent across commands. Same concept uses the same key everywhere (e.g., SKI is always `subject_key_id`).
 - **CLI-5 (MUST)** All dates in RFC 3339 format. No RFC 1123, no custom layouts.
-- **CLI-6 (MUST)** Exit codes: `0` = success, `1` = general error, `2` = validation failure (chain invalid, key mismatch, expired).
-- **CLI-7 (MUST)** JSON output is a single object or array, ending with `\n`. No mixed text/JSON. No log lines on stdout when `--format json` is used.
+- **CLI-6 (MUST)** Exit codes: `0` = success, `1` = general error, `2` = validation failure (chain invalid, key mismatch, expired, revoked).
+- **CLI-7 (MUST)** JSON output is a single object or array, ending with `\n`. No mixed text/JSON. No log lines on stdout when `--json` is used.
 
 ---
 
@@ -311,7 +311,7 @@ Examples: `feat: add PKCS#7 export`, `fix(jks): handle empty alias`, `ci: add go
 
 ### CI checks
 
-Every PR runs 10 parallel checks (`.github/workflows/ci.yml`):
+Every PR runs 11 parallel checks (`.github/workflows/ci.yml`):
 
 | Check | What it validates |
 |---|---|
@@ -322,6 +322,7 @@ Every PR runs 10 parallel checks (`.github/workflows/ci.yml`):
 | Lint (golangci-lint) | errcheck, staticcheck, unused, etc. |
 | Vulnerability Check | `govulncheck ./...` |
 | WASM Build | `GOOS=js GOARCH=wasm` vet + build |
+| Docs | `go generate ./...` + `git diff --exit-code README.md` |
 | Web | vitest + wrangler build |
 | Lint | prettier + markdownlint |
 | CI | Gate — fails if any above failed |
@@ -341,7 +342,7 @@ pre-commit install --hook-type commit-msg
 pre-commit run --all-files  # Manual run against all files
 ```
 
-Configured hooks: `no-commit-to-branch`, `branch-name`, `commit-message` (commit-msg stage), `goimports`, `go-fix`, `go-vet`, `golangci-lint`, `wasm`, `go-build`, `go-test`, `prettier`, `vitest`, `wrangler-build`, `markdownlint`.
+Configured hooks: `no-commit-to-branch`, `branch-name`, `commit-message` (commit-msg stage), `goimports`, `go-fix`, `go-vet`, `golangci-lint`, `wasm`, `go-build`, `go-test`, `gendocs`, `prettier`, `vitest`, `wrangler-build`, `markdownlint`.
 
 ### Tooling gates
 
@@ -352,6 +353,7 @@ Configured hooks: `no-commit-to-branch`, `branch-name`, `commit-message` (commit
 - **G-5 (MUST)** `GOOS=js GOARCH=wasm go vet ./cmd/wasm/` and `go build` pass.
 - **G-6 (MUST)** `cd web && npm test` passes (vitest).
 - **G-7 (MUST)** `cd web && wrangler pages functions build` compiles (local only, no credentials).
+- **G-8 (MUST)** `go generate ./...` followed by `git diff --exit-code README.md` — flag tables in README must match Cobra command definitions. Run `go generate` after changing any CLI flags.
 
 ---
 

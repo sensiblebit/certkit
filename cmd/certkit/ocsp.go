@@ -33,8 +33,8 @@ Exits with code 2 if the certificate is revoked.`,
 }
 
 func init() {
-	ocspCmd.Flags().StringVar(&ocspIssuerPath, "issuer", "", "Issuer certificate file (PEM)")
-	ocspCmd.Flags().StringVar(&ocspFormat, "format", "text", "Output format: text or json")
+	ocspCmd.Flags().StringVar(&ocspIssuerPath, "issuer", "", "Issuer certificate file (PEM); auto-resolved from input if omitted")
+	ocspCmd.Flags().StringVar(&ocspFormat, "format", "text", "Output format: text, json")
 
 	registerCompletion(ocspCmd, completionInput{"issuer", fileCompletion})
 	registerCompletion(ocspCmd, completionInput{"format", fixedCompletion("text", "json")})
@@ -92,7 +92,12 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("checking OCSP: %w", err)
 	}
 
-	switch ocspFormat {
+	format := ocspFormat
+	if jsonOutput {
+		format = "json"
+	}
+
+	switch format {
 	case "json":
 		if verbose {
 			verboseResult := ocspVerboseJSON{
@@ -119,7 +124,7 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 		}
 		fmt.Print(certkit.FormatOCSPResult(result))
 	default:
-		return fmt.Errorf("unsupported output format %q (use text or json)", ocspFormat)
+		return fmt.Errorf("unsupported output format %q (use text or json)", format)
 	}
 
 	if result.Status == "revoked" {

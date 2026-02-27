@@ -33,7 +33,7 @@ Exits with code 2 if the checked certificate is found in the CRL.`,
 
 func init() {
 	crlCmd.Flags().StringVar(&crlCheckPath, "check", "", "Certificate file to check against the CRL")
-	crlCmd.Flags().StringVar(&crlFormat, "format", "text", "Output format: text or json")
+	crlCmd.Flags().StringVar(&crlFormat, "format", "text", "Output format: text, json")
 
 	registerCompletion(crlCmd, completionInput{"check", fileCompletion})
 	registerCompletion(crlCmd, completionInput{"format", fixedCompletion("text", "json")})
@@ -99,7 +99,12 @@ func runCRL(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	switch crlFormat {
+	format := crlFormat
+	if jsonOutput {
+		format = "json"
+	}
+
+	switch format {
 	case "json":
 		output := crlOutputJSON{CRLInfo: info, CheckResult: checkResult}
 		jsonData, err := json.MarshalIndent(output, "", "  ")
@@ -117,7 +122,7 @@ func runCRL(cmd *cobra.Command, args []string) error {
 			}
 		}
 	default:
-		return fmt.Errorf("unsupported output format %q (use text or json)", crlFormat)
+		return fmt.Errorf("unsupported output format %q (use text or json)", format)
 	}
 
 	if checkResult != nil && checkResult.Revoked {

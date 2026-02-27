@@ -64,6 +64,21 @@ jobs:
       prettier_paths: "web/**/*.{js,ts,css,html}"
       prettier_exclude: "!web/public/wasm_exec.js"
 
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          check-latest: true
+          cache: true
+      - name: Verify flag tables are up to date
+        run: |
+          go generate ./...
+          git diff --exit-code README.md
+
   # ── Gate ──────────────────────────────────────────────
 
   ci-ok:
@@ -75,6 +90,7 @@ jobs:
       - wasm
       - web
       - lint
+      - docs
     runs-on: ubuntu-latest
     steps:
       - name: Check results

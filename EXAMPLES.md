@@ -413,7 +413,7 @@ This creates `key.pem`, `pub.pem`, and `csr.pem` (if a CN is provided) in the sp
 You have an existing cert and need to create a CSR to request a renewal from your CA. This copies the subject and SANs from the old cert:
 
 ```sh
-certkit csr --cert existing-cert.pem
+certkit csr --from-cert existing-cert.pem
 ```
 
 This prints the CSR and a newly generated key to stdout in PEM format. Send the CSR to your CA.
@@ -421,13 +421,13 @@ This prints the CSR and a newly generated key to stdout in PEM format. Send the 
 If you want to reuse your existing key:
 
 ```sh
-certkit csr --cert existing-cert.pem --key existing-key.pem
+certkit csr --from-cert existing-cert.pem --key existing-key.pem
 ```
 
 Write to separate files in a directory instead of stdout:
 
 ```sh
-certkit csr --cert existing-cert.pem -o ./out
+certkit csr --from-cert existing-cert.pem -o ./out
 ```
 
 ---
@@ -578,20 +578,23 @@ certkit uses meaningful exit codes:
 | **1**     | General error (bad input, missing file, etc.)                      |
 | **2**     | Validation failure (chain invalid, key mismatch, expired, revoked) |
 
-Use `--format json` on any command for machine-readable output. Data always goes to stdout, warnings and progress to stderr, so piping works cleanly:
+Use `--json` on any command for machine-readable output. Display commands also accept `--format json`. Data always goes to stdout, warnings and progress to stderr, so piping works cleanly:
 
 ```sh
 # Check cert in CI -- fails with exit code 2 if expiring within 30 days
 certkit verify cert.pem --expiry 30d
 
 # Parse cert info programmatically
-certkit inspect cert.pem --format json | jq '.subject'
+certkit inspect cert.pem --json | jq '.[0].subject'
 
 # Verify and capture result
 certkit verify cert.pem --format json > result.json
 
 # Check revocation in a pipeline
-certkit ocsp cert.pem --issuer issuer.pem --format json | jq '.status'
+certkit ocsp cert.pem --issuer issuer.pem --json | jq '.status'
+
+# Generate a key and capture JSON
+certkit keygen --json | jq '.key_pem'
 ```
 
 ### Verbose output

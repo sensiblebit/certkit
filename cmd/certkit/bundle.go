@@ -3,6 +3,8 @@ package main
 import (
 	"crypto"
 	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
@@ -44,10 +46,12 @@ certificates are used as extra intermediates for chain building.`,
 
 func init() {
 	bundleCmd.Flags().StringVar(&bundleKeyPath, "key", "", "Private key file (PEM)")
-	bundleCmd.Flags().StringVarP(&bundleOutFile, "out-file", "o", "", "Output file (default: stdout)")
+	bundleCmd.Flags().StringVarP(&bundleOutFile, "out-file", "o", "", "Output file")
 	bundleCmd.Flags().StringVar(&bundleFormat, "format", "pem", "Output format: pem, chain, fullchain, p12, jks")
 	bundleCmd.Flags().BoolVarP(&bundleForce, "force", "f", false, "Skip chain verification")
 	bundleCmd.Flags().StringVar(&bundleTrustStore, "trust-store", "mozilla", "Trust store: system, mozilla")
+
+	bundleCmd.Flags().Lookup("out-file").Annotations = map[string][]string{"readme_default": {"_(stdout)_"}}
 
 	registerCompletion(bundleCmd, completionInput{"format", fixedCompletion("pem", "chain", "fullchain", "p12", "jks")})
 	registerCompletion(bundleCmd, completionInput{"trust-store", fixedCompletion("system", "mozilla")})
@@ -120,13 +124,43 @@ func runBundle(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("writing output: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "Wrote %s (%d bytes)\n", bundleOutFile, len(output))
-	} else {
+	}
+
+	if jsonOutput {
+		var out bundleJSON
+		isBinary := bundleFormat == "p12" || bundleFormat == "jks"
+		if bundleOutFile != "" {
+			// File was written — emit metadata only
+			out.File = bundleOutFile
+			out.Format = bundleFormat
+			out.Size = len(output)
+		} else if isBinary {
+			out.Data = base64.StdEncoding.EncodeToString(output)
+			out.Format = bundleFormat
+		} else {
+			out.ChainPEM = string(output)
+		}
+		data, err := json.MarshalIndent(out, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshaling JSON: %w", err)
+		}
+		fmt.Println(string(data))
+	} else if bundleOutFile == "" {
 		if _, err := os.Stdout.Write(output); err != nil {
 			return fmt.Errorf("writing to stdout: %w", err)
 		}
 	}
 
 	return nil
+}
+
+// bundleJSON is the JSON output structure for the bundle command.
+type bundleJSON struct {
+	ChainPEM string `json:"chain_pem,omitempty"`
+	Data     string `json:"data,omitempty"`
+	File     string `json:"file,omitempty"`
+	Format   string `json:"format,omitempty"`
+	Size     int    `json:"size,omitempty"`
 }
 
 // loadBundleInput reads the input file and extracts the leaf cert, optional key,

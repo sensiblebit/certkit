@@ -6,6 +6,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -69,13 +70,14 @@ SANs from the CSR are copied to the issued certificate by default.`,
 
 func init() {
 	// self-signed flags
+	signSelfSignedCmd.Flags().StringVar(&selfSignedCN, "cn", "", "Common Name for the certificate")
 	signSelfSignedCmd.Flags().StringVar(&selfSignedKeyPath, "key", "", "Existing private key file (generates EC P-256 if omitted)")
-	signSelfSignedCmd.Flags().StringVar(&selfSignedCN, "cn", "", "Common Name for the certificate (required)")
 	signSelfSignedCmd.Flags().IntVar(&selfSignedDays, "days", 3650, "Validity period in days")
 	signSelfSignedCmd.Flags().BoolVar(&selfSignedIsCA, "is-ca", true, "Set CA:TRUE basic constraint")
-	signSelfSignedCmd.Flags().StringVarP(&selfSignedOutFile, "out-file", "o", "", "Output file (default: stdout)")
+	signSelfSignedCmd.Flags().StringVarP(&selfSignedOutFile, "out-file", "o", "", "Output file")
 
 	_ = signSelfSignedCmd.MarkFlagRequired("cn")
+	signSelfSignedCmd.Flags().Lookup("out-file").Annotations = map[string][]string{"readme_default": {"_(stdout)_"}}
 	registerCompletion(signSelfSignedCmd, completionInput{"key", fileCompletion})
 	registerCompletion(signSelfSignedCmd, completionInput{"out-file", fileCompletion})
 
@@ -83,8 +85,10 @@ func init() {
 	signCSRCmd.Flags().StringVar(&signCSRCAPath, "ca", "", "CA certificate file (PEM)")
 	signCSRCmd.Flags().StringVar(&signCSRKeyPath, "ca-key", "", "CA private key file (PEM)")
 	signCSRCmd.Flags().IntVar(&signCSRDays, "days", 365, "Validity period in days")
-	signCSRCmd.Flags().BoolVar(&signCSRCopySAN, "copy-sans", true, "Copy SANs from CSR to certificate")
-	signCSRCmd.Flags().StringVarP(&signCSROutFile, "out-file", "o", "", "Output file (default: stdout)")
+	signCSRCmd.Flags().BoolVar(&signCSRCopySAN, "copy-sans", true, "Copy SANs from CSR to issued certificate")
+	signCSRCmd.Flags().StringVarP(&signCSROutFile, "out-file", "o", "", "Output file")
+
+	signCSRCmd.Flags().Lookup("out-file").Annotations = map[string][]string{"readme_default": {"_(stdout)_"}}
 
 	_ = signCSRCmd.MarkFlagRequired("ca")
 	_ = signCSRCmd.MarkFlagRequired("ca-key")
@@ -154,7 +158,16 @@ func runSignSelfSigned(_ *cobra.Command, _ []string) error {
 			return fmt.Errorf("writing output: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "Wrote %s (%d bytes)\n", selfSignedOutFile, len(output))
-	} else {
+	}
+
+	if jsonOutput {
+		out := signSelfSignedJSON{CertificatePEM: certPEM, KeyPEM: keyPEM}
+		data, err := json.MarshalIndent(out, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshaling JSON: %w", err)
+		}
+		fmt.Println(string(data))
+	} else if selfSignedOutFile == "" {
 		fmt.Print(certPEM)
 		if keyPEM != "" {
 			fmt.Print(keyPEM)
@@ -162,6 +175,12 @@ func runSignSelfSigned(_ *cobra.Command, _ []string) error {
 	}
 
 	return nil
+}
+
+// signSelfSignedJSON is the JSON output structure for sign self-signed.
+type signSelfSignedJSON struct {
+	CertificatePEM string `json:"certificate_pem"`
+	KeyPEM         string `json:"key_pem,omitempty"`
 }
 
 func runSignCSR(_ *cobra.Command, args []string) error {
@@ -222,9 +241,23 @@ func runSignCSR(_ *cobra.Command, args []string) error {
 			return fmt.Errorf("writing output: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "Wrote %s (%d bytes)\n", signCSROutFile, len(certPEM))
-	} else {
+	}
+
+	if jsonOutput {
+		out := signCSRJSON{CertificatePEM: certPEM}
+		data, err := json.MarshalIndent(out, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshaling JSON: %w", err)
+		}
+		fmt.Println(string(data))
+	} else if signCSROutFile == "" {
 		fmt.Print(certPEM)
 	}
 
 	return nil
+}
+
+// signCSRJSON is the JSON output structure for sign csr.
+type signCSRJSON struct {
+	CertificatePEM string `json:"certificate_pem"`
 }

@@ -47,16 +47,16 @@ var scanCmd = &cobra.Command{
 }
 
 func init() {
-	scanCmd.Flags().StringVar(&scanLoadDB, "load-db", "", "Load an existing database into memory before scanning")
-	scanCmd.Flags().StringVar(&scanSaveDB, "save-db", "", "Save the in-memory database to disk after scanning")
-	scanCmd.Flags().StringVar(&scanBundlePath, "bundle-path", "", "Export certificate bundles to this directory after scanning")
+	scanCmd.Flags().StringVar(&scanBundlePath, "bundle-path", "", "Export bundles to this directory")
 	scanCmd.Flags().StringVarP(&scanConfigPath, "config", "c", "./bundles.yaml", "Path to bundle config YAML")
 	scanCmd.Flags().BoolVarP(&scanForceExport, "force", "f", false, "Allow export of untrusted certificate bundles")
 	scanCmd.Flags().BoolVar(&scanDuplicates, "duplicates", false, "Export all certificates per bundle, not just the newest")
 	scanCmd.Flags().StringVar(&scanDumpKeys, "dump-keys", "", "Dump all discovered keys to a single PEM file")
 	scanCmd.Flags().StringVar(&scanDumpCerts, "dump-certs", "", "Dump all discovered certificates to a single PEM file")
 	scanCmd.Flags().Int64Var(&scanMaxFileSize, "max-file-size", 10*1024*1024, "Skip files larger than this size in bytes (0 to disable)")
-	scanCmd.Flags().StringVar(&scanFormat, "format", "text", "Output format: text or json")
+	scanCmd.Flags().StringVar(&scanFormat, "format", "text", "Output format: text, json")
+	scanCmd.Flags().StringVar(&scanSaveDB, "save-db", "", "Save the in-memory database to disk after scanning")
+	scanCmd.Flags().StringVar(&scanLoadDB, "load-db", "", "Load an existing database into memory before scanning")
 
 	registerCompletion(scanCmd, completionInput{"format", fixedCompletion("text", "json")})
 	registerCompletion(scanCmd, completionInput{"bundle-path", directoryCompletion})
@@ -272,7 +272,12 @@ func runScan(cmd *cobra.Command, args []string) error {
 		summary := store.ScanSummary(certstore.ScanSummaryInput{
 			RootPool: mozillaPool,
 		})
-		switch scanFormat {
+		format := scanFormat
+		if jsonOutput {
+			format = "json"
+		}
+
+		switch format {
 		case "json":
 			if verbose {
 				verboseOutput := scanVerboseJSON{
@@ -310,7 +315,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 				printScanVerboseText(store)
 			}
 		default:
-			return fmt.Errorf("unsupported output format %q (use text or json)", scanFormat)
+			return fmt.Errorf("unsupported output format %q (use text or json)", format)
 		}
 	}
 

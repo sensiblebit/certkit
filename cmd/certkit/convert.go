@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto"
 	"crypto/x509"
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -40,11 +41,13 @@ multi-alias keystore. PKCS#12 supports only a single key entry.`,
 }
 
 func init() {
-	convertCmd.Flags().StringVar(&convertTo, "to", "", "Output format: pem, der, p12, jks, p7b (required)")
+	convertCmd.Flags().StringVar(&convertTo, "to", "", "Output format: pem, der, p12, jks, p7b")
 	convertCmd.Flags().StringVarP(&convertOutFile, "out-file", "o", "", "Output file (required for binary formats)")
 	convertCmd.Flags().StringVar(&convertKeyPath, "key", "", "Private key file (PEM). Keys are matched to certificates automatically.")
 
 	_ = convertCmd.MarkFlagRequired("to")
+
+	convertCmd.Flags().Lookup("out-file").Annotations = map[string][]string{"readme_default": {"_(stdout for PEM)_"}}
 
 	registerCompletion(convertCmd, completionInput{"to", fixedCompletion("pem", "der", "p12", "jks", "p7b")})
 	registerCompletion(convertCmd, completionInput{"out-file", fileCompletion})
@@ -147,13 +150,40 @@ func runConvert(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("writing output: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "Wrote %s (%d bytes)\n", convertOutFile, len(output))
-	} else {
+	}
+
+	if jsonOutput {
+		var out convertJSON
+		if convertOutFile != "" {
+			// Binary format written to file — report metadata
+			out.File = convertOutFile
+			out.Format = convertTo
+			out.Size = len(output)
+		} else {
+			// Text format — include the data directly
+			out.Data = string(output)
+			out.Format = convertTo
+		}
+		data, err := json.MarshalIndent(out, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshaling JSON: %w", err)
+		}
+		fmt.Println(string(data))
+	} else if convertOutFile == "" {
 		if _, err := os.Stdout.Write(output); err != nil {
 			return fmt.Errorf("writing to stdout: %w", err)
 		}
 	}
 
 	return nil
+}
+
+// convertJSON is the JSON output structure for the convert command.
+type convertJSON struct {
+	Data   string `json:"data,omitempty"`
+	File   string `json:"file,omitempty"`
+	Format string `json:"format,omitempty"`
+	Size   int    `json:"size,omitempty"`
 }
 
 func formatConvertOutput(input formatConvertInput) ([]byte, error) {

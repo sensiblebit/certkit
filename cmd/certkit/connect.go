@@ -46,7 +46,7 @@ Exits with code 2 if chain verification fails or the certificate is revoked.`,
 
 func init() {
 	connectCmd.Flags().StringVar(&connectServerName, "servername", "", "Override SNI hostname (defaults to host)")
-	connectCmd.Flags().StringVar(&connectFormat, "format", "text", "Output format: text or json")
+	connectCmd.Flags().StringVar(&connectFormat, "format", "text", "Output format: text, json")
 	connectCmd.Flags().BoolVar(&connectCRL, "crl", false, "Check CRL distribution points for revocation")
 	connectCmd.Flags().BoolVar(&connectNoOCSP, "no-ocsp", false, "Disable automatic OCSP revocation check")
 
@@ -70,6 +70,7 @@ type connectResultJSON struct {
 	Chain       []connectCertJSON         `json:"chain"`
 }
 
+// connectCertJSON holds per-certificate fields for the connect command's JSON output.
 type connectCertJSON struct {
 	Subject   string   `json:"subject"`
 	Issuer    string   `json:"issuer"`
@@ -115,7 +116,12 @@ func runConnect(cmd *cobra.Command, args []string) error {
 
 	now := time.Now()
 
-	switch connectFormat {
+	format := connectFormat
+	if jsonOutput {
+		format = "json"
+	}
+
+	switch format {
 	case "json":
 		jr := connectResultJSON{
 			Host:        result.Host,
@@ -137,7 +143,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 				Issuer:    certkit.FormatDN(cert.Issuer),
 				NotBefore: cert.NotBefore.UTC().Format(time.RFC3339),
 				NotAfter:  cert.NotAfter.UTC().Format(time.RFC3339),
-				SHA256:    certkit.CertFingerprint(cert),
+				SHA256:    certkit.CertFingerprintColonSHA256(cert),
 				CertType:  certkit.GetCertificateType(cert),
 				SANs:      certkit.CollectCertificateSANs(cert),
 			}
@@ -170,7 +176,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 			fmt.Print(certkit.FormatConnectResult(result))
 		}
 	default:
-		return fmt.Errorf("unsupported output format %q (use text or json)", connectFormat)
+		return fmt.Errorf("unsupported output format %q (use text or json)", format)
 	}
 
 	if result.VerifyError != "" {
