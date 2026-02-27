@@ -62,7 +62,7 @@ type legacyClientHelloInput struct {
 // supported_versions, key_share, or psk_key_exchange_modes extensions.
 func buildLegacyClientHelloMsg(input legacyClientHelloInput) ([]byte, error) {
 	if len(input.cipherSuites) == 0 {
-		return nil, fmt.Errorf("building legacy ClientHello: no cipher suites specified")
+		return nil, fmt.Errorf("building legacy client hello: no cipher suites specified")
 	}
 
 	// Build extensions.
@@ -230,14 +230,14 @@ func readServerCertificates(r io.Reader) (*serverHelloResult, []*x509.Certificat
 			case 0x02: // ServerHello
 				sh, err := parseServerHello(hsMsg)
 				if err != nil {
-					return nil, nil, fmt.Errorf("parsing ServerHello: %w", err)
+					return nil, nil, fmt.Errorf("parsing server hello: %w", err)
 				}
 				shResult = sh
 
 			case 0x0B: // Certificate
 				parsed, err := parseCertificateMessage(hsMsg[4:]) // skip handshake header
 				if err != nil {
-					return shResult, nil, fmt.Errorf("parsing Certificate message: %w", err)
+					return shResult, nil, fmt.Errorf("parsing certificate message: %w", err)
 				}
 				certs = parsed
 				return shResult, certs, nil

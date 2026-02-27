@@ -464,8 +464,8 @@ func parseQUICInitialResponse(packet []byte, serverKeys quicInitialKeys) (*serve
 	return nil, fmt.Errorf("no CRYPTO frame found in QUIC Initial response")
 }
 
-// probeQUICCipher sends a QUIC Initial packet to UDP 443 with a single
-// cipher suite and returns true if the server accepts it.
+// probeQUICCipher sends a QUIC Initial packet to the provided UDP address
+// with a single cipher suite and returns true if the server accepts it.
 func probeQUICCipher(ctx context.Context, input cipherProbeInput) bool {
 	// Generate random connection IDs.
 	dcid := make([]byte, 8)

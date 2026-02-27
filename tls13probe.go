@@ -176,28 +176,28 @@ func generateKeyShare(groupID tls.CurveID) ([]byte, error) {
 	case tls.X25519:
 		key, err := ecdh.X25519().GenerateKey(rand.Reader)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("generating X25519 key: %w", err)
 		}
 		return key.PublicKey().Bytes(), nil
 
 	case tls.CurveP256:
 		key, err := ecdh.P256().GenerateKey(rand.Reader)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("generating P-256 key: %w", err)
 		}
 		return key.PublicKey().Bytes(), nil
 
 	case tls.CurveP384:
 		key, err := ecdh.P384().GenerateKey(rand.Reader)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("generating P-384 key: %w", err)
 		}
 		return key.PublicKey().Bytes(), nil
 
 	case tls.CurveP521:
 		key, err := ecdh.P521().GenerateKey(rand.Reader)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("generating P-521 key: %w", err)
 		}
 		return key.PublicKey().Bytes(), nil
 
@@ -206,11 +206,11 @@ func generateKeyShare(groupID tls.CurveID) ([]byte, error) {
 		// See draft-ietf-tls-ecdhe-mlkem-02 §4.1 and Go crypto/tls/key_schedule.go:184.
 		dk, err := mlkem.GenerateKey768()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("generating ML-KEM-768 key: %w", err)
 		}
 		x, err := ecdh.X25519().GenerateKey(rand.Reader)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("generating X25519 key for X25519MLKEM768: %w", err)
 		}
 		return append(dk.EncapsulationKey().Bytes(), x.PublicKey().Bytes()...), nil
 
@@ -218,11 +218,11 @@ func generateKeyShare(groupID tls.CurveID) ([]byte, error) {
 		// SecP256r1MLKEM768: ECDH (P-256) first, then ML-KEM-768.
 		ec, err := ecdh.P256().GenerateKey(rand.Reader)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("generating P-256 key for SecP256r1MLKEM768: %w", err)
 		}
 		dk, err := mlkem.GenerateKey768()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("generating ML-KEM-768 key for SecP256r1MLKEM768: %w", err)
 		}
 		return append(ec.PublicKey().Bytes(), dk.EncapsulationKey().Bytes()...), nil
 
@@ -230,11 +230,11 @@ func generateKeyShare(groupID tls.CurveID) ([]byte, error) {
 		// SecP384r1MLKEM1024: ECDH (P-384) first, then ML-KEM-1024.
 		ec, err := ecdh.P384().GenerateKey(rand.Reader)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("generating P-384 key for SecP384r1MLKEM1024: %w", err)
 		}
 		dk, err := mlkem.GenerateKey1024()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("generating ML-KEM-1024 key for SecP384r1MLKEM1024: %w", err)
 		}
 		return append(ec.PublicKey().Bytes(), dk.EncapsulationKey().Bytes()...), nil
 
