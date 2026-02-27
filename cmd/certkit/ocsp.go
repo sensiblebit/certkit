@@ -92,11 +92,12 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("checking OCSP: %w", err)
 	}
 
+	format := ocspFormat
 	if jsonOutput {
-		ocspFormat = "json"
+		format = "json"
 	}
 
-	switch ocspFormat {
+	switch format {
 	case "json":
 		if verbose {
 			verboseResult := ocspVerboseJSON{
@@ -123,7 +124,7 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 		}
 		fmt.Print(certkit.FormatOCSPResult(result))
 	default:
-		return fmt.Errorf("unsupported output format %q (use text or json)", ocspFormat)
+		return fmt.Errorf("unsupported output format %q (use text or json)", format)
 	}
 
 	if result.Status == "revoked" {

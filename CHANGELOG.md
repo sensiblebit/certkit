@@ -53,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** `connect` JSON `sha256_fingerprint` format changed from lowercase hex to colon-separated uppercase hex for CLI-4 consistency with `inspect` and `sha1_fingerprint` ([#80])
 - **Breaking:** Rename `CRLCheckResult.DistributionPoint` to `CRLCheckResult.URL` (JSON: `url`) and `OCSPResult.ResponderURL` to `OCSPResult.URL` (JSON: `url`) — consistent field name for the checked endpoint across both revocation types (CLI-4) ([#78])
 - **Breaking:** Rename OCSP JSON field `serial_number` to `serial` for CLI-4 consistency with all other commands ([#78])
 - **Breaking:** `FetchCRL` now takes `FetchCRLInput` struct instead of a URL string — enables `AllowPrivateNetworks` for user-provided URLs ([#78])

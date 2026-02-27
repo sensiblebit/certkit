@@ -129,15 +129,14 @@ func runBundle(cmd *cobra.Command, args []string) error {
 	if jsonOutput {
 		var out bundleJSON
 		isBinary := bundleFormat == "p12" || bundleFormat == "jks"
-		if isBinary {
-			if bundleOutFile != "" {
-				out.File = bundleOutFile
-				out.Format = bundleFormat
-				out.Size = len(output)
-			} else {
-				out.Data = base64.StdEncoding.EncodeToString(output)
-				out.Format = bundleFormat
-			}
+		if bundleOutFile != "" {
+			// File was written — emit metadata only
+			out.File = bundleOutFile
+			out.Format = bundleFormat
+			out.Size = len(output)
+		} else if isBinary {
+			out.Data = base64.StdEncoding.EncodeToString(output)
+			out.Format = bundleFormat
 		} else {
 			out.ChainPEM = string(output)
 		}

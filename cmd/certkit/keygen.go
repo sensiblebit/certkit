@@ -60,11 +60,22 @@ func runKeygen(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("generating key: %w", err)
 	}
 
+	if keygenOutPath != "" {
+		fmt.Fprintf(os.Stderr, "Private key: %s\n", result.KeyFile)
+		fmt.Fprintf(os.Stderr, "Public key:  %s\n", result.PubFile)
+		if result.CSRFile != "" {
+			fmt.Fprintf(os.Stderr, "CSR:         %s\n", result.CSRFile)
+		}
+	}
+
 	if jsonOutput {
 		out := keygenJSON{
 			KeyPEM:       result.KeyPEM,
 			PublicKeyPEM: result.PubPEM,
 			CSRPEM:       result.CSRPEM,
+			KeyFile:      result.KeyFile,
+			PubFile:      result.PubFile,
+			CSRFile:      result.CSRFile,
 		}
 		data, err := json.MarshalIndent(out, "", "  ")
 		if err != nil {
@@ -77,12 +88,6 @@ func runKeygen(cmd *cobra.Command, args []string) error {
 		if result.CSRPEM != "" {
 			fmt.Print(result.CSRPEM)
 		}
-	} else {
-		fmt.Fprintf(os.Stderr, "Private key: %s\n", result.KeyFile)
-		fmt.Fprintf(os.Stderr, "Public key:  %s\n", result.PubFile)
-		if result.CSRFile != "" {
-			fmt.Fprintf(os.Stderr, "CSR:         %s\n", result.CSRFile)
-		}
 	}
 	return nil
 }
@@ -92,4 +97,7 @@ type keygenJSON struct {
 	KeyPEM       string `json:"key_pem"`
 	PublicKeyPEM string `json:"public_key_pem"`
 	CSRPEM       string `json:"csr_pem,omitempty"`
+	KeyFile      string `json:"key_file,omitempty"`
+	PubFile      string `json:"public_key_file,omitempty"`
+	CSRFile      string `json:"csr_file,omitempty"`
 }

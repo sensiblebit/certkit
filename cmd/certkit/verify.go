@@ -145,11 +145,12 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		})
 	}
 
+	format := verifyFormat
 	if jsonOutput {
-		verifyFormat = "json"
+		format = "json"
 	}
 
-	switch verifyFormat {
+	switch format {
 	case "json":
 		data, err := json.MarshalIndent(result, "", "  ")
 		if err != nil {
@@ -162,7 +163,7 @@ func runVerify(cmd *cobra.Command, args []string) error {
 			fmt.Print(internal.FormatDiagnoses(result.Diagnoses))
 		}
 	default:
-		return fmt.Errorf("unsupported output format %q (use text or json)", verifyFormat)
+		return fmt.Errorf("unsupported output format %q (use text or json)", format)
 	}
 
 	if len(result.Errors) > 0 {

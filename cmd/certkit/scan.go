@@ -272,11 +272,12 @@ func runScan(cmd *cobra.Command, args []string) error {
 		summary := store.ScanSummary(certstore.ScanSummaryInput{
 			RootPool: mozillaPool,
 		})
+		format := scanFormat
 		if jsonOutput {
-			scanFormat = "json"
+			format = "json"
 		}
 
-		switch scanFormat {
+		switch format {
 		case "json":
 			if verbose {
 				verboseOutput := scanVerboseJSON{
@@ -314,7 +315,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 				printScanVerboseText(store)
 			}
 		default:
-			return fmt.Errorf("unsupported output format %q (use text or json)", scanFormat)
+			return fmt.Errorf("unsupported output format %q (use text or json)", format)
 		}
 	}
 

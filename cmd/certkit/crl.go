@@ -99,11 +99,12 @@ func runCRL(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	format := crlFormat
 	if jsonOutput {
-		crlFormat = "json"
+		format = "json"
 	}
 
-	switch crlFormat {
+	switch format {
 	case "json":
 		output := crlOutputJSON{CRLInfo: info, CheckResult: checkResult}
 		jsonData, err := json.MarshalIndent(output, "", "  ")
@@ -121,7 +122,7 @@ func runCRL(cmd *cobra.Command, args []string) error {
 			}
 		}
 	default:
-		return fmt.Errorf("unsupported output format %q (use text or json)", crlFormat)
+		return fmt.Errorf("unsupported output format %q (use text or json)", format)
 	}
 
 	if checkResult != nil && checkResult.Revoked {

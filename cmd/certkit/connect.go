@@ -70,6 +70,7 @@ type connectResultJSON struct {
 	Chain       []connectCertJSON         `json:"chain"`
 }
 
+// connectCertJSON holds per-certificate fields for the connect command's JSON output.
 type connectCertJSON struct {
 	Subject   string   `json:"subject"`
 	Issuer    string   `json:"issuer"`
@@ -115,11 +116,12 @@ func runConnect(cmd *cobra.Command, args []string) error {
 
 	now := time.Now()
 
+	format := connectFormat
 	if jsonOutput {
-		connectFormat = "json"
+		format = "json"
 	}
 
-	switch connectFormat {
+	switch format {
 	case "json":
 		jr := connectResultJSON{
 			Host:        result.Host,
@@ -174,7 +176,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 			fmt.Print(certkit.FormatConnectResult(result))
 		}
 	default:
-		return fmt.Errorf("unsupported output format %q (use text or json)", connectFormat)
+		return fmt.Errorf("unsupported output format %q (use text or json)", format)
 	}
 
 	if result.VerifyError != "" {
