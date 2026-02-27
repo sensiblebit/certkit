@@ -141,7 +141,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 				Issuer:    certkit.FormatDN(cert.Issuer),
 				NotBefore: cert.NotBefore.UTC().Format(time.RFC3339),
 				NotAfter:  cert.NotAfter.UTC().Format(time.RFC3339),
-				SHA256:    certkit.CertFingerprint(cert),
+				SHA256:    certkit.CertFingerprintColonSHA256(cert),
 				CertType:  certkit.GetCertificateType(cert),
 				SANs:      certkit.CollectCertificateSANs(cert),
 			}

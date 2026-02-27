@@ -64,9 +64,7 @@ func runKeygen(cmd *cobra.Command, args []string) error {
 		out := keygenJSON{
 			KeyPEM:       result.KeyPEM,
 			PublicKeyPEM: result.PubPEM,
-		}
-		if result.CSRPEM != "" {
-			out.CSRPEM = result.CSRPEM
+			CSRPEM:       result.CSRPEM,
 		}
 		data, err := json.MarshalIndent(out, "", "  ")
 		if err != nil {

@@ -11,6 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Auto-generate CLI flag tables in README from Cobra command definitions via `go generate` ([#80])
 - Add `gendocs` pre-commit hook and CI check to verify flag tables stay in sync ([#80])
+- Add global `--json` persistent flag — all commands now support JSON output; overrides `--format` when both are set ([#80])
+- Add JSON output to `keygen`, `csr`, `sign`, `bundle`, and `convert` commands ([#80])
 - `connect` automatically checks OCSP revocation status on the leaf certificate (best-effort; shows "skipped" or "unavailable" when check cannot complete) ([#78])
 - Add `--crl` flag to `connect` for opt-in CRL revocation checking via distribution points ([#78])
 - Add `FetchCRL` library function for downloading CRLs from HTTP URLs with SSRF validation ([#78])
@@ -51,8 +53,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Add global `--json` persistent flag — all commands now support JSON output; overrides `--format` when both are set ([#80])
-- Add JSON output to `keygen`, `csr`, `sign`, `bundle`, and `convert` commands ([#80])
 - **Breaking:** Rename `CRLCheckResult.DistributionPoint` to `CRLCheckResult.URL` (JSON: `url`) and `OCSPResult.ResponderURL` to `OCSPResult.URL` (JSON: `url`) — consistent field name for the checked endpoint across both revocation types (CLI-4) ([#78])
 - **Breaking:** Rename OCSP JSON field `serial_number` to `serial` for CLI-4 consistency with all other commands ([#78])
 - **Breaking:** `FetchCRL` now takes `FetchCRLInput` struct instead of a URL string — enables `AllowPrivateNetworks` for user-provided URLs ([#78])

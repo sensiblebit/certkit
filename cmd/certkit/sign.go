@@ -148,17 +148,7 @@ func runSignSelfSigned(_ *cobra.Command, _ []string) error {
 
 	certPEM := certkit.CertToPEM(cert)
 
-	if jsonOutput {
-		out := signSelfSignedJSON{CertificatePEM: certPEM}
-		if keyPEM != "" {
-			out.KeyPEM = keyPEM
-		}
-		data, err := json.MarshalIndent(out, "", "  ")
-		if err != nil {
-			return fmt.Errorf("marshaling JSON: %w", err)
-		}
-		fmt.Println(string(data))
-	} else if selfSignedOutFile != "" {
+	if selfSignedOutFile != "" {
 		output := certPEM
 		if keyPEM != "" {
 			output += keyPEM
@@ -168,7 +158,16 @@ func runSignSelfSigned(_ *cobra.Command, _ []string) error {
 			return fmt.Errorf("writing output: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "Wrote %s (%d bytes)\n", selfSignedOutFile, len(output))
-	} else {
+	}
+
+	if jsonOutput {
+		out := signSelfSignedJSON{CertificatePEM: certPEM, KeyPEM: keyPEM}
+		data, err := json.MarshalIndent(out, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshaling JSON: %w", err)
+		}
+		fmt.Println(string(data))
+	} else if selfSignedOutFile == "" {
 		fmt.Print(certPEM)
 		if keyPEM != "" {
 			fmt.Print(keyPEM)
@@ -237,6 +236,13 @@ func runSignCSR(_ *cobra.Command, args []string) error {
 
 	certPEM := certkit.CertToPEM(cert)
 
+	if signCSROutFile != "" {
+		if err := os.WriteFile(signCSROutFile, []byte(certPEM), 0644); err != nil {
+			return fmt.Errorf("writing output: %w", err)
+		}
+		fmt.Fprintf(os.Stderr, "Wrote %s (%d bytes)\n", signCSROutFile, len(certPEM))
+	}
+
 	if jsonOutput {
 		out := signCSRJSON{CertificatePEM: certPEM}
 		data, err := json.MarshalIndent(out, "", "  ")
@@ -244,12 +250,7 @@ func runSignCSR(_ *cobra.Command, args []string) error {
 			return fmt.Errorf("marshaling JSON: %w", err)
 		}
 		fmt.Println(string(data))
-	} else if signCSROutFile != "" {
-		if err := os.WriteFile(signCSROutFile, []byte(certPEM), 0644); err != nil {
-			return fmt.Errorf("writing output: %w", err)
-		}
-		fmt.Fprintf(os.Stderr, "Wrote %s (%d bytes)\n", signCSROutFile, len(certPEM))
-	} else {
+	} else if signCSROutFile == "" {
 		fmt.Print(certPEM)
 	}
 

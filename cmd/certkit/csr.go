@@ -77,9 +77,9 @@ func runCSR(cmd *cobra.Command, args []string) error {
 	}
 
 	if jsonOutput {
-		out := csrJSON{CSRPEM: result.CSRPEM}
-		if result.KeyPEM != "" {
-			out.KeyPEM = result.KeyPEM
+		out := csrJSON{
+			CSRPEM: result.CSRPEM,
+			KeyPEM: result.KeyPEM,
 		}
 		data, err := json.MarshalIndent(out, "", "  ")
 		if err != nil {

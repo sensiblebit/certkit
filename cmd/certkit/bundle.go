@@ -3,6 +3,7 @@ package main
 import (
 	"crypto"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -126,7 +127,20 @@ func runBundle(cmd *cobra.Command, args []string) error {
 	}
 
 	if jsonOutput {
-		out := bundleJSON{ChainPEM: string(output)}
+		var out bundleJSON
+		isBinary := bundleFormat == "p12" || bundleFormat == "jks"
+		if isBinary {
+			if bundleOutFile != "" {
+				out.File = bundleOutFile
+				out.Format = bundleFormat
+				out.Size = len(output)
+			} else {
+				out.Data = base64.StdEncoding.EncodeToString(output)
+				out.Format = bundleFormat
+			}
+		} else {
+			out.ChainPEM = string(output)
+		}
 		data, err := json.MarshalIndent(out, "", "  ")
 		if err != nil {
 			return fmt.Errorf("marshaling JSON: %w", err)
@@ -143,7 +157,11 @@ func runBundle(cmd *cobra.Command, args []string) error {
 
 // bundleJSON is the JSON output structure for the bundle command.
 type bundleJSON struct {
-	ChainPEM string `json:"chain_pem"`
+	ChainPEM string `json:"chain_pem,omitempty"`
+	Data     string `json:"data,omitempty"`
+	File     string `json:"file,omitempty"`
+	Format   string `json:"format,omitempty"`
+	Size     int    `json:"size,omitempty"`
 }
 
 // loadBundleInput reads the input file and extracts the leaf cert, optional key,
