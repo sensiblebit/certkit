@@ -76,6 +76,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fix bare `return err` in `connect` CLI dropping host context from error messages — ConnectTLS and ScanCipherSuites errors now wrap with host and operation (ERR-1) ([#82])
+- Fix potential out-of-bounds write in QUIC response parser when packet number length exceeds remaining packet bytes ([#82])
+- Add panic guard to `appendQUICVarint2` for values >= 16384 that would silently produce corrupt 2-byte encoding ([#82])
+- Skip QUIC cipher probes on non-443 ports — avoids wasted 10s of timeout when QUIC is not conventionally served ([#82])
 - Use `slices.Concat` instead of `append` for cipher suite slice concatenation — prevents potential mutation of stdlib return value ([#82])
 - Show "Cipher suites: none detected" when cipher scan finds no supported suites instead of silent empty output ([#82])
 - Fix `OverallRating`, `FormatCipherRatingLine`, and `DiagnoseCipherScan` ignoring QUIC ciphers — weak QUIC ciphers were excluded from the overall rating and diagnostic count ([#82])

@@ -311,6 +311,11 @@ func parseQUICInitialResponse(packet []byte, serverKeys quicInitialKeys) (*serve
 	packet[0] ^= mask[0] & 0x0f
 	pnLen := int(packet[0]&0x03) + 1
 
+	// Validate that the packet number bytes fit within the packet.
+	if pnOffset+pnLen > len(packet) {
+		return nil, fmt.Errorf("packet truncated at packet number bytes")
+	}
+
 	// Unmask packet number.
 	for i := range pnLen {
 		packet[pnOffset+i] ^= mask[1+i]
@@ -557,7 +562,11 @@ func appendQUICVarint(b []byte, v uint64) []byte {
 }
 
 // appendQUICVarint2 appends a 2-byte QUIC varint (for values < 16384).
+// Panics if v >= 16384 since that requires a 4-byte encoding.
 func appendQUICVarint2(b []byte, v uint64) []byte {
+	if v >= 16384 {
+		panic(fmt.Sprintf("appendQUICVarint2: value %d exceeds 2-byte varint capacity (max 16383)", v))
+	}
 	return append(b, byte(0x40|v>>8), byte(v))
 }
 

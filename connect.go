@@ -900,8 +900,9 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 	}
 
 	// Probe QUIC/UDP cipher suites if requested.
+	// Skip non-443 ports since QUIC is only conventionally served on 443.
 	var quicCiphers []CipherProbeResult
-	if input.ProbeQUIC {
+	if input.ProbeQUIC && port == "443" {
 		quicAddr := net.JoinHostPort(input.Host, port)
 		for _, id := range tls13CipherSuites {
 			if ctx.Err() != nil {
@@ -1008,7 +1009,7 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 	return &CipherScanResult{
 		SupportedVersions: versions,
 		Ciphers:           results,
-		QUICProbed:        input.ProbeQUIC,
+		QUICProbed:        input.ProbeQUIC && port == "443",
 		QUICCiphers:       quicCiphers,
 		KeyExchanges:      keyExchanges,
 		OverallRating:     overall,

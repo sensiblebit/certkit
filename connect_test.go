@@ -1240,8 +1240,14 @@ func TestRateCipherSuite(t *testing.T) {
 			tlsVersion: tls.VersionTLS12,
 			want:       CipherRatingWeak,
 		},
-		// InsecureCipherSuites list — weak (RC4).
-		// Unknown cipher IDs should be rated conservatively.
+		// InsecureCipherSuites list — ECDHE+RC4 is still weak despite forward secrecy.
+		{
+			name:       "TLS 1.2 ECDHE+RC4 insecure",
+			cipherID:   tls.TLS_ECDHE_ECDSA_WITH_RC4_128_SHA,
+			tlsVersion: tls.VersionTLS12,
+			want:       CipherRatingWeak,
+		},
+		// Unknown cipher IDs should be rated conservatively (non-ECDHE fallthrough).
 		{
 			name:       "unknown cipher ID weak",
 			cipherID:   0xFFFF,
@@ -1328,14 +1334,8 @@ func TestScanCipherSuites(t *testing.T) {
 		}
 	}
 
-	// All detected ciphers should be rated excellent (GCM + ECDHE only).
-	for _, c := range result.Ciphers {
-		if c.Rating != CipherRatingGood {
-			t.Errorf("cipher %q (%s) rated %q, want %q", c.Name, c.Version, c.Rating, CipherRatingGood)
-		}
-	}
-
-	// Overall rating should be excellent.
+	// Overall rating should be good (all configured ciphers are ECDHE+GCM).
+	// Per-cipher rating correctness is covered by TestRateCipherSuite.
 	if result.OverallRating != CipherRatingGood {
 		t.Errorf("OverallRating = %q, want %q", result.OverallRating, CipherRatingGood)
 	}
@@ -1370,6 +1370,16 @@ func TestScanCipherSuites_EmptyHost(t *testing.T) {
 	_, err := ScanCipherSuites(context.Background(), ScanCipherSuitesInput{})
 	if err == nil {
 		t.Fatal("expected error for empty host")
+	}
+}
+
+func TestScanCipherSuites_CancelledContext(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := ScanCipherSuites(ctx, ScanCipherSuitesInput{Host: "127.0.0.1", Port: "443"})
+	if err == nil {
+		t.Fatal("expected error for cancelled context")
 	}
 }
 
@@ -1494,6 +1504,11 @@ func TestFormatCipherRatingLine(t *testing.T) {
 			want: "",
 		},
 		{
+			name: "empty scan",
+			scan: &CipherScanResult{},
+			want: "",
+		},
+		{
 			name: "all good",
 			scan: &CipherScanResult{
 				Ciphers: []CipherProbeResult{
@@ -1546,7 +1561,7 @@ func TestDiagnoseCipherScan(t *testing.T) {
 		name       string
 		result     *CipherScanResult
 		wantChecks int
-		wantDetail string // substring in first diagnostic detail
+		wantDetail string // exact first diagnostic detail
 	}{
 		{
 			name:       "nil result",
@@ -1600,8 +1615,8 @@ func TestDiagnoseCipherScan(t *testing.T) {
 				if diags[0].Check != "weak-cipher" {
 					t.Errorf("Check = %q, want %q", diags[0].Check, "weak-cipher")
 				}
-				if !strings.Contains(diags[0].Detail, tt.wantDetail) {
-					t.Errorf("Detail = %q, want substring %q", diags[0].Detail, tt.wantDetail)
+				if diags[0].Detail != tt.wantDetail {
+					t.Errorf("Detail = %q, want %q", diags[0].Detail, tt.wantDetail)
 				}
 			}
 		})
