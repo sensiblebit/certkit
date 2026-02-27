@@ -20,6 +20,23 @@ repos:
       - id: go-build
       - id: go-test
 
+  # ── Dependency Updates ──
+  - repo: local
+    hooks:
+      - id: go-mod-update
+        name: go mod update
+        entry: bash -c 'go get -u ./... && go mod tidy'
+        language: system
+        files: \.go$
+        pass_filenames: false
+
+      - id: npm-update
+        name: npm update
+        entry: bash -c 'cd web && npm update'
+        language: system
+        files: ^web/
+        pass_filenames: false
+
   # ── Docs ──
   - repo: local
     hooks:
