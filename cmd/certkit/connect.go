@@ -286,16 +286,14 @@ func formatConnectVerbose(r *certkit.ConnectResult, now time.Time) string {
 	fmt.Fprintf(&out, "Server Name:  %s\n", r.ServerName)
 
 	if r.LegacyProbe {
-		out.WriteString("Note:         certificate obtained via raw probe — server only supports legacy cipher suites\n")
+		out.WriteString("Note:         certificate obtained via raw probe — server key possession not verified\n")
 	}
 
 	if r.ALPN != "" {
 		fmt.Fprintf(&out, "ALPN:         %s\n", r.ALPN)
 	}
 
-	if r.LegacyProbe {
-		out.WriteString("Verify:       N/A (raw handshake — certificate not cryptographically verified)\n")
-	} else if r.VerifyError != "" {
+	if r.VerifyError != "" {
 		fmt.Fprintf(&out, "Verify:       FAILED (%s)\n", r.VerifyError)
 	} else if r.AIAFetched {
 		out.WriteString("Verify:       OK (intermediates fetched via AIA)\n")

@@ -345,7 +345,7 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 		result.Diagnostics = append(result.Diagnostics, ChainDiagnostic{
 			Check:  "legacy-only",
 			Status: "warn",
-			Detail: "server only supports cipher suites not available in standard TLS libraries — connected via raw handshake",
+			Detail: "server only supports cipher suites not available in standard TLS libraries; certificate chain verified but server key possession not proven",
 		})
 		return result, nil
 	}
@@ -1527,16 +1527,14 @@ func FormatConnectResult(r *ConnectResult) string {
 	fmt.Fprintf(&out, "Server Name:  %s\n", r.ServerName)
 
 	if r.LegacyProbe {
-		out.WriteString("Note:         certificate obtained via raw probe — server only supports legacy cipher suites\n")
+		out.WriteString("Note:         certificate obtained via raw probe — server key possession not verified\n")
 	}
 
 	if r.ALPN != "" {
 		fmt.Fprintf(&out, "ALPN:         %s\n", r.ALPN)
 	}
 
-	if r.LegacyProbe {
-		out.WriteString("Verify:       N/A (raw handshake — certificate not cryptographically verified)\n")
-	} else if r.VerifyError != "" {
+	if r.VerifyError != "" {
 		fmt.Fprintf(&out, "Verify:       FAILED (%s)\n", r.VerifyError)
 	} else if r.AIAFetched {
 		out.WriteString("Verify:       OK (intermediates fetched via AIA)\n")

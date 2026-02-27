@@ -420,8 +420,8 @@ func TestFormatConnectResult(t *testing.T) {
 		},
 	}
 
-	// LegacyProbe cases are structurally different: the result has LegacyProbe=true.
-	t.Run("LegacyProbe shows Note and Verify N/A", func(t *testing.T) {
+	// LegacyProbe: Note shows key-possession caveat; Verify shows real chain result.
+	t.Run("LegacyProbe shows Note and real Verify result", func(t *testing.T) {
 		t.Parallel()
 		result := &ConnectResult{
 			Host:        "test.example.com",
@@ -436,16 +436,16 @@ func TestFormatConnectResult(t *testing.T) {
 		for _, want := range []string{
 			"Note:",
 			"raw probe",
-			"Verify:       N/A",
-			"not cryptographically verified",
+			"server key possession not verified",
+			"Verify:       OK",
 		} {
 			if !strings.Contains(output, want) {
 				t.Errorf("output missing %q\ngot:\n%s", want, output)
 			}
 		}
-		// Must NOT show "Verify:       OK" for a legacy probe result.
-		if strings.Contains(output, "Verify:       OK") {
-			t.Errorf("output contains misleading %q for LegacyProbe result\ngot:\n%s", "Verify:       OK", output)
+		// Must NOT show the old "N/A" placeholder.
+		if strings.Contains(output, "N/A") {
+			t.Errorf("output contains stale N/A placeholder\ngot:\n%s", output)
 		}
 	})
 

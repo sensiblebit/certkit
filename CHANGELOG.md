@@ -86,6 +86,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fix `connect` legacy probe showing `Verify: N/A` despite performing full x509 chain verification — now shows the real verify result (`OK`/`FAILED`); Note line updated to clarify only server key possession is unverified ([`pending`])
 - Fix `connect --ciphers` showing "none detected" on QUIC-only servers — empty check now covers both TCP and QUIC cipher lists ([`6492fa5`])
 - Fix `probeLegacyCipher` hardcoding `"TLS 1.2"` for negotiated version — now returns the actual negotiated version from the ServerHello ([`6492fa5`])
 - Fix error strings violating ERR-4 (must be lowercase): `"tls alert received"`, `"tls record too large"`, `"quic packet too short"`, `"tls handshake with ..."` ([`6492fa5`])
