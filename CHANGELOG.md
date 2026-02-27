@@ -9,14 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Add raw TLS 1.0–1.2 legacy prober for DHE/DHE-DSS cipher suites that Go's `crypto/tls` doesn't implement — probes individual suites via byte-level ClientHello construction ([`pending`])
-- Add legacy fallback to `connect` — when Go's TLS handshake fails, attempts a raw handshake to extract server certificates from DHE-only or static-RSA-only servers ([`pending`])
-- Add DHE cipher suite probing to `connect --ciphers` — detects 13 DHE/DHE-DSS cipher suites using raw ClientHello packets, all rated "weak" ([`pending`])
-- Add `dhe-kex` diagnostic to `connect --ciphers` — warns when server accepts DHE key exchange cipher suites (deprecated, vulnerable to small DH parameters) ([`pending`])
-- Add negotiated cipher diagnostics to `connect` — warns about CBC mode, 3DES, static RSA, DHE, and deprecated TLS versions even without `--ciphers` ([`pending`])
-- Add hostname-mismatch diagnostic to `connect` — detects `x509.HostnameError` and surfaces it as `[ERR] hostname-mismatch` in the diagnostics section ([`pending`])
-- Add error-level diagnostics (`verify-failed`, `ocsp-revoked`, `crl-revoked`) to `connect` output — validation failures now appear in the Diagnostics section instead of a redundant `Error:` line on stderr ([`pending`])
-- Add specific cipher diagnostics to `connect --ciphers` — replaces the single "weak cipher" message with actionable checks: `deprecated-tls10`, `deprecated-tls11`, `cbc-cipher`, `static-rsa-kex`, `3des-cipher` ([`pending`])
+- Add raw TLS 1.0–1.2 legacy prober for DHE/DHE-DSS cipher suites that Go's `crypto/tls` doesn't implement — probes individual suites via byte-level ClientHello construction ([`715cb81`])
+- Add legacy fallback to `connect` — when Go's TLS handshake fails, attempts a raw handshake to extract server certificates from DHE-only or static-RSA-only servers ([`715cb81`])
+- Add DHE cipher suite probing to `connect --ciphers` — detects 13 DHE/DHE-DSS cipher suites using raw ClientHello packets, all rated "weak" ([`715cb81`])
+- Add `dhe-kex` diagnostic to `connect --ciphers` — warns when server accepts DHE key exchange cipher suites (deprecated, vulnerable to small DH parameters) ([`715cb81`])
+- Add negotiated cipher diagnostics to `connect` — warns about CBC mode, 3DES, static RSA, DHE, and deprecated TLS versions even without `--ciphers` ([`715cb81`])
+- Add hostname-mismatch diagnostic to `connect` — detects `x509.HostnameError` and surfaces it as `[ERR] hostname-mismatch` in the diagnostics section ([`715cb81`])
+- Add error-level diagnostics (`verify-failed`, `ocsp-revoked`, `crl-revoked`) to `connect` output — validation failures now appear in the Diagnostics section instead of a redundant `Error:` line on stderr ([`715cb81`])
+- Add specific cipher diagnostics to `connect --ciphers` — replaces the single "weak cipher" message with actionable checks: `deprecated-tls10`, `deprecated-tls11`, `cbc-cipher`, `static-rsa-kex`, `3des-cipher` ([`715cb81`])
 - Add `--ciphers` flag to `connect` command — enumerates all supported cipher suites with good/weak ratings, key exchange subgrouping, and forward secrecy labels ([#82])
 - Add raw TLS 1.3 cipher prober — probes all 5 RFC 8446 cipher suites using byte-level ClientHello construction, no shared state or data races ([#82])
 - Add key exchange group probing to `--ciphers` — detects all 7 named groups including post-quantum hybrids (X25519MLKEM768, SecP256r1MLKEM768, SecP384r1MLKEM1024) with HelloRetryRequest detection ([#82])
@@ -65,8 +65,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `connect` QUIC probing no longer restricted to port 443 — QUIC can run on any UDP port ([`pending`])
-- `connect` diagnostics now distinguish `[ERR]` (verification failures) from `[WARN]` (configuration issues) ([`pending`])
+- `connect` QUIC probing no longer restricted to port 443 — QUIC can run on any UDP port ([`910b977`])
+- `connect` diagnostics now distinguish `[ERR]` (verification failures) from `[WARN]` (configuration issues) ([`910b977`])
 - Harden QUIC response parser — add bounds checks for DCID/SCID lengths, varint decode guards to prevent infinite loops on malformed ACK frames, and increase UDP read buffer to 65535 bytes ([#82])
 - Harden TLS ServerHello parser — add explicit bounds check for oversized session ID length before advancing position ([#82])
 - Refactor probe functions to use input structs per CS-5 — `probeTLS13Cipher`, `probeKeyExchangeGroup`, `probeQUICCipher`, `probeCipher`, `probeKeyExchangeGroupLegacy` now take `cipherProbeInput` ([#82])
@@ -95,14 +95,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix `OverallRating`, `FormatCipherRatingLine`, and `DiagnoseCipherScan` ignoring QUIC ciphers — weak QUIC ciphers were excluded from the overall rating and diagnostic count ([#82])
 - Fix data race on `spinner.started` — replace `bool` with `atomic.Bool` for safe concurrent access (CC-3) ([#82])
 - Fix bare error returns in `deriveTrafficKeys` — wrap with `%w` context per ERR-1 ([#82])
-- Fix `SupportedVersions` missing QUIC-only TLS versions — QUIC cipher versions now added to version set alongside TCP ciphers ([`pending`])
-- Fix `appendQUICVarint2` panic on values ≥ 16384 — falls back to `appendQUICVarint` instead of panicking on unexpected input ([`pending`])
-- Fix duplicate error context in `connect` CLI — `ConnectTLS` error returned directly; `ScanCipherSuites` error uses non-repeating prefix ([`pending`])
-- Fix remaining uppercase protocol names in `legacyprobe.go` error strings (ERR-4) ([`pending`])
-- Fix `readServerCertificates` totalRead check — enforce `maxCertificatePayload` limit before allocating record payload buffer, preventing over-allocation by a malicious server ([`pending`])
-- Fix QUIC ACK range count cap — use `len(plaintext)/2` instead of `len(plaintext)` since each range item requires at minimum 2 varint bytes ([`pending`])
-- Fix uppercase `CRYPTO` in `quicprobe.go` error strings — lowercase per ERR-4 ([`pending`])
-- Fix `connect` output showing misleading `Verify: OK` when result was obtained via raw legacy probe — now shows `Verify: N/A` and a `Note:` header line ([`pending`])
+- Fix `SupportedVersions` missing QUIC-only TLS versions — QUIC cipher versions now added to version set alongside TCP ciphers ([`bed32df`])
+- Fix `appendQUICVarint2` panic on values ≥ 16384 — falls back to `appendQUICVarint` instead of panicking on unexpected input ([`bed32df`])
+- Fix duplicate error context in `connect` CLI — `ConnectTLS` error returned directly; `ScanCipherSuites` error uses non-repeating prefix ([`bed32df`])
+- Fix remaining uppercase protocol names in `legacyprobe.go` error strings (ERR-4) ([`bed32df`])
+- Fix `readServerCertificates` totalRead check — enforce `maxCertificatePayload` limit before allocating record payload buffer, preventing over-allocation by a malicious server ([`900d526`])
+- Fix QUIC ACK range count cap — use `len(plaintext)/2` instead of `len(plaintext)` since each range item requires at minimum 2 varint bytes ([`900d526`])
+- Fix uppercase `CRYPTO` in `quicprobe.go` error strings — lowercase per ERR-4 ([`900d526`])
+- Fix `connect` output showing misleading `Verify: OK` when result was obtained via raw legacy probe — now shows `Verify: N/A` and a `Note:` header line ([`900d526`])
 - Fix QUIC varint `uint64`→`int` overflow in `parseQUICInitialResponse` — bounds checks now compare in `uint64` space to prevent truncation on malicious packets ([#82])
 - Fix ACK range loop inner `break` not propagating to outer frame parser in QUIC decoder — malformed ACK frames could corrupt subsequent frame parsing ([#82])
 - Cap ACK `rangeCount` to plaintext length to prevent CPU exhaustion on malicious QUIC packets ([#82])
@@ -197,11 +197,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replace RC4 test case with unknown cipher ID (0xFFFF) in `TestRateCipherSuite` — tests conservative rating for unrecognized ciphers ([#82])
 - Remove redundant `TestFormatCipherScanResult/single_cipher` and `TestFormatCipherRatingLine/TCP_good_QUIC_weak` — subsumed by stronger cases (T-14) ([#82])
 - Add `TestConnectTLS_CRL_AIAFetchedIssuer` — verifies CRL checking works when issuer is obtained via AIA walking ([#78])
-- Add `TestReadServerCertificates` cases for oversized record, unexpected content type, and ServerHelloDone-without-Certificate paths (T-8) ([`pending`])
-- Add `TestReadServerCertificates_AlertAfterServerHello` — verifies ServerHello result is preserved when alert arrives after it ([`pending`])
-- Add `TestReadServerCertificates_PayloadLimit` — verifies `maxCertificatePayload` is enforced before allocation ([`pending`])
-- Add `TestFormatConnectResult/LegacyProbe` case — verifies Note and `Verify: N/A` appear for raw-probe results ([`pending`])
-- Remove T-9 violation from `TestCipherSuiteNameLegacyIDs` — `0x1301` (TLS_AES_128_GCM_SHA256) test was exercising stdlib routing, not certkit logic ([`pending`])
+- Add `TestReadServerCertificates` cases for oversized record, unexpected content type, and ServerHelloDone-without-Certificate paths (T-8) ([`900d526`])
+- Add `TestReadServerCertificates_AlertAfterServerHello` — verifies ServerHello result is preserved when alert arrives after it ([`900d526`])
+- Add `TestReadServerCertificates_PayloadLimit` — verifies `maxCertificatePayload` is enforced before allocation ([`900d526`])
+- Add `TestFormatConnectResult/LegacyProbe` case — verifies Note and `Verify: N/A` appear for raw-probe results ([`900d526`])
+- Remove T-9 violation from `TestCipherSuiteNameLegacyIDs` — `0x1301` (TLS_AES_128_GCM_SHA256) test was exercising stdlib routing, not certkit logic ([`900d526`])
 - Add `TestFetchCRL_AllowPrivateNetworks` — verifies loopback IPs succeed with `AllowPrivateNetworks` ([#78])
 - Add `TestFetchCRL` unit tests for HTTP handling, redirect limits, SSRF blocking, and error paths ([#78])
 - Add `TestCheckLeafCRL` table-driven tests covering revoked, good, expired CRL, wrong issuer, no CDPs, and non-HTTP CDPs ([#78])
@@ -832,6 +832,10 @@ Initial release.
 [0.1.2]: https://github.com/sensiblebit/certkit/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/sensiblebit/certkit/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/sensiblebit/certkit/releases/tag/v0.1.0
+[`900d526`]: https://github.com/sensiblebit/certkit/commit/900d526
+[`bed32df`]: https://github.com/sensiblebit/certkit/commit/bed32df
+[`910b977`]: https://github.com/sensiblebit/certkit/commit/910b977
+[`715cb81`]: https://github.com/sensiblebit/certkit/commit/715cb81
 [`2693116`]: https://github.com/sensiblebit/certkit/commit/2693116
 [`84c4edf`]: https://github.com/sensiblebit/certkit/commit/84c4edf
 [`2b8cb8c`]: https://github.com/sensiblebit/certkit/commit/2b8cb8c
