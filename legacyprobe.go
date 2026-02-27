@@ -119,12 +119,13 @@ func appendECPointFormatsExtension(b []byte) []byte {
 }
 
 // probeLegacyCipher attempts a raw TLS 1.0–1.2 ClientHello with a single
-// legacy cipher suite and returns true if the server accepts it.
-func probeLegacyCipher(ctx context.Context, input cipherProbeInput) bool {
+// legacy cipher suite. It returns the negotiated TLS version and true if the
+// server accepts the cipher suite; returns 0, false on any failure or rejection.
+func probeLegacyCipher(ctx context.Context, input cipherProbeInput) (uint16, bool) {
 	dialer := &net.Dialer{}
 	conn, err := dialer.DialContext(ctx, "tcp", input.addr)
 	if err != nil {
-		return false
+		return 0, false
 	}
 	defer func() { _ = conn.Close() }()
 
@@ -137,19 +138,22 @@ func probeLegacyCipher(ctx context.Context, input cipherProbeInput) bool {
 		cipherSuites: []uint16{input.cipherID},
 	})
 	if err != nil {
-		return false
+		return 0, false
 	}
 
 	if _, err := conn.Write(wrapTLSRecord(msg)); err != nil {
-		return false
+		return 0, false
 	}
 
 	result, err := readServerHello(conn)
 	if err != nil {
-		return false
+		return 0, false
 	}
 
-	return result.version <= tls.VersionTLS12 && result.cipherSuite == input.cipherID
+	if result.version <= tls.VersionTLS12 && result.cipherSuite == input.cipherID {
+		return result.version, true
+	}
+	return 0, false
 }
 
 // maxCertificatePayload is the maximum total bytes we'll read from the server
@@ -187,7 +191,7 @@ func readServerCertificates(r io.Reader) (*serverHelloResult, []*x509.Certificat
 		recordLen := int(binary.BigEndian.Uint16(header[3:5]))
 
 		if recordLen > 16640 {
-			return shResult, certs, fmt.Errorf("TLS record too large: %d bytes", recordLen)
+			return shResult, certs, fmt.Errorf("tls record too large: %d bytes", recordLen)
 		}
 		// Check before allocating: a malicious server cannot force us to allocate
 		// more than maxCertificatePayload bytes even if record sizes are valid.

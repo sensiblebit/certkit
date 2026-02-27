@@ -61,7 +61,7 @@ type serverHelloResult struct {
 
 // errAlertReceived is returned when the server responds with a TLS Alert
 // instead of a ServerHello, indicating the cipher suite or group was rejected.
-var errAlertReceived = errors.New("TLS alert received")
+var errAlertReceived = errors.New("tls alert received")
 
 // errHelloRetryRequest is returned when the server responds with a
 // HelloRetryRequest instead of a real ServerHello. Per RFC 8446 §4.1.3, an HRR
@@ -257,7 +257,7 @@ func readServerHello(r io.Reader) (*serverHelloResult, error) {
 
 	// TLS records are limited to 16384 bytes plus some overhead.
 	if recordLen > 16640 {
-		return nil, fmt.Errorf("TLS record too large: %d bytes", recordLen)
+		return nil, fmt.Errorf("tls record too large: %d bytes", recordLen)
 	}
 
 	payload := make([]byte, recordLen)

@@ -220,7 +220,7 @@ func buildQUICInitialPacket(input quicInitialPacketInput) ([]byte, error) {
 // extracts the ServerHello from the CRYPTO frame.
 func parseQUICInitialResponse(packet []byte, serverKeys quicInitialKeys) (*serverHelloResult, error) {
 	if len(packet) < 5 {
-		return nil, fmt.Errorf("QUIC packet too short: %d bytes", len(packet))
+		return nil, fmt.Errorf("quic packet too short: %d bytes", len(packet))
 	}
 
 	// Check it's a Long Header Initial packet.
@@ -431,6 +431,7 @@ func parseQUICInitialResponse(packet []byte, serverKeys quicInitialKeys) (*serve
 					break
 				}
 			}
+			slog.Debug("skipping QUIC ACK frame")
 			continue
 		}
 		if frameType != 0x06 {

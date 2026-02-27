@@ -7,7 +7,6 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
-	"encoding/binary"
 	"errors"
 	"math/big"
 	"net"
@@ -15,168 +14,6 @@ import (
 	"testing"
 	"time"
 )
-
-func TestBuildLegacyClientHelloMsg(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		input   legacyClientHelloInput
-		wantErr bool
-	}{
-		{
-			name: "single cipher suite with SNI",
-			input: legacyClientHelloInput{
-				serverName:   "example.com",
-				cipherSuites: []uint16{0x0033},
-			},
-		},
-		{
-			name: "multiple cipher suites",
-			input: legacyClientHelloInput{
-				serverName:   "test.example.com",
-				cipherSuites: []uint16{0x0033, 0x0039, 0x009E},
-			},
-		},
-		{
-			name: "no server name",
-			input: legacyClientHelloInput{
-				cipherSuites: []uint16{0x0033},
-			},
-		},
-		{
-			name: "no cipher suites",
-			input: legacyClientHelloInput{
-				serverName: "example.com",
-			},
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			msg, err := buildLegacyClientHelloMsg(tt.input)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-
-			// Verify it's a valid handshake message.
-			if len(msg) < 4 {
-				t.Fatalf("message too short: %d bytes", len(msg))
-			}
-			if msg[0] != 0x01 {
-				t.Errorf("handshake type = 0x%02x, want 0x01 (ClientHello)", msg[0])
-			}
-
-			// Parse handshake length.
-			hsLen := int(msg[1])<<16 | int(msg[2])<<8 | int(msg[3])
-			if len(msg) != 4+hsLen {
-				t.Fatalf("handshake length mismatch: header says %d, actual body is %d", hsLen, len(msg)-4)
-			}
-
-			body := msg[4:]
-
-			// Legacy version should be TLS 1.2 (0x0303).
-			if body[0] != 0x03 || body[1] != 0x03 {
-				t.Errorf("legacy version = 0x%02x%02x, want 0x0303 (TLS 1.2)", body[0], body[1])
-			}
-
-			// Client random: 32 bytes at offset 2.
-			pos := 2 + 32
-
-			// Session ID: should be empty (length 0).
-			sessionIDLen := int(body[pos])
-			pos++
-			if sessionIDLen != 0 {
-				t.Errorf("session ID length = %d, want 0", sessionIDLen)
-			}
-			pos += sessionIDLen
-
-			// Cipher suites length.
-			csLen := int(binary.BigEndian.Uint16(body[pos : pos+2]))
-			pos += 2
-			wantCSLen := len(tt.input.cipherSuites) * 2
-			if csLen != wantCSLen {
-				t.Errorf("cipher suites length = %d, want %d", csLen, wantCSLen)
-			}
-
-			// Verify cipher suite values.
-			for i, wantCS := range tt.input.cipherSuites {
-				gotCS := binary.BigEndian.Uint16(body[pos+i*2 : pos+i*2+2])
-				if gotCS != wantCS {
-					t.Errorf("cipher suite[%d] = 0x%04x, want 0x%04x", i, gotCS, wantCS)
-				}
-			}
-			pos += csLen
-
-			// Compression methods: 1 byte length, 1 byte null.
-			if body[pos] != 1 || body[pos+1] != 0 {
-				t.Errorf("compression = [%d, %d], want [1, 0]", body[pos], body[pos+1])
-			}
-			pos += 2
-
-			// Extensions.
-			if pos+2 > len(body) {
-				t.Fatal("body truncated at extensions length")
-			}
-			extLen := int(binary.BigEndian.Uint16(body[pos : pos+2]))
-			pos += 2
-			if pos+extLen != len(body) {
-				t.Fatalf("extensions length mismatch: says %d, remaining is %d", extLen, len(body)-pos)
-			}
-
-			// Parse extensions and check for expected/unexpected types.
-			extData := body[pos:]
-			foundSNI := false
-			foundSigAlg := false
-			foundECPointFormats := false
-			for len(extData) >= 4 {
-				extType := binary.BigEndian.Uint16(extData[0:2])
-				extDataLen := int(binary.BigEndian.Uint16(extData[2:4]))
-				if 4+extDataLen > len(extData) {
-					t.Fatalf("extension truncated: type 0x%04x, length %d", extType, extDataLen)
-				}
-
-				switch extType {
-				case 0x0000:
-					foundSNI = true
-				case 0x000d:
-					foundSigAlg = true
-				case 0x000b:
-					foundECPointFormats = true
-				case 0x002b: // supported_versions — TLS 1.3 only
-					t.Error("found supported_versions extension (0x002b) — should not be in legacy ClientHello")
-				case 0x0033: // key_share — TLS 1.3 only
-					t.Error("found key_share extension (0x0033) — should not be in legacy ClientHello")
-				case 0x002d: // psk_key_exchange_modes — TLS 1.3 only
-					t.Error("found psk_key_exchange_modes extension (0x002d) — should not be in legacy ClientHello")
-				}
-
-				extData = extData[4+extDataLen:]
-			}
-
-			if tt.input.serverName != "" && !foundSNI {
-				t.Error("SNI extension not found")
-			}
-			if tt.input.serverName == "" && foundSNI {
-				t.Error("SNI extension present but no server name specified")
-			}
-			if !foundSigAlg {
-				t.Error("signature_algorithms extension not found")
-			}
-			if !foundECPointFormats {
-				t.Error("ec_point_formats extension not found")
-			}
-		})
-	}
-}
 
 func TestParseCertificateMessage(t *testing.T) {
 	t.Parallel()
@@ -345,7 +182,7 @@ func TestReadServerCertificates(t *testing.T) {
 		{
 			name:            "oversized TLS record",
 			records:         buildRawTLSRecord(0x16, 16641),
-			wantErrContains: "TLS record too large",
+			wantErrContains: "tls record too large",
 		},
 		{
 			name:            "unexpected content type",

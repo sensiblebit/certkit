@@ -121,7 +121,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	})
 	if err != nil {
 		spin.Stop()
-		return err
+		return fmt.Errorf("connecting to %s: %w", args[0], err)
 	}
 
 	// Optional cipher suite enumeration.

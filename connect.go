@@ -330,7 +330,7 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 			serverName: serverName,
 		})
 		if legacyErr != nil {
-			return nil, fmt.Errorf("TLS handshake with %s: %w", addr, handshakeErr)
+			return nil, fmt.Errorf("tls handshake with %s: %w", addr, handshakeErr)
 		}
 		result := &ConnectResult{
 			Host:        input.Host,
@@ -1025,16 +1025,16 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 			probeCtx, probeCancel := context.WithTimeout(ctx, probeTimeout)
 			defer probeCancel()
 
-			if probeLegacyCipher(probeCtx, cipherProbeInput{
+			if negotiatedVer, ok := probeLegacyCipher(probeCtx, cipherProbeInput{
 				addr:       addr,
 				serverName: serverName,
 				cipherID:   d.ID,
 				version:    tls.VersionTLS12,
-			}) {
+			}); ok {
 				r := CipherProbeResult{
 					Name:        d.Name,
 					ID:          d.ID,
-					Version:     "TLS 1.2",
+					Version:     tlsVersionString(negotiatedVer),
 					KeyExchange: d.KeyExchange,
 					Rating:      CipherRatingWeak,
 				}
@@ -1208,10 +1208,10 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 	}, nil
 }
 
-// emptyClientCert is a GetClientCertificate callback that returns an empty
+// emptyClientCertificate is a GetClientCertificate callback that returns an empty
 // certificate. This is needed so the handshake progresses far enough to
 // negotiate a cipher suite even when the server requests client auth (mTLS).
-func emptyClientCert(_ *tls.CertificateRequestInfo) (*tls.Certificate, error) {
+func emptyClientCertificate(_ *tls.CertificateRequestInfo) (*tls.Certificate, error) {
 	return &tls.Certificate{}, nil
 }
 
@@ -1230,7 +1230,7 @@ func probeCipher(ctx context.Context, input cipherProbeInput) bool {
 		MinVersion:           input.version,
 		MaxVersion:           input.version,
 		CipherSuites:         []uint16{input.cipherID},
-		GetClientCertificate: emptyClientCert,
+		GetClientCertificate: emptyClientCertificate,
 	})
 	defer func() { _ = tlsConn.Close() }()
 
@@ -1276,7 +1276,7 @@ func probeKeyExchangeGroupLegacy(ctx context.Context, input cipherProbeInput) bo
 		MaxVersion:           tls.VersionTLS12,
 		CipherSuites:         ecdheOnlyCipherSuites,
 		CurvePreferences:     []tls.CurveID{input.groupID},
-		GetClientCertificate: emptyClientCert,
+		GetClientCertificate: emptyClientCertificate,
 	})
 	defer func() { _ = tlsConn.Close() }()
 
@@ -1469,7 +1469,7 @@ func FormatCipherScanResult(r *CipherScanResult) string {
 	if r == nil {
 		return ""
 	}
-	if len(r.Ciphers) == 0 {
+	if len(r.Ciphers) == 0 && len(r.QUICCiphers) == 0 {
 		return "\nCipher suites: none detected\n"
 	}
 
