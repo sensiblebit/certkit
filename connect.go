@@ -966,13 +966,18 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 		return cmp.Compare(b.ID, a.ID)
 	})
 
-	// Compute supported versions and overall rating.
+	// Compute supported versions and overall rating across both TCP and QUIC ciphers.
 	versionSet := make(map[string]bool)
 	var overall CipherRating
-	if len(results) > 0 {
+	if len(results) > 0 || len(quicCiphers) > 0 {
 		overall = CipherRatingGood
 		for _, r := range results {
 			versionSet[r.Version] = true
+			if ratingRank(r.Rating) > ratingRank(overall) {
+				overall = r.Rating
+			}
+		}
+		for _, r := range quicCiphers {
 			if ratingRank(r.Rating) > ratingRank(overall) {
 				overall = r.Rating
 			}
@@ -1135,6 +1140,11 @@ func DiagnoseCipherScan(r *CipherScanResult) []ChainDiagnostic {
 			weak++
 		}
 	}
+	for _, c := range r.QUICCiphers {
+		if c.Rating == CipherRatingWeak {
+			weak++
+		}
+	}
 	if weak == 0 {
 		return nil
 	}
@@ -1149,12 +1159,19 @@ func DiagnoseCipherScan(r *CipherScanResult) []ChainDiagnostic {
 // FormatCipherRatingLine formats a one-line summary for the connect header block,
 // positioned alongside Host/Protocol/OCSP etc.
 func FormatCipherRatingLine(r *CipherScanResult) string {
-	if r == nil || len(r.Ciphers) == 0 {
+	if r == nil || (len(r.Ciphers) == 0 && len(r.QUICCiphers) == 0) {
 		return ""
 	}
 
 	var strong, weak int
 	for _, c := range r.Ciphers {
+		if c.Rating == CipherRatingGood {
+			strong++
+		} else {
+			weak++
+		}
+	}
+	for _, c := range r.QUICCiphers {
 		if c.Rating == CipherRatingGood {
 			strong++
 		} else {

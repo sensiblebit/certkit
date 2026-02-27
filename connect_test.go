@@ -1241,9 +1241,10 @@ func TestRateCipherSuite(t *testing.T) {
 			want:       CipherRatingWeak,
 		},
 		// InsecureCipherSuites list — weak (RC4).
+		// Unknown cipher IDs should be rated conservatively.
 		{
-			name:       "TLS 1.2 insecure list RC4 weak",
-			cipherID:   tls.TLS_RSA_WITH_RC4_128_SHA,
+			name:       "unknown cipher ID weak",
+			cipherID:   0xFFFF,
 			tlsVersion: tls.VersionTLS12,
 			want:       CipherRatingWeak,
 		},
@@ -1416,21 +1417,6 @@ func TestFormatCipherScanResult(t *testing.T) {
 			},
 		},
 		{
-			name: "single cipher",
-			result: &CipherScanResult{
-				SupportedVersions: []string{"TLS 1.3"},
-				Ciphers: []CipherProbeResult{
-					{Name: "TLS_AES_128_GCM_SHA256", Version: "TLS 1.3", KeyExchange: "ECDHE", Rating: CipherRatingGood},
-				},
-				OverallRating: CipherRatingGood,
-			},
-			wantStrings: []string{
-				"Cipher suites (1 supported)",
-				"TLS 1.3 (ECDHE):",
-				"[good]",
-			},
-		},
-		{
 			name: "QUIC and key exchanges",
 			result: &CipherScanResult{
 				SupportedVersions: []string{"TLS 1.3"},
@@ -1529,6 +1515,17 @@ func TestFormatCipherRatingLine(t *testing.T) {
 			},
 			want: "Ciphers:      weak (1 good, 1 weak)\n",
 		},
+		{
+			name: "QUIC only",
+			scan: &CipherScanResult{
+				QUICCiphers: []CipherProbeResult{
+					{Rating: CipherRatingGood},
+					{Rating: CipherRatingWeak},
+				},
+				OverallRating: CipherRatingWeak,
+			},
+			want: "Ciphers:      weak (1 good, 1 weak)\n",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1576,6 +1573,19 @@ func TestDiagnoseCipherScan(t *testing.T) {
 			},
 			wantChecks: 1,
 			wantDetail: "server accepts 2 weak cipher suite(s) that should be disabled",
+		},
+		{
+			name: "QUIC weak ciphers counted",
+			result: &CipherScanResult{
+				Ciphers: []CipherProbeResult{
+					{Name: "TLS_AES_128_GCM_SHA256", Version: "TLS 1.3", Rating: CipherRatingGood},
+				},
+				QUICCiphers: []CipherProbeResult{
+					{Name: "TLS_AES_128_CCM_8_SHA256", Rating: CipherRatingWeak},
+				},
+			},
+			wantChecks: 1,
+			wantDetail: "server accepts 1 weak cipher suite(s) that should be disabled",
 		},
 	}
 

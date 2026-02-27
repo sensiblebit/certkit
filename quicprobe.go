@@ -71,15 +71,15 @@ func deriveQUICInitialKeys(dcid []byte) (client, server quicInitialKeys, err err
 func deriveTrafficKeys(secret []byte) (quicInitialKeys, error) {
 	key, err := hkdfExpandLabel(hkdfExpandLabelInput{secret: secret, label: "quic key", length: 16})
 	if err != nil {
-		return quicInitialKeys{}, err
+		return quicInitialKeys{}, fmt.Errorf("expanding quic key: %w", err)
 	}
 	iv, err := hkdfExpandLabel(hkdfExpandLabelInput{secret: secret, label: "quic iv", length: 12})
 	if err != nil {
-		return quicInitialKeys{}, err
+		return quicInitialKeys{}, fmt.Errorf("expanding quic iv: %w", err)
 	}
 	hp, err := hkdfExpandLabel(hkdfExpandLabelInput{secret: secret, label: "quic hp", length: 16})
 	if err != nil {
-		return quicInitialKeys{}, err
+		return quicInitialKeys{}, fmt.Errorf("expanding quic hp: %w", err)
 	}
 	return quicInitialKeys{key: key, iv: iv, hp: hp}, nil
 }

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mattn/go-isatty"
@@ -19,7 +20,7 @@ type spinner struct {
 	done      chan struct{}
 	startOnce sync.Once
 	stopOnce  sync.Once
-	started   bool
+	started   atomic.Bool
 }
 
 // newSpinner creates a spinner with the given message. Call Start() to begin
@@ -43,7 +44,7 @@ func (s *spinner) Start(ctx context.Context) {
 			return
 		}
 
-		s.started = true
+		s.started.Store(true)
 		go s.run(ctx)
 	})
 }
@@ -57,7 +58,7 @@ func (s *spinner) SetMessage(msg string) {
 
 // Stop halts the spinner and clears the line. Safe to call multiple times.
 func (s *spinner) Stop() {
-	if !s.started {
+	if !s.started.Load() {
 		<-s.done
 		return
 	}
