@@ -149,7 +149,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		for _, d := range scanDiags {
 			scanChecks[d.Check] = true
 		}
-		filtered := result.Diagnostics[:0]
+		var filtered []certkit.ChainDiagnostic
 		for _, d := range result.Diagnostics {
 			if !scanChecks[d.Check] {
 				filtered = append(filtered, d)

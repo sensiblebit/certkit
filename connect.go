@@ -315,12 +315,15 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 	}
 
 	handshakeErr := tlsConn.HandshakeContext(ctx)
-	if handshakeErr != nil && clientAuth == nil {
+	var tlsAlert tls.AlertError
+	if handshakeErr != nil && clientAuth == nil && errors.As(handshakeErr, &tlsAlert) {
 		// Close the failed TLS connection before opening a new one.
 		// The deferred tlsConn.Close() will be a no-op after this.
 		_ = tlsConn.Close()
 
 		// Try raw legacy handshake to detect DHE/static-RSA-only servers.
+		// Only attempt this when the server sent a TLS alert (cipher
+		// negotiation failure), not for network errors or certificate errors.
 		// Use a dedicated timeout so a stalling server can't hold the
 		// fallback connection open indefinitely.
 		fallbackCtx, fallbackCancel := context.WithTimeout(ctx, 5*time.Second)
@@ -348,6 +351,11 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 			Detail: "server only supports cipher suites not available in standard TLS libraries; certificate chain verified but server key possession not proven",
 		})
 		return result, nil
+	} else if handshakeErr != nil && clientAuth == nil {
+		// Non-alert failure (network error, certificate error, etc.) — return
+		// immediately. The mTLS fallback path below is only for client auth
+		// rejection, which only occurs when clientAuth is non-nil.
+		return nil, fmt.Errorf("tls handshake with %s: %w", addr, handshakeErr)
 	}
 
 	// When the server requested a client cert and rejected our empty
@@ -435,6 +443,15 @@ func populateConnectResult(ctx context.Context, result *ConnectResult, input Con
 	// No peer certificates means TLS completed without sending certs (unlikely
 	// but possible on a partially-completed handshake). Return early.
 	if len(result.PeerChain) == 0 {
+		return
+	}
+
+	// For legacy probes, certificate chain verification has been run above and
+	// the result is included in the output. However, OCSP and CRL revocation
+	// checks require a verified issuer from a real TLS channel — skipping
+	// them prevents misleading "skipped (no issuer in chain)" OCSP output
+	// when the legacy handshake produced an untrusted certificate.
+	if result.LegacyProbe {
 		return
 	}
 
@@ -1091,9 +1108,11 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 		}(gid)
 	}
 
-	// Probe QUIC/UDP cipher suites if requested.
+	// Probe QUIC/UDP cipher suites if requested and the target port is 443.
+	// QUIC is only meaningful on UDP 443; probing arbitrary ports produces
+	// spurious timeouts on servers that don't run QUIC.
 	var quicCiphers []CipherProbeResult
-	if input.ProbeQUIC {
+	if input.ProbeQUIC && port == "443" {
 		quicAddr := net.JoinHostPort(input.Host, port)
 		for _, id := range tls13CipherSuites {
 			if ctx.Err() != nil {
@@ -1201,7 +1220,7 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 	return &CipherScanResult{
 		SupportedVersions: versions,
 		Ciphers:           results,
-		QUICProbed:        input.ProbeQUIC,
+		QUICProbed:        input.ProbeQUIC && port == "443",
 		QUICCiphers:       quicCiphers,
 		KeyExchanges:      keyExchanges,
 		OverallRating:     overall,

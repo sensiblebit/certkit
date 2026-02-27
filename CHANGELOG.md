@@ -65,7 +65,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `connect` QUIC probing no longer restricted to port 443 — QUIC can run on any UDP port ([`910b977`])
 - `connect` diagnostics now distinguish `[ERR]` (verification failures) from `[WARN]` (configuration issues) ([`910b977`])
 - Harden QUIC response parser — add bounds checks for DCID/SCID lengths, varint decode guards to prevent infinite loops on malformed ACK frames, and increase UDP read buffer to 65535 bytes ([#82])
 - Harden TLS ServerHello parser — add explicit bounds check for oversized session ID length before advancing position ([#82])
@@ -100,7 +99,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Use `slices.Concat` instead of `append` for cipher suite slice concatenation — prevents potential mutation of stdlib return value ([#82])
 - Show "Cipher suites: none detected" when cipher scan finds no supported suites instead of silent empty output ([#82])
 - Fix `OverallRating`, `FormatCipherRatingLine`, and `DiagnoseCipherScan` ignoring QUIC ciphers — weak QUIC ciphers were excluded from the overall rating and diagnostic count ([#82])
-- Fix data race on `spinner.started` — replace `bool` with `atomic.Bool` for safe concurrent access (CC-3) ([#82])
+- Fix TOCTOU race in `spinner.Stop()` — remove started guard and use `stopOnce` unconditionally so Stop() is safe regardless of concurrency with Start() ([#82])
+- Fix `connect` legacy probe running OCSP and CRL checks — revocation checks are now skipped for legacy probes since there is no cryptographic chain to verify revocation against; eliminates misleading `OCSP: skipped (no issuer certificate in chain)` output ([#82])
+- Fix `connect` legacy fallback triggering on all TLS handshake failures — now only attempted on `tls.AlertError` (cipher negotiation failure), not network errors or certificate errors that would add a spurious 5-second timeout ([#82])
+- Fix `connect --ciphers` diagnostics filter using in-place slice aliasing — now allocates a new slice to avoid confusing aliasing semantics ([#82])
 - Fix bare error returns in `deriveTrafficKeys` — wrap with `%w` context per ERR-1 ([#82])
 - Fix `SupportedVersions` missing QUIC-only TLS versions — QUIC cipher versions now added to version set alongside TCP ciphers ([`bed32df`])
 - Fix `appendQUICVarint2` panic on values ≥ 16384 — falls back to `appendQUICVarint` instead of panicking on unexpected input ([`bed32df`])
