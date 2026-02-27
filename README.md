@@ -155,12 +155,13 @@ Chain verification is always performed. When the input contains an embedded priv
 ### Connect Flags
 
 <!-- certkit:flags:connect -->
-| Flag           | Default | Description                                  |
-| -------------- | ------- | -------------------------------------------- |
-| `--crl`        | `false` | Check CRL distribution points for revocation |
-| `--format`     | `text`  | Output format: text, json                    |
-| `--no-ocsp`    | `false` | Disable automatic OCSP revocation check      |
-| `--servername` |         | Override SNI hostname (defaults to host)     |
+| Flag           | Default | Description                                                 |
+| -------------- | ------- | ----------------------------------------------------------- |
+| `--ciphers`    | `false` | Enumerate all supported cipher suites with security ratings |
+| `--crl`        | `false` | Check CRL distribution points for revocation                |
+| `--format`     | `text`  | Output format: text, json                                   |
+| `--no-ocsp`    | `false` | Disable automatic OCSP revocation check                     |
+| `--servername` |         | Override SNI hostname (defaults to host)                    |
 <!-- /certkit:flags -->
 
 Port defaults to 443 if not specified. OCSP revocation status is checked automatically (best-effort); use `--no-ocsp` to disable. Use `--verbose` for extended details (serial, key info, signature algorithm, key usage, EKU).

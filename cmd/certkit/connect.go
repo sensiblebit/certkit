@@ -22,6 +22,7 @@ var (
 	connectFormat     string
 	connectCRL        bool
 	connectNoOCSP     bool
+	connectCiphers    bool
 )
 
 var connectCmd = &cobra.Command{
@@ -32,12 +33,14 @@ and the full certificate chain.
 
 Port defaults to 443 if not specified. OCSP revocation status is checked
 automatically (best-effort). Use --no-ocsp to disable. Use --crl to also
-check CRL distribution points.
+check CRL distribution points. Use --ciphers to enumerate all cipher suites
+the server supports with security ratings.
 
 Exits with code 2 if chain verification fails or the certificate is revoked.`,
 	Example: `  certkit connect example.com
   certkit connect example.com:8443
   certkit connect example.com --crl
+  certkit connect example.com --ciphers
   certkit connect example.com --servername alt.example.com
   certkit connect example.com --format json`,
 	Args: cobra.ExactArgs(1),
@@ -49,6 +52,7 @@ func init() {
 	connectCmd.Flags().StringVar(&connectFormat, "format", "text", "Output format: text, json")
 	connectCmd.Flags().BoolVar(&connectCRL, "crl", false, "Check CRL distribution points for revocation")
 	connectCmd.Flags().BoolVar(&connectNoOCSP, "no-ocsp", false, "Disable automatic OCSP revocation check")
+	connectCmd.Flags().BoolVar(&connectCiphers, "ciphers", false, "Enumerate all supported cipher suites with security ratings")
 
 	registerCompletion(connectCmd, completionInput{"format", fixedCompletion("text", "json")})
 }
@@ -67,6 +71,7 @@ type connectResultJSON struct {
 	AIAFetched  bool                      `json:"aia_fetched,omitempty"`
 	OCSP        *certkit.OCSPResult       `json:"ocsp,omitempty"`
 	CRL         *certkit.CRLCheckResult   `json:"crl,omitempty"`
+	CipherScan  *certkit.CipherScanResult `json:"cipher_scan,omitempty"`
 	Chain       []connectCertJSON         `json:"chain"`
 }
 
@@ -100,6 +105,9 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("parsing address %q: %w", args[0], err)
 	}
 
+	spin := newSpinner("Connecting…")
+	spin.Start()
+
 	ctx, cancel := context.WithTimeout(cmd.Context(), 10*time.Second)
 	defer cancel()
 
@@ -111,8 +119,31 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		CheckCRL:    connectCRL,
 	})
 	if err != nil {
+		spin.Stop()
 		return fmt.Errorf("connecting to %s: %w", args[0], err)
 	}
+
+	// Optional cipher suite enumeration.
+	if connectCiphers {
+		spin.SetMessage("Scanning cipher suites…")
+
+		cipherCtx, cipherCancel := context.WithTimeout(cmd.Context(), 60*time.Second)
+		defer cipherCancel()
+		cipherScan, scanErr := certkit.ScanCipherSuites(cipherCtx, certkit.ScanCipherSuitesInput{
+			Host:       host,
+			Port:       port,
+			ServerName: connectServerName,
+			ProbeQUIC:  true,
+		})
+		if scanErr != nil {
+			spin.Stop()
+			return fmt.Errorf("scanning cipher suites: %w", scanErr)
+		}
+		result.CipherScan = cipherScan
+		result.Diagnostics = append(result.Diagnostics, certkit.DiagnoseCipherScan(cipherScan)...)
+	}
+
+	spin.Stop()
 
 	now := time.Now()
 
@@ -136,6 +167,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 			AIAFetched:  result.AIAFetched,
 			OCSP:        result.OCSP,
 			CRL:         result.CRL,
+			CipherScan:  result.CipherScan,
 		}
 		for _, cert := range result.PeerChain {
 			cj := connectCertJSON{
@@ -174,6 +206,9 @@ func runConnect(cmd *cobra.Command, args []string) error {
 			fmt.Print(formatConnectVerbose(result, now))
 		} else {
 			fmt.Print(certkit.FormatConnectResult(result))
+		}
+		if result.CipherScan != nil {
+			fmt.Print(certkit.FormatCipherScanResult(result.CipherScan))
 		}
 	default:
 		return fmt.Errorf("unsupported output format %q (use text or json)", format)
@@ -219,6 +254,8 @@ func formatConnectVerbose(r *certkit.ConnectResult, now time.Time) string {
 	if r.CRL != nil {
 		out.WriteString(certkit.FormatCRLLine(r.CRL))
 	}
+
+	out.WriteString(certkit.FormatCipherRatingLine(r.CipherScan))
 
 	if r.ClientAuth != nil && r.ClientAuth.Requested {
 		out.WriteString("Client Auth:  requested\n")

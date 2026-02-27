@@ -8,11 +8,13 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/hex"
 	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1169,6 +1171,375 @@ func TestConnectTLS_CRL_AIAFetchedIssuer(t *testing.T) {
 	}
 }
 
+func TestRateCipherSuite(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		cipherID   uint16
+		tlsVersion uint16
+		want       CipherRating
+	}{
+		// TLS 1.3 — always excellent.
+		{
+			name:       "TLS 1.3 AES-128-GCM",
+			cipherID:   tls.TLS_AES_128_GCM_SHA256,
+			tlsVersion: tls.VersionTLS13,
+			want:       CipherRatingGood,
+		},
+		{
+			name:       "TLS 1.3 AES-256-GCM",
+			cipherID:   tls.TLS_AES_256_GCM_SHA384,
+			tlsVersion: tls.VersionTLS13,
+			want:       CipherRatingGood,
+		},
+		{
+			name:       "TLS 1.3 CHACHA20-POLY1305",
+			cipherID:   tls.TLS_CHACHA20_POLY1305_SHA256,
+			tlsVersion: tls.VersionTLS13,
+			want:       CipherRatingGood,
+		},
+		// TLS 1.2 ECDHE + AEAD — excellent.
+		{
+			name:       "TLS 1.2 ECDHE-RSA-AES128-GCM",
+			cipherID:   tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+			tlsVersion: tls.VersionTLS12,
+			want:       CipherRatingGood,
+		},
+		{
+			name:       "TLS 1.2 ECDHE-ECDSA-AES256-GCM",
+			cipherID:   tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+			tlsVersion: tls.VersionTLS12,
+			want:       CipherRatingGood,
+		},
+		{
+			name:       "TLS 1.2 ECDHE-RSA-CHACHA20-POLY1305",
+			cipherID:   tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+			tlsVersion: tls.VersionTLS12,
+			want:       CipherRatingGood,
+		},
+		// TLS 1.2 ECDHE + CBC — insecure.
+		{
+			name:       "TLS 1.2 ECDHE-RSA-AES128-CBC-SHA256",
+			cipherID:   tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256,
+			tlsVersion: tls.VersionTLS12,
+			want:       CipherRatingWeak,
+		},
+		{
+			name:       "TLS 1.2 ECDHE-ECDSA-AES128-CBC-SHA",
+			cipherID:   tls.TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA,
+			tlsVersion: tls.VersionTLS12,
+			want:       CipherRatingWeak,
+		},
+		// TLS 1.2 static RSA — insecure (no forward secrecy).
+		{
+			name:       "TLS 1.2 RSA-AES128-GCM",
+			cipherID:   tls.TLS_RSA_WITH_AES_128_GCM_SHA256,
+			tlsVersion: tls.VersionTLS12,
+			want:       CipherRatingWeak,
+		},
+		// Insecure cipher suites (from tls.InsecureCipherSuites).
+		{
+			name:       "TLS 1.2 RSA-RC4-SHA (insecure list)",
+			cipherID:   tls.TLS_RSA_WITH_RC4_128_SHA,
+			tlsVersion: tls.VersionTLS12,
+			want:       CipherRatingWeak,
+		},
+		{
+			name:       "TLS 1.2 RSA-3DES-EDE-CBC-SHA (insecure list)",
+			cipherID:   tls.TLS_RSA_WITH_3DES_EDE_CBC_SHA,
+			tlsVersion: tls.VersionTLS12,
+			want:       CipherRatingWeak,
+		},
+		{
+			name:       "TLS 1.2 ECDHE-RSA-RC4-SHA (insecure list)",
+			cipherID:   tls.TLS_ECDHE_RSA_WITH_RC4_128_SHA,
+			tlsVersion: tls.VersionTLS12,
+			want:       CipherRatingWeak,
+		},
+		// TLS 1.0 ECDHE + GCM — still excellent (GCM is good regardless of TLS version).
+		{
+			name:       "TLS 1.0 ECDHE-RSA-AES128-GCM",
+			cipherID:   tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+			tlsVersion: tls.VersionTLS10,
+			want:       CipherRatingGood,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := RateCipherSuite(tt.cipherID, tt.tlsVersion)
+			if got != tt.want {
+				t.Errorf("RateCipherSuite(0x%04x, 0x%04x) = %q, want %q",
+					tt.cipherID, tt.tlsVersion, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestScanCipherSuites(t *testing.T) {
+	t.Parallel()
+
+	// Create a TLS server that only accepts specific cipher suites.
+	ca := generateTestCA(t, "Cipher Scan CA")
+	leaf := generateTestLeafCert(t, ca)
+
+	tlsCert := tls.Certificate{
+		Certificate: [][]byte{leaf.DER, ca.CertDER},
+		PrivateKey:  leaf.Key,
+	}
+
+	port := startTLSServerWithConfig(t, &tls.Config{
+		Certificates: []tls.Certificate{tlsCert},
+		MinVersion:   tls.VersionTLS12,
+		MaxVersion:   tls.VersionTLS13,
+		CipherSuites: []uint16{
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+		},
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	result, err := ScanCipherSuites(ctx, ScanCipherSuitesInput{
+		Host:        "127.0.0.1",
+		Port:        port,
+		Concurrency: 5,
+	})
+	if err != nil {
+		t.Fatalf("ScanCipherSuites failed: %v", err)
+	}
+
+	if len(result.Ciphers) == 0 {
+		t.Fatal("no ciphers detected")
+	}
+
+	// Should detect TLS 1.3 suites (all 3).
+	tls13Count := 0
+	for _, c := range result.Ciphers {
+		if c.Version == "TLS 1.3" {
+			tls13Count++
+		}
+	}
+	if tls13Count != 3 {
+		t.Errorf("expected 3 TLS 1.3 ciphers, got %d", tls13Count)
+	}
+
+	// Should detect the two TLS 1.2 ECDHE-ECDSA-GCM ciphers we configured.
+	tls12Names := make(map[string]bool)
+	for _, c := range result.Ciphers {
+		if c.Version == "TLS 1.2" {
+			tls12Names[c.Name] = true
+		}
+	}
+	for _, want := range []string{
+		"TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+		"TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+	} {
+		if !tls12Names[want] {
+			t.Errorf("expected TLS 1.2 cipher %q in results", want)
+		}
+	}
+
+	// All detected ciphers should be rated excellent (GCM + ECDHE only).
+	for _, c := range result.Ciphers {
+		if c.Rating != CipherRatingGood {
+			t.Errorf("cipher %q (%s) rated %q, want %q", c.Name, c.Version, c.Rating, CipherRatingGood)
+		}
+	}
+
+	// Overall rating should be excellent.
+	if result.OverallRating != CipherRatingGood {
+		t.Errorf("OverallRating = %q, want %q", result.OverallRating, CipherRatingGood)
+	}
+
+	// SupportedVersions should include both TLS 1.3 and TLS 1.2.
+	if len(result.SupportedVersions) < 2 {
+		t.Errorf("SupportedVersions = %v, want at least TLS 1.3 and TLS 1.2", result.SupportedVersions)
+	}
+}
+
+func TestScanCipherSuites_EmptyHost(t *testing.T) {
+	t.Parallel()
+	_, err := ScanCipherSuites(context.Background(), ScanCipherSuitesInput{})
+	if err == nil {
+		t.Fatal("expected error for empty host")
+	}
+}
+
+func TestFormatCipherScanResult(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		result      *CipherScanResult
+		wantStrings []string
+	}{
+		{
+			name: "empty results — no output",
+			result: &CipherScanResult{
+				Ciphers: nil,
+			},
+			wantStrings: nil, // empty string, nothing to check
+		},
+		{
+			name: "mixed ratings with kex subgroups",
+			result: &CipherScanResult{
+				SupportedVersions: []string{"TLS 1.3", "TLS 1.2"},
+				Ciphers: []CipherProbeResult{
+					{Name: "TLS_AES_128_GCM_SHA256", ID: tls.TLS_AES_128_GCM_SHA256, Version: "TLS 1.3", KeyExchange: "ECDHE", Rating: CipherRatingGood},
+					{Name: "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256", ID: tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256, Version: "TLS 1.2", KeyExchange: "ECDHE", Rating: CipherRatingGood},
+					{Name: "TLS_RSA_WITH_AES_128_CBC_SHA", ID: tls.TLS_RSA_WITH_AES_128_CBC_SHA, Version: "TLS 1.2", KeyExchange: "RSA", Rating: CipherRatingWeak},
+				},
+				OverallRating: CipherRatingWeak,
+			},
+			wantStrings: []string{
+				"Cipher suites (3 supported)",
+				"TLS 1.3 (ECDHE):",
+				"TLS 1.2 (ECDHE):",
+				"TLS 1.2 (RSA, no forward secrecy):",
+				"[good]",
+				"[weak]",
+				"TLS_AES_128_GCM_SHA256",
+				"TLS_RSA_WITH_AES_128_CBC_SHA",
+			},
+		},
+		{
+			name: "single cipher",
+			result: &CipherScanResult{
+				SupportedVersions: []string{"TLS 1.3"},
+				Ciphers: []CipherProbeResult{
+					{Name: "TLS_AES_128_GCM_SHA256", Version: "TLS 1.3", KeyExchange: "ECDHE", Rating: CipherRatingGood},
+				},
+				OverallRating: CipherRatingGood,
+			},
+			wantStrings: []string{
+				"Cipher suites (1 supported)",
+				"TLS 1.3 (ECDHE):",
+				"[good]",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			output := FormatCipherScanResult(tt.result)
+			for _, want := range tt.wantStrings {
+				if !strings.Contains(output, want) {
+					t.Errorf("output missing %q\ngot:\n%s", want, output)
+				}
+			}
+		})
+	}
+}
+
+func TestFormatCipherRatingLine(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		scan *CipherScanResult
+		want string
+	}{
+		{
+			name: "nil scan",
+			scan: nil,
+			want: "",
+		},
+		{
+			name: "all good",
+			scan: &CipherScanResult{
+				Ciphers: []CipherProbeResult{
+					{Rating: CipherRatingGood},
+					{Rating: CipherRatingGood},
+				},
+				OverallRating: CipherRatingGood,
+			},
+			want: "Ciphers:      good (2 good, 0 weak)\n",
+		},
+		{
+			name: "mixed",
+			scan: &CipherScanResult{
+				Ciphers: []CipherProbeResult{
+					{Rating: CipherRatingGood},
+					{Rating: CipherRatingWeak},
+				},
+				OverallRating: CipherRatingWeak,
+			},
+			want: "Ciphers:      weak (1 good, 1 weak)\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := FormatCipherRatingLine(tt.scan)
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDiagnoseCipherScan(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		result     *CipherScanResult
+		wantChecks int
+		wantDetail string // substring in first diagnostic detail
+	}{
+		{
+			name:       "nil result",
+			result:     nil,
+			wantChecks: 0,
+		},
+		{
+			name: "all good — no diagnostics",
+			result: &CipherScanResult{
+				Ciphers: []CipherProbeResult{
+					{Name: "TLS_AES_128_GCM_SHA256", Version: "TLS 1.3", Rating: CipherRatingGood},
+				},
+			},
+			wantChecks: 0,
+		},
+		{
+			name: "weak ciphers present",
+			result: &CipherScanResult{
+				Ciphers: []CipherProbeResult{
+					{Name: "TLS_AES_128_GCM_SHA256", Version: "TLS 1.3", Rating: CipherRatingGood},
+					{Name: "TLS_RSA_WITH_AES_128_CBC_SHA", Version: "TLS 1.2", Rating: CipherRatingWeak},
+					{Name: "TLS_RSA_WITH_3DES_EDE_CBC_SHA", Version: "TLS 1.0", Rating: CipherRatingWeak},
+				},
+			},
+			wantChecks: 1,
+			wantDetail: "server accepts 2 weak cipher suite(s) that should be disabled",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			diags := DiagnoseCipherScan(tt.result)
+			if len(diags) != tt.wantChecks {
+				t.Fatalf("got %d diagnostics, want %d: %+v", len(diags), tt.wantChecks, diags)
+			}
+			if tt.wantChecks > 0 {
+				if diags[0].Check != "weak-cipher" {
+					t.Errorf("Check = %q, want %q", diags[0].Check, "weak-cipher")
+				}
+				if !strings.Contains(diags[0].Detail, tt.wantDetail) {
+					t.Errorf("Detail = %q, want substring %q", diags[0].Detail, tt.wantDetail)
+				}
+			}
+		})
+	}
+}
+
 func TestConnectTLS_CRL_DuplicateLeafInChain(t *testing.T) {
 	t.Parallel()
 
@@ -1281,5 +1652,552 @@ func TestConnectTLS_CRL_DuplicateLeafInChain(t *testing.T) {
 	}
 	if !strings.Contains(result.CRL.Detail, revokedSerial.Text(16)) {
 		t.Errorf("CRL.Detail = %q, want substring %q", result.CRL.Detail, revokedSerial.Text(16))
+	}
+}
+
+func TestBuildClientHello(t *testing.T) {
+	t.Parallel()
+
+	msg, err := buildClientHelloMsg(clientHelloInput{
+		serverName:  "example.com",
+		cipherSuite: 0x1301, // TLS_AES_128_GCM_SHA256
+		groupID:     tls.X25519,
+	})
+	if err != nil {
+		t.Fatalf("buildClientHelloMsg failed: %v", err)
+	}
+
+	// Handshake type must be ClientHello (0x01).
+	if msg[0] != 0x01 {
+		t.Errorf("handshake type = 0x%02x, want 0x01", msg[0])
+	}
+
+	// Handshake length (3 bytes, big-endian) must match actual body length.
+	handshakeLen := int(msg[1])<<16 | int(msg[2])<<8 | int(msg[3])
+	if handshakeLen != len(msg)-4 {
+		t.Errorf("handshake length = %d, want %d", handshakeLen, len(msg)-4)
+	}
+
+	// Legacy version at body[0:2] must be TLS 1.2 (0x0303).
+	if msg[4] != 0x03 || msg[5] != 0x03 {
+		t.Errorf("legacy version = 0x%02x%02x, want 0x0303", msg[4], msg[5])
+	}
+
+	// Client random is 32 bytes starting at body[2].
+	// Session ID length at body[34], session ID follows.
+	sessionIDLen := int(msg[4+34])
+	if sessionIDLen != 32 {
+		t.Errorf("session ID length = %d, want 32", sessionIDLen)
+	}
+
+	// Cipher suite list starts after session ID.
+	csOffset := 4 + 35 + sessionIDLen
+	csListLen := int(msg[csOffset])<<8 | int(msg[csOffset+1])
+	if csListLen != 2 {
+		t.Errorf("cipher suite list length = %d, want 2 (single cipher)", csListLen)
+	}
+	csID := uint16(msg[csOffset+2])<<8 | uint16(msg[csOffset+3])
+	if csID != 0x1301 {
+		t.Errorf("cipher suite = 0x%04x, want 0x1301", csID)
+	}
+}
+
+func TestBuildClientHello_WithALPN(t *testing.T) {
+	t.Parallel()
+
+	msg, err := buildClientHelloMsg(clientHelloInput{
+		serverName:  "example.com",
+		cipherSuite: 0x1301,
+		groupID:     tls.X25519,
+		alpn:        []string{"h3"},
+		quic:        true,
+	})
+	if err != nil {
+		t.Fatalf("buildClientHelloMsg with ALPN failed: %v", err)
+	}
+
+	// Message must contain the ALPN extension (type 0x0010) with "h3".
+	if !containsBytes(msg, []byte("h3")) {
+		t.Error("ClientHello missing ALPN 'h3'")
+	}
+
+	// Must also be a valid handshake message.
+	if msg[0] != 0x01 {
+		t.Errorf("handshake type = 0x%02x, want 0x01", msg[0])
+	}
+}
+
+func TestParseServerHello(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		data        []byte
+		wantCipher  uint16
+		wantVersion uint16
+		wantErr     string
+	}{
+		{
+			name:        "valid TLS 1.3 ServerHello",
+			data:        buildTestServerHello(0x1301, 0x0304),
+			wantCipher:  0x1301,
+			wantVersion: 0x0304,
+		},
+		{
+			name:        "valid TLS 1.2 ServerHello (no supported_versions ext)",
+			data:        buildTestServerHello12(0xc02f),
+			wantCipher:  0xc02f,
+			wantVersion: 0x0303,
+		},
+		{
+			name:    "truncated input",
+			data:    []byte{0x02, 0x00},
+			wantErr: "too short",
+		},
+		{
+			name:    "wrong handshake type",
+			data:    append([]byte{0x0b, 0x00, 0x00, 0x04}, make([]byte, 4)...),
+			wantErr: "unexpected handshake type",
+		},
+		{
+			name:    "HelloRetryRequest (HRR sentinel random)",
+			data:    buildTestServerHelloHRR(0x1301),
+			wantErr: "HelloRetryRequest",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			result, err := parseServerHello(tt.data)
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("error = %q, want substring %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if result.cipherSuite != tt.wantCipher {
+				t.Errorf("cipherSuite = 0x%04x, want 0x%04x", result.cipherSuite, tt.wantCipher)
+			}
+			if result.version != tt.wantVersion {
+				t.Errorf("version = 0x%04x, want 0x%04x", result.version, tt.wantVersion)
+			}
+		})
+	}
+}
+
+func TestGenerateKeyShare(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		groupID tls.CurveID
+		wantLen int
+	}{
+		{"X25519", tls.X25519, 32},
+		{"P-256", tls.CurveP256, 65},
+		{"P-384", tls.CurveP384, 97},
+		{"P-521", tls.CurveP521, 133},
+		{"X25519MLKEM768", tls.X25519MLKEM768, 1184 + 32},         // ML-KEM-768 encap key + X25519
+		{"SecP256r1MLKEM768", tls.SecP256r1MLKEM768, 65 + 1184},   // P-256 + ML-KEM-768
+		{"SecP384r1MLKEM1024", tls.SecP384r1MLKEM1024, 97 + 1568}, // P-384 + ML-KEM-1024
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			data, err := generateKeyShare(tt.groupID)
+			if err != nil {
+				t.Fatalf("generateKeyShare(%s) failed: %v", tt.name, err)
+			}
+			if len(data) != tt.wantLen {
+				t.Errorf("key share length = %d, want %d", len(data), tt.wantLen)
+			}
+		})
+	}
+}
+
+func TestGenerateKeyShare_UnsupportedGroup(t *testing.T) {
+	t.Parallel()
+	_, err := generateKeyShare(tls.CurveID(0xFFFF))
+	if err == nil {
+		t.Fatal("expected error for unsupported group")
+	}
+}
+
+func TestDeriveQUICInitialKeys(t *testing.T) {
+	t.Parallel()
+
+	// RFC 9001 Appendix A test vectors.
+	dcid := hexDecode(t, "8394c8f03e515708")
+
+	client, server, err := deriveQUICInitialKeys(dcid)
+	if err != nil {
+		t.Fatalf("deriveQUICInitialKeys failed: %v", err)
+	}
+
+	// Client keys.
+	assertHex(t, "client key", client.key, "1f369613dd76d5467730efcbe3b1a22d")
+	assertHex(t, "client iv", client.iv, "fa044b2f42a3fd3b46fb255c")
+	assertHex(t, "client hp", client.hp, "9f50449e04a0e810283a1e9933adedd2")
+
+	// Server keys.
+	assertHex(t, "server key", server.key, "cf3a5331653c364c88f0f379b6067e37")
+	assertHex(t, "server iv", server.iv, "0ac1493ca1905853b0bba03e")
+	assertHex(t, "server hp", server.hp, "c206b8d9b9f0f37644430b490eeaa314")
+}
+
+func TestBuildQUICInitialPacket(t *testing.T) {
+	t.Parallel()
+
+	msg, err := buildClientHelloMsg(clientHelloInput{
+		serverName:  "example.com",
+		cipherSuite: 0x1301,
+		groupID:     tls.X25519,
+		alpn:        []string{"h3"},
+		quic:        true,
+	})
+	if err != nil {
+		t.Fatalf("buildClientHelloMsg failed: %v", err)
+	}
+
+	dcid := hexDecode(t, "0102030405060708")
+	scid := hexDecode(t, "0807060504030201")
+
+	packet, err := buildQUICInitialPacket(quicInitialPacketInput{
+		clientHello: msg,
+		dcid:        dcid,
+		scid:        scid,
+	})
+	if err != nil {
+		t.Fatalf("buildQUICInitialPacket failed: %v", err)
+	}
+
+	// Packet must be at least 1200 bytes (QUIC minimum datagram size).
+	if len(packet) < 1200 {
+		t.Errorf("packet length = %d, want >= 1200", len(packet))
+	}
+
+	// Version field (bytes 1-4 after header protection) should be QUIC v1
+	// before header protection. We can't check after HP, but verify the packet
+	// is non-empty and has the long-header high bit set (after HP, bit may vary).
+	// The packet should at least be well-formed and non-trivially sized.
+	if len(packet) == 0 {
+		t.Fatal("empty packet")
+	}
+}
+
+func TestProbeTLS13Cipher_Concurrent(t *testing.T) {
+	t.Parallel()
+
+	// Verify that concurrent raw probes don't race. Each probe is fully
+	// isolated with its own TCP connection and packet — no shared state.
+
+	ca := generateTestCA(t, "Raw Probe CA")
+	leaf := generateTestLeafCert(t, ca)
+
+	tlsCert := tls.Certificate{
+		Certificate: [][]byte{leaf.DER, ca.CertDER},
+		PrivateKey:  leaf.Key,
+	}
+	port := startTLSServerWithConfig(t, &tls.Config{
+		Certificates: []tls.Certificate{tlsCert},
+	})
+	addr := net.JoinHostPort("127.0.0.1", port)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// Run 50 concurrent probes against 3 different cipher suites.
+	var wg sync.WaitGroup
+	for i := range 50 {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			cipherID := tls13CipherSuites[idx%len(tls13CipherSuites)]
+			probeTLS13Cipher(ctx, addr, "127.0.0.1", cipherID)
+		}(i)
+	}
+	wg.Wait()
+	// If the race detector doesn't fire, the test passes.
+}
+
+func TestScanCipherSuites_KeyExchanges(t *testing.T) {
+	t.Parallel()
+
+	ca := generateTestCA(t, "KX Scan CA")
+	leaf := generateTestLeafCert(t, ca)
+
+	tlsCert := tls.Certificate{
+		Certificate: [][]byte{leaf.DER, ca.CertDER},
+		PrivateKey:  leaf.Key,
+	}
+	port := startTLSServerWithConfig(t, &tls.Config{
+		Certificates: []tls.Certificate{tlsCert},
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	result, err := ScanCipherSuites(ctx, ScanCipherSuitesInput{
+		Host:        "127.0.0.1",
+		Port:        port,
+		Concurrency: 5,
+	})
+	if err != nil {
+		t.Fatalf("ScanCipherSuites failed: %v", err)
+	}
+
+	// Go's TLS server should accept at least X25519 and P-256.
+	if len(result.KeyExchanges) == 0 {
+		t.Fatal("no key exchange groups detected")
+	}
+
+	names := make(map[string]bool)
+	for _, kx := range result.KeyExchanges {
+		names[kx.Name] = true
+		// Verify PostQuantum flag is set correctly.
+		if kx.Name == "X25519MLKEM768" || kx.Name == "SecP256r1MLKEM768" || kx.Name == "SecP384r1MLKEM1024" {
+			if !kx.PostQuantum {
+				t.Errorf("key exchange %s should be PostQuantum", kx.Name)
+			}
+		} else if kx.PostQuantum {
+			t.Errorf("key exchange %s should not be PostQuantum", kx.Name)
+		}
+	}
+
+	if !names["X25519"] {
+		t.Error("expected X25519 in key exchange results")
+	}
+}
+
+func TestFormatCipherScanResult_QUICAndKeyExchanges(t *testing.T) {
+	t.Parallel()
+
+	result := &CipherScanResult{
+		SupportedVersions: []string{"TLS 1.3"},
+		Ciphers: []CipherProbeResult{
+			{Name: "TLS_AES_128_GCM_SHA256", Version: "TLS 1.3", KeyExchange: "ECDHE", Rating: CipherRatingGood},
+		},
+		QUICProbed: true,
+		QUICCiphers: []CipherProbeResult{
+			{Name: "TLS_AES_128_GCM_SHA256", Version: "TLS 1.3", KeyExchange: "ECDHE", Rating: CipherRatingGood},
+			{Name: "TLS_AES_256_GCM_SHA384", Version: "TLS 1.3", KeyExchange: "ECDHE", Rating: CipherRatingGood},
+		},
+		KeyExchanges: []KeyExchangeProbeResult{
+			{Name: "X25519MLKEM768", ID: 4588, PostQuantum: true},
+			{Name: "X25519", ID: 29},
+			{Name: "P-256", ID: 23},
+		},
+		OverallRating: CipherRatingGood,
+	}
+
+	output := FormatCipherScanResult(result)
+
+	for _, want := range []string{
+		"Cipher suites (1 supported)",
+		"QUIC cipher suites (2 supported)",
+		"Key exchange groups (3 supported, forward secrecy)",
+		"X25519MLKEM768 (post-quantum)",
+		"X25519\n",
+		"P-256\n",
+	} {
+		if !strings.Contains(output, want) {
+			t.Errorf("output missing %q\ngot:\n%s", want, output)
+		}
+	}
+}
+
+func TestFormatCipherScanResult_QUICNotSupported(t *testing.T) {
+	t.Parallel()
+
+	result := &CipherScanResult{
+		SupportedVersions: []string{"TLS 1.3"},
+		Ciphers: []CipherProbeResult{
+			{Name: "TLS_AES_128_GCM_SHA256", Version: "TLS 1.3", KeyExchange: "ECDHE", Rating: CipherRatingGood},
+		},
+		QUICProbed:    true,
+		QUICCiphers:   nil,
+		OverallRating: CipherRatingGood,
+	}
+
+	output := FormatCipherScanResult(result)
+
+	if !strings.Contains(output, "QUIC: not supported") {
+		t.Errorf("expected QUIC not supported line\ngot:\n%s", output)
+	}
+}
+
+func TestIsPQKeyExchange(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		id   tls.CurveID
+		want bool
+	}{
+		{tls.X25519MLKEM768, true},
+		{tls.SecP256r1MLKEM768, true},
+		{tls.SecP384r1MLKEM1024, true},
+		{tls.X25519, false},
+		{tls.CurveP256, false},
+		{tls.CurveP384, false},
+		{tls.CurveP521, false},
+	}
+
+	for _, tt := range tests {
+		if got := isPQKeyExchange(tt.id); got != tt.want {
+			t.Errorf("isPQKeyExchange(%s) = %v, want %v", tt.id, got, tt.want)
+		}
+	}
+}
+
+func TestQUICVarint(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		val  uint64
+		want []byte
+	}{
+		{"zero", 0, []byte{0x00}},
+		{"one byte max", 63, []byte{0x3f}},
+		{"two byte min", 64, []byte{0x40, 0x40}},
+		{"two byte max", 16383, []byte{0x7f, 0xff}},
+		{"four byte min", 16384, []byte{0x80, 0x00, 0x40, 0x00}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := appendQUICVarint(nil, tt.val)
+			if len(got) != len(tt.want) {
+				t.Fatalf("length = %d, want %d", len(got), len(tt.want))
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("byte[%d] = 0x%02x, want 0x%02x", i, got[i], tt.want[i])
+				}
+			}
+
+			// Round-trip through decode.
+			decoded, n := decodeQUICVarint(got)
+			if decoded != tt.val {
+				t.Errorf("decode = %d, want %d", decoded, tt.val)
+			}
+			if n != len(got) {
+				t.Errorf("decode consumed %d bytes, want %d", n, len(got))
+			}
+		})
+	}
+}
+
+// ---------- test helpers ----------
+
+// buildTestServerHello constructs a minimal TLS 1.3 ServerHello handshake message
+// with the given cipher suite and a supported_versions extension.
+func buildTestServerHello(cipherSuite uint16, version uint16) []byte {
+	// ServerHello body: version(2) + random(32) + session_id(1+32) + cipher(2) + compression(1) + extensions
+	var body []byte
+	body = append(body, 0x03, 0x03)          // legacy version TLS 1.2
+	body = append(body, make([]byte, 32)...) // random
+	body = append(body, 32)                  // session ID length
+	body = append(body, make([]byte, 32)...) // session ID
+	body = appendUint16(body, cipherSuite)
+	body = append(body, 0x00) // compression: null
+
+	// Extensions: supported_versions.
+	var exts []byte
+	exts = appendUint16(exts, 0x002b) // supported_versions
+	exts = appendUint16(exts, 2)      // length
+	exts = appendUint16(exts, version)
+	body = appendUint16(body, uint16(len(exts)))
+	body = append(body, exts...)
+
+	msg := []byte{0x02} // ServerHello
+	msg = appendUint24(msg, uint32(len(body)))
+	msg = append(msg, body...)
+	return msg
+}
+
+// buildTestServerHelloHRR constructs a ServerHello with the HelloRetryRequest
+// sentinel random value (RFC 8446 §4.1.3), indicating the server doesn't
+// support the offered key exchange group.
+func buildTestServerHelloHRR(cipherSuite uint16) []byte {
+	var body []byte
+	body = append(body, 0x03, 0x03) // legacy version TLS 1.2
+	// HRR sentinel random (RFC 8446 §4.1.3).
+	body = append(body,
+		0xCF, 0x21, 0xAD, 0x74, 0xE5, 0x9A, 0x61, 0x11,
+		0xBE, 0x1D, 0x8C, 0x02, 0x1E, 0x65, 0xB8, 0x91,
+		0xC2, 0xA2, 0x11, 0x16, 0x7A, 0xBB, 0x8C, 0x5E,
+		0x07, 0x9E, 0x09, 0xE2, 0xC8, 0xA8, 0x33, 0x9C,
+	)
+	body = append(body, 32)                  // session ID length
+	body = append(body, make([]byte, 32)...) // session ID
+	body = appendUint16(body, cipherSuite)
+	body = append(body, 0x00) // compression: null
+
+	// Extensions: supported_versions with TLS 1.3.
+	var exts []byte
+	exts = appendUint16(exts, 0x002b) // supported_versions
+	exts = appendUint16(exts, 2)      // length
+	exts = appendUint16(exts, 0x0304) // TLS 1.3
+	body = appendUint16(body, uint16(len(exts)))
+	body = append(body, exts...)
+
+	msg := []byte{0x02} // ServerHello
+	msg = appendUint24(msg, uint32(len(body)))
+	msg = append(msg, body...)
+	return msg
+}
+
+// buildTestServerHello12 constructs a minimal TLS 1.2 ServerHello (no supported_versions ext).
+func buildTestServerHello12(cipherSuite uint16) []byte {
+	var body []byte
+	body = append(body, 0x03, 0x03)          // legacy version TLS 1.2
+	body = append(body, make([]byte, 32)...) // random
+	body = append(body, 32)                  // session ID length
+	body = append(body, make([]byte, 32)...) // session ID
+	body = appendUint16(body, cipherSuite)
+	body = append(body, 0x00) // compression: null
+
+	msg := []byte{0x02} // ServerHello
+	msg = appendUint24(msg, uint32(len(body)))
+	msg = append(msg, body...)
+	return msg
+}
+
+// containsBytes reports whether b contains the subslice sub.
+func containsBytes(b, sub []byte) bool {
+	for i := range len(b) - len(sub) + 1 {
+		if string(b[i:i+len(sub)]) == string(sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// hexDecode decodes a hex string, failing the test on error.
+func hexDecode(t *testing.T, s string) []byte {
+	t.Helper()
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		t.Fatalf("hex decode %q: %v", s, err)
+	}
+	return b
+}
+
+// assertHex compares a byte slice to an expected hex string.
+func assertHex(t *testing.T, name string, got []byte, wantHex string) {
+	t.Helper()
+	gotHex := hex.EncodeToString(got)
+	if gotHex != wantHex {
+		t.Errorf("%s = %s, want %s", name, gotHex, wantHex)
 	}
 }

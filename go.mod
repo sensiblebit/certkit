@@ -5,6 +5,7 @@ go 1.26
 require (
 	github.com/breml/rootcerts v0.3.4
 	github.com/jmoiron/sqlx v1.4.0
+	github.com/mattn/go-isatty v0.0.20
 	github.com/pavlo-v-chernykh/keystore-go/v4 v4.5.0
 	github.com/smallstep/pkcs7 v0.2.1
 	github.com/spf13/cobra v1.10.2
@@ -22,7 +23,6 @@ require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/kr/pretty v0.1.0 // indirect
 	github.com/kr/text v0.2.0 // indirect
-	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/ncruces/go-strftime v1.0.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	golang.org/x/exp v0.0.0-20260218203240-3dfff04db8fa // indirect

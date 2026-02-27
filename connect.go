@@ -1,6 +1,7 @@
 package certkit
 
 import (
+	"cmp"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -9,7 +10,9 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -147,6 +150,9 @@ type ConnectResult struct {
 	// CRL contains the leaf certificate's CRL revocation status.
 	// Nil when CRL checking is not requested (CheckCRL is false).
 	CRL *CRLCheckResult `json:"crl,omitempty"`
+	// CipherScan contains the cipher suite enumeration results.
+	// Nil when cipher scanning is not requested.
+	CipherScan *CipherScanResult `json:"cipher_scan,omitempty"`
 }
 
 // ConnectTLS connects to a TLS server and returns connection details including
@@ -569,6 +575,638 @@ func FormatCRLLine(r *CRLCheckResult) string {
 	return FormatCRLStatusLine("CRL:          ", r)
 }
 
+// CipherRating indicates the security quality of a cipher suite.
+type CipherRating string
+
+const (
+	// CipherRatingGood indicates TLS 1.3 suites or TLS 1.2 ECDHE+AEAD (GCM, ChaCha20-Poly1305).
+	CipherRatingGood CipherRating = "good"
+	// CipherRatingWeak indicates cipher suites that should be disabled:
+	// anything in Go's InsecureCipherSuites(), CBC-mode ciphers, or non-ECDHE key exchange.
+	CipherRatingWeak CipherRating = "weak"
+)
+
+// CipherProbeResult describes a single cipher suite accepted by the server.
+type CipherProbeResult struct {
+	// Name is the IANA cipher suite name (e.g. "TLS_AES_128_GCM_SHA256").
+	Name string `json:"name"`
+	// ID is the numeric cipher suite identifier.
+	ID uint16 `json:"id"`
+	// Version is the TLS version string (e.g. "TLS 1.3").
+	Version string `json:"version"`
+	// KeyExchange is the key exchange mechanism (e.g. "ECDHE", "RSA").
+	KeyExchange string `json:"key_exchange"`
+	// Rating is the security quality assessment.
+	Rating CipherRating `json:"rating"`
+}
+
+// CipherScanResult contains the results of a cipher suite enumeration.
+type CipherScanResult struct {
+	// SupportedVersions lists the TLS versions the server supports (e.g. ["TLS 1.3", "TLS 1.2"]).
+	SupportedVersions []string `json:"supported_versions"`
+	// Ciphers lists all accepted cipher suites, sorted by version (descending) then rating.
+	Ciphers []CipherProbeResult `json:"ciphers"`
+	// QUICProbed is true when QUIC/UDP cipher probing was attempted.
+	QUICProbed bool `json:"quic_probed"`
+	// QUICCiphers lists TLS 1.3 cipher suites accepted over QUIC/UDP.
+	QUICCiphers []CipherProbeResult `json:"quic_ciphers,omitempty"`
+	// KeyExchanges lists accepted key exchange groups (classical and post-quantum).
+	KeyExchanges []KeyExchangeProbeResult `json:"key_exchanges,omitempty"`
+	// OverallRating is the worst rating among all accepted ciphers.
+	OverallRating CipherRating `json:"overall_rating"`
+}
+
+// ScanCipherSuitesInput contains parameters for ScanCipherSuites.
+type ScanCipherSuitesInput struct {
+	// Host is the hostname or IP to connect to.
+	Host string
+	// Port is the TCP port (default: "443").
+	Port string
+	// ServerName overrides the SNI hostname (defaults to Host).
+	ServerName string
+	// Concurrency is the maximum number of parallel probe connections (default: 10).
+	Concurrency int
+	// ProbeQUIC enables QUIC/UDP cipher probing alongside TCP.
+	ProbeQUIC bool
+}
+
+// cipherSuiteName returns a human-readable name for any TLS cipher suite.
+// It extends tls.CipherSuiteName with the two CCM suites from RFC 8446 that
+// Go doesn't implement (0x1304, 0x1305) and would otherwise show as hex.
+func cipherSuiteName(id uint16) string {
+	switch id {
+	case 0x1304:
+		return "TLS_AES_128_CCM_SHA256"
+	case 0x1305:
+		return "TLS_AES_128_CCM_8_SHA256"
+	default:
+		return tls.CipherSuiteName(id)
+	}
+}
+
+// keyExchangeName returns a human-readable name for a TLS named group.
+// Go's CurveID.String() returns "CurveP256" etc.; we prefer "P-256".
+func keyExchangeName(id tls.CurveID) string {
+	switch id {
+	case tls.CurveP256:
+		return "P-256"
+	case tls.CurveP384:
+		return "P-384"
+	case tls.CurveP521:
+		return "P-521"
+	default:
+		return id.String()
+	}
+}
+
+// cipherKeyExchange returns the key exchange mechanism for a cipher suite.
+// TLS 1.3 always uses ECDHE. For TLS 1.0–1.2, it's derived from the cipher name.
+func cipherKeyExchange(name, version string) string {
+	if version == "TLS 1.3" {
+		return "ECDHE"
+	}
+	if strings.HasPrefix(name, "TLS_ECDHE_") {
+		return "ECDHE"
+	}
+	if strings.HasPrefix(name, "TLS_RSA_") {
+		return "RSA"
+	}
+	if strings.HasPrefix(name, "TLS_DHE_") {
+		return "DHE"
+	}
+	return "unknown"
+}
+
+// kexRank returns a sort key for key exchange types (lower = better).
+func kexRank(kex string) int {
+	switch kex {
+	case "ECDHE":
+		return 0
+	case "DHE":
+		return 1
+	case "RSA":
+		return 2
+	default:
+		return 3
+	}
+}
+
+// RateCipherSuite returns the security rating for a cipher suite at a given TLS version.
+func RateCipherSuite(cipherID uint16, tlsVersion uint16) CipherRating {
+	// TLS 1.3 suites are always good — they only use AEAD ciphers.
+	if tlsVersion == tls.VersionTLS13 {
+		return CipherRatingGood
+	}
+
+	// Check if it's in Go's insecure list (RC4, 3DES, null ciphers).
+	for _, cs := range tls.InsecureCipherSuites() {
+		if cs.ID == cipherID {
+			return CipherRatingWeak
+		}
+	}
+
+	// For TLS 1.0–1.2: look up the cipher suite name to classify.
+	name := tls.CipherSuiteName(cipherID)
+
+	// Non-ECDHE key exchange (static RSA) is insecure — no forward secrecy.
+	if !strings.Contains(name, "ECDHE") {
+		return CipherRatingWeak
+	}
+
+	// ECDHE + AEAD (GCM or ChaCha20-Poly1305) is good.
+	if strings.Contains(name, "GCM") || strings.Contains(name, "CHACHA20_POLY1305") {
+		return CipherRatingGood
+	}
+
+	// ECDHE + CBC is weak (padding oracle attacks like BEAST, Lucky13).
+	return CipherRatingWeak
+}
+
+// ScanCipherSuites probes a TLS server to enumerate all supported cipher suites
+// and key exchange groups. TLS 1.3 ciphers are probed using raw ClientHello
+// packets (all 5 RFC 8446 suites). TLS 1.0–1.2 ciphers are probed using Go's
+// crypto/tls with a single-cipher config. Key exchange groups are probed via
+// raw ClientHello with individual named groups. All probes run concurrently.
+func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*CipherScanResult, error) {
+	if input.Host == "" {
+		return nil, fmt.Errorf("scanning cipher suites: host is required")
+	}
+	port := input.Port
+	if port == "" {
+		port = "443"
+	}
+	serverName := input.ServerName
+	if serverName == "" {
+		serverName = input.Host
+	}
+	concurrency := input.Concurrency
+	if concurrency <= 0 {
+		concurrency = 10
+	}
+
+	addr := net.JoinHostPort(input.Host, port)
+
+	sem := make(chan struct{}, concurrency)
+	var mu sync.Mutex
+	var wg sync.WaitGroup
+
+	// acquireSem tries to acquire a semaphore slot, returning false if the
+	// context is cancelled while waiting for a slot.
+	acquireSem := func() bool {
+		select {
+		case sem <- struct{}{}:
+			return true
+		case <-ctx.Done():
+			return false
+		}
+	}
+
+	// probeTimeout is the maximum time for a single probe attempt. This
+	// is independent of the parent context to prevent slow/stalling servers
+	// from blocking the entire scan. Each probe gets its own child context.
+	const probeTimeout = 2 * time.Second
+
+	// Probe TLS 1.3 ciphers using raw ClientHello packets. Each probe is
+	// fully isolated — no shared state, safe for concurrent use.
+	var results []CipherProbeResult
+	for _, id := range tls13CipherSuites {
+		if ctx.Err() != nil {
+			break
+		}
+		if !acquireSem() {
+			break
+		}
+		wg.Add(1)
+		go func(cipherID uint16) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			probeCtx, probeCancel := context.WithTimeout(ctx, probeTimeout)
+			defer probeCancel()
+
+			if probeTLS13Cipher(probeCtx, addr, serverName, cipherID) {
+				r := CipherProbeResult{
+					Name:        cipherSuiteName(cipherID),
+					ID:          cipherID,
+					Version:     "TLS 1.3",
+					KeyExchange: "ECDHE",
+					Rating:      RateCipherSuite(cipherID, tls.VersionTLS13),
+				}
+				mu.Lock()
+				results = append(results, r)
+				mu.Unlock()
+			}
+		}(id)
+	}
+
+	// Collect all TLS 1.0–1.2 cipher suites to probe.
+	type probeTask struct {
+		id      uint16
+		version uint16
+	}
+	var tasks []probeTask
+	allSuites := append(tls.CipherSuites(), tls.InsecureCipherSuites()...)
+	for _, cs := range allSuites {
+		for _, v := range cs.SupportedVersions {
+			if v >= tls.VersionTLS10 && v <= tls.VersionTLS12 {
+				tasks = append(tasks, probeTask{id: cs.ID, version: v})
+			}
+		}
+	}
+
+	// Probe TLS 1.0–1.2 ciphers concurrently using Go's crypto/tls.
+	for _, task := range tasks {
+		if ctx.Err() != nil {
+			break
+		}
+		if !acquireSem() {
+			break
+		}
+
+		wg.Add(1)
+		go func(t probeTask) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			probeCtx, probeCancel := context.WithTimeout(ctx, probeTimeout)
+			defer probeCancel()
+
+			if probeCipher(probeCtx, addr, serverName, t.id, t.version) {
+				name := cipherSuiteName(t.id)
+				r := CipherProbeResult{
+					Name:        name,
+					ID:          t.id,
+					Version:     tlsVersionString(t.version),
+					KeyExchange: cipherKeyExchange(name, tlsVersionString(t.version)),
+					Rating:      RateCipherSuite(t.id, t.version),
+				}
+				mu.Lock()
+				results = append(results, r)
+				mu.Unlock()
+			}
+		}(task)
+	}
+
+	// Probe key exchange groups. TLS 1.3 groups use raw ClientHello packets;
+	// classical groups also try TLS 1.2 (via crypto/tls CurvePreferences)
+	// to cover servers that don't support TLS 1.3.
+	var keyExchanges []KeyExchangeProbeResult
+	kxSeen := make(map[tls.CurveID]bool)
+	var kxMu sync.Mutex
+	for _, gid := range keyExchangeGroups {
+		if ctx.Err() != nil {
+			break
+		}
+		if !acquireSem() {
+			break
+		}
+		wg.Add(1)
+		go func(groupID tls.CurveID) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			probeCtx, probeCancel := context.WithTimeout(ctx, probeTimeout)
+			defer probeCancel()
+
+			accepted := probeKeyExchangeGroup(probeCtx, addr, serverName, groupID)
+
+			// For classical (non-PQ) groups, also probe TLS 1.0–1.2 if TLS 1.3 didn't work.
+			if !accepted && !isPQKeyExchange(groupID) {
+				probeCtx2, probeCancel2 := context.WithTimeout(ctx, probeTimeout)
+				defer probeCancel2()
+				accepted = probeKeyExchangeGroupLegacy(probeCtx2, addr, serverName, groupID)
+			}
+
+			if accepted {
+				kxMu.Lock()
+				if !kxSeen[groupID] {
+					kxSeen[groupID] = true
+					keyExchanges = append(keyExchanges, KeyExchangeProbeResult{
+						Name:        keyExchangeName(groupID),
+						ID:          uint16(groupID),
+						PostQuantum: isPQKeyExchange(groupID),
+					})
+				}
+				kxMu.Unlock()
+			}
+		}(gid)
+	}
+
+	// Probe QUIC/UDP cipher suites if requested.
+	var quicCiphers []CipherProbeResult
+	if input.ProbeQUIC {
+		quicAddr := net.JoinHostPort(input.Host, port)
+		for _, id := range tls13CipherSuites {
+			if ctx.Err() != nil {
+				break
+			}
+			if !acquireSem() {
+				break
+			}
+			wg.Add(1)
+			go func(cipherID uint16) {
+				defer wg.Done()
+				defer func() { <-sem }()
+
+				probeCtx, probeCancel := context.WithTimeout(ctx, probeTimeout)
+				defer probeCancel()
+
+				if probeQUICCipher(probeCtx, quicAddr, serverName, cipherID) {
+					r := CipherProbeResult{
+						Name:        cipherSuiteName(cipherID),
+						ID:          cipherID,
+						Version:     "TLS 1.3",
+						KeyExchange: "ECDHE",
+						Rating:      RateCipherSuite(cipherID, tls.VersionTLS13),
+					}
+					mu.Lock()
+					quicCiphers = append(quicCiphers, r)
+					mu.Unlock()
+				}
+			}(id)
+		}
+	}
+
+	wg.Wait()
+
+	if ctx.Err() != nil {
+		return nil, fmt.Errorf("scanning cipher suites: %w", ctx.Err())
+	}
+
+	// Sort ciphers: version descending, then kex type (ECDHE before RSA),
+	// then rating (good before weak), then name.
+	slices.SortFunc(results, func(a, b CipherProbeResult) int {
+		if c := cmp.Compare(tlsVersionRank(b.Version), tlsVersionRank(a.Version)); c != 0 {
+			return c
+		}
+		if c := cmp.Compare(kexRank(a.KeyExchange), kexRank(b.KeyExchange)); c != 0 {
+			return c
+		}
+		if c := cmp.Compare(ratingRank(a.Rating), ratingRank(b.Rating)); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.Name, b.Name)
+	})
+
+	// Sort key exchanges: PQ first, then by ID descending for consistent output.
+	slices.SortFunc(keyExchanges, func(a, b KeyExchangeProbeResult) int {
+		if a.PostQuantum != b.PostQuantum {
+			if a.PostQuantum {
+				return -1
+			}
+			return 1
+		}
+		return cmp.Compare(b.ID, a.ID)
+	})
+
+	// Compute supported versions and overall rating.
+	versionSet := make(map[string]bool)
+	overall := CipherRatingGood
+	for _, r := range results {
+		versionSet[r.Version] = true
+		if ratingRank(r.Rating) > ratingRank(overall) {
+			overall = r.Rating
+		}
+	}
+
+	var versions []string
+	for v := range versionSet {
+		versions = append(versions, v)
+	}
+	slices.SortFunc(versions, func(a, b string) int {
+		return cmp.Compare(tlsVersionRank(b), tlsVersionRank(a))
+	})
+
+	// Sort QUIC ciphers by name for consistent output.
+	slices.SortFunc(quicCiphers, func(a, b CipherProbeResult) int {
+		return cmp.Compare(a.Name, b.Name)
+	})
+
+	return &CipherScanResult{
+		SupportedVersions: versions,
+		Ciphers:           results,
+		QUICProbed:        input.ProbeQUIC,
+		QUICCiphers:       quicCiphers,
+		KeyExchanges:      keyExchanges,
+		OverallRating:     overall,
+	}, nil
+}
+
+// emptyClientCert is a GetClientCertificate callback that returns an empty
+// certificate. This is needed so the handshake progresses far enough to
+// negotiate a cipher suite even when the server requests client auth (mTLS).
+func emptyClientCert(_ *tls.CertificateRequestInfo) (*tls.Certificate, error) {
+	return &tls.Certificate{}, nil
+}
+
+// probeCipher attempts a TLS handshake offering only the specified cipher suite at the given version.
+// Returns true if the server accepted the cipher, even if the handshake
+// ultimately fails (e.g. mTLS rejection after cipher negotiation).
+func probeCipher(ctx context.Context, addr, serverName string, cipherID uint16, version uint16) bool {
+	dialer := &net.Dialer{}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return false
+	}
+	tlsConn := tls.Client(conn, &tls.Config{
+		ServerName:           serverName,
+		InsecureSkipVerify:   true, //nolint:gosec // Cipher probing doesn't need cert verification.
+		MinVersion:           version,
+		MaxVersion:           version,
+		CipherSuites:         []uint16{cipherID},
+		GetClientCertificate: emptyClientCert,
+	})
+	defer func() { _ = tlsConn.Close() }()
+
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = tlsConn.SetDeadline(deadline)
+	}
+	if tlsConn.HandshakeContext(ctx) == nil {
+		return true
+	}
+	// Handshake failed, but check if the server negotiated our cipher before aborting.
+	state := tlsConn.ConnectionState()
+	return state.Version == version && state.CipherSuite == cipherID
+}
+
+// ecdheOnlyCipherSuites contains only ECDHE-based TLS 1.0–1.2 cipher suites.
+// Used by probeKeyExchangeGroupLegacy to ensure the server must use ECDHE key
+// exchange — without this, servers that pick RSA key exchange would incorrectly
+// appear to support any offered curve.
+var ecdheOnlyCipherSuites = func() []uint16 {
+	var ids []uint16
+	for _, cs := range tls.CipherSuites() {
+		if strings.Contains(cs.Name, "ECDHE") {
+			ids = append(ids, cs.ID)
+		}
+	}
+	return ids
+}()
+
+// probeKeyExchangeGroupLegacy attempts a TLS 1.0–1.2 handshake using a single
+// CurvePreferences entry and returns true if the server accepts the group. Only
+// ECDHE cipher suites are offered so the handshake fails if the server doesn't
+// support the offered curve (RSA key exchange would bypass curve negotiation).
+func probeKeyExchangeGroupLegacy(ctx context.Context, addr, serverName string, groupID tls.CurveID) bool {
+	dialer := &net.Dialer{}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return false
+	}
+	tlsConn := tls.Client(conn, &tls.Config{
+		ServerName:           serverName,
+		InsecureSkipVerify:   true, //nolint:gosec // Probing doesn't need cert verification.
+		MinVersion:           tls.VersionTLS10,
+		MaxVersion:           tls.VersionTLS12,
+		CipherSuites:         ecdheOnlyCipherSuites,
+		CurvePreferences:     []tls.CurveID{groupID},
+		GetClientCertificate: emptyClientCert,
+	})
+	defer func() { _ = tlsConn.Close() }()
+
+	if deadline, ok := ctx.Deadline(); ok {
+		_ = tlsConn.SetDeadline(deadline)
+	}
+	if tlsConn.HandshakeContext(ctx) == nil {
+		return true
+	}
+	// Handshake may fail due to mTLS rejection, but the key exchange
+	// succeeded if a TLS version was negotiated (happens before client auth).
+	state := tlsConn.ConnectionState()
+	return state.Version != 0
+}
+
+// tlsVersionRank returns a sort key for TLS versions (higher = newer).
+func tlsVersionRank(version string) int {
+	switch version {
+	case "TLS 1.3":
+		return 4
+	case "TLS 1.2":
+		return 3
+	case "TLS 1.1":
+		return 2
+	case "TLS 1.0":
+		return 1
+	default:
+		return 0
+	}
+}
+
+// ratingRank returns a sort key for cipher ratings (lower = better).
+func ratingRank(r CipherRating) int {
+	switch r {
+	case CipherRatingGood:
+		return 0
+	case CipherRatingWeak:
+		return 1
+	default:
+		return 2
+	}
+}
+
+// DiagnoseCipherScan inspects cipher scan results and returns diagnostics
+// for weak cipher suites that should be disabled.
+func DiagnoseCipherScan(r *CipherScanResult) []ChainDiagnostic {
+	if r == nil {
+		return nil
+	}
+
+	var weak int
+	for _, c := range r.Ciphers {
+		if c.Rating == CipherRatingWeak {
+			weak++
+		}
+	}
+	if weak == 0 {
+		return nil
+	}
+
+	return []ChainDiagnostic{{
+		Check:  "weak-cipher",
+		Status: "warn",
+		Detail: fmt.Sprintf("server accepts %d weak cipher suite(s) that should be disabled", weak),
+	}}
+}
+
+// FormatCipherRatingLine formats a one-line summary for the connect header block,
+// positioned alongside Host/Protocol/OCSP etc.
+func FormatCipherRatingLine(r *CipherScanResult) string {
+	if r == nil || len(r.Ciphers) == 0 {
+		return ""
+	}
+
+	var strong, weak int
+	for _, c := range r.Ciphers {
+		if c.Rating == CipherRatingGood {
+			strong++
+		} else {
+			weak++
+		}
+	}
+
+	return fmt.Sprintf("Ciphers:      %s (%d good, %d weak)\n", r.OverallRating, strong, weak)
+}
+
+// kexLabel returns the display label for a key exchange type in the cipher
+// suite subgroup header, e.g. "ECDHE" or "RSA, no forward secrecy".
+func kexLabel(kex string) string {
+	if kex == "RSA" {
+		return "RSA, no forward secrecy"
+	}
+	return kex
+}
+
+// FormatCipherScanResult formats the cipher suite list as human-readable text.
+func FormatCipherScanResult(r *CipherScanResult) string {
+	if len(r.Ciphers) == 0 {
+		return ""
+	}
+
+	var out strings.Builder
+	fmt.Fprintf(&out, "\nCipher suites (%d supported):\n", len(r.Ciphers))
+
+	// Group by version, then subgroup by key exchange type.
+	currentVersion := ""
+	currentKex := ""
+	for _, c := range r.Ciphers {
+		if c.Version != currentVersion || c.KeyExchange != currentKex {
+			if currentVersion != "" {
+				out.WriteByte('\n')
+			}
+			currentVersion = c.Version
+			currentKex = c.KeyExchange
+			fmt.Fprintf(&out, "  %s (%s):\n", currentVersion, kexLabel(currentKex))
+		}
+		fmt.Fprintf(&out, "    [%s]  %s\n", c.Rating, c.Name)
+	}
+
+	// QUIC cipher suites (if probed).
+	if r.QUICProbed {
+		if len(r.QUICCiphers) > 0 {
+			fmt.Fprintf(&out, "\nQUIC cipher suites (%d supported):\n", len(r.QUICCiphers))
+			for _, c := range r.QUICCiphers {
+				fmt.Fprintf(&out, "    [%s]  %s\n", c.Rating, c.Name)
+			}
+		} else {
+			out.WriteString("\nQUIC: not supported\n")
+		}
+	}
+
+	// Key exchange groups (forward secrecy).
+	if len(r.KeyExchanges) > 0 {
+		fmt.Fprintf(&out, "\nKey exchange groups (%d supported, forward secrecy):\n", len(r.KeyExchanges))
+		for _, g := range r.KeyExchanges {
+			if g.PostQuantum {
+				fmt.Fprintf(&out, "    %s (post-quantum)\n", g.Name)
+			} else {
+				fmt.Fprintf(&out, "    %s\n", g.Name)
+			}
+		}
+	}
+
+	return out.String()
+}
+
 // FormatConnectResult formats a ConnectResult as human-readable text.
 func FormatConnectResult(r *ConnectResult) string {
 	var out strings.Builder
@@ -596,6 +1234,8 @@ func FormatConnectResult(r *ConnectResult) string {
 	if r.CRL != nil {
 		out.WriteString(FormatCRLLine(r.CRL))
 	}
+
+	out.WriteString(FormatCipherRatingLine(r.CipherScan))
 
 	if r.ClientAuth != nil && r.ClientAuth.Requested {
 		if len(r.ClientAuth.AcceptableCAs) > 0 {

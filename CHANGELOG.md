@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add `--ciphers` flag to `connect` command — enumerates all supported cipher suites with good/weak ratings, key exchange subgrouping, and forward secrecy labels ([`pending`])
+- Add raw TLS 1.3 cipher prober — probes all 5 RFC 8446 cipher suites using byte-level ClientHello construction, no shared state or data races ([`pending`])
+- Add key exchange group probing to `--ciphers` — detects all 7 named groups including post-quantum hybrids (X25519MLKEM768, SecP256r1MLKEM768, SecP384r1MLKEM1024) with HelloRetryRequest detection ([`pending`])
+- Add QUIC/UDP cipher probing to `--ciphers` — automatically probes UDP 443 alongside TCP, shows "QUIC: not supported" when server rejects ([`pending`])
 - Auto-generate CLI flag tables in README from Cobra command definitions via `go generate` ([#80])
 - Add `gendocs` pre-commit hook and CI check to verify flag tables stay in sync ([#80])
 - Add global `--json` persistent flag — all commands now support JSON output; overrides `--format` when both are set ([#80])

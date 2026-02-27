@@ -431,3 +431,38 @@ func startTLSServer(t *testing.T, certChain [][]byte, key *ecdsa.PrivateKey) str
 	}
 	return port
 }
+
+// startTLSServerWithConfig starts a TLS server with the given tls.Config.
+// The config must already have Certificates set. Returns the listener port.
+// The server is stopped via t.Cleanup.
+func startTLSServerWithConfig(t *testing.T, config *tls.Config) string {
+	t.Helper()
+	listener, err := tls.Listen("tcp", "127.0.0.1:0", config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			if tlsConn, ok := conn.(*tls.Conn); ok {
+				if err := tlsConn.Handshake(); err != nil {
+					slog.Debug("startTLSServerWithConfig: handshake error", "error", err)
+				}
+			}
+			if err := conn.Close(); err != nil {
+				slog.Debug("startTLSServerWithConfig: connection close error", "error", err)
+			}
+		}
+	}()
+
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return port
+}
