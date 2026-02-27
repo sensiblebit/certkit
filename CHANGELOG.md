@@ -53,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** Rename `csr --cert` flag to `--from-cert` for clarity — avoids confusion with certificate file arguments in other commands ([#80])
 - **Breaking:** `connect` JSON `sha256_fingerprint` format changed from lowercase hex to colon-separated uppercase hex for CLI-4 consistency with `inspect` and `sha1_fingerprint` ([#80])
 - **Breaking:** Rename `CRLCheckResult.DistributionPoint` to `CRLCheckResult.URL` (JSON: `url`) and `OCSPResult.ResponderURL` to `OCSPResult.URL` (JSON: `url`) — consistent field name for the checked endpoint across both revocation types (CLI-4) ([#78])
 - **Breaking:** Rename OCSP JSON field `serial_number` to `serial` for CLI-4 consistency with all other commands ([#78])
@@ -68,6 +69,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fix backtick-quoted values in flag usage strings being consumed by pflag as type placeholders — all `--format`, `--trust-store`, `--log-level`, `--algorithm`, and `--curve` flags now display correctly in `--help` output ([#80])
+- Fix `convert --json` without `-o` missing `format` field in JSON output ([#80])
 - Fix data race in `TestCheckLeafCRL` — CRL bytes are now generated before starting the test HTTP server (CC-3) ([#78])
 - Fix `CheckLeafCRL` panic on nil `Leaf` or `Issuer` — now returns "unavailable" result instead of panicking ([#78])
 - Fix `verify` help text claiming "Exits with code 2 if revoked" — actually exits 2 for any verification error including revocation ([#78])

@@ -120,7 +120,7 @@ See [EXAMPLES.md](EXAMPLES.md) for a complete walkthrough of every command with 
 | ------------------- | ------- | ---------------------------------------------------------------------------------- |
 | `--allow-expired`   | `false` | Include expired certificates                                                       |
 | `--json`            | `false` | Output in JSON format                                                              |
-| `--log-level`, `-l` | `info`  | Log level: `debug`, `info`, `warn`, `error`                                        |
+| `--log-level`, `-l` | `info`  | Log level: debug, info, warn, error                                                |
 | `--password-file`   |         | File containing passwords, one per line                                            |
 | `--passwords`, `-p` |         | Comma-separated passwords for encrypted keys                                       |
 | `--verbose`, `-v`   | `false` | Extended details in output (serial, key info, signature algorithm, key usage, EKU) |
@@ -131,23 +131,23 @@ Common passwords (`""`, `"password"`, `"changeit"`, `"keypassword"`) are always 
 ### Inspect Flags
 
 <!-- certkit:flags:inspect -->
-| Flag       | Default | Description                   |
-| ---------- | ------- | ----------------------------- |
-| `--format` | `text`  | Output format: `text`, `json` |
+| Flag       | Default | Description               |
+| ---------- | ------- | ------------------------- |
+| `--format` | `text`  | Output format: text, json |
 <!-- /certkit:flags -->
 
 ### Verify Flags
 
 <!-- certkit:flags:verify -->
-| Flag             | Default   | Description                                                 |
-| ---------------- | --------- | ----------------------------------------------------------- |
-| `--crl`          | `false`   | Check CRL distribution points for revocation                |
-| `--diagnose`     | `false`   | Show diagnostics when chain verification fails              |
-| `--expiry`, `-e` |           | Check if cert expires within duration (e.g., `30d`, `720h`) |
-| `--format`       | `text`    | Output format: `text`, `json`                               |
-| `--key`          |           | Private key file to check against the certificate           |
-| `--ocsp`         | `false`   | Check OCSP revocation status                                |
-| `--trust-store`  | `mozilla` | Trust store: `system`, `mozilla`                            |
+| Flag             | Default   | Description                                             |
+| ---------------- | --------- | ------------------------------------------------------- |
+| `--crl`          | `false`   | Check CRL distribution points for revocation            |
+| `--diagnose`     | `false`   | Show diagnostics when chain verification fails          |
+| `--expiry`, `-e` |           | Check if cert expires within duration (e.g., 30d, 720h) |
+| `--format`       | `text`    | Output format: text, json                               |
+| `--key`          |           | Private key file to check against the certificate       |
+| `--ocsp`         | `false`   | Check OCSP revocation status                            |
+| `--trust-store`  | `mozilla` | Trust store: system, mozilla                            |
 <!-- /certkit:flags -->
 
 Chain verification is always performed. When the input contains an embedded private key (PKCS#12, JKS), key match is checked automatically. Use `--ocsp` and/or `--crl` to check revocation status (requires network access and a valid chain).
@@ -158,7 +158,7 @@ Chain verification is always performed. When the input contains an embedded priv
 | Flag           | Default | Description                                  |
 | -------------- | ------- | -------------------------------------------- |
 | `--crl`        | `false` | Check CRL distribution points for revocation |
-| `--format`     | `text`  | Output format: `text`, `json`                |
+| `--format`     | `text`  | Output format: text, json                    |
 | `--no-ocsp`    | `false` | Disable automatic OCSP revocation check      |
 | `--servername` |         | Override SNI hostname (defaults to host)     |
 <!-- /certkit:flags -->
@@ -168,13 +168,13 @@ Port defaults to 443 if not specified. OCSP revocation status is checked automat
 ### Bundle Flags
 
 <!-- certkit:flags:bundle -->
-| Flag               | Default    | Description                                              |
-| ------------------ | ---------- | -------------------------------------------------------- |
-| `--force`, `-f`    | `false`    | Skip chain verification                                  |
-| `--format`         | `pem`      | Output format: `pem`, `chain`, `fullchain`, `p12`, `jks` |
-| `--key`            |            | Private key file (PEM)                                   |
-| `--out-file`, `-o` | _(stdout)_ | Output file                                              |
-| `--trust-store`    | `mozilla`  | Trust store: `system`, `mozilla`                         |
+| Flag               | Default    | Description                                    |
+| ------------------ | ---------- | ---------------------------------------------- |
+| `--force`, `-f`    | `false`    | Skip chain verification                        |
+| `--format`         | `pem`      | Output format: pem, chain, fullchain, p12, jks |
+| `--key`            |            | Private key file (PEM)                         |
+| `--out-file`, `-o` | _(stdout)_ | Output file                                    |
+| `--trust-store`    | `mozilla`  | Trust store: system, mozilla                   |
 <!-- /certkit:flags -->
 
 ### Convert Flags
@@ -184,7 +184,7 @@ Port defaults to 443 if not specified. OCSP revocation status is checked automat
 | ------------------ | ------------------ | ----------------------------------------------------------------------- |
 | `--key`            |                    | Private key file (PEM). Keys are matched to certificates automatically. |
 | `--out-file`, `-o` | _(stdout for PEM)_ | Output file (required for binary formats)                               |
-| `--to`             | _(required)_       | Output format: `pem`, `der`, `p12`, `jks`, `p7b`                        |
+| `--to`             | _(required)_       | Output format: pem, der, p12, jks, p7b                                  |
 <!-- /certkit:flags -->
 
 Input format is auto-detected.
@@ -224,7 +224,7 @@ Input format is auto-detected.
 | `--dump-keys`     |                  | Dump all discovered keys to a single PEM file            |
 | `--duplicates`    | `false`          | Export all certificates per bundle, not just the newest  |
 | `--force`, `-f`   | `false`          | Allow export of untrusted certificate bundles            |
-| `--format`        | `text`           | Output format: `text`, `json`                            |
+| `--format`        | `text`           | Output format: text, json                                |
 | `--load-db`       |                  | Load an existing database into memory before scanning    |
 | `--max-file-size` | `10485760`       | Skip files larger than this size in bytes (0 to disable) |
 | `--save-db`       |                  | Save the in-memory database to disk after scanning       |
@@ -235,10 +235,10 @@ Input format is auto-detected.
 <!-- certkit:flags:keygen -->
 | Flag                | Default    | Description                                    |
 | ------------------- | ---------- | ---------------------------------------------- |
-| `--algorithm`, `-a` | `ecdsa`    | Key algorithm: `rsa`, `ecdsa`, `ed25519`       |
+| `--algorithm`, `-a` | `ecdsa`    | Key algorithm: rsa, ecdsa, ed25519             |
 | `--bits`, `-b`      | `4096`     | RSA key size in bits                           |
 | `--cn`              |            | Common Name (triggers CSR generation)          |
-| `--curve`           | `P-256`    | ECDSA curve: `P-256`, `P-384`, `P-521`         |
+| `--curve`           | `P-256`    | ECDSA curve: P-256, P-384, P-521               |
 | `--out-path`, `-o`  | _(stdout)_ | Output directory                               |
 | `--sans`            |            | Comma-separated SANs (triggers CSR generation) |
 <!-- /certkit:flags -->
@@ -250,22 +250,22 @@ Input format is auto-detected.
 | ------------------- | ---------- | --------------------------------------------------------- |
 | `--algorithm`, `-a` | `ecdsa`    | Key algorithm for generated keys                          |
 | `--bits`, `-b`      | `4096`     | RSA key size in bits                                      |
-| `--cert`            |            | PEM certificate to use as CSR template                    |
 | `--curve`           | `P-256`    | ECDSA curve                                               |
+| `--from-cert`       |            | PEM certificate to use as CSR template                    |
 | `--from-csr`        |            | Existing PEM CSR to re-sign with a new key                |
 | `--key`             |            | Existing private key file (PEM); generates new if omitted |
 | `--out-path`, `-o`  | _(stdout)_ | Output directory                                          |
 | `--template`        |            | JSON template file for CSR generation                     |
 <!-- /certkit:flags -->
 
-Exactly one of `--template`, `--cert`, or `--from-csr` is required.
+Exactly one of `--template`, `--from-cert`, or `--from-csr` is required.
 
 ### OCSP Flags
 
 <!-- certkit:flags:ocsp -->
 | Flag       | Default | Description                                                        |
 | ---------- | ------- | ------------------------------------------------------------------ |
-| `--format` | `text`  | Output format: `text`, `json`                                      |
+| `--format` | `text`  | Output format: text, json                                          |
 | `--issuer` |         | Issuer certificate file (PEM); auto-resolved from input if omitted |
 <!-- /certkit:flags -->
 
@@ -277,7 +277,7 @@ The OCSP responder URL is read from the certificate's AIA extension.
 | Flag       | Default | Description                               |
 | ---------- | ------- | ----------------------------------------- |
 | `--check`  |         | Certificate file to check against the CRL |
-| `--format` | `text`  | Output format: `text`, `json`             |
+| `--format` | `text`  | Output format: text, json                 |
 <!-- /certkit:flags -->
 
 Accepts local files (PEM or DER) or HTTP URLs.

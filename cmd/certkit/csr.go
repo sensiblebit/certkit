@@ -28,7 +28,7 @@ var csrCmd = &cobra.Command{
 A new key is generated unless --key is provided. Output is printed to stdout
 by default (PEM format). Use -o to write files to a directory instead.`,
 	Example: `  certkit csr --template request.json
-  certkit csr --cert existing.pem --algorithm rsa --bits 4096
+  certkit csr --from-cert existing.pem --algorithm rsa --bits 4096
   certkit csr --from-csr old.csr --key mykey.pem
   certkit csr --template request.json -o ./out`,
 	Args: cobra.NoArgs,
@@ -37,7 +37,7 @@ by default (PEM format). Use -o to write files to a directory instead.`,
 
 func init() {
 	csrCmd.Flags().StringVar(&csrTemplatePath, "template", "", "JSON template file for CSR generation")
-	csrCmd.Flags().StringVar(&csrCertPath, "cert", "", "PEM certificate to use as CSR template")
+	csrCmd.Flags().StringVar(&csrCertPath, "from-cert", "", "PEM certificate to use as CSR template")
 	csrCmd.Flags().StringVar(&csrFromCSR, "from-csr", "", "Existing PEM CSR to re-sign with a new key")
 	csrCmd.Flags().StringVar(&csrKeyPath, "key", "", "Existing private key file (PEM); generates new if omitted")
 	csrCmd.Flags().StringVarP(&csrAlgorithm, "algorithm", "a", "ecdsa", "Key algorithm for generated keys")
@@ -51,8 +51,8 @@ func init() {
 	registerCompletion(csrCmd, completionInput{"curve", fixedCompletion("P-256", "P-384", "P-521")})
 	registerCompletion(csrCmd, completionInput{"out-path", directoryCompletion})
 
-	csrCmd.MarkFlagsMutuallyExclusive("template", "cert", "from-csr")
-	csrCmd.MarkFlagsOneRequired("template", "cert", "from-csr")
+	csrCmd.MarkFlagsMutuallyExclusive("template", "from-cert", "from-csr")
+	csrCmd.MarkFlagsOneRequired("template", "from-cert", "from-csr")
 }
 
 func runCSR(cmd *cobra.Command, args []string) error {

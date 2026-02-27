@@ -33,7 +33,7 @@ Exits with code 2 if the checked certificate is found in the CRL.`,
 
 func init() {
 	crlCmd.Flags().StringVar(&crlCheckPath, "check", "", "Certificate file to check against the CRL")
-	crlCmd.Flags().StringVar(&crlFormat, "format", "text", "Output format: `text`, `json`")
+	crlCmd.Flags().StringVar(&crlFormat, "format", "text", "Output format: text, json")
 
 	registerCompletion(crlCmd, completionInput{"check", fileCompletion})
 	registerCompletion(crlCmd, completionInput{"format", fixedCompletion("text", "json")})

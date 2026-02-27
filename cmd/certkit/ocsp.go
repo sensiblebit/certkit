@@ -34,7 +34,7 @@ Exits with code 2 if the certificate is revoked.`,
 
 func init() {
 	ocspCmd.Flags().StringVar(&ocspIssuerPath, "issuer", "", "Issuer certificate file (PEM); auto-resolved from input if omitted")
-	ocspCmd.Flags().StringVar(&ocspFormat, "format", "text", "Output format: `text`, `json`")
+	ocspCmd.Flags().StringVar(&ocspFormat, "format", "text", "Output format: text, json")
 
 	registerCompletion(ocspCmd, completionInput{"issuer", fileCompletion})
 	registerCompletion(ocspCmd, completionInput{"format", fixedCompletion("text", "json")})

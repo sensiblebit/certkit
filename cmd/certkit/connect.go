@@ -46,7 +46,7 @@ Exits with code 2 if chain verification fails or the certificate is revoked.`,
 
 func init() {
 	connectCmd.Flags().StringVar(&connectServerName, "servername", "", "Override SNI hostname (defaults to host)")
-	connectCmd.Flags().StringVar(&connectFormat, "format", "text", "Output format: `text`, `json`")
+	connectCmd.Flags().StringVar(&connectFormat, "format", "text", "Output format: text, json")
 	connectCmd.Flags().BoolVar(&connectCRL, "crl", false, "Check CRL distribution points for revocation")
 	connectCmd.Flags().BoolVar(&connectNoOCSP, "no-ocsp", false, "Disable automatic OCSP revocation check")
 

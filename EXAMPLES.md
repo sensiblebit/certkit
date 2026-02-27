@@ -413,7 +413,7 @@ This creates `key.pem`, `pub.pem`, and `csr.pem` (if a CN is provided) in the sp
 You have an existing cert and need to create a CSR to request a renewal from your CA. This copies the subject and SANs from the old cert:
 
 ```sh
-certkit csr --cert existing-cert.pem
+certkit csr --from-cert existing-cert.pem
 ```
 
 This prints the CSR and a newly generated key to stdout in PEM format. Send the CSR to your CA.
@@ -421,13 +421,13 @@ This prints the CSR and a newly generated key to stdout in PEM format. Send the 
 If you want to reuse your existing key:
 
 ```sh
-certkit csr --cert existing-cert.pem --key existing-key.pem
+certkit csr --from-cert existing-cert.pem --key existing-key.pem
 ```
 
 Write to separate files in a directory instead of stdout:
 
 ```sh
-certkit csr --cert existing-cert.pem -o ./out
+certkit csr --from-cert existing-cert.pem -o ./out
 ```
 
 ---

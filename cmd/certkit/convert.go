@@ -41,7 +41,7 @@ multi-alias keystore. PKCS#12 supports only a single key entry.`,
 }
 
 func init() {
-	convertCmd.Flags().StringVar(&convertTo, "to", "", "Output format: `pem`, `der`, `p12`, `jks`, `p7b`")
+	convertCmd.Flags().StringVar(&convertTo, "to", "", "Output format: pem, der, p12, jks, p7b")
 	convertCmd.Flags().StringVarP(&convertOutFile, "out-file", "o", "", "Output file (required for binary formats)")
 	convertCmd.Flags().StringVar(&convertKeyPath, "key", "", "Private key file (PEM). Keys are matched to certificates automatically.")
 
@@ -162,6 +162,7 @@ func runConvert(cmd *cobra.Command, args []string) error {
 		} else {
 			// Text format — include the data directly
 			out.Data = string(output)
+			out.Format = convertTo
 		}
 		data, err := json.MarshalIndent(out, "", "  ")
 		if err != nil {

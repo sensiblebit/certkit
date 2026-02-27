@@ -51,9 +51,9 @@ is needed to verify the response). Exits with code 2 if verification finds any e
 
 func init() {
 	verifyCmd.Flags().StringVar(&verifyKeyPath, "key", "", "Private key file to check against the certificate")
-	verifyCmd.Flags().StringVarP(&verifyExpiry, "expiry", "e", "", "Check if cert expires within duration (e.g., `30d`, `720h`)")
-	verifyCmd.Flags().StringVar(&verifyTrustStore, "trust-store", "mozilla", "Trust store: `system`, `mozilla`")
-	verifyCmd.Flags().StringVar(&verifyFormat, "format", "text", "Output format: `text`, `json`")
+	verifyCmd.Flags().StringVarP(&verifyExpiry, "expiry", "e", "", "Check if cert expires within duration (e.g., 30d, 720h)")
+	verifyCmd.Flags().StringVar(&verifyTrustStore, "trust-store", "mozilla", "Trust store: system, mozilla")
+	verifyCmd.Flags().StringVar(&verifyFormat, "format", "text", "Output format: text, json")
 	verifyCmd.Flags().BoolVar(&verifyDiagnose, "diagnose", false, "Show diagnostics when chain verification fails")
 	verifyCmd.Flags().BoolVar(&verifyOCSP, "ocsp", false, "Check OCSP revocation status")
 	verifyCmd.Flags().BoolVar(&verifyCRL, "crl", false, "Check CRL distribution points for revocation")
