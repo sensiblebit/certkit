@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add hostname-mismatch diagnostic to `connect` — detects `x509.HostnameError` and surfaces it as `[ERR] hostname-mismatch` in the diagnostics section ([`pending`])
+- Add error-level diagnostics (`verify-failed`, `ocsp-revoked`, `crl-revoked`) to `connect` output — validation failures now appear in the Diagnostics section instead of a redundant `Error:` line on stderr ([`pending`])
+- Add specific cipher diagnostics to `connect --ciphers` — replaces the single "weak cipher" message with actionable checks: `deprecated-tls10`, `deprecated-tls11`, `cbc-cipher`, `static-rsa-kex`, `3des-cipher` ([`pending`])
 - Add `--ciphers` flag to `connect` command — enumerates all supported cipher suites with good/weak ratings, key exchange subgrouping, and forward secrecy labels ([#82])
 - Add raw TLS 1.3 cipher prober — probes all 5 RFC 8446 cipher suites using byte-level ClientHello construction, no shared state or data races ([#82])
 - Add key exchange group probing to `--ciphers` — detects all 7 named groups including post-quantum hybrids (X25519MLKEM768, SecP256r1MLKEM768, SecP384r1MLKEM1024) with HelloRetryRequest detection ([#82])
@@ -57,6 +60,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `connect` QUIC probing no longer restricted to port 443 — QUIC can run on any UDP port ([`pending`])
+- `connect` diagnostics now distinguish `[ERR]` (verification failures) from `[WARN]` (configuration issues) ([`pending`])
 - Harden QUIC response parser — add bounds checks for DCID/SCID lengths, varint decode guards to prevent infinite loops on malformed ACK frames, and increase UDP read buffer to 65535 bytes ([#82])
 - Harden TLS ServerHello parser — add explicit bounds check for oversized session ID length before advancing position ([#82])
 - Refactor probe functions to use input structs per CS-5 — `probeTLS13Cipher`, `probeKeyExchangeGroup`, `probeQUICCipher`, `probeCipher`, `probeKeyExchangeGroupLegacy` now take `cipherProbeInput` ([#82])

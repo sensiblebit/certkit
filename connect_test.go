@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"errors"
 	"math/big"
 	"net"
 	"net/http"
@@ -317,6 +318,18 @@ func TestFormatConnectResult(t *testing.T) {
 			wantStrings: []string{"Diagnostics:", "[WARN] root-in-chain:", "Verify:       OK\n"},
 		},
 		{
+			name: "error-level diagnostic rendered with ERR tag",
+			diagnostics: []ChainDiagnostic{
+				{Check: "hostname-mismatch", Status: "error", Detail: `x509: certificate is valid for *.badssl.com, badssl.com, not wrong.host.badssl.com`},
+			},
+			verifyError: "x509: certificate is valid for *.badssl.com, badssl.com, not wrong.host.badssl.com",
+			wantStrings: []string{
+				"[ERR] hostname-mismatch:",
+				"Verify:       FAILED",
+			},
+			notWantStrings: []string{"[WARN] hostname-mismatch:"},
+		},
+		{
 			name:       "AIA-aware verify line",
 			aiaFetched: true,
 			diagnostics: []ChainDiagnostic{
@@ -506,6 +519,85 @@ func TestDiagnoseConnectChain(t *testing.T) {
 							t.Errorf("diag[%d].Detail missing %q, got: %s", i, substr, diags[i].Detail)
 						}
 					}
+				}
+			}
+		})
+	}
+}
+
+func TestDiagnoseVerifyError(t *testing.T) {
+	t.Parallel()
+
+	// Generate a self-signed CA cert for "localhost" and trust it, so that
+	// verifying with a wrong DNSName triggers HostnameError (not UnknownAuthorityError).
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "localhost"},
+		DNSNames:              []string{"localhost"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	roots := x509.NewCertPool()
+	roots.AddCert(cert)
+
+	// Trigger a real HostnameError by verifying with wrong DNSName.
+	_, hostnameErr := cert.Verify(x509.VerifyOptions{DNSName: "wrong.example.com", Roots: roots})
+	if hostnameErr == nil {
+		t.Fatal("expected verification error for wrong hostname")
+	}
+
+	tests := []struct {
+		name       string
+		err        error
+		wantChecks []string
+	}{
+		{
+			name: "hostname mismatch",
+			err:  hostnameErr,
+			// The error chain may include both HostnameError and UnknownAuthorityError.
+			// We only care that hostname-mismatch is present.
+			wantChecks: []string{"hostname-mismatch"},
+		},
+		{
+			name:       "non-hostname error",
+			err:        errors.New("x509: certificate signed by unknown authority"),
+			wantChecks: nil,
+		},
+		{
+			name:       "nil error",
+			err:        nil,
+			wantChecks: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			diags := DiagnoseVerifyError(tt.err)
+			if len(diags) != len(tt.wantChecks) {
+				t.Fatalf("got %d diagnostics, want %d: %+v", len(diags), len(tt.wantChecks), diags)
+			}
+			for i, wantCheck := range tt.wantChecks {
+				if diags[i].Check != wantCheck {
+					t.Errorf("diag[%d].Check = %q, want %q", i, diags[i].Check, wantCheck)
+				}
+				if diags[i].Status != "error" {
+					t.Errorf("diag[%d].Status = %q, want %q", i, diags[i].Status, "error")
 				}
 			}
 		})
@@ -1560,47 +1652,77 @@ func TestDiagnoseCipherScan(t *testing.T) {
 	tests := []struct {
 		name       string
 		result     *CipherScanResult
-		wantChecks int
-		wantDetail string // exact first diagnostic detail
+		wantChecks []string   // expected diagnostic check names in order
+		wantSubs   [][]string // per-diagnostic substrings to match in Detail
 	}{
 		{
-			name:       "nil result",
-			result:     nil,
-			wantChecks: 0,
+			name:   "nil result",
+			result: nil,
 		},
 		{
 			name: "all good — no diagnostics",
 			result: &CipherScanResult{
 				Ciphers: []CipherProbeResult{
-					{Name: "TLS_AES_128_GCM_SHA256", Version: "TLS 1.3", Rating: CipherRatingGood},
+					{Name: "TLS_AES_128_GCM_SHA256", Version: "TLS 1.3", KeyExchange: "ECDHE", Rating: CipherRatingGood},
+					{Name: "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256", Version: "TLS 1.2", KeyExchange: "ECDHE", Rating: CipherRatingGood},
 				},
 			},
-			wantChecks: 0,
 		},
 		{
-			name: "weak ciphers present",
+			name: "deprecated TLS 1.0 with CBC and static RSA and 3DES",
 			result: &CipherScanResult{
 				Ciphers: []CipherProbeResult{
-					{Name: "TLS_AES_128_GCM_SHA256", Version: "TLS 1.3", Rating: CipherRatingGood},
-					{Name: "TLS_RSA_WITH_AES_128_CBC_SHA", Version: "TLS 1.2", Rating: CipherRatingWeak},
-					{Name: "TLS_RSA_WITH_3DES_EDE_CBC_SHA", Version: "TLS 1.0", Rating: CipherRatingWeak},
+					{Name: "TLS_AES_128_GCM_SHA256", Version: "TLS 1.3", KeyExchange: "ECDHE", Rating: CipherRatingGood},
+					{Name: "TLS_RSA_WITH_AES_128_CBC_SHA", Version: "TLS 1.0", KeyExchange: "RSA", Rating: CipherRatingWeak},
+					{Name: "TLS_RSA_WITH_3DES_EDE_CBC_SHA", Version: "TLS 1.0", KeyExchange: "RSA", Rating: CipherRatingWeak},
 				},
 			},
-			wantChecks: 1,
-			wantDetail: "server accepts 2 weak cipher suite(s) that should be disabled",
+			wantChecks: []string{"deprecated-tls10", "cbc-cipher", "static-rsa-kex", "3des-cipher"},
+			wantSubs: [][]string{
+				{"TLS 1.0", "2 cipher"},
+				{"CBC", "2"},
+				{"static RSA", "2"},
+				{"3DES", "1"},
+			},
 		},
 		{
-			name: "QUIC weak ciphers counted",
+			name: "deprecated TLS 1.1",
 			result: &CipherScanResult{
 				Ciphers: []CipherProbeResult{
-					{Name: "TLS_AES_128_GCM_SHA256", Version: "TLS 1.3", Rating: CipherRatingGood},
+					{Name: "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA", Version: "TLS 1.1", KeyExchange: "ECDHE", Rating: CipherRatingWeak},
 				},
+			},
+			wantChecks: []string{"deprecated-tls11", "cbc-cipher"},
+			wantSubs:   [][]string{{"TLS 1.1", "1"}, {"CBC", "1"}},
+		},
+		{
+			name: "CBC only at TLS 1.2",
+			result: &CipherScanResult{
+				Ciphers: []CipherProbeResult{
+					{Name: "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256", Version: "TLS 1.2", KeyExchange: "ECDHE", Rating: CipherRatingWeak},
+				},
+			},
+			wantChecks: []string{"cbc-cipher"},
+			wantSubs:   [][]string{{"CBC", "1"}},
+		},
+		{
+			name: "static RSA with GCM at TLS 1.2",
+			result: &CipherScanResult{
+				Ciphers: []CipherProbeResult{
+					{Name: "TLS_RSA_WITH_AES_128_GCM_SHA256", Version: "TLS 1.2", KeyExchange: "RSA", Rating: CipherRatingWeak},
+				},
+			},
+			wantChecks: []string{"static-rsa-kex"},
+			wantSubs:   [][]string{{"static RSA", "1"}},
+		},
+		{
+			name: "QUIC ciphers included in analysis",
+			result: &CipherScanResult{
 				QUICCiphers: []CipherProbeResult{
-					{Name: "TLS_AES_128_CCM_8_SHA256", Rating: CipherRatingWeak},
+					{Name: "TLS_RSA_WITH_AES_128_CBC_SHA", Version: "TLS 1.0", KeyExchange: "RSA", Rating: CipherRatingWeak},
 				},
 			},
-			wantChecks: 1,
-			wantDetail: "server accepts 1 weak cipher suite(s) that should be disabled",
+			wantChecks: []string{"deprecated-tls10", "cbc-cipher", "static-rsa-kex"},
 		},
 	}
 
@@ -1608,15 +1730,22 @@ func TestDiagnoseCipherScan(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			diags := DiagnoseCipherScan(tt.result)
-			if len(diags) != tt.wantChecks {
-				t.Fatalf("got %d diagnostics, want %d: %+v", len(diags), tt.wantChecks, diags)
+			if len(diags) != len(tt.wantChecks) {
+				t.Fatalf("got %d diagnostics, want %d: %+v", len(diags), len(tt.wantChecks), diags)
 			}
-			if tt.wantChecks > 0 {
-				if diags[0].Check != "weak-cipher" {
-					t.Errorf("Check = %q, want %q", diags[0].Check, "weak-cipher")
+			for i, wantCheck := range tt.wantChecks {
+				if diags[i].Check != wantCheck {
+					t.Errorf("diag[%d].Check = %q, want %q", i, diags[i].Check, wantCheck)
 				}
-				if diags[0].Detail != tt.wantDetail {
-					t.Errorf("Detail = %q, want %q", diags[0].Detail, tt.wantDetail)
+				if diags[i].Status != "warn" {
+					t.Errorf("diag[%d].Status = %q, want %q", i, diags[i].Status, "warn")
+				}
+				if i < len(tt.wantSubs) {
+					for _, sub := range tt.wantSubs[i] {
+						if !strings.Contains(diags[i].Detail, sub) {
+							t.Errorf("diag[%d].Detail missing %q, got: %s", i, sub, diags[i].Detail)
+						}
+					}
 				}
 			}
 		})

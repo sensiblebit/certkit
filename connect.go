@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -20,7 +21,7 @@ import (
 type ChainDiagnostic struct {
 	// Check is the diagnostic identifier (e.g. "root-in-chain", "duplicate-cert", "missing-intermediate").
 	Check string `json:"check"`
-	// Status is the severity level (currently always "warn").
+	// Status is the severity level: "warn" for configuration issues, "error" for verification failures.
 	Status string `json:"status"`
 	// Detail is a human-readable description of the issue.
 	Detail string `json:"detail"`
@@ -65,6 +66,22 @@ func DiagnoseConnectChain(input DiagnoseConnectChainInput) []ChainDiagnostic {
 	}
 
 	return diags
+}
+
+// DiagnoseVerifyError returns diagnostics derived from a chain verification error.
+// Currently detects hostname mismatches (x509.HostnameError).
+func DiagnoseVerifyError(verifyErr error) []ChainDiagnostic {
+	if verifyErr == nil {
+		return nil
+	}
+	if hostErr, ok := errors.AsType[x509.HostnameError](verifyErr); ok {
+		return []ChainDiagnostic{{
+			Check:  "hostname-mismatch",
+			Status: "error",
+			Detail: hostErr.Error(),
+		}}
+	}
+	return nil
 }
 
 // ConnectTLSInput contains parameters for a TLS connection probe.
@@ -283,6 +300,7 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 		}
 		if verifyErr != nil {
 			result.VerifyError = verifyErr.Error()
+			result.Diagnostics = append(result.Diagnostics, DiagnoseVerifyError(verifyErr)...)
 		} else {
 			result.VerifiedChains = chains
 		}
@@ -900,9 +918,8 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 	}
 
 	// Probe QUIC/UDP cipher suites if requested.
-	// Skip non-443 ports since QUIC is only conventionally served on 443.
 	var quicCiphers []CipherProbeResult
-	if input.ProbeQUIC && port == "443" {
+	if input.ProbeQUIC {
 		quicAddr := net.JoinHostPort(input.Host, port)
 		for _, id := range tls13CipherSuites {
 			if ctx.Err() != nil {
@@ -1009,7 +1026,7 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 	return &CipherScanResult{
 		SupportedVersions: versions,
 		Ciphers:           results,
-		QUICProbed:        input.ProbeQUIC && port == "443",
+		QUICProbed:        input.ProbeQUIC,
 		QUICCiphers:       quicCiphers,
 		KeyExchanges:      keyExchanges,
 		OverallRating:     overall,
@@ -1128,33 +1145,92 @@ func ratingRank(r CipherRating) int {
 	}
 }
 
-// DiagnoseCipherScan inspects cipher scan results and returns diagnostics
-// for weak cipher suites that should be disabled.
+// DiagnoseCipherScan inspects cipher scan results and returns specific,
+// actionable diagnostics for deprecated protocols, weak cipher modes,
+// and insecure key exchange.
 func DiagnoseCipherScan(r *CipherScanResult) []ChainDiagnostic {
 	if r == nil {
 		return nil
 	}
 
-	var weak int
-	for _, c := range r.Ciphers {
-		if c.Rating == CipherRatingWeak {
-			weak++
-		}
-	}
-	for _, c := range r.QUICCiphers {
-		if c.Rating == CipherRatingWeak {
-			weak++
-		}
-	}
-	if weak == 0 {
+	allCiphers := slices.Concat(r.Ciphers, r.QUICCiphers)
+	if len(allCiphers) == 0 {
 		return nil
 	}
 
-	return []ChainDiagnostic{{
-		Check:  "weak-cipher",
-		Status: "warn",
-		Detail: fmt.Sprintf("server accepts %d weak cipher suite(s) that should be disabled", weak),
-	}}
+	var diags []ChainDiagnostic
+
+	// Deprecated TLS versions (RFC 8996).
+	var tls10, tls11 int
+	for _, c := range allCiphers {
+		switch c.Version {
+		case "TLS 1.0":
+			tls10++
+		case "TLS 1.1":
+			tls11++
+		}
+	}
+	if tls10 > 0 {
+		diags = append(diags, ChainDiagnostic{
+			Check:  "deprecated-tls10",
+			Status: "warn",
+			Detail: fmt.Sprintf("server supports TLS 1.0 (%d cipher suite(s)) — deprecated since RFC 8996", tls10),
+		})
+	}
+	if tls11 > 0 {
+		diags = append(diags, ChainDiagnostic{
+			Check:  "deprecated-tls11",
+			Status: "warn",
+			Detail: fmt.Sprintf("server supports TLS 1.1 (%d cipher suite(s)) — deprecated since RFC 8996", tls11),
+		})
+	}
+
+	// CBC mode cipher suites — vulnerable to padding oracle attacks (BEAST, Lucky13).
+	var cbc int
+	for _, c := range allCiphers {
+		if strings.Contains(c.Name, "CBC") {
+			cbc++
+		}
+	}
+	if cbc > 0 {
+		diags = append(diags, ChainDiagnostic{
+			Check:  "cbc-cipher",
+			Status: "warn",
+			Detail: fmt.Sprintf("server accepts %d CBC mode cipher suite(s) — vulnerable to padding oracle attacks", cbc),
+		})
+	}
+
+	// Static RSA key exchange — no forward secrecy.
+	var staticRSA int
+	for _, c := range allCiphers {
+		if c.KeyExchange == "RSA" {
+			staticRSA++
+		}
+	}
+	if staticRSA > 0 {
+		diags = append(diags, ChainDiagnostic{
+			Check:  "static-rsa-kex",
+			Status: "warn",
+			Detail: fmt.Sprintf("server accepts %d static RSA key exchange cipher suite(s) — no forward secrecy", staticRSA),
+		})
+	}
+
+	// 3DES cipher suites — 64-bit block size, vulnerable to Sweet32.
+	var tripleDES int
+	for _, c := range allCiphers {
+		if strings.Contains(c.Name, "3DES") {
+			tripleDES++
+		}
+	}
+	if tripleDES > 0 {
+		diags = append(diags, ChainDiagnostic{
+			Check:  "3des-cipher",
+			Status: "warn",
+			Detail: fmt.Sprintf("server accepts %d 3DES cipher suite(s) — 64-bit block size, vulnerable to Sweet32", tripleDES),
+		})
+	}
+
+	return diags
 }
 
 // FormatCipherRatingLine formats a one-line summary for the connect header block,
@@ -1287,7 +1363,11 @@ func FormatConnectResult(r *ConnectResult) string {
 	if len(r.Diagnostics) > 0 {
 		out.WriteString("\nDiagnostics:\n")
 		for _, d := range r.Diagnostics {
-			fmt.Fprintf(&out, "  [WARN] %s: %s\n", d.Check, d.Detail)
+			tag := "WARN"
+			if d.Status == "error" {
+				tag = "ERR"
+			}
+			fmt.Fprintf(&out, "  [%s] %s: %s\n", tag, d.Check, d.Detail)
 		}
 	}
 

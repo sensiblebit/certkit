@@ -147,6 +147,44 @@ func runConnect(cmd *cobra.Command, args []string) error {
 
 	now := time.Now()
 
+	// Promote validation failures to error-level diagnostics so they appear
+	// in the Diagnostics section rather than as a separate Error: line.
+	var hasValidationError bool
+	if result.VerifyError != "" {
+		// Skip if hostname-mismatch diagnostic was already added by the library.
+		hasHostnameDiag := false
+		for _, d := range result.Diagnostics {
+			if d.Check == "hostname-mismatch" {
+				hasHostnameDiag = true
+				break
+			}
+		}
+		if !hasHostnameDiag {
+			result.Diagnostics = append(result.Diagnostics, certkit.ChainDiagnostic{
+				Check:  "verify-failed",
+				Status: "error",
+				Detail: result.VerifyError,
+			})
+		}
+		hasValidationError = true
+	}
+	if result.OCSP != nil && result.OCSP.Status == "revoked" {
+		result.Diagnostics = append(result.Diagnostics, certkit.ChainDiagnostic{
+			Check:  "ocsp-revoked",
+			Status: "error",
+			Detail: "certificate is revoked (OCSP)",
+		})
+		hasValidationError = true
+	}
+	if result.CRL != nil && result.CRL.Status == "revoked" {
+		result.Diagnostics = append(result.Diagnostics, certkit.ChainDiagnostic{
+			Check:  "crl-revoked",
+			Status: "error",
+			Detail: "certificate is revoked (CRL)",
+		})
+		hasValidationError = true
+	}
+
 	format := connectFormat
 	if jsonOutput {
 		format = "json"
@@ -214,14 +252,8 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("unsupported output format %q (use text or json)", format)
 	}
 
-	if result.VerifyError != "" {
-		return &ValidationError{Message: fmt.Sprintf("certificate verification failed: %s", result.VerifyError)}
-	}
-	if result.OCSP != nil && result.OCSP.Status == "revoked" {
-		return &ValidationError{Message: "certificate is revoked (OCSP)"}
-	}
-	if result.CRL != nil && result.CRL.Status == "revoked" {
-		return &ValidationError{Message: "certificate is revoked (CRL)"}
+	if hasValidationError {
+		return &ValidationError{Message: "validation failed", Quiet: true}
 	}
 
 	return nil
@@ -273,7 +305,11 @@ func formatConnectVerbose(r *certkit.ConnectResult, now time.Time) string {
 	if len(r.Diagnostics) > 0 {
 		out.WriteString("\nDiagnostics:\n")
 		for _, d := range r.Diagnostics {
-			fmt.Fprintf(&out, "  [WARN] %s: %s\n", d.Check, d.Detail)
+			tag := "WARN"
+			if d.Status == "error" {
+				tag = "ERR"
+			}
+			fmt.Fprintf(&out, "  [%s] %s: %s\n", tag, d.Check, d.Detail)
 		}
 	}
 
