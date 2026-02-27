@@ -101,6 +101,66 @@ func DiagnoseVerifyError(verifyErr error) []ChainDiagnostic {
 	return nil
 }
 
+// DiagnoseNegotiatedCipher returns diagnostics for the cipher suite and protocol
+// version that were actually negotiated during the TLS handshake. This catches
+// issues like CBC mode or deprecated TLS versions even without a full --ciphers scan.
+func DiagnoseNegotiatedCipher(protocol, cipherSuite string) []ChainDiagnostic {
+	var diags []ChainDiagnostic
+
+	// Deprecated TLS versions (RFC 8996).
+	switch protocol {
+	case "TLS 1.0":
+		diags = append(diags, ChainDiagnostic{
+			Check:  "deprecated-tls10",
+			Status: "warn",
+			Detail: "negotiated TLS 1.0 — deprecated since RFC 8996",
+		})
+	case "TLS 1.1":
+		diags = append(diags, ChainDiagnostic{
+			Check:  "deprecated-tls11",
+			Status: "warn",
+			Detail: "negotiated TLS 1.1 — deprecated since RFC 8996",
+		})
+	}
+
+	// CBC mode — vulnerable to padding oracle attacks (BEAST, Lucky13).
+	if strings.Contains(cipherSuite, "CBC") {
+		diags = append(diags, ChainDiagnostic{
+			Check:  "cbc-cipher",
+			Status: "warn",
+			Detail: fmt.Sprintf("negotiated CBC mode cipher suite %s — vulnerable to padding oracle attacks", cipherSuite),
+		})
+	}
+
+	// 3DES — 64-bit block size, vulnerable to Sweet32.
+	if strings.Contains(cipherSuite, "3DES") {
+		diags = append(diags, ChainDiagnostic{
+			Check:  "3des-cipher",
+			Status: "warn",
+			Detail: fmt.Sprintf("negotiated 3DES cipher suite %s — 64-bit block size, vulnerable to Sweet32", cipherSuite),
+		})
+	}
+
+	// Key exchange issues.
+	kex := cipherKeyExchange(cipherSuite, protocol)
+	switch kex {
+	case "RSA":
+		diags = append(diags, ChainDiagnostic{
+			Check:  "static-rsa-kex",
+			Status: "warn",
+			Detail: fmt.Sprintf("negotiated static RSA key exchange (%s) — no forward secrecy", cipherSuite),
+		})
+	case "DHE", "DHE-DSS":
+		diags = append(diags, ChainDiagnostic{
+			Check:  "dhe-kex",
+			Status: "warn",
+			Detail: fmt.Sprintf("negotiated DHE key exchange (%s) — deprecated, no guaranteed forward secrecy with small DH parameters", cipherSuite),
+		})
+	}
+
+	return diags
+}
+
 // ConnectTLSInput contains parameters for a TLS connection probe.
 type ConnectTLSInput struct {
 	// Host is the hostname or IP to connect to.
@@ -187,6 +247,11 @@ type ConnectResult struct {
 	// CipherScan contains the cipher suite enumeration results.
 	// Nil when cipher scanning is not requested.
 	CipherScan *CipherScanResult `json:"cipher_scan,omitempty"`
+	// LegacyProbe is true when the certificate chain was obtained via a raw
+	// TLS handshake (legacy fallback) because Go's crypto/tls could not
+	// negotiate any cipher suite. The chain is still valid for inspection
+	// but no full TLS connection was established.
+	LegacyProbe bool `json:"legacy_probe,omitempty"`
 }
 
 // ConnectTLS connects to a TLS server and returns connection details including
@@ -251,7 +316,31 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 
 	handshakeErr := tlsConn.HandshakeContext(ctx)
 	if handshakeErr != nil && clientAuth == nil {
-		return nil, fmt.Errorf("TLS handshake with %s: %w", addr, handshakeErr)
+		_ = tlsConn.Close()
+		// Try raw legacy handshake to detect DHE/static-RSA-only servers.
+		legacyResult, legacyErr := legacyFallbackConnect(ctx, legacyFallbackInput{
+			addr:       addr,
+			serverName: serverName,
+		})
+		if legacyErr != nil {
+			return nil, fmt.Errorf("TLS handshake with %s: %w", addr, handshakeErr)
+		}
+		result := &ConnectResult{
+			Host:        input.Host,
+			Port:        port,
+			Protocol:    tlsVersionString(legacyResult.version),
+			CipherSuite: legacyCipherSuiteName(legacyResult.cipherSuite),
+			ServerName:  serverName,
+			PeerChain:   legacyResult.certificates,
+			LegacyProbe: true,
+		}
+		populateConnectResult(ctx, result, input)
+		result.Diagnostics = append(result.Diagnostics, ChainDiagnostic{
+			Check:  "legacy-only",
+			Status: "warn",
+			Detail: "server only supports cipher suites not available in standard TLS libraries — connected via raw handshake",
+		})
+		return result, nil
 	}
 
 	// When the server requested a client cert and rejected our empty
@@ -271,22 +360,35 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 		PeerChain:   state.PeerCertificates,
 	}
 
+	populateConnectResult(ctx, result, input)
+	return result, nil
+}
+
+// populateConnectResult runs chain diagnostics, verification, OCSP, and CRL
+// checks on a ConnectResult. It is shared between the normal handshake path
+// and the legacy fallback path.
+func populateConnectResult(ctx context.Context, result *ConnectResult, input ConnectTLSInput) {
+	serverName := result.ServerName
+
+	// Diagnose the negotiated cipher suite and protocol version.
+	result.Diagnostics = append(result.Diagnostics, DiagnoseNegotiatedCipher(result.Protocol, result.CipherSuite)...)
+
 	// Run chain diagnostics on the raw peer chain.
-	if len(state.PeerCertificates) > 0 {
-		result.Diagnostics = DiagnoseConnectChain(DiagnoseConnectChainInput{
-			PeerChain: state.PeerCertificates,
-		})
+	if len(result.PeerChain) > 0 {
+		result.Diagnostics = append(result.Diagnostics, DiagnoseConnectChain(DiagnoseConnectChainInput{
+			PeerChain: result.PeerChain,
+		})...)
 	}
 
 	// Verify the chain ourselves to capture the error message.
-	if len(state.PeerCertificates) > 0 {
-		leaf := state.PeerCertificates[0]
+	if len(result.PeerChain) > 0 {
+		leaf := result.PeerChain[0]
 		opts := x509.VerifyOptions{
 			DNSName:       serverName,
 			Intermediates: x509.NewCertPool(),
 			Roots:         input.RootCAs,
 		}
-		for _, cert := range state.PeerCertificates[1:] {
+		for _, cert := range result.PeerChain[1:] {
 			opts.Intermediates.AddCert(cert)
 		}
 		chains, verifyErr := leaf.Verify(opts)
@@ -325,15 +427,15 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 
 	// No peer certificates means TLS completed without sending certs (unlikely
 	// but possible on a partially-completed handshake). Return early.
-	if len(state.PeerCertificates) == 0 {
-		return result, nil
+	if len(result.PeerChain) == 0 {
+		return
 	}
 
 	// Resolve the issuer certificate for revocation checks.
 	// Only use VerifiedChains (cryptographically validated). Do not fall back
 	// to PeerCertificates — those are raw, unverified certs from the server and
 	// using them would let an attacker forge valid OCSP/CRL responses.
-	leaf := state.PeerCertificates[0]
+	leaf := result.PeerChain[0]
 	var issuer *x509.Certificate
 	if len(result.VerifiedChains) > 0 && len(result.VerifiedChains[0]) > 1 {
 		issuer = result.VerifiedChains[0][1]
@@ -388,8 +490,6 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 			Detail: "no issuer certificate available to verify CRL signature",
 		}
 	}
-
-	return result, nil
 }
 
 // CheckLeafCRLInput holds parameters for CheckLeafCRL.
@@ -668,7 +768,8 @@ type ScanCipherSuitesInput struct {
 
 // cipherSuiteName returns a human-readable name for any TLS cipher suite.
 // It extends tls.CipherSuiteName with the two CCM suites from RFC 8446 that
-// Go doesn't implement (0x1304, 0x1305) and would otherwise show as hex.
+// Go doesn't implement (0x1304, 0x1305), legacy DHE/DHE-DSS suites, and would
+// otherwise show as hex for unknown suites.
 func cipherSuiteName(id uint16) string {
 	switch id {
 	case 0x1304:
@@ -676,6 +777,13 @@ func cipherSuiteName(id uint16) string {
 	case 0x1305:
 		return "TLS_AES_128_CCM_8_SHA256"
 	default:
+		// Check legacy cipher registry before falling back to Go's function,
+		// which returns hex for unknown suites.
+		for _, def := range legacyCipherSuites {
+			if def.ID == id {
+				return def.Name
+			}
+		}
 		return tls.CipherSuiteName(id)
 	}
 }
@@ -707,6 +815,9 @@ func cipherKeyExchange(name, version string) string {
 	if strings.HasPrefix(name, "TLS_RSA_") {
 		return "RSA"
 	}
+	if strings.HasPrefix(name, "TLS_DHE_DSS_") {
+		return "DHE-DSS"
+	}
 	if strings.HasPrefix(name, "TLS_DHE_") {
 		return "DHE"
 	}
@@ -720,10 +831,12 @@ func kexRank(kex string) int {
 		return 0
 	case "DHE":
 		return 1
-	case "RSA":
+	case "DHE-DSS":
 		return 2
-	default:
+	case "RSA":
 		return 3
+	default:
+		return 4
 	}
 }
 
@@ -886,6 +999,43 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 				mu.Unlock()
 			}
 		}(task)
+	}
+
+	// Probe legacy cipher suites (DHE, DHE-DSS) using raw ClientHello packets.
+	// These suites are not implemented in Go's crypto/tls.
+	for _, def := range legacyCipherSuites {
+		if ctx.Err() != nil {
+			break
+		}
+		if !acquireSem() {
+			break
+		}
+		wg.Add(1)
+		go func(d legacyCipherDef) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			probeCtx, probeCancel := context.WithTimeout(ctx, probeTimeout)
+			defer probeCancel()
+
+			if probeLegacyCipher(probeCtx, cipherProbeInput{
+				addr:       addr,
+				serverName: serverName,
+				cipherID:   d.ID,
+				version:    tls.VersionTLS12,
+			}) {
+				r := CipherProbeResult{
+					Name:        d.Name,
+					ID:          d.ID,
+					Version:     "TLS 1.2",
+					KeyExchange: d.KeyExchange,
+					Rating:      CipherRatingWeak,
+				}
+				mu.Lock()
+				results = append(results, r)
+				mu.Unlock()
+			}
+		}(def)
 	}
 
 	// Probe key exchange groups. TLS 1.3 groups use raw ClientHello packets;
@@ -1247,6 +1397,21 @@ func DiagnoseCipherScan(r *CipherScanResult) []ChainDiagnostic {
 		})
 	}
 
+	// DHE key exchange — deprecated, vulnerable to small DH parameters.
+	var dhe int
+	for _, c := range allCiphers {
+		if c.KeyExchange == "DHE" || c.KeyExchange == "DHE-DSS" {
+			dhe++
+		}
+	}
+	if dhe > 0 {
+		diags = append(diags, ChainDiagnostic{
+			Check:  "dhe-kex",
+			Status: "warn",
+			Detail: fmt.Sprintf("server accepts %d DHE key exchange cipher suite(s) — deprecated, no guaranteed forward secrecy with small DH parameters", dhe),
+		})
+	}
+
 	return diags
 }
 
@@ -1279,10 +1444,16 @@ func FormatCipherRatingLine(r *CipherScanResult) string {
 // kexLabel returns the display label for a key exchange type in the cipher
 // suite subgroup header, e.g. "ECDHE" or "RSA, no forward secrecy".
 func kexLabel(kex string) string {
-	if kex == "RSA" {
+	switch kex {
+	case "RSA":
 		return "RSA, no forward secrecy"
+	case "DHE":
+		return "DHE, deprecated"
+	case "DHE-DSS":
+		return "DHE-DSS, deprecated"
+	default:
+		return kex
 	}
-	return kex
 }
 
 // FormatCipherScanResult formats the cipher suite list as human-readable text.

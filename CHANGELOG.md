@@ -9,6 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add raw TLS 1.0–1.2 legacy prober for DHE/DHE-DSS cipher suites that Go's `crypto/tls` doesn't implement — probes individual suites via byte-level ClientHello construction ([`pending`])
+- Add legacy fallback to `connect` — when Go's TLS handshake fails, attempts a raw handshake to extract server certificates from DHE-only or static-RSA-only servers ([`pending`])
+- Add DHE cipher suite probing to `connect --ciphers` — detects 13 DHE/DHE-DSS cipher suites using raw ClientHello packets, all rated "weak" ([`pending`])
+- Add `dhe-kex` diagnostic to `connect --ciphers` — warns when server accepts DHE key exchange cipher suites (deprecated, vulnerable to small DH parameters) ([`pending`])
+- Add negotiated cipher diagnostics to `connect` — warns about CBC mode, 3DES, static RSA, DHE, and deprecated TLS versions even without `--ciphers` ([`pending`])
 - Add hostname-mismatch diagnostic to `connect` — detects `x509.HostnameError` and surfaces it as `[ERR] hostname-mismatch` in the diagnostics section ([`pending`])
 - Add error-level diagnostics (`verify-failed`, `ocsp-revoked`, `crl-revoked`) to `connect` output — validation failures now appear in the Diagnostics section instead of a redundant `Error:` line on stderr ([`pending`])
 - Add specific cipher diagnostics to `connect --ciphers` — replaces the single "weak cipher" message with actionable checks: `deprecated-tls10`, `deprecated-tls11`, `cbc-cipher`, `static-rsa-kex`, `3des-cipher` ([`pending`])

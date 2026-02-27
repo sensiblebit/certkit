@@ -637,6 +637,86 @@ func TestDiagnoseVerifyError(t *testing.T) {
 	}
 }
 
+func TestDiagnoseNegotiatedCipher(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		protocol    string
+		cipherSuite string
+		wantChecks  []string
+		wantSubs    [][]string // per-diagnostic substrings to match in Detail
+	}{
+		{
+			name:        "TLS 1.3 with AEAD — no diagnostics",
+			protocol:    "TLS 1.3",
+			cipherSuite: "TLS_AES_128_GCM_SHA256",
+		},
+		{
+			name:        "TLS 1.2 ECDHE GCM — no diagnostics",
+			protocol:    "TLS 1.2",
+			cipherSuite: "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+		},
+		{
+			name:        "TLS 1.2 CBC cipher",
+			protocol:    "TLS 1.2",
+			cipherSuite: "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA",
+			wantChecks:  []string{"cbc-cipher"},
+			wantSubs:    [][]string{{"CBC", "padding oracle"}},
+		},
+		{
+			name:        "TLS 1.0 with CBC and static RSA",
+			protocol:    "TLS 1.0",
+			cipherSuite: "TLS_RSA_WITH_AES_128_CBC_SHA",
+			wantChecks:  []string{"deprecated-tls10", "cbc-cipher", "static-rsa-kex"},
+		},
+		{
+			name:        "TLS 1.1 with 3DES",
+			protocol:    "TLS 1.1",
+			cipherSuite: "TLS_RSA_WITH_3DES_EDE_CBC_SHA",
+			wantChecks:  []string{"deprecated-tls11", "cbc-cipher", "3des-cipher", "static-rsa-kex"},
+		},
+		{
+			name:        "DHE key exchange",
+			protocol:    "TLS 1.2",
+			cipherSuite: "TLS_DHE_RSA_WITH_AES_128_GCM_SHA256",
+			wantChecks:  []string{"dhe-kex"},
+			wantSubs:    [][]string{{"DHE", "deprecated"}},
+		},
+		{
+			name:        "DHE-DSS key exchange with CBC",
+			protocol:    "TLS 1.2",
+			cipherSuite: "TLS_DHE_DSS_WITH_AES_128_CBC_SHA",
+			wantChecks:  []string{"cbc-cipher", "dhe-kex"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			diags := DiagnoseNegotiatedCipher(tt.protocol, tt.cipherSuite)
+			if len(diags) != len(tt.wantChecks) {
+				t.Fatalf("got %d diagnostics, want %d: %+v", len(diags), len(tt.wantChecks), diags)
+			}
+			for i, wantCheck := range tt.wantChecks {
+				if diags[i].Check != wantCheck {
+					t.Errorf("diag[%d].Check = %q, want %q", i, diags[i].Check, wantCheck)
+				}
+				if diags[i].Status != "warn" {
+					t.Errorf("diag[%d].Status = %q, want %q", i, diags[i].Status, "warn")
+				}
+				if i < len(tt.wantSubs) {
+					for _, sub := range tt.wantSubs[i] {
+						if !strings.Contains(diags[i].Detail, sub) {
+							t.Errorf("diag[%d].Detail missing %q, got: %s", i, sub, diags[i].Detail)
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
 func TestConnectTLS_AIAFetch(t *testing.T) {
 	t.Parallel()
 
@@ -1756,6 +1836,30 @@ func TestDiagnoseCipherScan(t *testing.T) {
 				},
 			},
 			wantChecks: []string{"deprecated-tls10", "cbc-cipher", "static-rsa-kex"},
+		},
+		{
+			name: "DHE key exchange",
+			result: &CipherScanResult{
+				Ciphers: []CipherProbeResult{
+					{Name: "TLS_DHE_RSA_WITH_AES_128_GCM_SHA256", Version: "TLS 1.2", KeyExchange: "DHE", Rating: CipherRatingWeak},
+					{Name: "TLS_DHE_DSS_WITH_AES_128_CBC_SHA", Version: "TLS 1.2", KeyExchange: "DHE-DSS", Rating: CipherRatingWeak},
+				},
+			},
+			wantChecks: []string{"cbc-cipher", "dhe-kex"},
+			wantSubs: [][]string{
+				{"CBC", "1"},
+				{"DHE", "2"},
+			},
+		},
+		{
+			name: "DHE-RSA only — no CBC no static RSA",
+			result: &CipherScanResult{
+				Ciphers: []CipherProbeResult{
+					{Name: "TLS_DHE_RSA_WITH_AES_128_GCM_SHA256", Version: "TLS 1.2", KeyExchange: "DHE", Rating: CipherRatingWeak},
+				},
+			},
+			wantChecks: []string{"dhe-kex"},
+			wantSubs:   [][]string{{"DHE", "1", "deprecated"}},
 		},
 	}
 
