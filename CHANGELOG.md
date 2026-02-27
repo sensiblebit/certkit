@@ -86,12 +86,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Fix `connect --ciphers` showing "none detected" on QUIC-only servers — empty check now covers both TCP and QUIC cipher lists ([`pending`])
-- Fix `probeLegacyCipher` hardcoding `"TLS 1.2"` for negotiated version — now returns the actual negotiated version from the ServerHello ([`pending`])
-- Fix error strings violating ERR-4 (must be lowercase): `"tls alert received"`, `"tls record too large"`, `"quic packet too short"`, `"tls handshake with ..."` ([`pending`])
-- Fix bare `return err` at CLI connect boundary — now wraps with context per ERR-1 ([`pending`])
-- Fix missing `slog.Debug` before `continue` in QUIC ACK frame handler per ERR-5 ([`pending`])
-- Rename `emptyClientCert` → `emptyClientCertificate` per naming convention ([`pending`])
+- Fix `connect --ciphers` showing "none detected" on QUIC-only servers — empty check now covers both TCP and QUIC cipher lists ([`6492fa5`])
+- Fix `probeLegacyCipher` hardcoding `"TLS 1.2"` for negotiated version — now returns the actual negotiated version from the ServerHello ([`6492fa5`])
+- Fix error strings violating ERR-4 (must be lowercase): `"tls alert received"`, `"tls record too large"`, `"quic packet too short"`, `"tls handshake with ..."` ([`6492fa5`])
+- Fix bare `return err` at CLI connect boundary — now wraps with context per ERR-1 ([`6492fa5`])
+- Fix missing `slog.Debug` before `continue` in QUIC ACK frame handler per ERR-5 ([`6492fa5`])
+- Rename `emptyClientCert` → `emptyClientCertificate` per naming convention ([`6492fa5`])
 - Fix bare `return err` in `connect` CLI dropping host context from error messages — ConnectTLS and ScanCipherSuites errors now wrap with host and operation (ERR-1) ([#82])
 - Fix potential out-of-bounds write in QUIC response parser when packet number length exceeds remaining packet bytes ([#82])
 - Add panic guard to `appendQUICVarint2` for values >= 16384 that would silently produce corrupt 2-byte encoding ([#82])
@@ -187,7 +187,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Tests
 
-- Remove `TestBuildLegacyClientHelloMsg` — behavioral coverage exists through `TestLegacyFallbackConnect` per T-11 ([`pending`])
+- Remove `TestBuildLegacyClientHelloMsg` — behavioral coverage exists through `TestLegacyFallbackConnect` per T-11 ([`6492fa5`])
 - Strengthen `TestBuildQUICInitialPacket` — verify QUIC v1 version, DCID/SCID in header, and round-trip decrypt CRYPTO frame against original ClientHello ([#82])
 - Consolidate `TestRateCipherSuite` from 13 entries to 6 — one per distinct code path (T-12) ([#82])
 - Merge `TestScanCipherSuites_KeyExchanges` into `TestScanCipherSuites` — eliminates redundant server setup (T-14) ([#82])
@@ -924,3 +924,4 @@ Initial release.
 [#25]: https://github.com/sensiblebit/certkit/pull/25
 [#26]: https://github.com/sensiblebit/certkit/pull/26
 [#27]: https://github.com/sensiblebit/certkit/pull/27
+[`6492fa5`]: https://github.com/sensiblebit/certkit/commit/6492fa52f43ad7bddd23265f54c15ccadc803d46
