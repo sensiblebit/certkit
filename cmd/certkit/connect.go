@@ -185,6 +185,8 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		hasValidationError = true
 	}
 
+	certkit.SortDiagnostics(result.Diagnostics)
+
 	format := connectFormat
 	if jsonOutput {
 		format = "json"

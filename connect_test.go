@@ -525,6 +525,39 @@ func TestDiagnoseConnectChain(t *testing.T) {
 	}
 }
 
+func TestSortDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	diags := []ChainDiagnostic{
+		{Check: "deprecated-tls10", Status: "warn", Detail: "..."},
+		{Check: "cbc-cipher", Status: "warn", Detail: "..."},
+		{Check: "verify-failed", Status: "error", Detail: "..."},
+		{Check: "3des-cipher", Status: "warn", Detail: "..."},
+		{Check: "hostname-mismatch", Status: "error", Detail: "..."},
+		{Check: "static-rsa-kex", Status: "warn", Detail: "..."},
+	}
+
+	SortDiagnostics(diags)
+
+	wantOrder := []string{
+		"hostname-mismatch", // error, alpha first
+		"verify-failed",     // error, alpha second
+		"3des-cipher",       // warn, alpha
+		"cbc-cipher",
+		"deprecated-tls10",
+		"static-rsa-kex",
+	}
+
+	if len(diags) != len(wantOrder) {
+		t.Fatalf("got %d diagnostics, want %d", len(diags), len(wantOrder))
+	}
+	for i, want := range wantOrder {
+		if diags[i].Check != want {
+			t.Errorf("diags[%d].Check = %q, want %q", i, diags[i].Check, want)
+		}
+	}
+}
+
 func TestDiagnoseVerifyError(t *testing.T) {
 	t.Parallel()
 

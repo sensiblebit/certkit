@@ -68,6 +68,23 @@ func DiagnoseConnectChain(input DiagnoseConnectChainInput) []ChainDiagnostic {
 	return diags
 }
 
+// SortDiagnostics sorts diagnostics: errors before warnings, then alphabetically
+// by check name within each group for stable output order.
+func SortDiagnostics(diags []ChainDiagnostic) {
+	slices.SortStableFunc(diags, func(a, b ChainDiagnostic) int {
+		// Errors first.
+		if a.Status != b.Status {
+			if a.Status == "error" {
+				return -1
+			}
+			if b.Status == "error" {
+				return 1
+			}
+		}
+		return cmp.Compare(a.Check, b.Check)
+	})
+}
+
 // DiagnoseVerifyError returns diagnostics derived from a chain verification error.
 // Currently detects hostname mismatches (x509.HostnameError).
 func DiagnoseVerifyError(verifyErr error) []ChainDiagnostic {
