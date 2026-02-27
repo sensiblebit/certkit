@@ -9,10 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Add `--ciphers` flag to `connect` command — enumerates all supported cipher suites with good/weak ratings, key exchange subgrouping, and forward secrecy labels ([`7299fc5`])
-- Add raw TLS 1.3 cipher prober — probes all 5 RFC 8446 cipher suites using byte-level ClientHello construction, no shared state or data races ([`7299fc5`])
-- Add key exchange group probing to `--ciphers` — detects all 7 named groups including post-quantum hybrids (X25519MLKEM768, SecP256r1MLKEM768, SecP384r1MLKEM1024) with HelloRetryRequest detection ([`7299fc5`])
-- Add QUIC/UDP cipher probing to `--ciphers` — automatically probes UDP 443 alongside TCP, shows "QUIC: not supported" when server rejects ([`7299fc5`])
+- Add `--ciphers` flag to `connect` command — enumerates all supported cipher suites with good/weak ratings, key exchange subgrouping, and forward secrecy labels ([#82])
+- Add raw TLS 1.3 cipher prober — probes all 5 RFC 8446 cipher suites using byte-level ClientHello construction, no shared state or data races ([#82])
+- Add key exchange group probing to `--ciphers` — detects all 7 named groups including post-quantum hybrids (X25519MLKEM768, SecP256r1MLKEM768, SecP384r1MLKEM1024) with HelloRetryRequest detection ([#82])
+- Add QUIC/UDP cipher probing to `--ciphers` — automatically probes UDP 443 alongside TCP, shows "QUIC: not supported" when server rejects ([#82])
 - Auto-generate CLI flag tables in README from Cobra command definitions via `go generate` ([#80])
 - Add `gendocs` pre-commit hook and CI check to verify flag tables stay in sync ([#80])
 - Add global `--json` persistent flag — all commands now support JSON output; overrides `--format` when both are set ([#80])
@@ -857,10 +857,10 @@ Initial release.
 [#75]: https://github.com/sensiblebit/certkit/pull/75
 [#76]: https://github.com/sensiblebit/certkit/pull/76
 [#78]: https://github.com/sensiblebit/certkit/pull/78
-[`7299fc5`]: https://github.com/sensiblebit/certkit/commit/7299fc5
 [`18ed288`]: https://github.com/sensiblebit/certkit/commit/18ed288
 [`1adb9b5`]: https://github.com/sensiblebit/certkit/commit/1adb9b5
 [#80]: https://github.com/sensiblebit/certkit/pull/80
+[#82]: https://github.com/sensiblebit/certkit/pull/82
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63

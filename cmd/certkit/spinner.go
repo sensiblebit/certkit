@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"sync"
@@ -12,11 +13,12 @@ import (
 // spinner displays an animated progress indicator on stderr when the output
 // is a terminal. It silently does nothing when piped or redirected.
 type spinner struct {
-	mu      sync.Mutex
-	msg     string
-	stop    chan struct{}
-	done    chan struct{}
-	started bool
+	mu       sync.Mutex
+	msg      string
+	stop     chan struct{}
+	done     chan struct{}
+	stopOnce sync.Once
+	started  bool
 }
 
 // newSpinner creates a spinner with the given message. Call Start() to begin
@@ -30,15 +32,16 @@ func newSpinner(msg string) *spinner {
 	}
 }
 
-// Start begins the spinner animation in a background goroutine.
-func (s *spinner) Start() {
+// Start begins the spinner animation in a background goroutine. The goroutine
+// is tied to ctx and will stop if the context is cancelled.
+func (s *spinner) Start(ctx context.Context) {
 	if !isatty.IsTerminal(os.Stderr.Fd()) && !isatty.IsCygwinTerminal(os.Stderr.Fd()) {
 		close(s.done)
 		return
 	}
 
 	s.started = true
-	go s.run()
+	go s.run(ctx)
 }
 
 // SetMessage updates the spinner text while it's running.
@@ -48,19 +51,19 @@ func (s *spinner) SetMessage(msg string) {
 	s.mu.Unlock()
 }
 
-// Stop halts the spinner and clears the line.
+// Stop halts the spinner and clears the line. Safe to call multiple times.
 func (s *spinner) Stop() {
 	if !s.started {
 		<-s.done
 		return
 	}
-	close(s.stop)
+	s.stopOnce.Do(func() { close(s.stop) })
 	<-s.done
 }
 
 var spinnerFrames = [...]string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
 
-func (s *spinner) run() {
+func (s *spinner) run(ctx context.Context) {
 	defer close(s.done)
 
 	ticker := time.NewTicker(80 * time.Millisecond)
@@ -78,6 +81,10 @@ func (s *spinner) run() {
 		select {
 		case <-s.stop:
 			// Clear the spinner line.
+			fmt.Fprintf(os.Stderr, "\r\033[K")
+			return
+		case <-ctx.Done():
+			// Context cancelled — clear and exit.
 			fmt.Fprintf(os.Stderr, "\r\033[K")
 			return
 		case <-ticker.C:

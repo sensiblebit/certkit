@@ -613,7 +613,8 @@ type CipherScanResult struct {
 	// KeyExchanges lists accepted key exchange groups (classical and post-quantum).
 	KeyExchanges []KeyExchangeProbeResult `json:"key_exchanges,omitempty"`
 	// OverallRating is the worst rating among all accepted ciphers.
-	OverallRating CipherRating `json:"overall_rating"`
+	// Empty when no ciphers were detected (omitted from JSON).
+	OverallRating CipherRating `json:"overall_rating,omitempty"`
 }
 
 // ScanCipherSuitesInput contains parameters for ScanCipherSuites.
@@ -693,8 +694,12 @@ func kexRank(kex string) int {
 
 // RateCipherSuite returns the security rating for a cipher suite at a given TLS version.
 func RateCipherSuite(cipherID uint16, tlsVersion uint16) CipherRating {
-	// TLS 1.3 suites are always good — they only use AEAD ciphers.
+	// TLS 1.3 suites are all AEAD — generally good, except TLS_AES_128_CCM_8_SHA256
+	// (0x1305) which uses a truncated 8-byte authentication tag and is IANA "Not Recommended".
 	if tlsVersion == tls.VersionTLS13 {
+		if cipherID == 0x1305 {
+			return CipherRatingWeak
+		}
 		return CipherRatingGood
 	}
 
@@ -761,9 +766,10 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 		}
 	}
 
-	// probeTimeout is the maximum time for a single probe attempt. This
-	// is independent of the parent context to prevent slow/stalling servers
-	// from blocking the entire scan. Each probe gets its own child context.
+	// probeTimeout is the maximum time for a single probe attempt. Each
+	// probe gets a child context derived from ctx, so it also inherits the
+	// parent's cancellation. The short timeout prevents slow/stalling
+	// servers from blocking the entire scan.
 	const probeTimeout = 2 * time.Second
 
 	// Probe TLS 1.3 ciphers using raw ClientHello packets. Each probe is
@@ -962,11 +968,14 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 
 	// Compute supported versions and overall rating.
 	versionSet := make(map[string]bool)
-	overall := CipherRatingGood
-	for _, r := range results {
-		versionSet[r.Version] = true
-		if ratingRank(r.Rating) > ratingRank(overall) {
-			overall = r.Rating
+	var overall CipherRating
+	if len(results) > 0 {
+		overall = CipherRatingGood
+		for _, r := range results {
+			versionSet[r.Version] = true
+			if ratingRank(r.Rating) > ratingRank(overall) {
+				overall = r.Rating
+			}
 		}
 	}
 
@@ -1167,7 +1176,7 @@ func kexLabel(kex string) string {
 
 // FormatCipherScanResult formats the cipher suite list as human-readable text.
 func FormatCipherScanResult(r *CipherScanResult) string {
-	if len(r.Ciphers) == 0 {
+	if r == nil || len(r.Ciphers) == 0 {
 		return ""
 	}
 

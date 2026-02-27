@@ -45,7 +45,7 @@ func deriveQUICInitialKeys(dcid []byte) (client, server quicInitialKeys, err err
 		return client, server, fmt.Errorf("extracting initial secret: %w", err)
 	}
 
-	clientSecret, err := hkdfExpandLabel(initialSecret, "client in", 32)
+	clientSecret, err := hkdfExpandLabel(hkdfExpandLabelInput{secret: initialSecret, label: "client in", length: 32})
 	if err != nil {
 		return client, server, fmt.Errorf("deriving client secret: %w", err)
 	}
@@ -54,7 +54,7 @@ func deriveQUICInitialKeys(dcid []byte) (client, server quicInitialKeys, err err
 		return client, server, fmt.Errorf("deriving client keys: %w", err)
 	}
 
-	serverSecret, err := hkdfExpandLabel(initialSecret, "server in", 32)
+	serverSecret, err := hkdfExpandLabel(hkdfExpandLabelInput{secret: initialSecret, label: "server in", length: 32})
 	if err != nil {
 		return client, server, fmt.Errorf("deriving server secret: %w", err)
 	}
@@ -68,34 +68,41 @@ func deriveQUICInitialKeys(dcid []byte) (client, server quicInitialKeys, err err
 
 // deriveTrafficKeys derives key, IV, and HP key from a traffic secret.
 func deriveTrafficKeys(secret []byte) (quicInitialKeys, error) {
-	key, err := hkdfExpandLabel(secret, "quic key", 16)
+	key, err := hkdfExpandLabel(hkdfExpandLabelInput{secret: secret, label: "quic key", length: 16})
 	if err != nil {
 		return quicInitialKeys{}, err
 	}
-	iv, err := hkdfExpandLabel(secret, "quic iv", 12)
+	iv, err := hkdfExpandLabel(hkdfExpandLabelInput{secret: secret, label: "quic iv", length: 12})
 	if err != nil {
 		return quicInitialKeys{}, err
 	}
-	hp, err := hkdfExpandLabel(secret, "quic hp", 16)
+	hp, err := hkdfExpandLabel(hkdfExpandLabelInput{secret: secret, label: "quic hp", length: 16})
 	if err != nil {
 		return quicInitialKeys{}, err
 	}
 	return quicInitialKeys{key: key, iv: iv, hp: hp}, nil
 }
 
+// hkdfExpandLabelInput contains parameters for HKDF-Expand-Label.
+type hkdfExpandLabelInput struct {
+	secret []byte
+	label  string
+	length int
+}
+
 // hkdfExpandLabel implements TLS 1.3 HKDF-Expand-Label (RFC 8446 §7.1).
 // The label is prefixed with "tls13 " as required by the spec.
-func hkdfExpandLabel(secret []byte, label string, length int) ([]byte, error) {
-	fullLabel := "tls13 " + label
+func hkdfExpandLabel(input hkdfExpandLabelInput) ([]byte, error) {
+	fullLabel := "tls13 " + input.label
 
 	// Build HkdfLabel struct: uint16 length + opaque label<7..255> + opaque context<0..255>
 	var info []byte
-	info = appendUint16(info, uint16(length))
+	info = appendUint16(info, uint16(input.length))
 	info = append(info, byte(len(fullLabel)))
 	info = append(info, []byte(fullLabel)...)
 	info = append(info, 0) // empty context
 
-	return hkdf.Expand(sha256.New, secret, string(info), length)
+	return hkdf.Expand(sha256.New, input.secret, string(info), input.length)
 }
 
 // quicInitialPacketInput contains parameters for building a QUIC Initial packet.
@@ -218,7 +225,7 @@ func parseQUICInitialResponse(packet []byte, serverKeys quicInitialKeys) (*serve
 	// Check it's a Long Header Initial packet.
 	firstByte := packet[0]
 	if firstByte&0x80 == 0 {
-		return nil, fmt.Errorf("not a Long Header packet")
+		return nil, fmt.Errorf("not a long header packet")
 	}
 
 	// Remove header protection first.

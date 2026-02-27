@@ -67,7 +67,7 @@ var errAlertReceived = errors.New("TLS alert received")
 // HelloRetryRequest instead of a real ServerHello. Per RFC 8446 §4.1.3, an HRR
 // is a ServerHello with a specific synthetic random value. It means the server
 // supports TLS 1.3 but not the offered key exchange group.
-var errHelloRetryRequest = errors.New("HelloRetryRequest received (group not supported)")
+var errHelloRetryRequest = errors.New("hello retry request received, group not supported")
 
 // hrrSentinel is the synthetic random value that distinguishes a
 // HelloRetryRequest from a real ServerHello (RFC 8446 §4.1.3).
@@ -288,18 +288,18 @@ func parseServerHello(data []byte) (*serverHelloResult, error) {
 	handshakeLen := int(data[1])<<16 | int(data[2])<<8 | int(data[3])
 
 	if handshakeType != 0x02 {
-		return nil, fmt.Errorf("unexpected handshake type: 0x%02x (expected ServerHello 0x02)", handshakeType)
+		return nil, fmt.Errorf("unexpected handshake type: 0x%02x, expected server hello 0x02", handshakeType)
 	}
 
 	if len(data) < 4+handshakeLen {
-		return nil, fmt.Errorf("ServerHello truncated: need %d bytes, have %d", 4+handshakeLen, len(data))
+		return nil, fmt.Errorf("server hello truncated: need %d bytes, have %d", 4+handshakeLen, len(data))
 	}
 
 	body := data[4 : 4+handshakeLen]
 
 	// ServerHello body: version(2) + random(32) + session_id_len(1) + ...
 	if len(body) < 35 {
-		return nil, fmt.Errorf("ServerHello body too short: %d bytes", len(body))
+		return nil, fmt.Errorf("server hello body too short: %d bytes", len(body))
 	}
 
 	// Check for HelloRetryRequest (RFC 8446 §4.1.3): a ServerHello with the
@@ -317,20 +317,20 @@ func parseServerHello(data []byte) (*serverHelloResult, error) {
 	sessionIDLen := int(body[pos])
 	pos++
 	if pos+sessionIDLen > len(body) {
-		return nil, fmt.Errorf("ServerHello truncated at session ID")
+		return nil, fmt.Errorf("server hello truncated at session ID")
 	}
 	pos += sessionIDLen
 
 	// Cipher suite (2 bytes).
 	if pos+2 > len(body) {
-		return nil, fmt.Errorf("ServerHello truncated at cipher suite")
+		return nil, fmt.Errorf("server hello truncated at cipher suite")
 	}
 	cipherSuite := binary.BigEndian.Uint16(body[pos : pos+2])
 	pos += 2
 
 	// Compression method (1 byte).
 	if pos+1 > len(body) {
-		return nil, fmt.Errorf("ServerHello truncated at compression method")
+		return nil, fmt.Errorf("server hello truncated at compression method")
 	}
 	pos++
 

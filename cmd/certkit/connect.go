@@ -106,7 +106,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	}
 
 	spin := newSpinner("Connecting…")
-	spin.Start()
+	spin.Start(cmd.Context())
 
 	ctx, cancel := context.WithTimeout(cmd.Context(), 10*time.Second)
 	defer cancel()
