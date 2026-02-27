@@ -29,6 +29,7 @@ repos:
         language: system
         files: \.go$
         pass_filenames: false
+        stages: [manual]
 
       - id: npm-update
         name: npm update
@@ -36,6 +37,7 @@ repos:
         language: system
         files: ^web/
         pass_filenames: false
+        stages: [manual]
 
   # ── Docs ──
   - repo: local

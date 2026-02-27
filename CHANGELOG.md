@@ -57,9 +57,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Harden QUIC response parser — add bounds checks for DCID/SCID lengths, varint decode guards to prevent infinite loops on malformed ACK frames, and increase UDP read buffer to 65535 bytes ([`1adb9b5`])
-- Harden TLS ServerHello parser — add explicit bounds check for oversized session ID length before advancing position ([`1adb9b5`])
-- Refactor probe functions to use input structs per CS-5 — `probeTLS13Cipher`, `probeKeyExchangeGroup`, `probeQUICCipher`, `probeCipher`, `probeKeyExchangeGroupLegacy` now take `cipherProbeInput` ([`1adb9b5`])
+- Harden QUIC response parser — add bounds checks for DCID/SCID lengths, varint decode guards to prevent infinite loops on malformed ACK frames, and increase UDP read buffer to 65535 bytes ([#82])
+- Harden TLS ServerHello parser — add explicit bounds check for oversized session ID length before advancing position ([#82])
+- Refactor probe functions to use input structs per CS-5 — `probeTLS13Cipher`, `probeKeyExchangeGroup`, `probeQUICCipher`, `probeCipher`, `probeKeyExchangeGroupLegacy` now take `cipherProbeInput` ([#82])
 - **Breaking:** Rename `csr --cert` flag to `--from-cert` for clarity — avoids confusion with certificate file arguments in other commands ([#80])
 - **Breaking:** `connect` JSON `sha256_fingerprint` format changed from lowercase hex to colon-separated uppercase hex for CLI-4 consistency with `inspect` and `sha1_fingerprint` ([#80])
 - **Breaking:** Rename `CRLCheckResult.DistributionPoint` to `CRLCheckResult.URL` (JSON: `url`) and `OCSPResult.ResponderURL` to `OCSPResult.URL` (JSON: `url`) — consistent field name for the checked endpoint across both revocation types (CLI-4) ([#78])
@@ -76,11 +76,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Fix QUIC varint `uint64`→`int` overflow in `parseQUICInitialResponse` — bounds checks now compare in `uint64` space to prevent truncation on malicious packets ([`18ed288`])
-- Fix ACK range loop inner `break` not propagating to outer frame parser in QUIC decoder — malformed ACK frames could corrupt subsequent frame parsing ([`18ed288`])
-- Cap ACK `rangeCount` to plaintext length to prevent CPU exhaustion on malicious QUIC packets ([`18ed288`])
-- Fix double-wrapped error messages in `connect` CLI — "connecting to: connecting to:" and "scanning cipher suites: scanning cipher suites:" ([`18ed288`])
-- Fix `CipherScanResult` JSON encoding `supported_versions` and `ciphers` as `null` instead of `[]` when no ciphers detected ([`18ed288`])
+- Fix QUIC varint `uint64`→`int` overflow in `parseQUICInitialResponse` — bounds checks now compare in `uint64` space to prevent truncation on malicious packets ([#82])
+- Fix ACK range loop inner `break` not propagating to outer frame parser in QUIC decoder — malformed ACK frames could corrupt subsequent frame parsing ([#82])
+- Cap ACK `rangeCount` to plaintext length to prevent CPU exhaustion on malicious QUIC packets ([#82])
+- Fix double-wrapped error messages in `connect` CLI — "connecting to: connecting to:" and "scanning cipher suites: scanning cipher suites:" ([#82])
+- Fix `CipherScanResult` JSON encoding `supported_versions` and `ciphers` as `null` instead of `[]` when no ciphers detected ([#82])
 - Fix backtick-quoted values in flag usage strings being consumed by pflag as type placeholders — all `--format`, `--trust-store`, `--log-level`, `--algorithm`, and `--curve` flags now display correctly in `--help` output ([#80])
 - Fix `convert --json` without `-o` missing `format` field in JSON output ([#80])
 - Fix data race in `TestCheckLeafCRL` — CRL bytes are now generated before starting the test HTTP server (CC-3) ([#78])
@@ -154,15 +154,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Tests
 
-- Strengthen `TestBuildQUICInitialPacket` — verify QUIC v1 version, DCID/SCID in header, and round-trip decrypt CRYPTO frame against original ClientHello ([`18ed288`])
-- Consolidate `TestRateCipherSuite` from 13 entries to 6 — one per distinct code path (T-12) ([`18ed288`])
-- Merge `TestScanCipherSuites_KeyExchanges` into `TestScanCipherSuites` — eliminates redundant server setup (T-14) ([`18ed288`])
-- Fix brittle `tls13Count != 3` assertion — use `>= 1` to tolerate future Go TLS 1.3 cipher additions ([`18ed288`])
-- Consolidate `FormatCipherScanResult` tests — merge QUIC and key exchange standalone tests into table-driven test ([`1adb9b5`])
-- Consolidate `BuildClientHello` tests — merge ALPN/QUIC test into subtests with session ID assertion ([`1adb9b5`])
-- Remove tests that validate upstream behavior rather than certkit logic: `TestDeriveQUICInitialKeys`, `TestGenerateKeyShare`, `TestIsPQKeyExchange` ([`1adb9b5`])
-- Add `parseServerHello` edge case tests — oversized session ID length, truncation at compression method ([`1adb9b5`])
-- Add `FormatConnectResult` tests for "Verify: FAILED" and "Client Auth: any CA" paths ([`1adb9b5`])
+- Strengthen `TestBuildQUICInitialPacket` — verify QUIC v1 version, DCID/SCID in header, and round-trip decrypt CRYPTO frame against original ClientHello ([#82])
+- Consolidate `TestRateCipherSuite` from 13 entries to 6 — one per distinct code path (T-12) ([#82])
+- Merge `TestScanCipherSuites_KeyExchanges` into `TestScanCipherSuites` — eliminates redundant server setup (T-14) ([#82])
+- Fix brittle `tls13Count != 3` assertion — use `>= 1` to tolerate future Go TLS 1.3 cipher additions ([#82])
+- Consolidate `FormatCipherScanResult` tests — merge QUIC and key exchange standalone tests into table-driven test ([#82])
+- Consolidate `BuildClientHello` tests — merge ALPN/QUIC test into subtests with session ID assertion ([#82])
+- Remove tests that validate upstream behavior rather than certkit logic: `TestDeriveQUICInitialKeys`, `TestGenerateKeyShare`, `TestIsPQKeyExchange` ([#82])
+- Add `parseServerHello` edge case tests — oversized session ID length, truncation at compression method ([#82])
+- Add `FormatConnectResult` tests for "Verify: FAILED" and "Client Auth: any CA" paths ([#82])
 - Add `TestConnectTLS_CRL_AIAFetchedIssuer` — verifies CRL checking works when issuer is obtained via AIA walking ([#78])
 - Add `TestFetchCRL_AllowPrivateNetworks` — verifies loopback IPs succeed with `AllowPrivateNetworks` ([#78])
 - Add `TestFetchCRL` unit tests for HTTP handling, redirect limits, SSRF blocking, and error paths ([#78])
@@ -857,8 +857,6 @@ Initial release.
 [#75]: https://github.com/sensiblebit/certkit/pull/75
 [#76]: https://github.com/sensiblebit/certkit/pull/76
 [#78]: https://github.com/sensiblebit/certkit/pull/78
-[`18ed288`]: https://github.com/sensiblebit/certkit/commit/18ed288
-[`1adb9b5`]: https://github.com/sensiblebit/certkit/commit/1adb9b5
 [#80]: https://github.com/sensiblebit/certkit/pull/80
 [#82]: https://github.com/sensiblebit/certkit/pull/82
 [#73]: https://github.com/sensiblebit/certkit/pull/73

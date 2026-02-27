@@ -1198,12 +1198,19 @@ func TestRateCipherSuite(t *testing.T) {
 		tlsVersion uint16
 		want       CipherRating
 	}{
-		// TLS 1.3 — always good (all suites are AEAD).
+		// TLS 1.3 — generally good (all suites are AEAD).
 		{
-			name:       "TLS 1.3 always good",
+			name:       "TLS 1.3 good",
 			cipherID:   tls.TLS_AES_128_GCM_SHA256,
 			tlsVersion: tls.VersionTLS13,
 			want:       CipherRatingGood,
+		},
+		// TLS 1.3 CCM_8 — weak (truncated 8-byte auth tag, IANA "Not Recommended").
+		{
+			name:       "TLS 1.3 CCM_8 weak",
+			cipherID:   0x1305,
+			tlsVersion: tls.VersionTLS13,
+			want:       CipherRatingWeak,
 		},
 		// TLS 1.2 ECDHE + GCM — good (forward secrecy + AEAD).
 		{

@@ -381,6 +381,11 @@ type cipherProbeInput struct {
 // probeTLS13Cipher attempts a raw TLS 1.3 ClientHello with a single cipher
 // suite and returns true if the server accepts it. Each call is fully isolated
 // with no shared state — safe for concurrent use from multiple goroutines.
+//
+// The key share uses X25519 only. Servers that support TLS 1.3 but reject
+// X25519 will trigger a HelloRetryRequest, causing this probe to return false.
+// In practice this is extremely rare — X25519 is mandatory in modern browsers
+// and required by RFC 8446 implementations.
 func probeTLS13Cipher(ctx context.Context, input cipherProbeInput) bool {
 	dialer := &net.Dialer{}
 	conn, err := dialer.DialContext(ctx, "tcp", input.addr)

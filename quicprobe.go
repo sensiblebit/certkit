@@ -19,6 +19,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 )
 
@@ -357,12 +358,12 @@ func parseQUICInitialResponse(packet []byte, serverKeys quicInitialKeys) (*serve
 	for fpos < len(plaintext) {
 		frameType := plaintext[fpos]
 		if frameType == 0x00 {
-			// PADDING frame — skip.
+			slog.Debug("skipping QUIC PADDING frame")
 			fpos++
 			continue
 		}
 		if frameType == 0x01 {
-			// PING frame — skip.
+			slog.Debug("skipping QUIC PING frame")
 			fpos++
 			continue
 		}

@@ -13,12 +13,13 @@ import (
 // spinner displays an animated progress indicator on stderr when the output
 // is a terminal. It silently does nothing when piped or redirected.
 type spinner struct {
-	mu       sync.Mutex
-	msg      string
-	stop     chan struct{}
-	done     chan struct{}
-	stopOnce sync.Once
-	started  bool
+	mu        sync.Mutex
+	msg       string
+	stop      chan struct{}
+	done      chan struct{}
+	startOnce sync.Once
+	stopOnce  sync.Once
+	started   bool
 }
 
 // newSpinner creates a spinner with the given message. Call Start() to begin
@@ -33,15 +34,18 @@ func newSpinner(msg string) *spinner {
 }
 
 // Start begins the spinner animation in a background goroutine. The goroutine
-// is tied to ctx and will stop if the context is cancelled.
+// is tied to ctx and will stop if the context is cancelled. Safe to call
+// multiple times — only the first call has any effect.
 func (s *spinner) Start(ctx context.Context) {
-	if !isatty.IsTerminal(os.Stderr.Fd()) && !isatty.IsCygwinTerminal(os.Stderr.Fd()) {
-		close(s.done)
-		return
-	}
+	s.startOnce.Do(func() {
+		if !isatty.IsTerminal(os.Stderr.Fd()) && !isatty.IsCygwinTerminal(os.Stderr.Fd()) {
+			close(s.done)
+			return
+		}
 
-	s.started = true
-	go s.run(ctx)
+		s.started = true
+		go s.run(ctx)
+	})
 }
 
 // SetMessage updates the spinner text while it's running.
