@@ -173,10 +173,6 @@ func readServerCertificates(r io.Reader) (*serverHelloResult, []*x509.Certificat
 	totalRead := 0
 
 	for {
-		if totalRead > maxCertificatePayload {
-			return shResult, certs, fmt.Errorf("exceeded %d byte limit reading server handshake", maxCertificatePayload)
-		}
-
 		// Read TLS record header (5 bytes): type(1) + version(2) + length(2).
 		header := make([]byte, 5)
 		if _, err := io.ReadFull(r, header); err != nil {
@@ -192,6 +188,11 @@ func readServerCertificates(r io.Reader) (*serverHelloResult, []*x509.Certificat
 
 		if recordLen > 16640 {
 			return shResult, certs, fmt.Errorf("TLS record too large: %d bytes", recordLen)
+		}
+		// Check before allocating: a malicious server cannot force us to allocate
+		// more than maxCertificatePayload bytes even if record sizes are valid.
+		if totalRead+recordLen > maxCertificatePayload {
+			return shResult, certs, fmt.Errorf("exceeded %d byte limit reading server handshake", maxCertificatePayload)
 		}
 
 		payload := make([]byte, recordLen)

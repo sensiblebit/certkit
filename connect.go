@@ -1526,11 +1526,17 @@ func FormatConnectResult(r *ConnectResult) string {
 	fmt.Fprintf(&out, "Cipher Suite: %s\n", r.CipherSuite)
 	fmt.Fprintf(&out, "Server Name:  %s\n", r.ServerName)
 
+	if r.LegacyProbe {
+		out.WriteString("Note:         certificate obtained via raw probe — server only supports legacy cipher suites\n")
+	}
+
 	if r.ALPN != "" {
 		fmt.Fprintf(&out, "ALPN:         %s\n", r.ALPN)
 	}
 
-	if r.VerifyError != "" {
+	if r.LegacyProbe {
+		out.WriteString("Verify:       N/A (raw handshake — certificate not cryptographically verified)\n")
+	} else if r.VerifyError != "" {
 		fmt.Fprintf(&out, "Verify:       FAILED (%s)\n", r.VerifyError)
 	} else if r.AIAFetched {
 		out.WriteString("Verify:       OK (intermediates fetched via AIA)\n")

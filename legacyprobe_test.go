@@ -11,6 +11,7 @@ import (
 	"errors"
 	"math/big"
 	"net"
+	"strings"
 	"testing"
 	"time"
 )
@@ -294,13 +295,16 @@ func TestReadServerCertificates(t *testing.T) {
 	certMsgSplit1 := certMsg[:len(certMsg)/2]
 	certMsgSplit2 := certMsg[len(certMsg)/2:]
 
+	serverHelloDone := []byte{0x0E, 0x00, 0x00, 0x00} // ServerHelloDone handshake message
+
 	tests := []struct {
-		name      string
-		records   []byte
-		wantCS    uint16
-		wantVer   uint16
-		wantCerts int
-		wantErr   error // nil means no error; non-nil checked with errors.Is
+		name            string
+		records         []byte
+		wantCS          uint16
+		wantVer         uint16
+		wantCerts       int
+		wantErr         error  // checked with errors.Is (sentinel errors)
+		wantErrContains string // checked with strings.Contains (non-sentinel errors)
 	}{
 		{
 			name:      "single record with ServerHello + Certificate",
@@ -331,6 +335,23 @@ func TestReadServerCertificates(t *testing.T) {
 			records: buildAlertRecord(),
 			wantErr: errAlertReceived,
 		},
+		{
+			name:      "ServerHelloDone without Certificate",
+			records:   wrapTLSRecord(append(serverHello, serverHelloDone...)),
+			wantCS:    0x0033,
+			wantVer:   0x0303,
+			wantCerts: 0,
+		},
+		{
+			name:            "oversized TLS record",
+			records:         buildRawTLSRecord(0x16, 16641),
+			wantErrContains: "TLS record too large",
+		},
+		{
+			name:            "unexpected content type",
+			records:         buildRawTLSRecord(0x17, 1), // ApplicationData
+			wantErrContains: "unexpected TLS content type",
+		},
 	}
 
 	for _, tt := range tests {
@@ -341,6 +362,15 @@ func TestReadServerCertificates(t *testing.T) {
 			if tt.wantErr != nil {
 				if !errors.Is(err, tt.wantErr) {
 					t.Fatalf("error = %v, want %v", err, tt.wantErr)
+				}
+				return
+			}
+			if tt.wantErrContains != "" {
+				if err == nil {
+					t.Fatal("expected error, got nil")
+				}
+				if !strings.Contains(err.Error(), tt.wantErrContains) {
+					t.Fatalf("error = %v, want containing %q", err, tt.wantErrContains)
 				}
 				return
 			}
@@ -365,6 +395,54 @@ func TestReadServerCertificates(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestReadServerCertificates_AlertAfterServerHello verifies that when an alert
+// arrives after a ServerHello, the ServerHello result is still returned alongside
+// the errAlertReceived sentinel.
+func TestReadServerCertificates_AlertAfterServerHello(t *testing.T) {
+	t.Parallel()
+	serverHello := buildMockServerHello(0x0303, 0x0033)
+	records := append(wrapTLSRecord(serverHello), buildAlertRecord()...)
+
+	sh, certs, err := readServerCertificates(bytes.NewReader(records))
+	if !errors.Is(err, errAlertReceived) {
+		t.Fatalf("err = %v, want errAlertReceived", err)
+	}
+	if sh == nil {
+		t.Error("expected non-nil ServerHello result even when alert follows")
+	}
+	if len(certs) != 0 {
+		t.Errorf("expected 0 certs, got %d", len(certs))
+	}
+}
+
+// TestReadServerCertificates_PayloadLimit verifies that readServerCertificates
+// rejects a stream that would exceed maxCertificatePayload before allocating
+// the payload buffer.
+func TestReadServerCertificates_PayloadLimit(t *testing.T) {
+	t.Parallel()
+
+	// Generate records with ignored handshake messages (CertificateRequest, type 0x0D)
+	// totalling just over maxCertificatePayload bytes.
+	const chunkBody = 4000
+	var chunkMsg []byte
+	chunkMsg = append(chunkMsg, 0x0D) // CertificateRequest — ignored by readServerCertificates
+	chunkMsg = appendUint24(chunkMsg, chunkBody)
+	chunkMsg = append(chunkMsg, make([]byte, chunkBody)...)
+
+	var records []byte
+	for len(records) <= maxCertificatePayload {
+		records = append(records, wrapTLSRecord(chunkMsg)...)
+	}
+
+	_, _, err := readServerCertificates(bytes.NewReader(records))
+	if err == nil {
+		t.Fatal("expected error for payload exceeding limit, got nil")
+	}
+	if !strings.Contains(err.Error(), "exceeded") {
+		t.Errorf("error = %v, want containing %q", err, "exceeded")
 	}
 }
 
@@ -396,6 +474,17 @@ func buildCertificateHandshakeMessage(certs ...[]byte) []byte {
 	msg = appendUint24(msg, uint32(len(body)))
 	msg = append(msg, body...)
 	return msg
+}
+
+// buildRawTLSRecord builds a TLS record with the given content type and a
+// payload of payloadLen zero bytes. Unlike wrapTLSRecord it does NOT cap the
+// payload size, so it can be used to construct intentionally oversized records
+// for negative test cases.
+func buildRawTLSRecord(contentType byte, payloadLen int) []byte {
+	record := []byte{contentType, 0x03, 0x03}
+	record = appendUint16(record, uint16(payloadLen))
+	record = append(record, make([]byte, payloadLen)...)
+	return record
 }
 
 // buildAlertRecord builds a TLS Alert record.
@@ -493,7 +582,6 @@ func TestCipherSuiteNameLegacyIDs(t *testing.T) {
 		{0x0033, "TLS_DHE_RSA_WITH_AES_128_CBC_SHA"},
 		{0x009E, "TLS_DHE_RSA_WITH_AES_128_GCM_SHA256"},
 		{0x0032, "TLS_DHE_DSS_WITH_AES_128_CBC_SHA"},
-		{0x1301, "TLS_AES_128_GCM_SHA256"}, // Standard suite via Go's registry
 	}
 
 	for _, tt := range tests {

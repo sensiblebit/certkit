@@ -395,8 +395,8 @@ func parseQUICInitialResponse(packet []byte, serverKeys quicInitialKeys) (*serve
 				break
 			}
 			fpos += varLen
-			// Cap rangeCount to avoid CPU exhaustion on malicious packets.
-			if rangeCount > uint64(len(plaintext)) {
+			// Cap rangeCount: each range item is at least 2 varint bytes (gap + range).
+			if rangeCount > uint64(len(plaintext))/2 {
 				break
 			}
 			malformed := false
@@ -442,18 +442,18 @@ func parseQUICInitialResponse(packet []byte, serverKeys quicInitialKeys) (*serve
 		fpos++ // skip frame type
 		_, varLen := decodeQUICVarint(plaintext[fpos:])
 		if varLen == 0 {
-			return nil, fmt.Errorf("malformed CRYPTO frame offset")
+			return nil, fmt.Errorf("malformed crypto frame offset")
 		}
 		fpos += varLen // skip offset
 
 		dataLen, varLen := decodeQUICVarint(plaintext[fpos:])
 		if varLen == 0 {
-			return nil, fmt.Errorf("malformed CRYPTO frame length")
+			return nil, fmt.Errorf("malformed crypto frame length")
 		}
 		fpos += varLen
 
 		if dataLen > uint64(len(plaintext)-fpos) {
-			return nil, fmt.Errorf("CRYPTO frame data truncated")
+			return nil, fmt.Errorf("crypto frame data truncated")
 		}
 		cryptoData := plaintext[fpos : fpos+int(dataLen)]
 
@@ -461,7 +461,7 @@ func parseQUICInitialResponse(packet []byte, serverKeys quicInitialKeys) (*serve
 		return parseServerHello(cryptoData)
 	}
 
-	return nil, fmt.Errorf("no CRYPTO frame found in QUIC Initial response")
+	return nil, fmt.Errorf("no crypto frame found in QUIC Initial response")
 }
 
 // probeQUICCipher sends a QUIC Initial packet to the provided UDP address

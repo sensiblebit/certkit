@@ -420,6 +420,35 @@ func TestFormatConnectResult(t *testing.T) {
 		},
 	}
 
+	// LegacyProbe cases are structurally different: the result has LegacyProbe=true.
+	t.Run("LegacyProbe shows Note and Verify N/A", func(t *testing.T) {
+		t.Parallel()
+		result := &ConnectResult{
+			Host:        "test.example.com",
+			Port:        "443",
+			Protocol:    "TLS 1.2",
+			CipherSuite: "TLS_DHE_RSA_WITH_AES_128_CBC_SHA",
+			ServerName:  "test.example.com",
+			PeerChain:   []*x509.Certificate{cert},
+			LegacyProbe: true,
+		}
+		output := FormatConnectResult(result)
+		for _, want := range []string{
+			"Note:",
+			"raw probe",
+			"Verify:       N/A",
+			"not cryptographically verified",
+		} {
+			if !strings.Contains(output, want) {
+				t.Errorf("output missing %q\ngot:\n%s", want, output)
+			}
+		}
+		// Must NOT show "Verify:       OK" for a legacy probe result.
+		if strings.Contains(output, "Verify:       OK") {
+			t.Errorf("output contains misleading %q for LegacyProbe result\ngot:\n%s", "Verify:       OK", output)
+		}
+	})
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
