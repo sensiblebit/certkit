@@ -4,6 +4,7 @@ package main
 
 import (
 	"fmt"
+	"log/slog"
 	"os"
 	"strings"
 
@@ -45,7 +46,7 @@ func main() {
 
 	content, err := os.ReadFile(readmePath)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error: reading %s: %v\n", readmePath, err)
+		slog.Error("reading README", "path", readmePath, "err", err)
 		os.Exit(1)
 	}
 
@@ -55,19 +56,23 @@ func main() {
 	for _, entry := range markerCommandMap {
 		table := generateFlagTable(entry.cmd, entry.persistent)
 		var spliceErr error
-		result, spliceErr = spliceMarker(result, entry.marker, table)
+		result, spliceErr = spliceMarker(spliceMarkerInput{
+			doc:         result,
+			name:        entry.marker,
+			replacement: table,
+		})
 		if spliceErr != nil {
-			fmt.Fprintf(os.Stderr, "error: %v\n", spliceErr)
+			slog.Error("splicing marker", "marker", entry.marker, "err", spliceErr)
 			os.Exit(1)
 		}
 	}
 
 	if result != original {
 		if err := os.WriteFile(readmePath, []byte(result), 0644); err != nil {
-			fmt.Fprintf(os.Stderr, "error: writing %s: %v\n", readmePath, err)
+			slog.Error("writing README", "path", readmePath, "err", err)
 			os.Exit(1)
 		}
-		fmt.Fprintf(os.Stderr, "Updated %s\n", readmePath)
+		slog.Info("updated README", "path", readmePath)
 	} else {
 		fmt.Fprintf(os.Stderr, "%s is up to date\n", readmePath)
 	}
@@ -177,20 +182,27 @@ func isRequired(cmd *cobra.Command, flagName string) bool {
 	return false
 }
 
+// spliceMarkerInput holds parameters for spliceMarker.
+type spliceMarkerInput struct {
+	doc         string
+	name        string
+	replacement string
+}
+
 // spliceMarker replaces content between <!-- certkit:flags:NAME --> and
 // <!-- /certkit:flags --> markers with the given replacement text.
-func spliceMarker(doc, name, replacement string) (string, error) {
-	openTag := "<!-- certkit:flags:" + name + " -->"
+func spliceMarker(in spliceMarkerInput) (string, error) {
+	openTag := "<!-- certkit:flags:" + in.name + " -->"
 	closeTag := "<!-- /certkit:flags -->"
 
-	openIdx := strings.Index(doc, openTag)
+	openIdx := strings.Index(in.doc, openTag)
 	if openIdx < 0 {
 		return "", fmt.Errorf("missing open marker %q in README.md", openTag)
 	}
 
 	// Find the close tag after the open tag.
 	afterOpen := openIdx + len(openTag)
-	closeIdx := strings.Index(doc[afterOpen:], closeTag)
+	closeIdx := strings.Index(in.doc[afterOpen:], closeTag)
 	if closeIdx < 0 {
 		return "", fmt.Errorf("missing close marker %q after %q in README.md", closeTag, openTag)
 	}
@@ -198,10 +210,10 @@ func spliceMarker(doc, name, replacement string) (string, error) {
 
 	// Build the spliced document.
 	var b strings.Builder
-	b.WriteString(doc[:afterOpen])
+	b.WriteString(in.doc[:afterOpen])
 	b.WriteByte('\n')
-	b.WriteString(replacement)
-	b.WriteString(doc[closeIdx:])
+	b.WriteString(in.replacement)
+	b.WriteString(in.doc[closeIdx:])
 
 	return b.String(), nil
 }
