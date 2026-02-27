@@ -396,40 +396,12 @@ func generateTestLeafCert(t *testing.T, ca *testCA, opts ...testLeafOption) *tes
 // and private key. Returns the listener port. The server is stopped via t.Cleanup.
 func startTLSServer(t *testing.T, certChain [][]byte, key *ecdsa.PrivateKey) string {
 	t.Helper()
-	tlsCert := tls.Certificate{
-		Certificate: certChain,
-		PrivateKey:  key,
-	}
-	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
-		Certificates: []tls.Certificate{tlsCert},
+	return startTLSServerWithConfig(t, &tls.Config{
+		Certificates: []tls.Certificate{{
+			Certificate: certChain,
+			PrivateKey:  key,
+		}},
 	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = listener.Close() })
-
-	go func() {
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
-			if tlsConn, ok := conn.(*tls.Conn); ok {
-				if err := tlsConn.Handshake(); err != nil {
-					slog.Debug("startTLSServer: handshake error (expected during test teardown)", "error", err)
-				}
-			}
-			if err := conn.Close(); err != nil {
-				slog.Debug("startTLSServer: connection close error", "error", err)
-			}
-		}
-	}()
-
-	_, port, err := net.SplitHostPort(listener.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	return port
 }
 
 // startTLSServerWithConfig starts a TLS server with the given tls.Config.

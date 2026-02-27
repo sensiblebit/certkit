@@ -1378,14 +1378,20 @@ func TestFormatCipherScanResult(t *testing.T) {
 	tests := []struct {
 		name        string
 		result      *CipherScanResult
+		wantExact   string // if non-empty, assert exact match instead of substring checks
 		wantStrings []string
 	}{
 		{
-			name: "empty results — no output",
+			name:      "nil result — no output",
+			result:    nil,
+			wantExact: "",
+		},
+		{
+			name: "empty ciphers — none detected",
 			result: &CipherScanResult{
 				Ciphers: nil,
 			},
-			wantStrings: nil, // empty string, nothing to check
+			wantStrings: []string{"none detected"},
 		},
 		{
 			name: "mixed ratings with kex subgroups",
@@ -1473,6 +1479,12 @@ func TestFormatCipherScanResult(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			output := FormatCipherScanResult(tt.result)
+			if tt.wantStrings == nil {
+				if output != tt.wantExact {
+					t.Errorf("want exact %q, got %q", tt.wantExact, output)
+				}
+				return
+			}
 			for _, want := range tt.wantStrings {
 				if !strings.Contains(output, want) {
 					t.Errorf("output missing %q\ngot:\n%s", want, output)

@@ -811,7 +811,7 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 		version uint16
 	}
 	var tasks []probeTask
-	allSuites := append(tls.CipherSuites(), tls.InsecureCipherSuites()...)
+	allSuites := slices.Concat(tls.CipherSuites(), tls.InsecureCipherSuites())
 	for _, cs := range allSuites {
 		for _, v := range cs.SupportedVersions {
 			if v >= tls.VersionTLS10 && v <= tls.VersionTLS12 {
@@ -1176,8 +1176,11 @@ func kexLabel(kex string) string {
 
 // FormatCipherScanResult formats the cipher suite list as human-readable text.
 func FormatCipherScanResult(r *CipherScanResult) string {
-	if r == nil || len(r.Ciphers) == 0 {
+	if r == nil {
 		return ""
+	}
+	if len(r.Ciphers) == 0 {
+		return "\nCipher suites: none detected\n"
 	}
 
 	var out strings.Builder
