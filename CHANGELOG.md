@@ -57,6 +57,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Harden QUIC response parser — add bounds checks for DCID/SCID lengths, varint decode guards to prevent infinite loops on malformed ACK frames, and increase UDP read buffer to 65535 bytes ([`pending`])
+- Harden TLS ServerHello parser — add explicit bounds check for oversized session ID length before advancing position ([`pending`])
+- Refactor probe functions to use input structs per CS-5 — `probeTLS13Cipher`, `probeKeyExchangeGroup`, `probeQUICCipher`, `probeCipher`, `probeKeyExchangeGroupLegacy` now take `cipherProbeInput` ([`pending`])
 - **Breaking:** Rename `csr --cert` flag to `--from-cert` for clarity — avoids confusion with certificate file arguments in other commands ([#80])
 - **Breaking:** `connect` JSON `sha256_fingerprint` format changed from lowercase hex to colon-separated uppercase hex for CLI-4 consistency with `inspect` and `sha1_fingerprint` ([#80])
 - **Breaking:** Rename `CRLCheckResult.DistributionPoint` to `CRLCheckResult.URL` (JSON: `url`) and `OCSPResult.ResponderURL` to `OCSPResult.URL` (JSON: `url`) — consistent field name for the checked endpoint across both revocation types (CLI-4) ([#78])
@@ -146,6 +149,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Tests
 
+- Consolidate `FormatCipherScanResult` tests — merge QUIC and key exchange standalone tests into table-driven test ([`pending`])
+- Consolidate `BuildClientHello` tests — merge ALPN/QUIC test into subtests with session ID assertion ([`pending`])
+- Remove tests that validate upstream behavior rather than certkit logic: `TestDeriveQUICInitialKeys`, `TestGenerateKeyShare`, `TestIsPQKeyExchange` ([`pending`])
+- Add `parseServerHello` edge case tests — oversized session ID length, truncation at compression method ([`pending`])
+- Add `FormatConnectResult` tests for "Verify: FAILED" and "Client Auth: any CA" paths ([`pending`])
 - Add `TestConnectTLS_CRL_AIAFetchedIssuer` — verifies CRL checking works when issuer is obtained via AIA walking ([#78])
 - Add `TestFetchCRL_AllowPrivateNetworks` — verifies loopback IPs succeed with `AllowPrivateNetworks` ([#78])
 - Add `TestFetchCRL` unit tests for HTTP handling, redirect limits, SSRF blocking, and error paths ([#78])

@@ -184,7 +184,7 @@ To enumerate all cipher suites the server supports with security ratings:
 certkit connect example.com --ciphers
 ```
 
-Each cipher suite is rated `strong` (ECDHE + AEAD, all TLS 1.3 suites) or `weak` (CBC, static RSA, RC4, 3DES). Weak ciphers are listed with a warning recommending they be disabled.
+Each cipher suite is rated `good` (ECDHE + AEAD, all TLS 1.3 suites) or `weak` (CBC, static RSA, RC4, 3DES). Weak ciphers are listed with a warning recommending they be disabled.
 
 For machine-readable output:
 

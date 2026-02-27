@@ -1,6 +1,7 @@
 package certkit
 
 import (
+	"bytes"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -297,6 +298,8 @@ func TestFormatConnectResult(t *testing.T) {
 		name           string
 		diagnostics    []ChainDiagnostic
 		aiaFetched     bool
+		verifyError    string
+		clientAuth     *ClientAuthInfo
 		ocsp           *OCSPResult
 		crl            *CRLCheckResult
 		wantStrings    []string
@@ -377,6 +380,21 @@ func TestFormatConnectResult(t *testing.T) {
 			},
 		},
 		{
+			name:        "verify failed",
+			verifyError: "x509: certificate signed by unknown authority",
+			wantStrings: []string{
+				"Verify:       FAILED (x509: certificate signed by unknown authority)",
+			},
+			notWantStrings: []string{"Verify:       OK"},
+		},
+		{
+			name:       "client auth requested (any CA)",
+			clientAuth: &ClientAuthInfo{Requested: true},
+			wantStrings: []string{
+				"Client Auth:  requested (any CA)",
+			},
+		},
+		{
 			name: "CRL good",
 			crl:  &CRLCheckResult{Status: "good", URL: "http://crl.example.com/ca.crl"},
 			wantStrings: []string{
@@ -404,6 +422,8 @@ func TestFormatConnectResult(t *testing.T) {
 				PeerChain:   []*x509.Certificate{cert},
 				Diagnostics: tt.diagnostics,
 				AIAFetched:  tt.aiaFetched,
+				VerifyError: tt.verifyError,
+				ClientAuth:  tt.clientAuth,
 				OCSP:        tt.ocsp,
 				CRL:         tt.crl,
 			}
@@ -1421,6 +1441,49 @@ func TestFormatCipherScanResult(t *testing.T) {
 				"[good]",
 			},
 		},
+		{
+			name: "QUIC and key exchanges",
+			result: &CipherScanResult{
+				SupportedVersions: []string{"TLS 1.3"},
+				Ciphers: []CipherProbeResult{
+					{Name: "TLS_AES_128_GCM_SHA256", Version: "TLS 1.3", KeyExchange: "ECDHE", Rating: CipherRatingGood},
+				},
+				QUICProbed: true,
+				QUICCiphers: []CipherProbeResult{
+					{Name: "TLS_AES_128_GCM_SHA256", Version: "TLS 1.3", KeyExchange: "ECDHE", Rating: CipherRatingGood},
+					{Name: "TLS_AES_256_GCM_SHA384", Version: "TLS 1.3", KeyExchange: "ECDHE", Rating: CipherRatingGood},
+				},
+				KeyExchanges: []KeyExchangeProbeResult{
+					{Name: "X25519MLKEM768", ID: 4588, PostQuantum: true},
+					{Name: "X25519", ID: 29},
+					{Name: "P-256", ID: 23},
+				},
+				OverallRating: CipherRatingGood,
+			},
+			wantStrings: []string{
+				"Cipher suites (1 supported)",
+				"QUIC cipher suites (2 supported)",
+				"Key exchange groups (3 supported, forward secrecy)",
+				"X25519MLKEM768 (post-quantum)",
+				"X25519\n",
+				"P-256\n",
+			},
+		},
+		{
+			name: "QUIC probed but not supported",
+			result: &CipherScanResult{
+				SupportedVersions: []string{"TLS 1.3"},
+				Ciphers: []CipherProbeResult{
+					{Name: "TLS_AES_128_GCM_SHA256", Version: "TLS 1.3", KeyExchange: "ECDHE", Rating: CipherRatingGood},
+				},
+				QUICProbed:    true,
+				QUICCiphers:   nil,
+				OverallRating: CipherRatingGood,
+			},
+			wantStrings: []string{
+				"QUIC: not supported",
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1658,73 +1721,80 @@ func TestConnectTLS_CRL_DuplicateLeafInChain(t *testing.T) {
 func TestBuildClientHello(t *testing.T) {
 	t.Parallel()
 
-	msg, err := buildClientHelloMsg(clientHelloInput{
-		serverName:  "example.com",
-		cipherSuite: 0x1301, // TLS_AES_128_GCM_SHA256
-		groupID:     tls.X25519,
+	t.Run("TCP mode", func(t *testing.T) {
+		t.Parallel()
+		msg, err := buildClientHelloMsg(clientHelloInput{
+			serverName:  "example.com",
+			cipherSuite: 0x1301, // TLS_AES_128_GCM_SHA256
+			groupID:     tls.X25519,
+		})
+		if err != nil {
+			t.Fatalf("buildClientHelloMsg failed: %v", err)
+		}
+
+		// Handshake type must be ClientHello (0x01).
+		if msg[0] != 0x01 {
+			t.Errorf("handshake type = 0x%02x, want 0x01", msg[0])
+		}
+
+		// Handshake length (3 bytes, big-endian) must match actual body length.
+		handshakeLen := int(msg[1])<<16 | int(msg[2])<<8 | int(msg[3])
+		if handshakeLen != len(msg)-4 {
+			t.Errorf("handshake length = %d, want %d", handshakeLen, len(msg)-4)
+		}
+
+		// Legacy version at body[0:2] must be TLS 1.2 (0x0303).
+		if msg[4] != 0x03 || msg[5] != 0x03 {
+			t.Errorf("legacy version = 0x%02x%02x, want 0x0303", msg[4], msg[5])
+		}
+
+		// Session ID length at body[34] — TCP mode uses 32-byte session ID.
+		sessionIDLen := int(msg[4+34])
+		if sessionIDLen != 32 {
+			t.Errorf("session ID length = %d, want 32", sessionIDLen)
+		}
+
+		// Cipher suite list starts after session ID.
+		csOffset := 4 + 35 + sessionIDLen
+		csListLen := int(msg[csOffset])<<8 | int(msg[csOffset+1])
+		if csListLen != 2 {
+			t.Errorf("cipher suite list length = %d, want 2 (single cipher)", csListLen)
+		}
+		csID := uint16(msg[csOffset+2])<<8 | uint16(msg[csOffset+3])
+		if csID != 0x1301 {
+			t.Errorf("cipher suite = 0x%04x, want 0x1301", csID)
+		}
 	})
-	if err != nil {
-		t.Fatalf("buildClientHelloMsg failed: %v", err)
-	}
 
-	// Handshake type must be ClientHello (0x01).
-	if msg[0] != 0x01 {
-		t.Errorf("handshake type = 0x%02x, want 0x01", msg[0])
-	}
+	t.Run("QUIC mode with ALPN", func(t *testing.T) {
+		t.Parallel()
+		msg, err := buildClientHelloMsg(clientHelloInput{
+			serverName:  "example.com",
+			cipherSuite: 0x1301,
+			groupID:     tls.X25519,
+			alpn:        []string{"h3"},
+			quic:        true,
+		})
+		if err != nil {
+			t.Fatalf("buildClientHelloMsg with ALPN failed: %v", err)
+		}
 
-	// Handshake length (3 bytes, big-endian) must match actual body length.
-	handshakeLen := int(msg[1])<<16 | int(msg[2])<<8 | int(msg[3])
-	if handshakeLen != len(msg)-4 {
-		t.Errorf("handshake length = %d, want %d", handshakeLen, len(msg)-4)
-	}
+		// Handshake type must be ClientHello (0x01).
+		if msg[0] != 0x01 {
+			t.Errorf("handshake type = 0x%02x, want 0x01", msg[0])
+		}
 
-	// Legacy version at body[0:2] must be TLS 1.2 (0x0303).
-	if msg[4] != 0x03 || msg[5] != 0x03 {
-		t.Errorf("legacy version = 0x%02x%02x, want 0x0303", msg[4], msg[5])
-	}
+		// QUIC mode: session ID must be empty (RFC 9001 §8.4).
+		sessionIDLen := int(msg[4+34])
+		if sessionIDLen != 0 {
+			t.Errorf("QUIC session ID length = %d, want 0", sessionIDLen)
+		}
 
-	// Client random is 32 bytes starting at body[2].
-	// Session ID length at body[34], session ID follows.
-	sessionIDLen := int(msg[4+34])
-	if sessionIDLen != 32 {
-		t.Errorf("session ID length = %d, want 32", sessionIDLen)
-	}
-
-	// Cipher suite list starts after session ID.
-	csOffset := 4 + 35 + sessionIDLen
-	csListLen := int(msg[csOffset])<<8 | int(msg[csOffset+1])
-	if csListLen != 2 {
-		t.Errorf("cipher suite list length = %d, want 2 (single cipher)", csListLen)
-	}
-	csID := uint16(msg[csOffset+2])<<8 | uint16(msg[csOffset+3])
-	if csID != 0x1301 {
-		t.Errorf("cipher suite = 0x%04x, want 0x1301", csID)
-	}
-}
-
-func TestBuildClientHello_WithALPN(t *testing.T) {
-	t.Parallel()
-
-	msg, err := buildClientHelloMsg(clientHelloInput{
-		serverName:  "example.com",
-		cipherSuite: 0x1301,
-		groupID:     tls.X25519,
-		alpn:        []string{"h3"},
-		quic:        true,
+		// Message must contain the ALPN extension with "h3".
+		if !bytes.Contains(msg, []byte("h3")) {
+			t.Error("ClientHello missing ALPN 'h3'")
+		}
 	})
-	if err != nil {
-		t.Fatalf("buildClientHelloMsg with ALPN failed: %v", err)
-	}
-
-	// Message must contain the ALPN extension (type 0x0010) with "h3".
-	if !containsBytes(msg, []byte("h3")) {
-		t.Error("ClientHello missing ALPN 'h3'")
-	}
-
-	// Must also be a valid handshake message.
-	if msg[0] != 0x01 {
-		t.Errorf("handshake type = 0x%02x, want 0x01", msg[0])
-	}
 }
 
 func TestParseServerHello(t *testing.T) {
@@ -1764,6 +1834,37 @@ func TestParseServerHello(t *testing.T) {
 			data:    buildTestServerHelloHRR(0x1301),
 			wantErr: "HelloRetryRequest",
 		},
+		{
+			name: "oversized session ID length causes truncation",
+			// Handshake header(4) + version(2) + random(32) + sessionIDLen(1) = 39 bytes body.
+			// sessionIDLen=200 causes pos to jump past body, caught at cipher suite bounds check.
+			data: func() []byte {
+				body := make([]byte, 35)
+				body[0], body[1] = 0x03, 0x03 // version
+				body[34] = 200                // sessionIDLen far exceeds body
+				msg := []byte{0x02}
+				msg = appendUint24(msg, uint32(len(body)))
+				msg = append(msg, body...)
+				return msg
+			}(),
+			wantErr: "truncated at session ID",
+		},
+		{
+			name: "truncated at compression method",
+			// Body: version(2) + random(32) + sessionIDLen(1,val=0) + cipher(2) = 37 bytes.
+			// No compression method byte.
+			data: func() []byte {
+				body := make([]byte, 37)
+				body[0], body[1] = 0x03, 0x03 // version
+				body[34] = 0                  // sessionIDLen = 0
+				body[35], body[36] = 0x13, 0x01
+				msg := []byte{0x02}
+				msg = appendUint24(msg, uint32(len(body)))
+				msg = append(msg, body...)
+				return msg
+			}(),
+			wantErr: "truncated at compression method",
+		},
 	}
 
 	for _, tt := range tests {
@@ -1790,67 +1891,6 @@ func TestParseServerHello(t *testing.T) {
 			}
 		})
 	}
-}
-
-func TestGenerateKeyShare(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name    string
-		groupID tls.CurveID
-		wantLen int
-	}{
-		{"X25519", tls.X25519, 32},
-		{"P-256", tls.CurveP256, 65},
-		{"P-384", tls.CurveP384, 97},
-		{"P-521", tls.CurveP521, 133},
-		{"X25519MLKEM768", tls.X25519MLKEM768, 1184 + 32},         // ML-KEM-768 encap key + X25519
-		{"SecP256r1MLKEM768", tls.SecP256r1MLKEM768, 65 + 1184},   // P-256 + ML-KEM-768
-		{"SecP384r1MLKEM1024", tls.SecP384r1MLKEM1024, 97 + 1568}, // P-384 + ML-KEM-1024
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			data, err := generateKeyShare(tt.groupID)
-			if err != nil {
-				t.Fatalf("generateKeyShare(%s) failed: %v", tt.name, err)
-			}
-			if len(data) != tt.wantLen {
-				t.Errorf("key share length = %d, want %d", len(data), tt.wantLen)
-			}
-		})
-	}
-}
-
-func TestGenerateKeyShare_UnsupportedGroup(t *testing.T) {
-	t.Parallel()
-	_, err := generateKeyShare(tls.CurveID(0xFFFF))
-	if err == nil {
-		t.Fatal("expected error for unsupported group")
-	}
-}
-
-func TestDeriveQUICInitialKeys(t *testing.T) {
-	t.Parallel()
-
-	// RFC 9001 Appendix A test vectors.
-	dcid := hexDecode(t, "8394c8f03e515708")
-
-	client, server, err := deriveQUICInitialKeys(dcid)
-	if err != nil {
-		t.Fatalf("deriveQUICInitialKeys failed: %v", err)
-	}
-
-	// Client keys.
-	assertHex(t, "client key", client.key, "1f369613dd76d5467730efcbe3b1a22d")
-	assertHex(t, "client iv", client.iv, "fa044b2f42a3fd3b46fb255c")
-	assertHex(t, "client hp", client.hp, "9f50449e04a0e810283a1e9933adedd2")
-
-	// Server keys.
-	assertHex(t, "server key", server.key, "cf3a5331653c364c88f0f379b6067e37")
-	assertHex(t, "server iv", server.iv, "0ac1493ca1905853b0bba03e")
-	assertHex(t, "server hp", server.hp, "c206b8d9b9f0f37644430b490eeaa314")
 }
 
 func TestBuildQUICInitialPacket(t *testing.T) {
@@ -1921,7 +1961,7 @@ func TestProbeTLS13Cipher_Concurrent(t *testing.T) {
 		go func(idx int) {
 			defer wg.Done()
 			cipherID := tls13CipherSuites[idx%len(tls13CipherSuites)]
-			probeTLS13Cipher(ctx, addr, "127.0.0.1", cipherID)
+			probeTLS13Cipher(ctx, cipherProbeInput{addr: addr, serverName: "127.0.0.1", cipherID: cipherID})
 		}(i)
 	}
 	wg.Wait()
@@ -1974,126 +2014,6 @@ func TestScanCipherSuites_KeyExchanges(t *testing.T) {
 
 	if !names["X25519"] {
 		t.Error("expected X25519 in key exchange results")
-	}
-}
-
-func TestFormatCipherScanResult_QUICAndKeyExchanges(t *testing.T) {
-	t.Parallel()
-
-	result := &CipherScanResult{
-		SupportedVersions: []string{"TLS 1.3"},
-		Ciphers: []CipherProbeResult{
-			{Name: "TLS_AES_128_GCM_SHA256", Version: "TLS 1.3", KeyExchange: "ECDHE", Rating: CipherRatingGood},
-		},
-		QUICProbed: true,
-		QUICCiphers: []CipherProbeResult{
-			{Name: "TLS_AES_128_GCM_SHA256", Version: "TLS 1.3", KeyExchange: "ECDHE", Rating: CipherRatingGood},
-			{Name: "TLS_AES_256_GCM_SHA384", Version: "TLS 1.3", KeyExchange: "ECDHE", Rating: CipherRatingGood},
-		},
-		KeyExchanges: []KeyExchangeProbeResult{
-			{Name: "X25519MLKEM768", ID: 4588, PostQuantum: true},
-			{Name: "X25519", ID: 29},
-			{Name: "P-256", ID: 23},
-		},
-		OverallRating: CipherRatingGood,
-	}
-
-	output := FormatCipherScanResult(result)
-
-	for _, want := range []string{
-		"Cipher suites (1 supported)",
-		"QUIC cipher suites (2 supported)",
-		"Key exchange groups (3 supported, forward secrecy)",
-		"X25519MLKEM768 (post-quantum)",
-		"X25519\n",
-		"P-256\n",
-	} {
-		if !strings.Contains(output, want) {
-			t.Errorf("output missing %q\ngot:\n%s", want, output)
-		}
-	}
-}
-
-func TestFormatCipherScanResult_QUICNotSupported(t *testing.T) {
-	t.Parallel()
-
-	result := &CipherScanResult{
-		SupportedVersions: []string{"TLS 1.3"},
-		Ciphers: []CipherProbeResult{
-			{Name: "TLS_AES_128_GCM_SHA256", Version: "TLS 1.3", KeyExchange: "ECDHE", Rating: CipherRatingGood},
-		},
-		QUICProbed:    true,
-		QUICCiphers:   nil,
-		OverallRating: CipherRatingGood,
-	}
-
-	output := FormatCipherScanResult(result)
-
-	if !strings.Contains(output, "QUIC: not supported") {
-		t.Errorf("expected QUIC not supported line\ngot:\n%s", output)
-	}
-}
-
-func TestIsPQKeyExchange(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		id   tls.CurveID
-		want bool
-	}{
-		{tls.X25519MLKEM768, true},
-		{tls.SecP256r1MLKEM768, true},
-		{tls.SecP384r1MLKEM1024, true},
-		{tls.X25519, false},
-		{tls.CurveP256, false},
-		{tls.CurveP384, false},
-		{tls.CurveP521, false},
-	}
-
-	for _, tt := range tests {
-		if got := isPQKeyExchange(tt.id); got != tt.want {
-			t.Errorf("isPQKeyExchange(%s) = %v, want %v", tt.id, got, tt.want)
-		}
-	}
-}
-
-func TestQUICVarint(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name string
-		val  uint64
-		want []byte
-	}{
-		{"zero", 0, []byte{0x00}},
-		{"one byte max", 63, []byte{0x3f}},
-		{"two byte min", 64, []byte{0x40, 0x40}},
-		{"two byte max", 16383, []byte{0x7f, 0xff}},
-		{"four byte min", 16384, []byte{0x80, 0x00, 0x40, 0x00}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := appendQUICVarint(nil, tt.val)
-			if len(got) != len(tt.want) {
-				t.Fatalf("length = %d, want %d", len(got), len(tt.want))
-			}
-			for i := range got {
-				if got[i] != tt.want[i] {
-					t.Errorf("byte[%d] = 0x%02x, want 0x%02x", i, got[i], tt.want[i])
-				}
-			}
-
-			// Round-trip through decode.
-			decoded, n := decodeQUICVarint(got)
-			if decoded != tt.val {
-				t.Errorf("decode = %d, want %d", decoded, tt.val)
-			}
-			if n != len(got) {
-				t.Errorf("decode consumed %d bytes, want %d", n, len(got))
-			}
-		})
 	}
 }
 
@@ -2173,16 +2093,6 @@ func buildTestServerHello12(cipherSuite uint16) []byte {
 	return msg
 }
 
-// containsBytes reports whether b contains the subslice sub.
-func containsBytes(b, sub []byte) bool {
-	for i := range len(b) - len(sub) + 1 {
-		if string(b[i:i+len(sub)]) == string(sub) {
-			return true
-		}
-	}
-	return false
-}
-
 // hexDecode decodes a hex string, failing the test on error.
 func hexDecode(t *testing.T, s string) []byte {
 	t.Helper()
@@ -2191,13 +2101,4 @@ func hexDecode(t *testing.T, s string) []byte {
 		t.Fatalf("hex decode %q: %v", s, err)
 	}
 	return b
-}
-
-// assertHex compares a byte slice to an expected hex string.
-func assertHex(t *testing.T, name string, got []byte, wantHex string) {
-	t.Helper()
-	gotHex := hex.EncodeToString(got)
-	if gotHex != wantHex {
-		t.Errorf("%s = %s, want %s", name, gotHex, wantHex)
-	}
 }

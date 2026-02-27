@@ -315,7 +315,11 @@ func parseServerHello(data []byte) (*serverHelloResult, error) {
 
 	// Session ID.
 	sessionIDLen := int(body[pos])
-	pos += 1 + sessionIDLen
+	pos++
+	if pos+sessionIDLen > len(body) {
+		return nil, fmt.Errorf("ServerHello truncated at session ID")
+	}
+	pos += sessionIDLen
 
 	// Cipher suite (2 bytes).
 	if pos+2 > len(body) {
@@ -364,12 +368,22 @@ func parseServerHello(data []byte) (*serverHelloResult, error) {
 	}, nil
 }
 
+// cipherProbeInput contains parameters for probing a single cipher suite
+// or key exchange group on a TLS server.
+type cipherProbeInput struct {
+	addr       string
+	serverName string
+	cipherID   uint16
+	groupID    tls.CurveID
+	version    uint16 // for legacy TLS 1.0–1.2 probing
+}
+
 // probeTLS13Cipher attempts a raw TLS 1.3 ClientHello with a single cipher
 // suite and returns true if the server accepts it. Each call is fully isolated
 // with no shared state — safe for concurrent use from multiple goroutines.
-func probeTLS13Cipher(ctx context.Context, addr, serverName string, cipherID uint16) bool {
+func probeTLS13Cipher(ctx context.Context, input cipherProbeInput) bool {
 	dialer := &net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	conn, err := dialer.DialContext(ctx, "tcp", input.addr)
 	if err != nil {
 		return false
 	}
@@ -380,8 +394,8 @@ func probeTLS13Cipher(ctx context.Context, addr, serverName string, cipherID uin
 	}
 
 	msg, err := buildClientHelloMsg(clientHelloInput{
-		serverName:  serverName,
-		cipherSuite: cipherID,
+		serverName:  input.serverName,
+		cipherSuite: input.cipherID,
 		groupID:     tls.X25519,
 	})
 	if err != nil {
@@ -397,15 +411,15 @@ func probeTLS13Cipher(ctx context.Context, addr, serverName string, cipherID uin
 		return false
 	}
 
-	return result.version == tls.VersionTLS13 && result.cipherSuite == cipherID
+	return result.version == tls.VersionTLS13 && result.cipherSuite == input.cipherID
 }
 
 // probeKeyExchangeGroup attempts a raw TLS 1.3 ClientHello offering a single
 // named group and returns true if the server selects it. Uses
 // TLS_AES_128_GCM_SHA256 as the cipher since all TLS 1.3 servers must support it.
-func probeKeyExchangeGroup(ctx context.Context, addr, serverName string, groupID tls.CurveID) bool {
+func probeKeyExchangeGroup(ctx context.Context, input cipherProbeInput) bool {
 	dialer := &net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	conn, err := dialer.DialContext(ctx, "tcp", input.addr)
 	if err != nil {
 		return false
 	}
@@ -416,9 +430,9 @@ func probeKeyExchangeGroup(ctx context.Context, addr, serverName string, groupID
 	}
 
 	msg, err := buildClientHelloMsg(clientHelloInput{
-		serverName:  serverName,
+		serverName:  input.serverName,
 		cipherSuite: 0x1301, // TLS_AES_128_GCM_SHA256
-		groupID:     groupID,
+		groupID:     input.groupID,
 	})
 	if err != nil {
 		return false

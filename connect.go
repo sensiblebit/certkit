@@ -784,7 +784,7 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 			probeCtx, probeCancel := context.WithTimeout(ctx, probeTimeout)
 			defer probeCancel()
 
-			if probeTLS13Cipher(probeCtx, addr, serverName, cipherID) {
+			if probeTLS13Cipher(probeCtx, cipherProbeInput{addr: addr, serverName: serverName, cipherID: cipherID}) {
 				r := CipherProbeResult{
 					Name:        cipherSuiteName(cipherID),
 					ID:          cipherID,
@@ -831,7 +831,7 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 			probeCtx, probeCancel := context.WithTimeout(ctx, probeTimeout)
 			defer probeCancel()
 
-			if probeCipher(probeCtx, addr, serverName, t.id, t.version) {
+			if probeCipher(probeCtx, cipherProbeInput{addr: addr, serverName: serverName, cipherID: t.id, version: t.version}) {
 				name := cipherSuiteName(t.id)
 				r := CipherProbeResult{
 					Name:        name,
@@ -868,13 +868,14 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 			probeCtx, probeCancel := context.WithTimeout(ctx, probeTimeout)
 			defer probeCancel()
 
-			accepted := probeKeyExchangeGroup(probeCtx, addr, serverName, groupID)
+			probeInput := cipherProbeInput{addr: addr, serverName: serverName, groupID: groupID}
+			accepted := probeKeyExchangeGroup(probeCtx, probeInput)
 
 			// For classical (non-PQ) groups, also probe TLS 1.0–1.2 if TLS 1.3 didn't work.
 			if !accepted && !isPQKeyExchange(groupID) {
 				probeCtx2, probeCancel2 := context.WithTimeout(ctx, probeTimeout)
 				defer probeCancel2()
-				accepted = probeKeyExchangeGroupLegacy(probeCtx2, addr, serverName, groupID)
+				accepted = probeKeyExchangeGroupLegacy(probeCtx2, probeInput)
 			}
 
 			if accepted {
@@ -911,7 +912,7 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 				probeCtx, probeCancel := context.WithTimeout(ctx, probeTimeout)
 				defer probeCancel()
 
-				if probeQUICCipher(probeCtx, quicAddr, serverName, cipherID) {
+				if probeQUICCipher(probeCtx, cipherProbeInput{addr: quicAddr, serverName: serverName, cipherID: cipherID}) {
 					r := CipherProbeResult{
 						Name:        cipherSuiteName(cipherID),
 						ID:          cipherID,
@@ -1002,18 +1003,18 @@ func emptyClientCert(_ *tls.CertificateRequestInfo) (*tls.Certificate, error) {
 // probeCipher attempts a TLS handshake offering only the specified cipher suite at the given version.
 // Returns true if the server accepted the cipher, even if the handshake
 // ultimately fails (e.g. mTLS rejection after cipher negotiation).
-func probeCipher(ctx context.Context, addr, serverName string, cipherID uint16, version uint16) bool {
+func probeCipher(ctx context.Context, input cipherProbeInput) bool {
 	dialer := &net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	conn, err := dialer.DialContext(ctx, "tcp", input.addr)
 	if err != nil {
 		return false
 	}
 	tlsConn := tls.Client(conn, &tls.Config{
-		ServerName:           serverName,
+		ServerName:           input.serverName,
 		InsecureSkipVerify:   true, //nolint:gosec // Cipher probing doesn't need cert verification.
-		MinVersion:           version,
-		MaxVersion:           version,
-		CipherSuites:         []uint16{cipherID},
+		MinVersion:           input.version,
+		MaxVersion:           input.version,
+		CipherSuites:         []uint16{input.cipherID},
 		GetClientCertificate: emptyClientCert,
 	})
 	defer func() { _ = tlsConn.Close() }()
@@ -1026,7 +1027,7 @@ func probeCipher(ctx context.Context, addr, serverName string, cipherID uint16, 
 	}
 	// Handshake failed, but check if the server negotiated our cipher before aborting.
 	state := tlsConn.ConnectionState()
-	return state.Version == version && state.CipherSuite == cipherID
+	return state.Version == input.version && state.CipherSuite == input.cipherID
 }
 
 // ecdheOnlyCipherSuites contains only ECDHE-based TLS 1.0–1.2 cipher suites.
@@ -1047,19 +1048,19 @@ var ecdheOnlyCipherSuites = func() []uint16 {
 // CurvePreferences entry and returns true if the server accepts the group. Only
 // ECDHE cipher suites are offered so the handshake fails if the server doesn't
 // support the offered curve (RSA key exchange would bypass curve negotiation).
-func probeKeyExchangeGroupLegacy(ctx context.Context, addr, serverName string, groupID tls.CurveID) bool {
+func probeKeyExchangeGroupLegacy(ctx context.Context, input cipherProbeInput) bool {
 	dialer := &net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	conn, err := dialer.DialContext(ctx, "tcp", input.addr)
 	if err != nil {
 		return false
 	}
 	tlsConn := tls.Client(conn, &tls.Config{
-		ServerName:           serverName,
+		ServerName:           input.serverName,
 		InsecureSkipVerify:   true, //nolint:gosec // Probing doesn't need cert verification.
 		MinVersion:           tls.VersionTLS10,
 		MaxVersion:           tls.VersionTLS12,
 		CipherSuites:         ecdheOnlyCipherSuites,
-		CurvePreferences:     []tls.CurveID{groupID},
+		CurvePreferences:     []tls.CurveID{input.groupID},
 		GetClientCertificate: emptyClientCert,
 	})
 	defer func() { _ = tlsConn.Close() }()

@@ -235,21 +235,36 @@ func parseQUICInitialResponse(packet []byte, serverKeys quicInitialKeys) (*serve
 		return nil, fmt.Errorf("packet truncated at DCID length")
 	}
 	dcidLen := int(packet[pos])
-	pos += 1 + dcidLen
+	pos++
+	if pos+dcidLen > len(packet) {
+		return nil, fmt.Errorf("packet truncated at DCID: need %d bytes", dcidLen)
+	}
+	pos += dcidLen
 
 	// SCID.
 	if pos+1 > len(packet) {
 		return nil, fmt.Errorf("packet truncated at SCID length")
 	}
 	scidLen := int(packet[pos])
-	pos += 1 + scidLen
+	pos++
+	if pos+scidLen > len(packet) {
+		return nil, fmt.Errorf("packet truncated at SCID: need %d bytes", scidLen)
+	}
+	pos += scidLen
 
 	// Token length (varint).
 	if pos >= len(packet) {
 		return nil, fmt.Errorf("packet truncated at token length")
 	}
 	tokenLen, tokenVarLen := decodeQUICVarint(packet[pos:])
-	pos += tokenVarLen + int(tokenLen)
+	if tokenVarLen == 0 {
+		return nil, fmt.Errorf("malformed token length varint")
+	}
+	pos += tokenVarLen
+	if pos+int(tokenLen) > len(packet) {
+		return nil, fmt.Errorf("packet truncated at token data")
+	}
+	pos += int(tokenLen)
 
 	// Payload length (varint) — covers packet number + encrypted data + AEAD tag.
 	// Must be kept to avoid decrypting coalesced packets (Initial + Handshake).
@@ -257,6 +272,9 @@ func parseQUICInitialResponse(packet []byte, serverKeys quicInitialKeys) (*serve
 		return nil, fmt.Errorf("packet truncated at payload length")
 	}
 	payloadLen, payloadVarLen := decodeQUICVarint(packet[pos:])
+	if payloadVarLen == 0 {
+		return nil, fmt.Errorf("malformed payload length varint")
+	}
 	pos += payloadVarLen
 
 	pnOffset := pos
@@ -342,27 +360,46 @@ func parseQUICInitialResponse(packet []byte, serverKeys quicInitialKeys) (*serve
 			// ACK frame (RFC 9000 §19.3): parse and skip.
 			fpos++
 			_, varLen := decodeQUICVarint(plaintext[fpos:]) // Largest Acknowledged
+			if varLen == 0 {
+				break
+			}
 			fpos += varLen
 			_, varLen = decodeQUICVarint(plaintext[fpos:]) // ACK Delay
+			if varLen == 0 {
+				break
+			}
 			fpos += varLen
 			rangeCount, varLen := decodeQUICVarint(plaintext[fpos:]) // ACK Range Count
+			if varLen == 0 {
+				break
+			}
 			fpos += varLen
 			_, varLen = decodeQUICVarint(plaintext[fpos:]) // First ACK Range
+			if varLen == 0 {
+				break
+			}
 			fpos += varLen
 			for range rangeCount {
 				_, varLen = decodeQUICVarint(plaintext[fpos:]) // Gap
+				if varLen == 0 {
+					break
+				}
 				fpos += varLen
 				_, varLen = decodeQUICVarint(plaintext[fpos:]) // ACK Range Length
+				if varLen == 0 {
+					break
+				}
 				fpos += varLen
 			}
 			if frameType == 0x03 {
 				// ACK_ECN has 3 additional varints.
-				_, varLen = decodeQUICVarint(plaintext[fpos:])
-				fpos += varLen
-				_, varLen = decodeQUICVarint(plaintext[fpos:])
-				fpos += varLen
-				_, varLen = decodeQUICVarint(plaintext[fpos:])
-				fpos += varLen
+				for range 3 {
+					_, varLen = decodeQUICVarint(plaintext[fpos:])
+					if varLen == 0 {
+						break
+					}
+					fpos += varLen
+				}
 			}
 			continue
 		}
@@ -374,9 +411,15 @@ func parseQUICInitialResponse(packet []byte, serverKeys quicInitialKeys) (*serve
 		// CRYPTO frame.
 		fpos++ // skip frame type
 		_, varLen := decodeQUICVarint(plaintext[fpos:])
+		if varLen == 0 {
+			return nil, fmt.Errorf("malformed CRYPTO frame offset")
+		}
 		fpos += varLen // skip offset
 
 		dataLen, varLen := decodeQUICVarint(plaintext[fpos:])
+		if varLen == 0 {
+			return nil, fmt.Errorf("malformed CRYPTO frame length")
+		}
 		fpos += varLen
 
 		if fpos+int(dataLen) > len(plaintext) {
@@ -393,7 +436,7 @@ func parseQUICInitialResponse(packet []byte, serverKeys quicInitialKeys) (*serve
 
 // probeQUICCipher sends a QUIC Initial packet to UDP 443 with a single
 // cipher suite and returns true if the server accepts it.
-func probeQUICCipher(ctx context.Context, addr, serverName string, cipherID uint16) bool {
+func probeQUICCipher(ctx context.Context, input cipherProbeInput) bool {
 	// Generate random connection IDs.
 	dcid := make([]byte, 8)
 	scid := make([]byte, 8)
@@ -408,8 +451,8 @@ func probeQUICCipher(ctx context.Context, addr, serverName string, cipherID uint
 	// QUIC requires ALPN ("h3"), quic_transport_parameters, and an empty session ID
 	// (RFC 9001 §8.4).
 	msg, err := buildClientHelloMsg(clientHelloInput{
-		serverName:  serverName,
-		cipherSuite: cipherID,
+		serverName:  input.serverName,
+		cipherSuite: input.cipherID,
 		groupID:     tls.X25519,
 		alpn:        []string{"h3"},
 		quic:        true,
@@ -431,7 +474,7 @@ func probeQUICCipher(ctx context.Context, addr, serverName string, cipherID uint
 
 	// Send via UDP.
 	dialer := &net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "udp", addr)
+	conn, err := dialer.DialContext(ctx, "udp", input.addr)
 	if err != nil {
 		return false
 	}
@@ -445,8 +488,9 @@ func probeQUICCipher(ctx context.Context, addr, serverName string, cipherID uint
 		return false
 	}
 
-	// Read response. QUIC Initial responses can be up to ~1400 bytes.
-	buf := make([]byte, 4096)
+	// Read response. Server Initial packets can include coalesced Handshake
+	// packets, so allocate a full UDP datagram buffer.
+	buf := make([]byte, 65535)
 	n, err := conn.Read(buf)
 	if err != nil {
 		return false
@@ -464,7 +508,7 @@ func probeQUICCipher(ctx context.Context, addr, serverName string, cipherID uint
 		return false
 	}
 
-	return result.version == tls.VersionTLS13 && result.cipherSuite == cipherID
+	return result.version == tls.VersionTLS13 && result.cipherSuite == input.cipherID
 }
 
 // ---------- QUIC varint helpers ----------
