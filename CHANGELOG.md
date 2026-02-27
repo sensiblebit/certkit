@@ -76,11 +76,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Fix QUIC varint `uint64`→`int` overflow in `parseQUICInitialResponse` — bounds checks now compare in `uint64` space to prevent truncation on malicious packets ([`pending`])
-- Fix ACK range loop inner `break` not propagating to outer frame parser in QUIC decoder — malformed ACK frames could corrupt subsequent frame parsing ([`pending`])
-- Cap ACK `rangeCount` to plaintext length to prevent CPU exhaustion on malicious QUIC packets ([`pending`])
-- Fix double-wrapped error messages in `connect` CLI — "connecting to: connecting to:" and "scanning cipher suites: scanning cipher suites:" ([`pending`])
-- Fix `CipherScanResult` JSON encoding `supported_versions` and `ciphers` as `null` instead of `[]` when no ciphers detected ([`pending`])
+- Fix QUIC varint `uint64`→`int` overflow in `parseQUICInitialResponse` — bounds checks now compare in `uint64` space to prevent truncation on malicious packets ([`18ed288`])
+- Fix ACK range loop inner `break` not propagating to outer frame parser in QUIC decoder — malformed ACK frames could corrupt subsequent frame parsing ([`18ed288`])
+- Cap ACK `rangeCount` to plaintext length to prevent CPU exhaustion on malicious QUIC packets ([`18ed288`])
+- Fix double-wrapped error messages in `connect` CLI — "connecting to: connecting to:" and "scanning cipher suites: scanning cipher suites:" ([`18ed288`])
+- Fix `CipherScanResult` JSON encoding `supported_versions` and `ciphers` as `null` instead of `[]` when no ciphers detected ([`18ed288`])
 - Fix backtick-quoted values in flag usage strings being consumed by pflag as type placeholders — all `--format`, `--trust-store`, `--log-level`, `--algorithm`, and `--curve` flags now display correctly in `--help` output ([#80])
 - Fix `convert --json` without `-o` missing `format` field in JSON output ([#80])
 - Fix data race in `TestCheckLeafCRL` — CRL bytes are now generated before starting the test HTTP server (CC-3) ([#78])
@@ -154,10 +154,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Tests
 
-- Strengthen `TestBuildQUICInitialPacket` — verify QUIC v1 version, DCID/SCID in header, and round-trip decrypt CRYPTO frame against original ClientHello ([`pending`])
-- Consolidate `TestRateCipherSuite` from 13 entries to 6 — one per distinct code path (T-12) ([`pending`])
-- Merge `TestScanCipherSuites_KeyExchanges` into `TestScanCipherSuites` — eliminates redundant server setup (T-14) ([`pending`])
-- Fix brittle `tls13Count != 3` assertion — use `>= 1` to tolerate future Go TLS 1.3 cipher additions ([`pending`])
+- Strengthen `TestBuildQUICInitialPacket` — verify QUIC v1 version, DCID/SCID in header, and round-trip decrypt CRYPTO frame against original ClientHello ([`18ed288`])
+- Consolidate `TestRateCipherSuite` from 13 entries to 6 — one per distinct code path (T-12) ([`18ed288`])
+- Merge `TestScanCipherSuites_KeyExchanges` into `TestScanCipherSuites` — eliminates redundant server setup (T-14) ([`18ed288`])
+- Fix brittle `tls13Count != 3` assertion — use `>= 1` to tolerate future Go TLS 1.3 cipher additions ([`18ed288`])
 - Consolidate `FormatCipherScanResult` tests — merge QUIC and key exchange standalone tests into table-driven test ([`1adb9b5`])
 - Consolidate `BuildClientHello` tests — merge ALPN/QUIC test into subtests with session ID assertion ([`1adb9b5`])
 - Remove tests that validate upstream behavior rather than certkit logic: `TestDeriveQUICInitialKeys`, `TestGenerateKeyShare`, `TestIsPQKeyExchange` ([`1adb9b5`])
@@ -858,6 +858,7 @@ Initial release.
 [#76]: https://github.com/sensiblebit/certkit/pull/76
 [#78]: https://github.com/sensiblebit/certkit/pull/78
 [`7299fc5`]: https://github.com/sensiblebit/certkit/commit/7299fc5
+[`18ed288`]: https://github.com/sensiblebit/certkit/commit/18ed288
 [`1adb9b5`]: https://github.com/sensiblebit/certkit/commit/1adb9b5
 [#80]: https://github.com/sensiblebit/certkit/pull/80
 [#73]: https://github.com/sensiblebit/certkit/pull/73
