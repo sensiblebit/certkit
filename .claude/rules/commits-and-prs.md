@@ -55,28 +55,41 @@ When a pre-commit hook modifies files (e.g., goimports reformats struct alignmen
 
 This is especially common with `goimports` reformatting Go files.
 
-## Resolving PR review threads
+## Addressing PR feedback
 
-When addressing review feedback, both reply AND resolve:
+When working on a PR, address **both** PR review comments (on diffs) and issue-style comments (on the PR conversation). For each piece of feedback:
 
-1. **Reply** via REST: `gh api repos/OWNER/REPO/pulls/N/comments -X POST -F body="..." -F in_reply_to=COMMENT_ID`
-2. **Resolve** via GraphQL: `gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "THREAD_ID"}) { thread { isResolved } } }'`
+1. **Fix the code** — make the requested change or explain why not
+2. **Reply** explaining what was done: `gh api repos/OWNER/REPO/pulls/N/comments -X POST -F body="..." -F in_reply_to=COMMENT_ID`
+3. **Resolve** the thread: `gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "THREAD_ID"}) { thread { isResolved } } }'`
+4. **Minimize** addressed comments to reduce noise: `gh api graphql -f query='mutation { minimizeComment(input: {subjectId: "COMMENT_NODE_ID", classifier: RESOLVED}) { minimizedComment { isMinimized } } }'`
 
-To get thread IDs, query:
+To get thread IDs and comment node IDs, query:
 
 ```sh
 gh api graphql -f query='{
   repository(owner: "sensiblebit", name: "certkit") {
     pullRequest(number: N) {
-      reviewThreads(first: 20) {
-        nodes { id isResolved comments(first: 1) { nodes { body } } }
+      reviewThreads(first: 50) {
+        nodes {
+          id
+          isResolved
+          comments(first: 5) {
+            nodes { id databaseId body }
+          }
+        }
+      }
+      comments(first: 50) {
+        nodes { id databaseId body }
       }
     }
   }
 }'
 ```
 
-Just replying does NOT mark the thread as resolved in the GitHub UI.
+For issue-style comments (PR conversation), use `minimizeComment` with the comment's node `id`. For review comments, reply + resolve + minimize.
+
+Just replying does NOT mark the thread as resolved or minimized in the GitHub UI — all three steps are required.
 
 ## Merging PRs
 
