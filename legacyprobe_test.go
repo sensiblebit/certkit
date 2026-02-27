@@ -15,78 +15,6 @@ import (
 	"time"
 )
 
-func TestParseCertificateMessage(t *testing.T) {
-	t.Parallel()
-
-	// Generate a test certificate.
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "test"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(time.Hour),
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	tests := []struct {
-		name      string
-		data      []byte
-		wantCerts int
-		wantErr   bool
-	}{
-		{
-			name:      "single certificate",
-			data:      buildCertificateMessageBody(certDER),
-			wantCerts: 1,
-		},
-		{
-			name:      "two certificates",
-			data:      buildCertificateMessageBody(certDER, certDER),
-			wantCerts: 2,
-		},
-		{
-			name:      "empty certificate list",
-			data:      []byte{0, 0, 0}, // total_len = 0
-			wantCerts: 0,
-		},
-		{
-			name:    "truncated header",
-			data:    []byte{0, 0},
-			wantErr: true,
-		},
-		{
-			name:    "truncated certificate entry",
-			data:    []byte{0, 0, 10, 0, 0, 5, 1, 2, 3}, // claims 5 bytes but only 3
-			wantErr: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			certs, err := parseCertificateMessage(tt.data)
-			if tt.wantErr {
-				if err == nil {
-					t.Fatal("expected error, got nil")
-				}
-				return
-			}
-			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
-			}
-			if len(certs) != tt.wantCerts {
-				t.Errorf("got %d certificates, want %d", len(certs), tt.wantCerts)
-			}
-		})
-	}
-}
-
 // buildCertificateMessageBody constructs a TLS Certificate message body
 // from DER-encoded certificates.
 func buildCertificateMessageBody(certs ...[]byte) []byte {
@@ -406,28 +334,5 @@ func TestLegacyFallbackConnect(t *testing.T) {
 	}
 	if result.certificates[0].Subject.CommonName != leafCert.Subject.CommonName {
 		t.Errorf("cert CN = %q, want %q", result.certificates[0].Subject.CommonName, leafCert.Subject.CommonName)
-	}
-}
-
-func TestCipherSuiteNameLegacyIDs(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		id   uint16
-		want string
-	}{
-		{0x0033, "TLS_DHE_RSA_WITH_AES_128_CBC_SHA"},
-		{0x009E, "TLS_DHE_RSA_WITH_AES_128_GCM_SHA256"},
-		{0x0032, "TLS_DHE_DSS_WITH_AES_128_CBC_SHA"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.want, func(t *testing.T) {
-			t.Parallel()
-			got := cipherSuiteName(tt.id)
-			if got != tt.want {
-				t.Errorf("cipherSuiteName(0x%04x) = %q, want %q", tt.id, got, tt.want)
-			}
-		})
 	}
 }

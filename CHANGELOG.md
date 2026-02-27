@@ -69,6 +69,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Harden QUIC response parser — add bounds checks for DCID/SCID lengths, varint decode guards to prevent infinite loops on malformed ACK frames, and increase UDP read buffer to 65535 bytes ([#82])
 - Harden TLS ServerHello parser — add explicit bounds check for oversized session ID length before advancing position ([#82])
 - Refactor probe functions to use input structs per CS-5 — `probeTLS13Cipher`, `probeKeyExchangeGroup`, `probeQUICCipher`, `probeCipher`, `probeKeyExchangeGroupLegacy` now take `cipherProbeInput` ([#82])
+- Convert `populateConnectResult` to a method `(*ConnectResult).populate` per CS-5 — reduces argument count from 3 to 2 (ctx + input) ([#82])
 - **Breaking:** Rename `csr --cert` flag to `--from-cert` for clarity — avoids confusion with certificate file arguments in other commands ([#80])
 - **Breaking:** `connect` JSON `sha256_fingerprint` format changed from lowercase hex to colon-separated uppercase hex for CLI-4 consistency with `inspect` and `sha1_fingerprint` ([#80])
 - **Breaking:** Rename `CRLCheckResult.DistributionPoint` to `CRLCheckResult.URL` (JSON: `url`) and `OCSPResult.ResponderURL` to `OCSPResult.URL` (JSON: `url`) — consistent field name for the checked endpoint across both revocation types (CLI-4) ([#78])
@@ -191,6 +192,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Tests
 
 - Remove `TestBuildLegacyClientHelloMsg` — behavioral coverage exists through `TestLegacyFallbackConnect` per T-11 ([`6492fa5`])
+- Remove `TestParseCertificateMessage` — behavioral coverage exists through `TestReadServerCertificates` per T-11 ([#82])
+- Remove `TestCipherSuiteNameLegacyIDs` — behavioral coverage exists through `TestScanCipherSuites` per T-11 ([#82])
 - Strengthen `TestBuildQUICInitialPacket` — verify QUIC v1 version, DCID/SCID in header, and round-trip decrypt CRYPTO frame against original ClientHello ([#82])
 - Consolidate `TestRateCipherSuite` from 13 entries to 6 — one per distinct code path (T-12) ([#82])
 - Merge `TestScanCipherSuites_KeyExchanges` into `TestScanCipherSuites` — eliminates redundant server setup (T-14) ([#82])
@@ -927,5 +930,5 @@ Initial release.
 [#25]: https://github.com/sensiblebit/certkit/pull/25
 [#26]: https://github.com/sensiblebit/certkit/pull/26
 [#27]: https://github.com/sensiblebit/certkit/pull/27
-[`6492fa5`]: https://github.com/sensiblebit/certkit/commit/6492fa52f43ad7bddd23265f54c15ccadc803d46
-[`772742c`]: https://github.com/sensiblebit/certkit/commit/772742c20a59cc89ce44889c7b6cde5756ad6ae2
+[`6492fa5`]: https://github.com/sensiblebit/certkit/commit/6492fa5
+[`772742c`]: https://github.com/sensiblebit/certkit/commit/772742c

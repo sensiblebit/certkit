@@ -344,7 +344,7 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 			PeerChain:   legacyResult.certificates,
 			LegacyProbe: true,
 		}
-		populateConnectResult(ctx, result, input)
+		result.populate(ctx, input)
 		result.Diagnostics = append(result.Diagnostics, ChainDiagnostic{
 			Check:  "legacy-only",
 			Status: "warn",
@@ -375,14 +375,14 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 		PeerChain:   state.PeerCertificates,
 	}
 
-	populateConnectResult(ctx, result, input)
+	result.populate(ctx, input)
 	return result, nil
 }
 
-// populateConnectResult runs chain diagnostics, verification, OCSP, and CRL
-// checks on a ConnectResult. It is shared between the normal handshake path
-// and the legacy fallback path.
-func populateConnectResult(ctx context.Context, result *ConnectResult, input ConnectTLSInput) {
+// populate runs chain diagnostics, verification, OCSP, and CRL checks on the
+// ConnectResult. It is shared between the normal handshake path and the legacy
+// fallback path.
+func (result *ConnectResult) populate(ctx context.Context, input ConnectTLSInput) {
 	serverName := result.ServerName
 
 	// Diagnose the negotiated cipher suite and protocol version.
