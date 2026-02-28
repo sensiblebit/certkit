@@ -570,15 +570,38 @@ func parseOtherNamesFromSANBytes(raw []byte) []string {
 }
 
 // extraOIDLabels maps OIDs not handled by Go's pkix.Name.String() to their
-// standard human-readable labels.
+// standard human-readable labels. Go renders standard X.500 attributes (C, ST,
+// L, O, OU, CN, STREET, POSTALCODE, SERIALNUMBER) natively; everything else
+// falls through as OID=#hex without this map.
 var extraOIDLabels = map[string]string{
+	// X.500 personal name attributes (RFC 4519)
+	"2.5.4.4":  "SN",       // surname
+	"2.5.4.41": "name",     // name
+	"2.5.4.42": "GN",       // givenName
+	"2.5.4.43": "initials", // initials
+	"2.5.4.44": "generationQualifier",
+	"2.5.4.46": "dnQualifier",
+	"2.5.4.65": "pseudonym",
+
+	// X.500 organization attributes
+	"2.5.4.15": "businessCategory",
+	"2.5.4.16": "postalAddress",
+	"2.5.4.20": "telephoneNumber",
+	"2.5.4.97": "organizationIdentifier", // eIDAS / QWAC
+
+	// Email (RFC 2985)
 	"1.2.840.113549.1.9.1": "emailAddress",
+
+	// EV certificate jurisdiction fields (CA/B Forum EV Guidelines)
+	"1.3.6.1.4.1.311.60.2.1.1": "jurisdictionLocalityName",
+	"1.3.6.1.4.1.311.60.2.1.2": "jurisdictionStateOrProvinceName",
+	"1.3.6.1.4.1.311.60.2.1.3": "jurisdictionCountryName",
 }
 
 // FormatDN formats a pkix.Name as a Distinguished Name string. Unlike
-// pkix.Name.String(), it renders the emailAddress OID (1.2.840.113549.1.9.1)
-// and serialNumber OID (2.5.4.5) with their standard labels instead of raw
-// OID=#hex notation.
+// pkix.Name.String(), it renders non-standard OIDs (personal name attributes,
+// emailAddress, businessCategory, EV jurisdiction fields, organizationIdentifier)
+// with their standard labels instead of raw OID=#hex notation.
 func FormatDN(name pkix.Name) string {
 	s := name.String()
 	for _, atv := range name.Names {

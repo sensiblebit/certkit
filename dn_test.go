@@ -706,6 +706,51 @@ func TestFormatDN(t *testing.T) {
 			want: "CN=example.com,emailAddress=user\\+tag@example.com",
 		},
 		{
+			name: "EV OIDs rendered with standard labels",
+			dn: pkix.Name{
+				CommonName:   "extended-validation.example.com",
+				Organization: []string{"Example Corp"},
+				Country:      []string{"US"},
+				Names: []pkix.AttributeTypeAndValue{
+					{Type: asn1.ObjectIdentifier{2, 5, 4, 6}, Value: "US"},
+					{Type: asn1.ObjectIdentifier{2, 5, 4, 10}, Value: "Example Corp"},
+					{Type: asn1.ObjectIdentifier{2, 5, 4, 3}, Value: "extended-validation.example.com"},
+					{Type: asn1.ObjectIdentifier{2, 5, 4, 15}, Value: "Private Organization"},
+					{Type: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 60, 2, 1, 2}, Value: "California"},
+					{Type: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 60, 2, 1, 3}, Value: "US"},
+				},
+			},
+			want: "CN=extended-validation.example.com,O=Example Corp,C=US,jurisdictionCountryName=US,jurisdictionStateOrProvinceName=California,businessCategory=Private Organization",
+		},
+		{
+			name: "personal name OIDs rendered with standard labels",
+			dn: pkix.Name{
+				CommonName: "John A. Doe",
+				Names: []pkix.AttributeTypeAndValue{
+					{Type: asn1.ObjectIdentifier{2, 5, 4, 3}, Value: "John A. Doe"},
+					{Type: asn1.ObjectIdentifier{2, 5, 4, 4}, Value: "Doe"},
+					{Type: asn1.ObjectIdentifier{2, 5, 4, 42}, Value: "John"},
+					{Type: asn1.ObjectIdentifier{2, 5, 4, 43}, Value: "A"},
+				},
+			},
+			want: "CN=John A. Doe,initials=A,GN=John,SN=Doe",
+		},
+		{
+			name: "organizationIdentifier (eIDAS) rendered with standard label",
+			dn: pkix.Name{
+				CommonName:   "eidas.example.com",
+				Organization: []string{"Example EU Corp"},
+				Country:      []string{"DE"},
+				Names: []pkix.AttributeTypeAndValue{
+					{Type: asn1.ObjectIdentifier{2, 5, 4, 6}, Value: "DE"},
+					{Type: asn1.ObjectIdentifier{2, 5, 4, 10}, Value: "Example EU Corp"},
+					{Type: asn1.ObjectIdentifier{2, 5, 4, 3}, Value: "eidas.example.com"},
+					{Type: asn1.ObjectIdentifier{2, 5, 4, 97}, Value: "PSDDE-BAFIN-12345"},
+				},
+			},
+			want: "CN=eidas.example.com,O=Example EU Corp,C=DE,organizationIdentifier=PSDDE-BAFIN-12345",
+		},
+		{
 			name: "empty name",
 			dn:   pkix.Name{},
 			want: "",

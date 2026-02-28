@@ -87,6 +87,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fix `FormatDN` to render non-standard OIDs with standard labels instead of raw `OID=#hex` notation: personal name attributes (`SN`, `GN`, `initials`, `generationQualifier`, `dnQualifier`, `pseudonym`), `businessCategory`, `organizationIdentifier` (eIDAS/QWAC), and EV jurisdiction fields (`jurisdictionLocalityName`, `jurisdictionStateOrProvinceName`, `jurisdictionCountryName`) ([`pending`])
 - Fix `connect` legacy probe showing `Verify: N/A` despite performing full x509 chain verification — now shows the real verify result (`OK`/`FAILED`); Note line updated to clarify only server key possession is unverified ([`772742c`])
 - Fix `connect --ciphers` showing "none detected" on QUIC-only servers — empty check now covers both TCP and QUIC cipher lists ([`6492fa5`])
 - Fix `probeLegacyCipher` hardcoding `"TLS 1.2"` for negotiated version — now returns the actual negotiated version from the ServerHello ([`6492fa5`])
