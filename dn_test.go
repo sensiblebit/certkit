@@ -720,7 +720,7 @@ func TestFormatDN(t *testing.T) {
 					{Type: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 60, 2, 1, 3}, Value: "US"},
 				},
 			},
-			want: "CN=extended-validation.example.com,O=Example Corp,C=US,jurisdictionCountryName=US,jurisdictionStateOrProvinceName=California,businessCategory=Private Organization",
+			want: "CN=extended-validation.example.com,O=Example Corp,C=US,jurisdictionC=US,jurisdictionST=California,businessCategory=Private Organization",
 		},
 		{
 			name: "personal name OIDs rendered with standard labels",

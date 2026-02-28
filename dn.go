@@ -592,10 +592,12 @@ var extraOIDLabels = map[string]string{
 	// Email (RFC 2985)
 	"1.2.840.113549.1.9.1": "emailAddress",
 
-	// EV certificate jurisdiction fields (CA/B Forum EV Guidelines)
-	"1.3.6.1.4.1.311.60.2.1.1": "jurisdictionLocalityName",
-	"1.3.6.1.4.1.311.60.2.1.2": "jurisdictionStateOrProvinceName",
-	"1.3.6.1.4.1.311.60.2.1.3": "jurisdictionCountryName",
+	// EV certificate jurisdiction fields (CA/B Forum EV Guidelines).
+	// OpenSSL abbreviates these as jurisdictionL/ST/C, mirroring the base
+	// X.500 locality/state/country abbreviations.
+	"1.3.6.1.4.1.311.60.2.1.1": "jurisdictionL",
+	"1.3.6.1.4.1.311.60.2.1.2": "jurisdictionST",
+	"1.3.6.1.4.1.311.60.2.1.3": "jurisdictionC",
 }
 
 // FormatDN formats a pkix.Name as a Distinguished Name string. Unlike
