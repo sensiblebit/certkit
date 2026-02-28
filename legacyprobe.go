@@ -181,9 +181,9 @@ func readServerCertificates(r io.Reader) (*serverHelloResult, []*x509.Certificat
 		header := make([]byte, 5)
 		if _, err := io.ReadFull(r, header); err != nil {
 			if shResult != nil {
-				return shResult, certs, fmt.Errorf("reading TLS record: %w", err)
+				return shResult, certs, fmt.Errorf("reading tls record: %w", err)
 			}
-			return nil, nil, fmt.Errorf("reading TLS record header: %w", err)
+			return nil, nil, fmt.Errorf("reading tls record header: %w", err)
 		}
 		totalRead += 5
 
@@ -201,7 +201,7 @@ func readServerCertificates(r io.Reader) (*serverHelloResult, []*x509.Certificat
 
 		payload := make([]byte, recordLen)
 		if _, err := io.ReadFull(r, payload); err != nil {
-			return shResult, certs, fmt.Errorf("reading TLS record payload: %w", err)
+			return shResult, certs, fmt.Errorf("reading tls record payload: %w", err)
 		}
 		totalRead += recordLen
 
@@ -214,7 +214,7 @@ func readServerCertificates(r io.Reader) (*serverHelloResult, []*x509.Certificat
 		}
 
 		if contentType != 0x16 {
-			return shResult, certs, fmt.Errorf("unexpected TLS content type: 0x%02x", contentType)
+			return shResult, certs, fmt.Errorf("unexpected tls content type: 0x%02x", contentType)
 		}
 
 		// Append to handshake buffer and process complete messages.

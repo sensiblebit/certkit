@@ -53,8 +53,11 @@ func (s *spinner) SetMessage(msg string) {
 	s.mu.Unlock()
 }
 
-// Stop halts the spinner and clears the line. Safe to call multiple times.
+// Stop halts the spinner and clears the line. Safe to call before or after
+// Start(), and safe to call multiple times.
 func (s *spinner) Stop() {
+	// If Start() was never called, close done so <-s.done does not block.
+	s.startOnce.Do(func() { close(s.done) })
 	s.stopOnce.Do(func() { close(s.stop) })
 	<-s.done
 }

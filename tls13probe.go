@@ -103,7 +103,7 @@ func buildClientHelloMsg(input clientHelloInput) ([]byte, error) {
 	exts = appendSNIExtension(exts, input.serverName)
 	exts = appendSupportedGroupsExtension(exts, input.groupID)
 	exts = appendSignatureAlgorithmsExtension(exts)
-	exts = appendKeyShareExtension(exts, input.groupID, keyShareData)
+	exts = appendKeyShareExtension(exts, appendKeyShareExtensionInput{groupID: input.groupID, keyData: keyShareData})
 	exts = appendSupportedVersionsExtension(exts)
 	exts = appendPSKKeyExchangeModesExtension(exts)
 	if len(input.alpn) > 0 {
@@ -249,7 +249,7 @@ func readServerHello(r io.Reader) (*serverHelloResult, error) {
 	// Read TLS record header (5 bytes): type(1) + version(2) + length(2).
 	header := make([]byte, 5)
 	if _, err := io.ReadFull(r, header); err != nil {
-		return nil, fmt.Errorf("reading TLS record header: %w", err)
+		return nil, fmt.Errorf("reading tls record header: %w", err)
 	}
 
 	contentType := header[0]
@@ -262,7 +262,7 @@ func readServerHello(r io.Reader) (*serverHelloResult, error) {
 
 	payload := make([]byte, recordLen)
 	if _, err := io.ReadFull(r, payload); err != nil {
-		return nil, fmt.Errorf("reading TLS record payload: %w", err)
+		return nil, fmt.Errorf("reading tls record payload: %w", err)
 	}
 
 	// Alert record: the server rejected the cipher suite or group.
@@ -271,7 +271,7 @@ func readServerHello(r io.Reader) (*serverHelloResult, error) {
 	}
 
 	if contentType != 0x16 {
-		return nil, fmt.Errorf("unexpected TLS content type: 0x%02x", contentType)
+		return nil, fmt.Errorf("unexpected tls content type: 0x%02x", contentType)
 	}
 
 	return parseServerHello(payload)
@@ -509,16 +509,22 @@ func appendSignatureAlgorithmsExtension(b []byte) []byte {
 	return appendUint16(b, 0x0401) // rsa_pkcs1_sha256
 }
 
-// appendKeyShareExtension appends a key_share extension (0x0033).
-func appendKeyShareExtension(b []byte, groupID tls.CurveID, keyData []byte) []byte {
-	entryLen := 2 + 2 + len(keyData) // group(2) + key_len(2) + key_data
+// appendKeyShareExtensionInput contains parameters for appendKeyShareExtension.
+type appendKeyShareExtensionInput struct {
+	groupID tls.CurveID
+	keyData []byte
+}
 
-	b = appendUint16(b, 0x0033)             // extension type
-	b = appendUint16(b, uint16(2+entryLen)) // extension data length
-	b = appendUint16(b, uint16(entryLen))   // client key shares length
-	b = appendUint16(b, uint16(groupID))    // named group
-	b = appendUint16(b, uint16(len(keyData)))
-	return append(b, keyData...)
+// appendKeyShareExtension appends a key_share extension (0x0033).
+func appendKeyShareExtension(b []byte, input appendKeyShareExtensionInput) []byte {
+	entryLen := 2 + 2 + len(input.keyData) // group(2) + key_len(2) + key_data
+
+	b = appendUint16(b, 0x0033)                // extension type
+	b = appendUint16(b, uint16(2+entryLen))    // extension data length
+	b = appendUint16(b, uint16(entryLen))      // client key shares length
+	b = appendUint16(b, uint16(input.groupID)) // named group
+	b = appendUint16(b, uint16(len(input.keyData)))
+	return append(b, input.keyData...)
 }
 
 // appendSupportedVersionsExtension appends a supported_versions extension (0x002b)

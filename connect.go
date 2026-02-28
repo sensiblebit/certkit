@@ -333,7 +333,7 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 			serverName: serverName,
 		})
 		if legacyErr != nil {
-			return nil, fmt.Errorf("tls handshake with %s: %w", addr, handshakeErr)
+			return nil, fmt.Errorf("tls handshake with %s: %w; legacy fallback: %v", addr, handshakeErr, legacyErr)
 		}
 		result := &ConnectResult{
 			Host:        input.Host,
@@ -885,7 +885,7 @@ func RateCipherSuite(cipherID uint16, tlsVersion uint16) CipherRating {
 	// For TLS 1.0–1.2: look up the cipher suite name to classify.
 	name := tls.CipherSuiteName(cipherID)
 
-	// Non-ECDHE key exchange (static RSA) is insecure — no forward secrecy.
+	// Non-ECDHE key exchange (static RSA, DHE/DSS) is weak — no modern forward secrecy guarantees.
 	if !strings.Contains(name, "ECDHE") {
 		return CipherRatingWeak
 	}

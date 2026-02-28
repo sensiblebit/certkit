@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
+	"log/slog"
 	"math/big"
 	"net"
 	"strings"
@@ -115,7 +116,7 @@ func TestReadServerCertificates(t *testing.T) {
 		{
 			name:            "unexpected content type",
 			records:         buildRawTLSRecord(0x17, 1), // ApplicationData
-			wantErrContains: "unexpected TLS content type",
+			wantErrContains: "unexpected tls content type",
 		},
 	}
 
@@ -292,7 +293,9 @@ func TestLegacyFallbackConnect(t *testing.T) {
 			}
 			// Read the ClientHello (we don't parse it, just consume it).
 			buf := make([]byte, 4096)
-			_, _ = conn.Read(buf)
+			if _, err := conn.Read(buf); err != nil {
+				slog.Debug("TestLegacyFallbackConnect: reading ClientHello", "error", err)
+			}
 
 			// Send ServerHello + Certificate as raw TLS records.
 			serverHello := buildMockServerHello(0x0303, 0x0033)
@@ -305,7 +308,9 @@ func TestLegacyFallbackConnect(t *testing.T) {
 			handshake = append(handshake, certMsg...)
 			handshake = append(handshake, helloDone...)
 
-			_, _ = conn.Write(wrapTLSRecord(handshake))
+			if _, err := conn.Write(wrapTLSRecord(handshake)); err != nil {
+				slog.Debug("TestLegacyFallbackConnect: writing server response", "error", err)
+			}
 			_ = conn.Close()
 		}
 	}()

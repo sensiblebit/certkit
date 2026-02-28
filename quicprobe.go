@@ -119,7 +119,7 @@ type quicInitialPacketInput struct {
 func buildQUICInitialPacket(input quicInitialPacketInput) ([]byte, error) {
 	clientKeys, _, err := deriveQUICInitialKeys(input.dcid)
 	if err != nil {
-		return nil, fmt.Errorf("deriving QUIC keys: %w", err)
+		return nil, fmt.Errorf("deriving quic keys: %w", err)
 	}
 
 	// Build CRYPTO frame: type(1) + offset(var) + length(var) + data
@@ -354,7 +354,7 @@ func parseQUICInitialResponse(packet []byte, serverKeys quicInitialKeys) (*serve
 	}
 	plaintext, err := gcm.Open(nil, nonce, packet[ciphertextStart:payloadEnd], associatedData)
 	if err != nil {
-		return nil, fmt.Errorf("decrypting QUIC payload: %w", err)
+		return nil, fmt.Errorf("decrypting quic payload: %w", err)
 	}
 
 	// Find the CRYPTO frame in the plaintext.
@@ -462,7 +462,7 @@ func parseQUICInitialResponse(packet []byte, serverKeys quicInitialKeys) (*serve
 		return parseServerHello(cryptoData)
 	}
 
-	return nil, fmt.Errorf("no crypto frame found in QUIC Initial response")
+	return nil, fmt.Errorf("no crypto frame found in quic initial response")
 }
 
 // probeQUICCipher sends a QUIC Initial packet to the provided UDP address
