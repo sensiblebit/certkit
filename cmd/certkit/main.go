@@ -20,11 +20,13 @@ func init() {
 func main() {
 	rootCmd.Version = version
 	if err := rootCmd.Execute(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
-		var ve *ValidationError
-		if errors.As(err, &ve) {
+		if ve, ok := errors.AsType[*ValidationError](err); ok {
+			if !ve.Quiet {
+				fmt.Fprintf(os.Stderr, "Error: %s\n", err)
+			}
 			os.Exit(2)
 		}
+		fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 		os.Exit(1)
 	}
 }

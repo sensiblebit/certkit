@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"errors"
 	"math/big"
 	"net"
 	"net/http"
@@ -295,6 +296,8 @@ func TestFormatConnectResult(t *testing.T) {
 		name           string
 		diagnostics    []ChainDiagnostic
 		aiaFetched     bool
+		verifyError    string
+		clientAuth     *ClientAuthInfo
 		ocsp           *OCSPResult
 		crl            *CRLCheckResult
 		wantStrings    []string
@@ -313,6 +316,18 @@ func TestFormatConnectResult(t *testing.T) {
 				{Check: "root-in-chain", Status: "warn", Detail: `server sent root certificate "CN=Root CA" (position 2)`},
 			},
 			wantStrings: []string{"Diagnostics:", "[WARN] root-in-chain:", "Verify:       OK\n"},
+		},
+		{
+			name: "error-level diagnostic rendered with ERR tag",
+			diagnostics: []ChainDiagnostic{
+				{Check: "hostname-mismatch", Status: "error", Detail: `x509: certificate is valid for *.badssl.com, badssl.com, not wrong.host.badssl.com`},
+			},
+			verifyError: "x509: certificate is valid for *.badssl.com, badssl.com, not wrong.host.badssl.com",
+			wantStrings: []string{
+				"[ERR] hostname-mismatch:",
+				"Verify:       FAILED",
+			},
+			notWantStrings: []string{"[WARN] hostname-mismatch:"},
 		},
 		{
 			name:       "AIA-aware verify line",
@@ -375,6 +390,21 @@ func TestFormatConnectResult(t *testing.T) {
 			},
 		},
 		{
+			name:        "verify failed",
+			verifyError: "x509: certificate signed by unknown authority",
+			wantStrings: []string{
+				"Verify:       FAILED (x509: certificate signed by unknown authority)",
+			},
+			notWantStrings: []string{"Verify:       OK"},
+		},
+		{
+			name:       "client auth requested (any CA)",
+			clientAuth: &ClientAuthInfo{Requested: true},
+			wantStrings: []string{
+				"Client Auth:  requested (any CA)",
+			},
+		},
+		{
 			name: "CRL good",
 			crl:  &CRLCheckResult{Status: "good", URL: "http://crl.example.com/ca.crl"},
 			wantStrings: []string{
@@ -390,6 +420,35 @@ func TestFormatConnectResult(t *testing.T) {
 		},
 	}
 
+	// LegacyProbe: Note shows key-possession caveat; Verify shows real chain result.
+	t.Run("LegacyProbe shows Note and real Verify result", func(t *testing.T) {
+		t.Parallel()
+		result := &ConnectResult{
+			Host:        "test.example.com",
+			Port:        "443",
+			Protocol:    "TLS 1.2",
+			CipherSuite: "TLS_DHE_RSA_WITH_AES_128_CBC_SHA",
+			ServerName:  "test.example.com",
+			PeerChain:   []*x509.Certificate{cert},
+			LegacyProbe: true,
+		}
+		output := FormatConnectResult(result)
+		for _, want := range []string{
+			"Note:",
+			"raw probe",
+			"server key possession not verified",
+			"Verify:       OK",
+		} {
+			if !strings.Contains(output, want) {
+				t.Errorf("output missing %q\ngot:\n%s", want, output)
+			}
+		}
+		// Must NOT show the old "N/A" placeholder.
+		if strings.Contains(output, "N/A") {
+			t.Errorf("output contains stale N/A placeholder\ngot:\n%s", output)
+		}
+	})
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
@@ -402,6 +461,8 @@ func TestFormatConnectResult(t *testing.T) {
 				PeerChain:   []*x509.Certificate{cert},
 				Diagnostics: tt.diagnostics,
 				AIAFetched:  tt.aiaFetched,
+				VerifyError: tt.verifyError,
+				ClientAuth:  tt.clientAuth,
 				OCSP:        tt.ocsp,
 				CRL:         tt.crl,
 			}
@@ -485,6 +546,198 @@ func TestDiagnoseConnectChain(t *testing.T) {
 					for _, substr := range tt.wantDetailContains[i] {
 						if !strings.Contains(diags[i].Detail, substr) {
 							t.Errorf("diag[%d].Detail missing %q, got: %s", i, substr, diags[i].Detail)
+						}
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestSortDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	diags := []ChainDiagnostic{
+		{Check: "deprecated-tls10", Status: "warn", Detail: "..."},
+		{Check: "cbc-cipher", Status: "warn", Detail: "..."},
+		{Check: "verify-failed", Status: "error", Detail: "..."},
+		{Check: "3des-cipher", Status: "warn", Detail: "..."},
+		{Check: "hostname-mismatch", Status: "error", Detail: "..."},
+		{Check: "static-rsa-kex", Status: "warn", Detail: "..."},
+	}
+
+	SortDiagnostics(diags)
+
+	wantOrder := []string{
+		"hostname-mismatch", // error, alpha first
+		"verify-failed",     // error, alpha second
+		"3des-cipher",       // warn, alpha
+		"cbc-cipher",
+		"deprecated-tls10",
+		"static-rsa-kex",
+	}
+
+	if len(diags) != len(wantOrder) {
+		t.Fatalf("got %d diagnostics, want %d", len(diags), len(wantOrder))
+	}
+	for i, want := range wantOrder {
+		if diags[i].Check != want {
+			t.Errorf("diags[%d].Check = %q, want %q", i, diags[i].Check, want)
+		}
+	}
+}
+
+func TestDiagnoseVerifyError(t *testing.T) {
+	t.Parallel()
+
+	// Generate a self-signed CA cert for "localhost" and trust it, so that
+	// verifying with a wrong DNSName triggers HostnameError (not UnknownAuthorityError).
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "localhost"},
+		DNSNames:              []string{"localhost"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	roots := x509.NewCertPool()
+	roots.AddCert(cert)
+
+	// Trigger a real HostnameError by verifying with wrong DNSName.
+	_, hostnameErr := cert.Verify(x509.VerifyOptions{DNSName: "wrong.example.com", Roots: roots})
+	if hostnameErr == nil {
+		t.Fatal("expected verification error for wrong hostname")
+	}
+
+	tests := []struct {
+		name       string
+		err        error
+		wantChecks []string
+	}{
+		{
+			name: "hostname mismatch",
+			err:  hostnameErr,
+			// The error chain may include both HostnameError and UnknownAuthorityError.
+			// We only care that hostname-mismatch is present.
+			wantChecks: []string{"hostname-mismatch"},
+		},
+		{
+			name:       "non-hostname error",
+			err:        errors.New("x509: certificate signed by unknown authority"),
+			wantChecks: nil,
+		},
+		{
+			name:       "nil error",
+			err:        nil,
+			wantChecks: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			diags := DiagnoseVerifyError(tt.err)
+			if len(diags) != len(tt.wantChecks) {
+				t.Fatalf("got %d diagnostics, want %d: %+v", len(diags), len(tt.wantChecks), diags)
+			}
+			for i, wantCheck := range tt.wantChecks {
+				if diags[i].Check != wantCheck {
+					t.Errorf("diag[%d].Check = %q, want %q", i, diags[i].Check, wantCheck)
+				}
+				if diags[i].Status != "error" {
+					t.Errorf("diag[%d].Status = %q, want %q", i, diags[i].Status, "error")
+				}
+			}
+		})
+	}
+}
+
+func TestDiagnoseNegotiatedCipher(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		protocol    string
+		cipherSuite string
+		wantChecks  []string
+		wantSubs    [][]string // per-diagnostic substrings to match in Detail
+	}{
+		{
+			name:        "TLS 1.3 with AEAD — no diagnostics",
+			protocol:    "TLS 1.3",
+			cipherSuite: "TLS_AES_128_GCM_SHA256",
+		},
+		{
+			name:        "TLS 1.2 ECDHE GCM — no diagnostics",
+			protocol:    "TLS 1.2",
+			cipherSuite: "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256",
+		},
+		{
+			name:        "TLS 1.2 CBC cipher",
+			protocol:    "TLS 1.2",
+			cipherSuite: "TLS_ECDHE_RSA_WITH_AES_256_CBC_SHA",
+			wantChecks:  []string{"cbc-cipher"},
+			wantSubs:    [][]string{{"CBC", "padding oracle"}},
+		},
+		{
+			name:        "TLS 1.0 with CBC and static RSA",
+			protocol:    "TLS 1.0",
+			cipherSuite: "TLS_RSA_WITH_AES_128_CBC_SHA",
+			wantChecks:  []string{"deprecated-tls10", "cbc-cipher", "static-rsa-kex"},
+		},
+		{
+			name:        "TLS 1.1 with 3DES",
+			protocol:    "TLS 1.1",
+			cipherSuite: "TLS_RSA_WITH_3DES_EDE_CBC_SHA",
+			wantChecks:  []string{"deprecated-tls11", "cbc-cipher", "3des-cipher", "static-rsa-kex"},
+		},
+		{
+			name:        "DHE key exchange",
+			protocol:    "TLS 1.2",
+			cipherSuite: "TLS_DHE_RSA_WITH_AES_128_GCM_SHA256",
+			wantChecks:  []string{"dhe-kex"},
+			wantSubs:    [][]string{{"DHE", "deprecated"}},
+		},
+		{
+			name:        "DHE-DSS key exchange with CBC",
+			protocol:    "TLS 1.2",
+			cipherSuite: "TLS_DHE_DSS_WITH_AES_128_CBC_SHA",
+			wantChecks:  []string{"cbc-cipher", "dhe-kex"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			diags := DiagnoseNegotiatedCipher(tt.protocol, tt.cipherSuite)
+			if len(diags) != len(tt.wantChecks) {
+				t.Fatalf("got %d diagnostics, want %d: %+v", len(diags), len(tt.wantChecks), diags)
+			}
+			for i, wantCheck := range tt.wantChecks {
+				if diags[i].Check != wantCheck {
+					t.Errorf("diag[%d].Check = %q, want %q", i, diags[i].Check, wantCheck)
+				}
+				if diags[i].Status != "warn" {
+					t.Errorf("diag[%d].Status = %q, want %q", i, diags[i].Status, "warn")
+				}
+				if i < len(tt.wantSubs) {
+					for _, sub := range tt.wantSubs[i] {
+						if !strings.Contains(diags[i].Detail, sub) {
+							t.Errorf("diag[%d].Detail missing %q, got: %s", i, sub, diags[i].Detail)
 						}
 					}
 				}
@@ -1166,6 +1419,502 @@ func TestConnectTLS_CRL_AIAFetchedIssuer(t *testing.T) {
 	}
 	if result.CRL.Status != "revoked" {
 		t.Errorf("CRL.Status = %q, want %q", result.CRL.Status, "revoked")
+	}
+}
+
+func TestRateCipherSuite(t *testing.T) {
+	t.Parallel()
+
+	// One entry per distinct code path in RateCipherSuite (T-12).
+	tests := []struct {
+		name       string
+		cipherID   uint16
+		tlsVersion uint16
+		want       CipherRating
+	}{
+		// TLS 1.3 — generally good (all suites are AEAD).
+		{
+			name:       "TLS 1.3 good",
+			cipherID:   tls.TLS_AES_128_GCM_SHA256,
+			tlsVersion: tls.VersionTLS13,
+			want:       CipherRatingGood,
+		},
+		// TLS 1.3 CCM_8 — weak (truncated 8-byte auth tag, IANA "Not Recommended").
+		{
+			name:       "TLS 1.3 CCM_8 weak",
+			cipherID:   0x1305,
+			tlsVersion: tls.VersionTLS13,
+			want:       CipherRatingWeak,
+		},
+		// TLS 1.2 ECDHE + GCM — good (forward secrecy + AEAD).
+		{
+			name:       "TLS 1.2 ECDHE+GCM good",
+			cipherID:   tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+			tlsVersion: tls.VersionTLS12,
+			want:       CipherRatingGood,
+		},
+		// TLS 1.2 ECDHE + ChaCha20 — good (forward secrecy + AEAD).
+		{
+			name:       "TLS 1.2 ECDHE+CHACHA20 good",
+			cipherID:   tls.TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+			tlsVersion: tls.VersionTLS12,
+			want:       CipherRatingGood,
+		},
+		// TLS 1.2 ECDHE + CBC — weak (padding oracle attacks).
+		{
+			name:       "TLS 1.2 ECDHE+CBC weak",
+			cipherID:   tls.TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256,
+			tlsVersion: tls.VersionTLS12,
+			want:       CipherRatingWeak,
+		},
+		// TLS 1.2 static RSA — weak (no forward secrecy).
+		{
+			name:       "TLS 1.2 static RSA weak",
+			cipherID:   tls.TLS_RSA_WITH_AES_128_GCM_SHA256,
+			tlsVersion: tls.VersionTLS12,
+			want:       CipherRatingWeak,
+		},
+		// InsecureCipherSuites list — ECDHE+RC4 is still weak despite forward secrecy.
+		{
+			name:       "TLS 1.2 ECDHE+RC4 insecure",
+			cipherID:   tls.TLS_ECDHE_ECDSA_WITH_RC4_128_SHA,
+			tlsVersion: tls.VersionTLS12,
+			want:       CipherRatingWeak,
+		},
+		// Unknown cipher IDs should be rated conservatively (non-ECDHE fallthrough).
+		{
+			name:       "unknown cipher ID weak",
+			cipherID:   0xFFFF,
+			tlsVersion: tls.VersionTLS12,
+			want:       CipherRatingWeak,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := RateCipherSuite(tt.cipherID, tt.tlsVersion)
+			if got != tt.want {
+				t.Errorf("RateCipherSuite(0x%04x, 0x%04x) = %q, want %q",
+					tt.cipherID, tt.tlsVersion, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestScanCipherSuites(t *testing.T) {
+	t.Parallel()
+
+	// Create a TLS server that only accepts specific cipher suites.
+	ca := generateTestCA(t, "Cipher Scan CA")
+	leaf := generateTestLeafCert(t, ca)
+
+	tlsCert := tls.Certificate{
+		Certificate: [][]byte{leaf.DER, ca.CertDER},
+		PrivateKey:  leaf.Key,
+	}
+
+	port := startTLSServerWithConfig(t, &tls.Config{
+		Certificates: []tls.Certificate{tlsCert},
+		MinVersion:   tls.VersionTLS12,
+		MaxVersion:   tls.VersionTLS13,
+		CipherSuites: []uint16{
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+			tls.TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+		},
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	result, err := ScanCipherSuites(ctx, ScanCipherSuitesInput{
+		Host:        "127.0.0.1",
+		Port:        port,
+		Concurrency: 5,
+	})
+	if err != nil {
+		t.Fatalf("ScanCipherSuites failed: %v", err)
+	}
+
+	if len(result.Ciphers) == 0 {
+		t.Fatal("no ciphers detected")
+	}
+
+	// Should detect at least one TLS 1.3 suite (Go supports 3 standard suites;
+	// exact count may change if Go adds CCM support).
+	tls13Count := 0
+	for _, c := range result.Ciphers {
+		if c.Version == "TLS 1.3" {
+			tls13Count++
+		}
+	}
+	if tls13Count == 0 {
+		t.Error("expected at least one TLS 1.3 cipher, got 0")
+	}
+
+	// Should detect the two TLS 1.2 ECDHE-ECDSA-GCM ciphers we configured.
+	tls12Names := make(map[string]bool)
+	for _, c := range result.Ciphers {
+		if c.Version == "TLS 1.2" {
+			tls12Names[c.Name] = true
+		}
+	}
+	for _, want := range []string{
+		"TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256",
+		"TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384",
+	} {
+		if !tls12Names[want] {
+			t.Errorf("expected TLS 1.2 cipher %q in results", want)
+		}
+	}
+
+	// Overall rating should be good (all configured ciphers are ECDHE+GCM).
+	// Per-cipher rating correctness is covered by TestRateCipherSuite.
+	if result.OverallRating != CipherRatingGood {
+		t.Errorf("OverallRating = %q, want %q", result.OverallRating, CipherRatingGood)
+	}
+
+	// SupportedVersions should include both TLS 1.3 and TLS 1.2.
+	if len(result.SupportedVersions) < 2 {
+		t.Errorf("SupportedVersions = %v, want at least TLS 1.3 and TLS 1.2", result.SupportedVersions)
+	}
+
+	// Key exchange groups: Go's TLS server should accept at least X25519.
+	if len(result.KeyExchanges) == 0 {
+		t.Fatal("no key exchange groups detected")
+	}
+	kxNames := make(map[string]bool)
+	for _, kx := range result.KeyExchanges {
+		kxNames[kx.Name] = true
+		if kx.Name == "X25519MLKEM768" || kx.Name == "SecP256r1MLKEM768" || kx.Name == "SecP384r1MLKEM1024" {
+			if !kx.PostQuantum {
+				t.Errorf("key exchange %s should be PostQuantum", kx.Name)
+			}
+		} else if kx.PostQuantum {
+			t.Errorf("key exchange %s should not be PostQuantum", kx.Name)
+		}
+	}
+	if !kxNames["X25519"] {
+		t.Error("expected X25519 in key exchange results")
+	}
+}
+
+func TestScanCipherSuites_EmptyHost(t *testing.T) {
+	t.Parallel()
+	_, err := ScanCipherSuites(context.Background(), ScanCipherSuitesInput{})
+	if err == nil {
+		t.Fatal("expected error for empty host")
+	}
+}
+
+func TestScanCipherSuites_CancelledContext(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := ScanCipherSuites(ctx, ScanCipherSuitesInput{Host: "127.0.0.1", Port: "443"})
+	if err == nil {
+		t.Fatal("expected error for cancelled context")
+	}
+}
+
+func TestFormatCipherScanResult(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		result      *CipherScanResult
+		wantExact   string // if non-empty, assert exact match instead of substring checks
+		wantStrings []string
+	}{
+		{
+			name:      "nil result — no output",
+			result:    nil,
+			wantExact: "",
+		},
+		{
+			name: "empty ciphers — none detected",
+			result: &CipherScanResult{
+				Ciphers: nil,
+			},
+			wantStrings: []string{"none detected"},
+		},
+		{
+			name: "mixed ratings with kex subgroups",
+			result: &CipherScanResult{
+				SupportedVersions: []string{"TLS 1.3", "TLS 1.2"},
+				Ciphers: []CipherProbeResult{
+					{Name: "TLS_AES_128_GCM_SHA256", ID: tls.TLS_AES_128_GCM_SHA256, Version: "TLS 1.3", KeyExchange: "ECDHE", Rating: CipherRatingGood},
+					{Name: "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256", ID: tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256, Version: "TLS 1.2", KeyExchange: "ECDHE", Rating: CipherRatingGood},
+					{Name: "TLS_RSA_WITH_AES_128_CBC_SHA", ID: tls.TLS_RSA_WITH_AES_128_CBC_SHA, Version: "TLS 1.2", KeyExchange: "RSA", Rating: CipherRatingWeak},
+				},
+				OverallRating: CipherRatingWeak,
+			},
+			wantStrings: []string{
+				"Cipher suites (3 supported)",
+				"TLS 1.3 (ECDHE):",
+				"TLS 1.2 (ECDHE):",
+				"TLS 1.2 (RSA, no forward secrecy):",
+				"[good]",
+				"[weak]",
+				"TLS_AES_128_GCM_SHA256",
+				"TLS_RSA_WITH_AES_128_CBC_SHA",
+			},
+		},
+		{
+			name: "QUIC and key exchanges",
+			result: &CipherScanResult{
+				SupportedVersions: []string{"TLS 1.3"},
+				Ciphers: []CipherProbeResult{
+					{Name: "TLS_AES_128_GCM_SHA256", Version: "TLS 1.3", KeyExchange: "ECDHE", Rating: CipherRatingGood},
+				},
+				QUICProbed: true,
+				QUICCiphers: []CipherProbeResult{
+					{Name: "TLS_AES_128_GCM_SHA256", Version: "TLS 1.3", KeyExchange: "ECDHE", Rating: CipherRatingGood},
+					{Name: "TLS_AES_256_GCM_SHA384", Version: "TLS 1.3", KeyExchange: "ECDHE", Rating: CipherRatingGood},
+				},
+				KeyExchanges: []KeyExchangeProbeResult{
+					{Name: "X25519MLKEM768", ID: 4588, PostQuantum: true},
+					{Name: "X25519", ID: 29},
+					{Name: "P-256", ID: 23},
+				},
+				OverallRating: CipherRatingGood,
+			},
+			wantStrings: []string{
+				"Cipher suites (1 supported)",
+				"QUIC cipher suites (2 supported)",
+				"Key exchange groups (3 supported, forward secrecy)",
+				"X25519MLKEM768 (post-quantum)",
+				"X25519\n",
+				"P-256\n",
+			},
+		},
+		{
+			name: "QUIC probed but not supported",
+			result: &CipherScanResult{
+				SupportedVersions: []string{"TLS 1.3"},
+				Ciphers: []CipherProbeResult{
+					{Name: "TLS_AES_128_GCM_SHA256", Version: "TLS 1.3", KeyExchange: "ECDHE", Rating: CipherRatingGood},
+				},
+				QUICProbed:    true,
+				QUICCiphers:   nil,
+				OverallRating: CipherRatingGood,
+			},
+			wantStrings: []string{
+				"QUIC: not supported",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			output := FormatCipherScanResult(tt.result)
+			if tt.wantStrings == nil {
+				if output != tt.wantExact {
+					t.Errorf("want exact %q, got %q", tt.wantExact, output)
+				}
+				return
+			}
+			for _, want := range tt.wantStrings {
+				if !strings.Contains(output, want) {
+					t.Errorf("output missing %q\ngot:\n%s", want, output)
+				}
+			}
+		})
+	}
+}
+
+func TestFormatCipherRatingLine(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		scan *CipherScanResult
+		want string
+	}{
+		{
+			name: "nil scan",
+			scan: nil,
+			want: "",
+		},
+		{
+			name: "empty scan",
+			scan: &CipherScanResult{},
+			want: "",
+		},
+		{
+			name: "all good",
+			scan: &CipherScanResult{
+				Ciphers: []CipherProbeResult{
+					{Rating: CipherRatingGood},
+					{Rating: CipherRatingGood},
+				},
+				OverallRating: CipherRatingGood,
+			},
+			want: "Ciphers:      good (2 good, 0 weak)\n",
+		},
+		{
+			name: "mixed",
+			scan: &CipherScanResult{
+				Ciphers: []CipherProbeResult{
+					{Rating: CipherRatingGood},
+					{Rating: CipherRatingWeak},
+				},
+				OverallRating: CipherRatingWeak,
+			},
+			want: "Ciphers:      weak (1 good, 1 weak)\n",
+		},
+		{
+			name: "QUIC only",
+			scan: &CipherScanResult{
+				QUICCiphers: []CipherProbeResult{
+					{Rating: CipherRatingGood},
+					{Rating: CipherRatingWeak},
+				},
+				OverallRating: CipherRatingWeak,
+			},
+			want: "Ciphers:      weak (1 good, 1 weak)\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := FormatCipherRatingLine(tt.scan)
+			if got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDiagnoseCipherScan(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		result     *CipherScanResult
+		wantChecks []string   // expected diagnostic check names in order
+		wantSubs   [][]string // per-diagnostic substrings to match in Detail
+	}{
+		{
+			name:   "nil result",
+			result: nil,
+		},
+		{
+			name: "all good — no diagnostics",
+			result: &CipherScanResult{
+				Ciphers: []CipherProbeResult{
+					{Name: "TLS_AES_128_GCM_SHA256", Version: "TLS 1.3", KeyExchange: "ECDHE", Rating: CipherRatingGood},
+					{Name: "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256", Version: "TLS 1.2", KeyExchange: "ECDHE", Rating: CipherRatingGood},
+				},
+			},
+		},
+		{
+			name: "deprecated TLS 1.0 with CBC and static RSA and 3DES",
+			result: &CipherScanResult{
+				Ciphers: []CipherProbeResult{
+					{Name: "TLS_AES_128_GCM_SHA256", Version: "TLS 1.3", KeyExchange: "ECDHE", Rating: CipherRatingGood},
+					{Name: "TLS_RSA_WITH_AES_128_CBC_SHA", Version: "TLS 1.0", KeyExchange: "RSA", Rating: CipherRatingWeak},
+					{Name: "TLS_RSA_WITH_3DES_EDE_CBC_SHA", Version: "TLS 1.0", KeyExchange: "RSA", Rating: CipherRatingWeak},
+				},
+			},
+			wantChecks: []string{"deprecated-tls10", "cbc-cipher", "static-rsa-kex", "3des-cipher"},
+			wantSubs: [][]string{
+				{"TLS 1.0", "2 cipher"},
+				{"CBC", "2"},
+				{"static RSA", "2"},
+				{"3DES", "1"},
+			},
+		},
+		{
+			name: "deprecated TLS 1.1",
+			result: &CipherScanResult{
+				Ciphers: []CipherProbeResult{
+					{Name: "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA", Version: "TLS 1.1", KeyExchange: "ECDHE", Rating: CipherRatingWeak},
+				},
+			},
+			wantChecks: []string{"deprecated-tls11", "cbc-cipher"},
+			wantSubs:   [][]string{{"TLS 1.1", "1"}, {"CBC", "1"}},
+		},
+		{
+			name: "CBC only at TLS 1.2",
+			result: &CipherScanResult{
+				Ciphers: []CipherProbeResult{
+					{Name: "TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256", Version: "TLS 1.2", KeyExchange: "ECDHE", Rating: CipherRatingWeak},
+				},
+			},
+			wantChecks: []string{"cbc-cipher"},
+			wantSubs:   [][]string{{"CBC", "1"}},
+		},
+		{
+			name: "static RSA with GCM at TLS 1.2",
+			result: &CipherScanResult{
+				Ciphers: []CipherProbeResult{
+					{Name: "TLS_RSA_WITH_AES_128_GCM_SHA256", Version: "TLS 1.2", KeyExchange: "RSA", Rating: CipherRatingWeak},
+				},
+			},
+			wantChecks: []string{"static-rsa-kex"},
+			wantSubs:   [][]string{{"static RSA", "1"}},
+		},
+		{
+			name: "QUIC ciphers included in analysis",
+			result: &CipherScanResult{
+				QUICCiphers: []CipherProbeResult{
+					{Name: "TLS_RSA_WITH_AES_128_CBC_SHA", Version: "TLS 1.0", KeyExchange: "RSA", Rating: CipherRatingWeak},
+				},
+			},
+			wantChecks: []string{"deprecated-tls10", "cbc-cipher", "static-rsa-kex"},
+		},
+		{
+			name: "DHE key exchange",
+			result: &CipherScanResult{
+				Ciphers: []CipherProbeResult{
+					{Name: "TLS_DHE_RSA_WITH_AES_128_GCM_SHA256", Version: "TLS 1.2", KeyExchange: "DHE", Rating: CipherRatingWeak},
+					{Name: "TLS_DHE_DSS_WITH_AES_128_CBC_SHA", Version: "TLS 1.2", KeyExchange: "DHE-DSS", Rating: CipherRatingWeak},
+				},
+			},
+			wantChecks: []string{"cbc-cipher", "dhe-kex"},
+			wantSubs: [][]string{
+				{"CBC", "1"},
+				{"DHE", "2"},
+			},
+		},
+		{
+			name: "DHE-RSA only — no CBC no static RSA",
+			result: &CipherScanResult{
+				Ciphers: []CipherProbeResult{
+					{Name: "TLS_DHE_RSA_WITH_AES_128_GCM_SHA256", Version: "TLS 1.2", KeyExchange: "DHE", Rating: CipherRatingWeak},
+				},
+			},
+			wantChecks: []string{"dhe-kex"},
+			wantSubs:   [][]string{{"DHE", "1", "deprecated"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			diags := DiagnoseCipherScan(tt.result)
+			if len(diags) != len(tt.wantChecks) {
+				t.Fatalf("got %d diagnostics, want %d: %+v", len(diags), len(tt.wantChecks), diags)
+			}
+			for i, wantCheck := range tt.wantChecks {
+				if diags[i].Check != wantCheck {
+					t.Errorf("diag[%d].Check = %q, want %q", i, diags[i].Check, wantCheck)
+				}
+				if diags[i].Status != "warn" {
+					t.Errorf("diag[%d].Status = %q, want %q", i, diags[i].Status, "warn")
+				}
+				if i < len(tt.wantSubs) {
+					for _, sub := range tt.wantSubs[i] {
+						if !strings.Contains(diags[i].Detail, sub) {
+							t.Errorf("diag[%d].Detail missing %q, got: %s", i, sub, diags[i].Detail)
+						}
+					}
+				}
+			}
+		})
 	}
 }
 

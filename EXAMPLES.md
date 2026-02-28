@@ -178,6 +178,14 @@ certkit connect example.com --crl
 
 certkit exits with code 2 if the certificate is revoked (via OCSP or CRL).
 
+To enumerate all cipher suites the server supports with security ratings:
+
+```sh
+certkit connect example.com --ciphers
+```
+
+Each cipher suite is rated `good` (ECDHE + AEAD, all TLS 1.3 suites) or `weak` (CBC, static RSA, RC4, 3DES). Weak ciphers are listed with a warning recommending they be disabled.
+
 For machine-readable output:
 
 ```sh
