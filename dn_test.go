@@ -668,7 +668,8 @@ func TestFormatDN(t *testing.T) {
 		want string
 	}{
 		{
-			name: "standard OIDs only delegates to String",
+			// No Names set: falls back to pkix.Name.String() (RFC 4514 reverse order).
+			name: "standard OIDs only — no Names set, falls back to String()",
 			dn: pkix.Name{
 				CommonName:   "example.com",
 				Organization: []string{"Example Inc."},
@@ -677,12 +678,9 @@ func TestFormatDN(t *testing.T) {
 			want: "CN=example.com,O=Example Inc.,C=US",
 		},
 		{
-			name: "emailAddress rendered with label",
+			// Names set in ASN.1 order: output follows Names order, not RFC 4514 reverse.
+			name: "emailAddress rendered with label — ASN.1 order preserved",
 			dn: pkix.Name{
-				CommonName:   "acme.com",
-				Organization: []string{"Acme Corp"},
-				Country:      []string{"US"},
-				// Names simulates what the ASN.1 parser populates.
 				Names: []pkix.AttributeTypeAndValue{
 					{Type: asn1.ObjectIdentifier{2, 5, 4, 6}, Value: "US"},
 					{Type: asn1.ObjectIdentifier{2, 5, 4, 10}, Value: "Acme Corp"},
@@ -690,14 +688,11 @@ func TestFormatDN(t *testing.T) {
 					{Type: oidEmail, Value: "admin@acme.com"},
 				},
 			},
-			// Go's String() puts standard OIDs first (RFC 4514 reverse),
-			// then appends extra OIDs at the end.
-			want: "CN=acme.com,O=Acme Corp,C=US,emailAddress=admin@acme.com",
+			want: "C=US,O=Acme Corp,CN=acme.com,emailAddress=admin@acme.com",
 		},
 		{
 			name: "emailAddress with special characters escaped",
 			dn: pkix.Name{
-				CommonName: "example.com",
 				Names: []pkix.AttributeTypeAndValue{
 					{Type: asn1.ObjectIdentifier{2, 5, 4, 3}, Value: "example.com"},
 					{Type: oidEmail, Value: "user+tag@example.com"},
@@ -706,49 +701,44 @@ func TestFormatDN(t *testing.T) {
 			want: "CN=example.com,emailAddress=user\\+tag@example.com",
 		},
 		{
-			name: "EV OIDs rendered with standard labels",
+			// Names ordered as a real EV cert encodes them (EV fields first, then
+			// standard X.500 attributes, CN last) — matching OpenSSL display order.
+			name: "EV OIDs rendered with standard labels — OpenSSL order",
 			dn: pkix.Name{
-				CommonName:   "extended-validation.example.com",
-				Organization: []string{"Example Corp"},
-				Country:      []string{"US"},
 				Names: []pkix.AttributeTypeAndValue{
+					{Type: asn1.ObjectIdentifier{2, 5, 4, 15}, Value: "Private Organization"},
+					{Type: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 60, 2, 1, 3}, Value: "US"},
+					{Type: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 60, 2, 1, 2}, Value: "California"},
 					{Type: asn1.ObjectIdentifier{2, 5, 4, 6}, Value: "US"},
 					{Type: asn1.ObjectIdentifier{2, 5, 4, 10}, Value: "Example Corp"},
 					{Type: asn1.ObjectIdentifier{2, 5, 4, 3}, Value: "extended-validation.example.com"},
-					{Type: asn1.ObjectIdentifier{2, 5, 4, 15}, Value: "Private Organization"},
-					{Type: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 60, 2, 1, 2}, Value: "California"},
-					{Type: asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 60, 2, 1, 3}, Value: "US"},
 				},
 			},
-			want: "CN=extended-validation.example.com,O=Example Corp,C=US,jurisdictionC=US,jurisdictionST=California,businessCategory=Private Organization",
+			want: "businessCategory=Private Organization,jurisdictionC=US,jurisdictionST=California,C=US,O=Example Corp,CN=extended-validation.example.com",
 		},
 		{
 			name: "personal name OIDs rendered with standard labels",
 			dn: pkix.Name{
-				CommonName: "John A. Doe",
 				Names: []pkix.AttributeTypeAndValue{
-					{Type: asn1.ObjectIdentifier{2, 5, 4, 3}, Value: "John A. Doe"},
 					{Type: asn1.ObjectIdentifier{2, 5, 4, 4}, Value: "Doe"},
 					{Type: asn1.ObjectIdentifier{2, 5, 4, 42}, Value: "John"},
 					{Type: asn1.ObjectIdentifier{2, 5, 4, 43}, Value: "A"},
+					{Type: asn1.ObjectIdentifier{2, 5, 4, 3}, Value: "John A. Doe"},
 				},
 			},
-			want: "CN=John A. Doe,initials=A,GN=John,SN=Doe",
+			want: "SN=Doe,GN=John,initials=A,CN=John A. Doe",
 		},
 		{
 			name: "organizationIdentifier (eIDAS) rendered with standard label",
 			dn: pkix.Name{
-				CommonName:   "eidas.example.com",
-				Organization: []string{"Example EU Corp"},
-				Country:      []string{"DE"},
 				Names: []pkix.AttributeTypeAndValue{
+					{Type: asn1.ObjectIdentifier{2, 5, 4, 97}, Value: "PSDDE-BAFIN-12345"},
 					{Type: asn1.ObjectIdentifier{2, 5, 4, 6}, Value: "DE"},
 					{Type: asn1.ObjectIdentifier{2, 5, 4, 10}, Value: "Example EU Corp"},
 					{Type: asn1.ObjectIdentifier{2, 5, 4, 3}, Value: "eidas.example.com"},
-					{Type: asn1.ObjectIdentifier{2, 5, 4, 97}, Value: "PSDDE-BAFIN-12345"},
 				},
 			},
-			want: "CN=eidas.example.com,O=Example EU Corp,C=DE,organizationIdentifier=PSDDE-BAFIN-12345",
+			want: "organizationIdentifier=PSDDE-BAFIN-12345,C=DE,O=Example EU Corp,CN=eidas.example.com",
 		},
 		{
 			name: "empty name",

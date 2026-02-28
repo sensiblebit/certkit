@@ -569,12 +569,27 @@ func parseOtherNamesFromSANBytes(raw []byte) []string {
 	return sans
 }
 
-// extraOIDLabels maps OIDs not handled by Go's pkix.Name.String() to their
-// standard human-readable labels. Go renders standard X.500 attributes (C, ST,
-// L, O, OU, CN, STREET, POSTALCODE, SERIALNUMBER) natively; everything else
-// falls through as OID=#hex without this map.
-var extraOIDLabels = map[string]string{
-	// X.500 personal name attributes (RFC 4519)
+// oidLabel maps certificate subject OIDs to their standard human-readable
+// labels. It includes both the standard X.500 attributes that Go's
+// crypto/x509/pkix package handles natively and the additional OIDs that
+// Go renders as raw OID=#hex.
+//
+// When name.Names is populated (always the case for parsed certificates),
+// FormatDN iterates it in ASN.1 DER order and looks up each OID here,
+// matching the display order that OpenSSL uses.
+var oidLabel = map[string]string{
+	// Standard X.500 attributes rendered natively by Go's pkix package.
+	"2.5.4.3":  "CN",
+	"2.5.4.5":  "SERIALNUMBER",
+	"2.5.4.6":  "C",
+	"2.5.4.7":  "L",
+	"2.5.4.8":  "ST",
+	"2.5.4.9":  "STREET",
+	"2.5.4.10": "O",
+	"2.5.4.11": "OU",
+	"2.5.4.17": "POSTALCODE",
+
+	// X.500 personal name attributes (RFC 4519).
 	"2.5.4.4":  "SN",       // surname
 	"2.5.4.41": "name",     // name
 	"2.5.4.42": "GN",       // givenName
@@ -583,13 +598,13 @@ var extraOIDLabels = map[string]string{
 	"2.5.4.46": "dnQualifier",
 	"2.5.4.65": "pseudonym",
 
-	// X.500 organization attributes
+	// X.500 organization attributes.
 	"2.5.4.15": "businessCategory",
 	"2.5.4.16": "postalAddress",
 	"2.5.4.20": "telephoneNumber",
 	"2.5.4.97": "organizationIdentifier", // eIDAS / QWAC
 
-	// Email (RFC 2985)
+	// Email (RFC 2985).
 	"1.2.840.113549.1.9.1": "emailAddress",
 
 	// EV certificate jurisdiction fields (CA/B Forum EV Guidelines).
@@ -600,33 +615,32 @@ var extraOIDLabels = map[string]string{
 	"1.3.6.1.4.1.311.60.2.1.3": "jurisdictionC",
 }
 
-// FormatDN formats a pkix.Name as a Distinguished Name string. Unlike
-// pkix.Name.String(), it renders non-standard OIDs (personal name attributes,
-// emailAddress, businessCategory, EV jurisdiction fields, organizationIdentifier)
-// with their standard labels instead of raw OID=#hex notation.
+// FormatDN formats a pkix.Name as a Distinguished Name string in ASN.1 DER
+// order, matching the display order used by OpenSSL. When name.Names is
+// populated (always the case for certificates parsed from DER/PEM), attributes
+// are emitted in their original encoded order with human-readable labels.
+// Unknown OIDs are rendered as OID=#hex. When name.Names is empty (e.g. a
+// pkix.Name constructed programmatically without setting Names), it falls back
+// to pkix.Name.String().
 func FormatDN(name pkix.Name) string {
-	s := name.String()
+	if len(name.Names) == 0 {
+		return name.String()
+	}
+	parts := make([]string, 0, len(name.Names))
 	for _, atv := range name.Names {
 		oid := atv.Type.String()
-		label, ok := extraOIDLabels[oid]
-		if !ok {
-			continue
-		}
 		value, isStr := atv.Value.(string)
-		if !isStr {
+		if label, ok := oidLabel[oid]; ok && isStr {
+			parts = append(parts, label+"="+escapeDNValue(value))
 			continue
 		}
-		// Reconstruct the exact hex that Go's String() produces so the
-		// string replacement is reliable.
+		// Unknown OID or non-string value: render as OID=#hex.
 		derBytes, err := asn1.Marshal(atv.Value)
-		if err != nil {
-			continue
+		if err == nil {
+			parts = append(parts, oid+"=#"+hex.EncodeToString(derBytes))
 		}
-		old := oid + "=#" + hex.EncodeToString(derBytes)
-		repl := label + "=" + escapeDNValue(value)
-		s = strings.Replace(s, old, repl, 1)
 	}
-	return s
+	return strings.Join(parts, ",")
 }
 
 // escapeDNValue escapes special characters in a DN attribute value per RFC 4514.

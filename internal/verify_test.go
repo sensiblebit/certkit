@@ -502,7 +502,7 @@ func TestDiagnoseChain(t *testing.T) {
 			},
 			wantDetailSubstr: map[string]string{
 				// Detail must use FormatDN (full DN), not bare CommonName
-				"missing-intermediate": "CN=Test RSA Root CA,O=TestOrg",
+				"missing-intermediate": "O=TestOrg,CN=Test RSA Root CA",
 			},
 		},
 		{
@@ -516,7 +516,7 @@ func TestDiagnoseChain(t *testing.T) {
 			},
 			wantDetailSubstr: map[string]string{
 				// Detail must use FormatDN (full DN), not bare CommonName
-				"intermediate-expired": "CN=Expired Intermediate,O=TestOrg",
+				"intermediate-expired": "O=TestOrg,CN=Expired Intermediate",
 			},
 		},
 	}
