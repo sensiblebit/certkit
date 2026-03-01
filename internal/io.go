@@ -12,7 +12,11 @@ const defaultMaxInputBytes int64 = 10 * 1024 * 1024
 
 func readAllLimited(r io.Reader, maxBytes int64) ([]byte, error) {
 	if maxBytes <= 0 || maxBytes == math.MaxInt64 {
-		return io.ReadAll(r)
+		data, err := io.ReadAll(r)
+		if err != nil {
+			return nil, fmt.Errorf("reading input: %w", err)
+		}
+		return data, nil
 	}
 	limited := io.LimitReader(r, maxBytes+1)
 	data, err := io.ReadAll(limited)
@@ -27,7 +31,11 @@ func readAllLimited(r io.Reader, maxBytes int64) ([]byte, error) {
 
 func readFileLimited(path string, maxBytes int64) ([]byte, error) {
 	if maxBytes > 0 {
-		if info, err := os.Stat(path); err == nil && info.Size() > maxBytes {
+		info, err := os.Stat(path)
+		if err != nil {
+			return nil, fmt.Errorf("stat %s: %w", path, err)
+		}
+		if info.Size() > maxBytes {
 			return nil, fmt.Errorf("file exceeds max size (%d bytes)", maxBytes)
 		}
 	}

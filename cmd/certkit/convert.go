@@ -66,17 +66,21 @@ type keyLeafPair struct {
 
 // formatConvertInput holds the parameters for formatConvertOutput.
 type formatConvertInput struct {
-	contents  *internal.ContainerContents
-	allCerts  []*x509.Certificate
-	pairs     []keyLeafPair
-	format    string
-	passwords []string
+	contents        *internal.ContainerContents
+	allCerts        []*x509.Certificate
+	pairs           []keyLeafPair
+	format          string
+	outputPasswords []string
 }
 
 func runConvert(cmd *cobra.Command, args []string) error {
 	passwords, err := internal.ProcessPasswords(passwordList, passwordFile)
 	if err != nil {
 		return fmt.Errorf("loading passwords: %w", err)
+	}
+	outputPasswords, err := internal.ProcessUserPasswords(passwordList, passwordFile)
+	if err != nil {
+		return fmt.Errorf("loading output passwords: %w", err)
 	}
 
 	contents, err := internal.LoadContainerFile(args[0], passwords)
@@ -133,11 +137,11 @@ func runConvert(cmd *cobra.Command, args []string) error {
 	}
 
 	output, err := formatConvertOutput(formatConvertInput{
-		contents:  contents,
-		allCerts:  allCerts,
-		pairs:     pairs,
-		format:    convertTo,
-		passwords: passwords,
+		contents:        contents,
+		allCerts:        allCerts,
+		pairs:           pairs,
+		format:          convertTo,
+		outputPasswords: outputPasswords,
 	})
 	if err != nil {
 		return fmt.Errorf("formatting output: %w", err)
@@ -206,7 +210,7 @@ func formatConvertOutput(input formatConvertInput) ([]byte, error) {
 		if len(input.pairs) > 1 {
 			return nil, &ValidationError{Message: fmt.Sprintf("PKCS#12 supports only one key entry; %d matches found (use JKS for multiple)", len(input.pairs))}
 		}
-		pw, ok := bundlePassword(input.passwords)
+		pw, ok := bundlePassword(input.outputPasswords)
 		if !ok {
 			return nil, fmt.Errorf("PKCS#12 output requires a password (use --passwords or --password-file)")
 		}
@@ -267,7 +271,7 @@ func formatConvertPEM(input formatConvertInput) ([]byte, error) {
 }
 
 func formatConvertJKS(input formatConvertInput) ([]byte, error) {
-	pw, ok := bundlePassword(input.passwords)
+	pw, ok := bundlePassword(input.outputPasswords)
 	if !ok {
 		return nil, fmt.Errorf("JKS output requires a password (use --passwords or --password-file)")
 	}

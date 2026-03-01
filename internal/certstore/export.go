@@ -331,12 +331,11 @@ func ExportMatchedBundles(ctx context.Context, input ExportMatchedBundleInput) e
 	opts := input.BundleOpts
 	opts.ExtraIntermediates = slices.Concat(opts.ExtraIntermediates, intermediates)
 
-	var firstErr error
-
 	for _, ski := range input.SKIs {
 		certRec := input.Store.GetCert(ski)
 		keyRec := input.Store.GetKey(ski)
 		if certRec == nil || keyRec == nil {
+			slog.Debug("skipping export entry without cert or key", "ski", ski)
 			continue
 		}
 
@@ -355,10 +354,7 @@ func ExportMatchedBundles(ctx context.Context, input ExportMatchedBundleInput) e
 		if err != nil {
 			wrapped := fmt.Errorf("bundling certificate %q: %w", certRec.Cert.Subject.CommonName, err)
 			slog.Warn("bundling cert", "cn", certRec.Cert.Subject.CommonName, "ski", ski, "error", wrapped)
-			if firstErr == nil {
-				firstErr = wrapped
-			}
-			continue
+			return wrapped
 		}
 
 		prefix := SanitizeFileName(FormatCN(certRec.Cert))
@@ -373,20 +369,14 @@ func ExportMatchedBundles(ctx context.Context, input ExportMatchedBundleInput) e
 				if fallbackErr != nil {
 					wrapped := fmt.Errorf("sanitizing fallback bundle folder %q: %w", prefix, fallbackErr)
 					slog.Warn("invalid bundle folder", "bundle", certRec.BundleName, "cn", certRec.Cert.Subject.CommonName, "error", wrapped)
-					if firstErr == nil {
-						firstErr = wrapped
-					}
-					continue
+					return wrapped
 				}
 				slog.Warn("invalid bundle name; falling back to CN", "bundle", certRec.BundleName, "folder", fallback, "cn", certRec.Cert.Subject.CommonName, "error", err)
 				folder = fallback
 			} else {
 				wrapped := fmt.Errorf("sanitizing bundle folder %q: %w", folderName, err)
 				slog.Warn("invalid bundle folder", "cn", certRec.Cert.Subject.CommonName, "error", wrapped)
-				if firstErr == nil {
-					firstErr = wrapped
-				}
-				continue
+				return wrapped
 			}
 		}
 
@@ -403,23 +393,17 @@ func ExportMatchedBundles(ctx context.Context, input ExportMatchedBundleInput) e
 		if err != nil {
 			wrapped := fmt.Errorf("generating bundle files for %q: %w", certRec.Cert.Subject.CommonName, err)
 			slog.Warn("generating bundle files", "cn", certRec.Cert.Subject.CommonName, "error", wrapped)
-			if firstErr == nil {
-				firstErr = wrapped
-			}
-			continue
+			return wrapped
 		}
 
 		if err := input.Writer.WriteBundleFiles(folder, files); err != nil {
 			wrapped := fmt.Errorf("writing bundle files for %q: %w", certRec.Cert.Subject.CommonName, err)
 			slog.Warn("writing bundle files", "cn", certRec.Cert.Subject.CommonName, "error", wrapped)
-			if firstErr == nil {
-				firstErr = wrapped
-			}
-			continue
+			return wrapped
 		}
 		slog.Info("exported bundle", "cn", certRec.Cert.Subject.CommonName, "folder", folder)
 	}
-	return firstErr
+	return nil
 }
 
 // GenerateCSR creates a CSR using the certificate's details and private key.

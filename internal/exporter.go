@@ -77,7 +77,6 @@ type ExportBundlesInput struct {
 // certificates and keys, builds certificate bundles, and writes output files.
 func ExportBundles(ctx context.Context, input ExportBundlesInput) error {
 	bundleNames := input.Store.BundleNames()
-	var firstErr error
 
 	for _, bundleName := range bundleNames {
 		opts := certkit.DefaultOptions()
@@ -85,7 +84,7 @@ func ExportBundles(ctx context.Context, input ExportBundlesInput) error {
 			opts.Verify = false
 		}
 
-		err := exportBundleCerts(ctx, exportBundleCertsInput{
+		if err := exportBundleCerts(ctx, exportBundleCertsInput{
 			Store:       input.Store,
 			Opts:        opts,
 			Configs:     input.Configs,
@@ -93,12 +92,11 @@ func ExportBundles(ctx context.Context, input ExportBundlesInput) error {
 			BundleName:  bundleName,
 			Duplicates:  input.Duplicates,
 			P12Password: input.P12Password,
-		})
-		if err != nil && firstErr == nil {
-			firstErr = err
+		}); err != nil {
+			return fmt.Errorf("exporting bundle %q: %w", bundleName, err)
 		}
 	}
-	return firstErr
+	return nil
 }
 
 type exportBundleCertsInput struct {
@@ -115,7 +113,6 @@ type exportBundleCertsInput struct {
 // output folders and writing bundle files for each one.
 func exportBundleCerts(ctx context.Context, input exportBundleCertsInput) error {
 	certs := input.Store.CertsByBundleName(input.BundleName)
-	var firstErr error
 
 	slog.Debug("found certificates for bundle", "count", len(certs), "bundle", input.BundleName)
 	for _, cert := range certs {
@@ -158,18 +155,13 @@ func exportBundleCerts(ctx context.Context, input exportBundleCertsInput) error 
 		}
 		folder, err := certstore.SanitizeBundleFolder(bundleFolder)
 		if err != nil {
-			wrapped := fmt.Errorf("sanitizing bundle folder %q: %w", bundleFolder, err)
-			slog.Warn("invalid bundle folder", "bundle", input.BundleName, "cn", certRec.Cert.Subject.CommonName, "error", wrapped)
-			if firstErr == nil {
-				firstErr = wrapped
-			}
-			continue
+			return fmt.Errorf("sanitizing bundle folder %q: %w", bundleFolder, err)
 		}
 
 		// Look up the matching key
 		keyRec := input.Store.GetKey(certRec.SKI)
 		if keyRec == nil {
-			slog.Warn("no key found for certificate", "ski", certRec.SKI, "cn", certRec.Cert.Subject.CommonName)
+			slog.Debug("skipping certificate without matching key", "ski", certRec.SKI, "cn", certRec.Cert.Subject.CommonName)
 			continue
 		}
 
@@ -182,14 +174,10 @@ func exportBundleCerts(ctx context.Context, input exportBundleCertsInput) error 
 			RetryNoVerify: false,
 			P12Password:   input.P12Password,
 		}); err != nil {
-			wrapped := fmt.Errorf("exporting bundle for %q: %w", certRec.Cert.Subject.CommonName, err)
-			slog.Warn("exporting bundle", "cn", certRec.Cert.Subject.CommonName, "error", wrapped)
-			if firstErr == nil {
-				firstErr = wrapped
-			}
+			return fmt.Errorf("exporting bundle for %q: %w", certRec.Cert.Subject.CommonName, err)
 		}
 	}
-	return firstErr
+	return nil
 }
 
 // folderOverrideWriter wraps filesystemWriter but forces a specific folder name

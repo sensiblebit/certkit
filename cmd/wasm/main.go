@@ -281,7 +281,7 @@ func getState(_ js.Value, _ []js.Value) any {
 }
 
 // exportBundlesJS generates a ZIP and returns it as a Uint8Array.
-// JS signature: certkitExportBundles(skis: string[]) → Promise<Uint8Array>
+// JS signature: certkitExportBundles(skis: string[], p12Password?: string) → Promise<Uint8Array>
 // Only bundles for the specified SKIs are included.
 func exportBundlesJS(_ js.Value, args []js.Value) any {
 	// Parse the SKI filter list from the JS array argument.
@@ -290,6 +290,13 @@ func exportBundlesJS(_ js.Value, args []js.Value) any {
 		arr := args[0]
 		for i := range arr.Length() {
 			filterSKIs = append(filterSKIs, arr.Index(i).String())
+		}
+	}
+
+	p12Password := "changeit"
+	if len(args) >= 2 && args[1].Type() != js.TypeUndefined && args[1].Type() != js.TypeNull {
+		if candidate := strings.TrimSpace(args[1].String()); candidate != "" {
+			p12Password = candidate
 		}
 	}
 
@@ -302,7 +309,7 @@ func exportBundlesJS(_ js.Value, args []js.Value) any {
 
 			storeMu.RLock()
 			defer storeMu.RUnlock()
-			zipData, err := exportBundles(ctx, globalStore, filterSKIs)
+			zipData, err := exportBundles(ctx, globalStore, filterSKIs, p12Password)
 
 			if err != nil {
 				reject.Invoke(js.Global().Get("Error").New(err.Error()))

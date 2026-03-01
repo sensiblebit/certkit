@@ -16,7 +16,7 @@ import (
 // exportBundles generates a ZIP file containing organized certificate bundles.
 // If filterSKIs is non-empty, only pairs whose colon-hex SKI appears in the
 // list are included. Otherwise all matched pairs are exported.
-func exportBundles(ctx context.Context, s *certstore.MemStore, filterSKIs []string) ([]byte, error) {
+func exportBundles(ctx context.Context, s *certstore.MemStore, filterSKIs []string, p12Password string) ([]byte, error) {
 	matched := s.MatchedPairs()
 	if len(matched) == 0 {
 		return nil, fmt.Errorf("no matched key-certificate pairs found")
@@ -56,6 +56,7 @@ func exportBundles(ctx context.Context, s *certstore.MemStore, filterSKIs []stri
 		BundleOpts:    opts,
 		Writer:        &zipBundleWriter{zw: zw},
 		RetryNoVerify: true,
+		P12Password:   p12Password,
 	}); err != nil {
 		return nil, err
 	}

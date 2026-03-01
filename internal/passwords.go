@@ -52,3 +52,33 @@ func ProcessPasswords(passwordList []string, passwordFile string) ([]string, err
 
 	return certkit.DeduplicatePasswords(extra), nil
 }
+
+// ProcessUserPasswords returns only explicitly provided non-empty passwords.
+// Unlike ProcessPasswords, it does not inject built-in defaults.
+func ProcessUserPasswords(passwordList []string, passwordFile string) ([]string, error) {
+	extra := slices.Clone(passwordList)
+
+	if passwordFile != "" {
+		filePasswords, err := LoadPasswordsFromFile(passwordFile)
+		if err != nil {
+			return nil, fmt.Errorf("loading passwords from file: %w", err)
+		}
+		extra = slices.Concat(extra, filePasswords)
+	}
+
+	seen := make(map[string]bool, len(extra))
+	out := make([]string, 0, len(extra))
+	for _, password := range extra {
+		password = strings.TrimSpace(password)
+		if password == "" {
+			continue
+		}
+		if seen[password] {
+			continue
+		}
+		seen[password] = true
+		out = append(out, password)
+	}
+
+	return out, nil
+}

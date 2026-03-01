@@ -63,6 +63,10 @@ func runBundle(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("loading passwords: %w", err)
 	}
+	exportPasswords, err := internal.ProcessUserPasswords(passwordList, passwordFile)
+	if err != nil {
+		return fmt.Errorf("loading export passwords: %w", err)
+	}
 
 	leaf, key, extraCerts, err := loadBundleInput(args[0], passwords)
 	if err != nil {
@@ -113,7 +117,7 @@ func runBundle(cmd *cobra.Command, args []string) error {
 		slog.Warn("bundle", "warning", w)
 	}
 
-	output, err := formatBundleOutput(bundle, key, bundleFormat, passwords)
+	output, err := formatBundleOutput(bundle, key, bundleFormat, exportPasswords)
 	if err != nil {
 		return fmt.Errorf("formatting bundle output: %w", err)
 	}
