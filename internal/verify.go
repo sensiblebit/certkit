@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -87,6 +88,13 @@ type VerifyResult struct {
 
 // VerifyCert verifies a certificate with optional key matching, chain validation, and expiry checking.
 func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) {
+	if input == nil {
+		return nil, errors.New("verify input is nil")
+	}
+	if input.Cert == nil {
+		return nil, errors.New("certificate is nil")
+	}
+
 	cert := input.Cert
 
 	result := &VerifyResult{

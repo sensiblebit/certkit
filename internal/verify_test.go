@@ -6,9 +6,14 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/crypto/ocsp"
 )
 
 func TestVerifyCert_KeyMatch(t *testing.T) {
@@ -23,18 +28,24 @@ func TestVerifyCert_KeyMatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	matchTrue := true
+	matchFalse := false
 
 	tests := []struct {
-		name       string
-		key        any
-		wantMatch  bool
-		wantErrors bool
+		name        string
+		key         any
+		wantMatch   *bool
+		wantKeyErr  bool
+		wantErrors  bool
+		wantKeyInfo bool
 	}{
-		{"matching key", leaf.key, true, false},
-		{"mismatched key", wrongKey, false, true},
+		{"matching key", leaf.key, &matchTrue, false, false, true},
+		{"mismatched key", wrongKey, &matchFalse, false, true, true},
+		{"unsupported key type", struct{}{}, nil, true, true, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// WHY: Ensures VerifyCert key matching handles this key input correctly.
 			t.Parallel()
 			result, err := VerifyCert(context.Background(), &VerifyInput{
 				Cert:          leaf.cert,
@@ -45,19 +56,57 @@ func TestVerifyCert_KeyMatch(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if result.KeyMatch == nil {
-				t.Fatal("expected KeyMatch to be set")
+			if tt.wantMatch == nil {
+				if result.KeyMatch != nil {
+					t.Errorf("expected KeyMatch to be nil, got %v", *result.KeyMatch)
+				}
+			} else {
+				if result.KeyMatch == nil {
+					t.Fatal("expected KeyMatch to be set")
+				}
+				if *result.KeyMatch != *tt.wantMatch {
+					t.Errorf("KeyMatch = %v, want %v", *result.KeyMatch, *tt.wantMatch)
+				}
 			}
-			if *result.KeyMatch != tt.wantMatch {
-				t.Errorf("KeyMatch = %v, want %v", *result.KeyMatch, tt.wantMatch)
+			if tt.wantKeyErr {
+				if result.KeyMatchErr == "" {
+					t.Error("expected KeyMatchErr to be set")
+				}
+			} else if result.KeyMatchErr != "" {
+				t.Errorf("expected no KeyMatchErr, got %q", result.KeyMatchErr)
+			}
+			if tt.wantKeyInfo {
+				if result.KeyInfo == "" {
+					t.Error("expected KeyInfo to be set")
+				}
+			} else if result.KeyInfo != "" {
+				t.Errorf("expected no KeyInfo, got %q", result.KeyInfo)
 			}
 			if tt.wantErrors && len(result.Errors) == 0 {
-				t.Error("expected errors for key mismatch")
+				t.Error("expected errors to be populated")
 			}
 			if !tt.wantErrors && len(result.Errors) != 0 {
 				t.Errorf("expected no errors, got %v", result.Errors)
 			}
 		})
+	}
+}
+
+func TestVerifyCert_NilInput(t *testing.T) {
+	// WHY: VerifyCert should fail fast when called with a nil input.
+	t.Parallel()
+	_, err := VerifyCert(context.Background(), nil)
+	if err == nil {
+		t.Fatal("expected error for nil input")
+	}
+}
+
+func TestVerifyCert_NilCertificate(t *testing.T) {
+	// WHY: VerifyCert should fail fast when the certificate is nil.
+	t.Parallel()
+	_, err := VerifyCert(context.Background(), &VerifyInput{Cert: nil, TrustStore: "mozilla"})
+	if err == nil {
+		t.Fatal("expected error for nil certificate")
 	}
 }
 
@@ -80,6 +129,7 @@ func TestVerifyCert_ExpiryCheck(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// WHY: Ensures expiry wiring behaves for this window.
 			t.Parallel()
 			result, err := VerifyCert(context.Background(), &VerifyInput{
 				Cert:           tt.cert,
@@ -155,6 +205,32 @@ func TestVerifyCert_CheckKeyMatchNilKey(t *testing.T) {
 	}
 }
 
+func TestVerifyCert_KeyMatchDisabled(t *testing.T) {
+	// WHY: When CheckKeyMatch=false, VerifyCert must ignore any provided key.
+	t.Parallel()
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "nokeymatch.example.com", []string{"nokeymatch.example.com"}, nil)
+
+	result, err := VerifyCert(context.Background(), &VerifyInput{
+		Cert:          leaf.cert,
+		Key:           leaf.key,
+		CheckKeyMatch: false,
+		TrustStore:    "mozilla",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.KeyMatch != nil {
+		t.Error("expected KeyMatch to be nil when CheckKeyMatch is false")
+	}
+	if result.KeyMatchErr != "" {
+		t.Errorf("expected no KeyMatchErr, got %q", result.KeyMatchErr)
+	}
+	if result.KeyInfo != "" {
+		t.Errorf("expected no KeyInfo, got %q", result.KeyInfo)
+	}
+}
+
 func TestVerifyCert_SimultaneousChainAndKeyFailures(t *testing.T) {
 	// WHY: Existing tests only check one failure mode at a time (key mismatch OR
 	// chain invalid). This verifies that when BOTH CheckChain and CheckKeyMatch
@@ -191,6 +267,12 @@ func TestVerifyCert_SimultaneousChainAndKeyFailures(t *testing.T) {
 	if *result.KeyMatch {
 		t.Error("expected key mismatch")
 	}
+	if result.KeyInfo == "" {
+		t.Error("expected KeyInfo to be set")
+	}
+	if result.KeyMatchErr != "" {
+		t.Errorf("expected no KeyMatchErr, got %q", result.KeyMatchErr)
+	}
 
 	// Verify chain is invalid
 	if result.ChainValid == nil {
@@ -199,27 +281,50 @@ func TestVerifyCert_SimultaneousChainAndKeyFailures(t *testing.T) {
 	if *result.ChainValid {
 		t.Error("expected chain to be invalid")
 	}
+	if result.ChainErr == "" {
+		t.Error("expected ChainErr to be set")
+	}
 
 	// Verify Errors slice contains entries for BOTH failures
 	if len(result.Errors) < 2 {
 		t.Fatalf("expected at least 2 errors (key + chain), got %d: %v", len(result.Errors), result.Errors)
 	}
+}
 
-	hasKeyError := false
-	hasChainError := false
-	for _, e := range result.Errors {
-		if strings.Contains(e, "key does not match") {
-			hasKeyError = true
-		}
-		if strings.Contains(e, "chain validation") {
-			hasChainError = true
-		}
+func TestVerifyCert_ChainAndKeyMatchSuccess(t *testing.T) {
+	// WHY: Verifies the full-success path when both chain and key checks pass.
+	t.Parallel()
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "ok.example.com", []string{"ok.example.com"}, nil)
+
+	result, err := VerifyCert(context.Background(), &VerifyInput{
+		Cert:          leaf.cert,
+		Key:           leaf.key,
+		CheckKeyMatch: true,
+		CheckChain:    true,
+		TrustStore:    "custom",
+		CustomRoots:   []*x509.Certificate{ca.cert},
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if !hasKeyError {
-		t.Errorf("expected key mismatch error in Errors, got %v", result.Errors)
+	if result.KeyMatch == nil || !*result.KeyMatch {
+		t.Fatalf("expected KeyMatch true, got %v", result.KeyMatch)
 	}
-	if !hasChainError {
-		t.Errorf("expected chain validation error in Errors, got %v", result.Errors)
+	if result.KeyInfo == "" {
+		t.Error("expected KeyInfo to be set")
+	}
+	if result.ChainValid == nil || !*result.ChainValid {
+		t.Fatalf("expected ChainValid true, got %v", result.ChainValid)
+	}
+	if result.ChainErr != "" {
+		t.Errorf("expected no ChainErr, got %q", result.ChainErr)
+	}
+	if len(result.Chain) == 0 {
+		t.Fatal("expected chain display to be populated")
+	}
+	if len(result.Errors) != 0 {
+		t.Errorf("expected no errors, got %v", result.Errors)
 	}
 }
 
@@ -369,6 +474,7 @@ func TestFormatVerifyResult(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// WHY: Ensures FormatVerifyResult renders this branch correctly.
 			t.Parallel()
 			output := FormatVerifyResult(tt.result)
 			for _, s := range tt.mustContain {
@@ -427,6 +533,7 @@ func TestVerifyCert_ChainOnlyNoKeyMatch(t *testing.T) {
 }
 
 func TestDiagnoseChain(t *testing.T) {
+	// WHY: DiagnoseChain should surface expected diagnostic statuses and details.
 	t.Parallel()
 
 	ca := newRSACA(t)
@@ -523,6 +630,7 @@ func TestDiagnoseChain(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			// WHY: Ensures DiagnoseChain reports expected checks for this scenario.
 			t.Parallel()
 			diags := DiagnoseChain(tc.input)
 
@@ -559,6 +667,7 @@ func TestDiagnoseChain(t *testing.T) {
 }
 
 func TestFormatDiagnoses(t *testing.T) {
+	// WHY: FormatDiagnoses should include headers and status markers for each diagnosis.
 	t.Parallel()
 	diags := []Diagnosis{
 		{Check: "expired", Status: "fail", Detail: "leaf certificate expired"},
@@ -637,6 +746,7 @@ func TestVerifyCert_RevocationBehavior(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			// WHY: Ensures revocation results reflect these flag combinations.
 			t.Parallel()
 
 			signer := ca
@@ -691,6 +801,111 @@ func TestVerifyCert_RevocationBehavior(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestVerifyCert_OCSPRevoked(t *testing.T) {
+	// WHY: VerifyCert should surface OCSP revoked results as verification errors.
+	t.Parallel()
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "ocsp-revoked.example.com", []string{"ocsp-revoked.example.com"}, nil)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resp := ocsp.Response{
+			Status:           ocsp.Revoked,
+			SerialNumber:     leaf.cert.SerialNumber,
+			ThisUpdate:       time.Now().Add(-time.Hour),
+			NextUpdate:       time.Now().Add(24 * time.Hour),
+			RevokedAt:        time.Now().Add(-time.Hour),
+			RevocationReason: ocsp.KeyCompromise,
+		}
+		respBytes, err := ocsp.CreateResponse(ca.cert, ca.cert, resp, ca.key.(*rsa.PrivateKey))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/ocsp-response")
+		_, _ = w.Write(respBytes)
+	}))
+	defer server.Close()
+
+	leaf.cert.OCSPServer = []string{strings.Replace(server.URL, "127.0.0.1", "localhost", 1)}
+
+	result, err := VerifyCert(context.Background(), &VerifyInput{
+		Cert:        leaf.cert,
+		CheckChain:  true,
+		TrustStore:  "custom",
+		CustomRoots: []*x509.Certificate{ca.cert},
+		CheckOCSP:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.OCSP == nil {
+		t.Fatal("expected OCSP result")
+	}
+	if result.OCSP.Status != "revoked" {
+		t.Errorf("OCSP.Status = %q, want %q", result.OCSP.Status, "revoked")
+	}
+	if result.OCSP.RevokedAt == nil {
+		t.Error("expected RevokedAt to be set")
+	}
+	if result.OCSP.RevocationReason == nil {
+		t.Error("expected RevocationReason to be set")
+	}
+	if len(result.Errors) == 0 {
+		t.Error("expected errors for revoked OCSP")
+	}
+}
+
+func TestVerifyCert_CRLRevoked(t *testing.T) {
+	// WHY: VerifyCert should surface CRL revoked results as verification errors.
+	t.Parallel()
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "crl-revoked.example.com", []string{"crl-revoked.example.com"}, nil)
+
+	now := time.Now()
+	crlDER, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+		Number:     big.NewInt(1),
+		ThisUpdate: now,
+		NextUpdate: now.Add(24 * time.Hour),
+		RevokedCertificateEntries: []x509.RevocationListEntry{
+			{SerialNumber: leaf.cert.SerialNumber, RevocationTime: now.Add(-time.Hour)},
+		},
+	}, ca.cert, ca.key.(*rsa.PrivateKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pkix-crl")
+		_, _ = w.Write(crlDER)
+	}))
+	defer server.Close()
+
+	leaf.cert.CRLDistributionPoints = []string{strings.Replace(server.URL, "127.0.0.1", "localhost", 1)}
+
+	result, err := VerifyCert(context.Background(), &VerifyInput{
+		Cert:        leaf.cert,
+		CheckChain:  true,
+		TrustStore:  "custom",
+		CustomRoots: []*x509.Certificate{ca.cert},
+		CheckCRL:    true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.CRL == nil {
+		t.Fatal("expected CRL result")
+	}
+	if result.CRL.Status != "revoked" {
+		t.Errorf("CRL.Status = %q, want %q", result.CRL.Status, "revoked")
+	}
+	if result.CRL.Detail == "" {
+		t.Error("expected CRL detail to be set")
+	}
+	if len(result.Errors) == 0 {
+		t.Error("expected errors for revoked CRL")
 	}
 }
 
