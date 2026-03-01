@@ -106,21 +106,25 @@ func TestVerifyCert_KeyMatch(t *testing.T) {
 	}
 }
 
-func TestVerifyCert_NilInput(t *testing.T) {
-	// WHY: VerifyCert should fail fast when called with a nil input.
+func TestVerifyCert_NilInputs(t *testing.T) {
+	// WHY: VerifyCert should fail fast on nil inputs and missing certificates.
 	t.Parallel()
-	_, err := VerifyCert(context.Background(), nil)
-	if err == nil {
-		t.Fatal("expected error for nil input")
+	tests := []struct {
+		name  string
+		input *VerifyInput
+	}{
+		{name: "nil input", input: nil},
+		{name: "nil certificate", input: &VerifyInput{Cert: nil, TrustStore: "mozilla"}},
 	}
-}
-
-func TestVerifyCert_NilCertificate(t *testing.T) {
-	// WHY: VerifyCert should fail fast when the certificate is nil.
-	t.Parallel()
-	_, err := VerifyCert(context.Background(), &VerifyInput{Cert: nil, TrustStore: "mozilla"})
-	if err == nil {
-		t.Fatal("expected error for nil certificate")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// WHY: Ensures VerifyCert rejects this nil input scenario.
+			t.Parallel()
+			_, err := VerifyCert(context.Background(), tt.input)
+			if err == nil {
+				t.Fatalf("expected error for %s", tt.name)
+			}
+		})
 	}
 }
 
@@ -1283,7 +1287,7 @@ func TestVerifyCert_OCSPRevoked(t *testing.T) {
 			return
 		}
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 
 	leaf.cert.OCSPServer = []string{strings.Replace(server.URL, "127.0.0.1", "localhost", 1)}
 
@@ -1351,7 +1355,7 @@ func TestVerifyCert_OCSPStatus(t *testing.T) {
 					return
 				}
 			}))
-			defer server.Close()
+			t.Cleanup(server.Close)
 
 			leaf.cert.OCSPServer = []string{strings.Replace(server.URL, "127.0.0.1", "localhost", 1)}
 
@@ -1391,7 +1395,7 @@ func TestVerifyCert_OCSPUnavailable(t *testing.T) {
 			return
 		}
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 
 	leaf.cert.OCSPServer = []string{strings.Replace(server.URL, "127.0.0.1", "localhost", 1)}
 
@@ -1445,7 +1449,7 @@ func TestVerifyCert_CRLRevoked(t *testing.T) {
 			return
 		}
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 
 	leaf.cert.CRLDistributionPoints = []string{strings.Replace(server.URL, "127.0.0.1", "localhost", 1)}
 
@@ -1496,7 +1500,7 @@ func TestVerifyCert_CRLGood(t *testing.T) {
 			return
 		}
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 
 	leaf.cert.CRLDistributionPoints = []string{strings.Replace(server.URL, "127.0.0.1", "localhost", 1)}
 
@@ -1544,7 +1548,7 @@ func TestVerifyCert_CRLExpired(t *testing.T) {
 			return
 		}
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 
 	leaf.cert.CRLDistributionPoints = []string{strings.Replace(server.URL, "127.0.0.1", "localhost", 1)}
 
@@ -1585,7 +1589,7 @@ func TestVerifyCert_CRLUnavailable(t *testing.T) {
 			return
 		}
 	}))
-	defer server.Close()
+	t.Cleanup(server.Close)
 
 	leaf.cert.CRLDistributionPoints = []string{strings.Replace(server.URL, "127.0.0.1", "localhost", 1)}
 

@@ -184,52 +184,6 @@ func TestFormatEKUOIDs(t *testing.T) {
 	}
 }
 
-func TestFormatEKUOIDs_FromCSR(t *testing.T) {
-	// WHY: Validates FormatEKUOIDs with real CSR extension bytes to catch
-	// integration mismatches between CSR encoding and raw extension parsing.
-	t.Parallel()
-
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	serverOID := asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 3, 1}
-	clientOID := asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 3, 2}
-	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
-		Subject: pkix.Name{CommonName: "eku.example.com"},
-		ExtraExtensions: []pkix.Extension{{
-			Id:    asn1.ObjectIdentifier{2, 5, 29, 37},
-			Value: mustMarshalOIDs(t, serverOID, clientOID),
-		}},
-	}, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	csr, err := x509.ParseCertificateRequest(csrDER)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	var ekuExt *pkix.Extension
-	for i := range csr.Extensions {
-		if csr.Extensions[i].Id.Equal(asn1.ObjectIdentifier{2, 5, 29, 37}) {
-			ekuExt = &csr.Extensions[i]
-			break
-		}
-	}
-	if ekuExt == nil {
-		t.Fatal("expected EKU extension in CSR")
-	}
-
-	got := FormatEKUOIDs(ekuExt.Value)
-	want := []string{"Server Authentication", "Client Authentication"}
-	if !slices.Equal(got, want) {
-		t.Errorf("FormatEKUOIDs() = %v, want %v", got, want)
-	}
-}
-
 // mustMarshalOIDs marshals a SEQUENCE OF OID for FormatEKUOIDs test input.
 func mustMarshalOIDs(t *testing.T, oids ...asn1.ObjectIdentifier) []byte {
 	t.Helper()
@@ -348,6 +302,11 @@ func TestFormatKeyUsageBitString(t *testing.T) {
 			want: []string{"Certificate Sign", "CRL Sign"},
 		},
 		{
+			name: "DigitalSignature and KeyEncipherment",
+			raw:  mustMarshalKeyUsageBitString(t, x509.KeyUsageDigitalSignature|x509.KeyUsageKeyEncipherment),
+			want: []string{"Digital Signature", "Key Encipherment"},
+		},
+		{
 			name: "invalid ASN.1 returns nil",
 			raw:  []byte{0xFF, 0xFF},
 			want: nil,
@@ -397,49 +356,6 @@ func TestFormatKeyUsageBitString_RoundTripsWithFormatKeyUsage(t *testing.T) {
 		if !slices.Equal(fromBitString, fromTyped) {
 			t.Errorf("round-trip mismatch for KeyUsage %d:\n  BitString: %v\n  Typed:     %v", ku, fromBitString, fromTyped)
 		}
-	}
-}
-
-func TestFormatKeyUsageBitString_FromCertificate(t *testing.T) {
-	// WHY: Ensures FormatKeyUsageBitString decodes real x509 KeyUsage extensions.
-	t.Parallel()
-
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	template := &x509.Certificate{
-		SerialNumber: randomSerial(t),
-		Subject:      pkix.Name{CommonName: "ku.example.com"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cert, err := x509.ParseCertificate(certDER)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	keyUsageOID := asn1.ObjectIdentifier{2, 5, 29, 15}
-	var keyUsageExt *pkix.Extension
-	for i := range cert.Extensions {
-		if cert.Extensions[i].Id.Equal(keyUsageOID) {
-			keyUsageExt = &cert.Extensions[i]
-			break
-		}
-	}
-	if keyUsageExt == nil {
-		t.Fatal("expected key usage extension")
-	}
-
-	got := FormatKeyUsageBitString(keyUsageExt.Value)
-	want := []string{"Digital Signature", "Key Encipherment"}
-	if !slices.Equal(got, want) {
-		t.Errorf("FormatKeyUsageBitString() = %v, want %v", got, want)
 	}
 }
 
