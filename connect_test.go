@@ -592,6 +592,48 @@ func TestConnectTLS_CancelledContext(t *testing.T) {
 	}
 }
 
+func TestConnectTLS_DefaultTimeoutWhenContextHasNoDeadline(t *testing.T) {
+	// WHY: ConnectTLS must apply a safe timeout when callers pass context.Background()
+	// so stalled handshakes do not block indefinitely.
+	t.Parallel()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	go func() {
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			// Hold the socket open without speaking TLS until the client times out.
+			time.Sleep(250 * time.Millisecond)
+			_ = conn.Close()
+		}
+	}()
+
+	_, portStr, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	_, err = ConnectTLS(context.Background(), ConnectTLSInput{
+		Host:           "127.0.0.1",
+		Port:           portStr,
+		ConnectTimeout: 50 * time.Millisecond,
+	})
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if elapsed := time.Since(start); elapsed > 200*time.Millisecond {
+		t.Fatalf("ConnectTLS took too long without context deadline: %s", elapsed)
+	}
+}
+
 func TestConnectTLS_IPv6Loopback(t *testing.T) {
 	// WHY: ConnectTLS should accept IPv6 hosts (with ServerName override) when available.
 	t.Parallel()
@@ -1393,10 +1435,11 @@ func TestConnectTLS_AIAFetch(t *testing.T) {
 	defer cancel()
 
 	result, err := ConnectTLS(ctx, ConnectTLSInput{
-		Host:       "127.0.0.1",
-		Port:       portStr,
-		AIATimeout: 5 * time.Second,
-		RootCAs:    rootPool,
+		Host:                 "127.0.0.1",
+		Port:                 portStr,
+		AIATimeout:           5 * time.Second,
+		RootCAs:              rootPool,
+		AllowPrivateNetworks: true,
 	})
 	if err != nil {
 		t.Fatalf("ConnectTLS failed: %v", err)
@@ -1496,9 +1539,10 @@ func TestConnectTLS_RootInChainDiagnostic(t *testing.T) {
 	defer cancel()
 
 	result, err := ConnectTLS(ctx, ConnectTLSInput{
-		Host:    "127.0.0.1",
-		Port:    port,
-		RootCAs: rootPool,
+		Host:                 "127.0.0.1",
+		Port:                 port,
+		RootCAs:              rootPool,
+		AllowPrivateNetworks: true,
 	})
 	if err != nil {
 		t.Fatalf("ConnectTLS failed: %v", err)
@@ -1553,9 +1597,10 @@ func TestConnectTLS_AIAFetch_FallbackURL(t *testing.T) {
 	defer cancel()
 
 	result, err := ConnectTLS(ctx, ConnectTLSInput{
-		Host:    "127.0.0.1",
-		Port:    port,
-		RootCAs: rootPool,
+		Host:                 "127.0.0.1",
+		Port:                 port,
+		RootCAs:              rootPool,
+		AllowPrivateNetworks: true,
 	})
 	if err != nil {
 		t.Fatalf("ConnectTLS failed: %v", err)
@@ -1728,10 +1773,11 @@ func TestConnectTLS_AIAFetch_Failure(t *testing.T) {
 			defer cancel()
 
 			result, err := ConnectTLS(ctx, ConnectTLSInput{
-				Host:       "127.0.0.1",
-				Port:       portStr,
-				AIATimeout: tc.aiaTimeout,
-				RootCAs:    rootPool,
+				Host:                 "127.0.0.1",
+				Port:                 portStr,
+				AIATimeout:           tc.aiaTimeout,
+				RootCAs:              rootPool,
+				AllowPrivateNetworks: true,
 			})
 			if err != nil {
 				t.Fatalf("ConnectTLS failed: %v", err)
@@ -1791,9 +1837,10 @@ func TestConnectTLS_AIAFetch_WrongIssuer(t *testing.T) {
 	defer cancel()
 
 	result, err := ConnectTLS(ctx, ConnectTLSInput{
-		Host:    "127.0.0.1",
-		Port:    port,
-		RootCAs: rootPool,
+		Host:                 "127.0.0.1",
+		Port:                 port,
+		RootCAs:              rootPool,
+		AllowPrivateNetworks: true,
 	})
 	if err != nil {
 		t.Fatalf("ConnectTLS failed: %v", err)
@@ -2054,9 +2101,10 @@ func TestConnectTLS_OCSP(t *testing.T) {
 			defer cancel()
 
 			result, err := ConnectTLS(ctx, ConnectTLSInput{
-				Host:    "127.0.0.1",
-				Port:    port,
-				RootCAs: rootPool,
+				Host:                 "127.0.0.1",
+				Port:                 port,
+				RootCAs:              rootPool,
+				AllowPrivateNetworks: true,
 			})
 			if err != nil {
 				t.Fatalf("ConnectTLS failed: %v", err)
@@ -2155,10 +2203,11 @@ func TestConnectTLS_OCSP_SkipAndFailure(t *testing.T) {
 			rootPool.AddCert(ca.Cert)
 
 			result, err := ConnectTLS(ctx, ConnectTLSInput{
-				Host:        "127.0.0.1",
-				Port:        port,
-				RootCAs:     rootPool,
-				DisableOCSP: tc.disableOCSP,
+				Host:                 "127.0.0.1",
+				Port:                 port,
+				RootCAs:              rootPool,
+				DisableOCSP:          tc.disableOCSP,
+				AllowPrivateNetworks: true,
 			})
 			if err != nil {
 				t.Fatalf("ConnectTLS failed: %v", err)
@@ -2256,9 +2305,10 @@ func TestConnectTLS_OCSP_InvalidResponses(t *testing.T) {
 			defer cancel()
 
 			result, err := ConnectTLS(ctx, ConnectTLSInput{
-				Host:    "127.0.0.1",
-				Port:    port,
-				RootCAs: rootPool,
+				Host:                 "127.0.0.1",
+				Port:                 port,
+				RootCAs:              rootPool,
+				AllowPrivateNetworks: true,
 			})
 			if err != nil {
 				t.Fatalf("ConnectTLS failed: %v", err)
@@ -2412,11 +2462,12 @@ func TestConnectTLS_CRL(t *testing.T) {
 			rootPool.AddCert(ca.Cert)
 
 			result, err := ConnectTLS(ctx, ConnectTLSInput{
-				Host:        "127.0.0.1",
-				Port:        port,
-				RootCAs:     rootPool,
-				CheckCRL:    true,
-				DisableOCSP: true,
+				Host:                 "127.0.0.1",
+				Port:                 port,
+				RootCAs:              rootPool,
+				CheckCRL:             true,
+				DisableOCSP:          true,
+				AllowPrivateNetworks: true,
 			})
 			if err != nil {
 				t.Fatalf("ConnectTLS failed: %v", err)
@@ -2617,11 +2668,12 @@ func TestConnectTLS_CRL_AIAFetchedIssuer(t *testing.T) {
 	defer cancel()
 
 	result, err := ConnectTLS(ctx, ConnectTLSInput{
-		Host:        "127.0.0.1",
-		Port:        port,
-		CheckCRL:    true,
-		DisableOCSP: true,
-		RootCAs:     rootPool,
+		Host:                 "127.0.0.1",
+		Port:                 port,
+		CheckCRL:             true,
+		DisableOCSP:          true,
+		RootCAs:              rootPool,
+		AllowPrivateNetworks: true,
 	})
 	if err != nil {
 		t.Fatalf("ConnectTLS failed: %v", err)
@@ -3263,10 +3315,11 @@ func TestConnectTLS_CRL_DuplicateLeafInChain(t *testing.T) {
 	defer cancel()
 
 	result, err := ConnectTLS(ctx, ConnectTLSInput{
-		Host:     "127.0.0.1",
-		Port:     port,
-		CheckCRL: true,
-		RootCAs:  rootPool,
+		Host:                 "127.0.0.1",
+		Port:                 port,
+		CheckCRL:             true,
+		RootCAs:              rootPool,
+		AllowPrivateNetworks: true,
 	})
 	if err != nil {
 		t.Fatalf("ConnectTLS failed: %v", err)

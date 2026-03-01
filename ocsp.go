@@ -18,6 +18,8 @@ type CheckOCSPInput struct {
 	Cert *x509.Certificate
 	// Issuer is the issuer certificate (used to build the OCSP request).
 	Issuer *x509.Certificate
+	// AllowPrivateNetworks allows OCSP requests to private/internal endpoints.
+	AllowPrivateNetworks bool
 }
 
 // OCSPResult contains the OCSP response details.
@@ -56,7 +58,7 @@ func CheckOCSP(ctx context.Context, input CheckOCSPInput) (*OCSPResult, error) {
 
 	responderURL := input.Cert.OCSPServer[0]
 
-	if err := ValidateAIAURL(responderURL); err != nil {
+	if err := ValidateAIAURLWithOptions(ValidateAIAURLInput{URL: responderURL, AllowPrivateNetworks: input.AllowPrivateNetworks}); err != nil {
 		return nil, fmt.Errorf("validating OCSP responder URL: %w", err)
 	}
 
@@ -78,7 +80,7 @@ func CheckOCSP(ctx context.Context, input CheckOCSPInput) (*OCSPResult, error) {
 			if len(via) >= maxRedirects {
 				return fmt.Errorf("stopped after %d redirects", maxRedirects)
 			}
-			if err := ValidateAIAURL(req.URL.String()); err != nil {
+			if err := ValidateAIAURLWithOptions(ValidateAIAURLInput{URL: req.URL.String(), AllowPrivateNetworks: input.AllowPrivateNetworks}); err != nil {
 				return fmt.Errorf("redirect blocked: %w", err)
 			}
 			return nil

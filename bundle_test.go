@@ -598,8 +598,8 @@ func TestFetchAIACertificates_duplicateURLs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Replace 127.0.0.1 with localhost to avoid ValidateAIAURL SSRF blocking
-	// of literal loopback IPs. Hostname-based URLs pass SSRF validation.
+	// Replace 127.0.0.1 with localhost and opt in to private networks for this
+	// local integration test.
 	srvURL := strings.Replace(srv.URL, "127.0.0.1", "localhost", 1)
 
 	leafTemplate := &x509.Certificate{
@@ -623,9 +623,10 @@ func TestFetchAIACertificates_duplicateURLs(t *testing.T) {
 	}
 
 	fetched, _ := FetchAIACertificates(context.Background(), FetchAIACertificatesInput{
-		Cert:     leafCert,
-		Timeout:  2 * time.Second,
-		MaxDepth: 5,
+		Cert:                 leafCert,
+		Timeout:              2 * time.Second,
+		MaxDepth:             5,
+		AllowPrivateNetworks: true,
 	})
 	if len(fetched) != 1 {
 		t.Errorf("expected 1 fetched cert (deduped), got %d", len(fetched))

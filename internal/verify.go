@@ -16,17 +16,18 @@ import (
 
 // VerifyInput holds the parsed certificate data and verification options.
 type VerifyInput struct {
-	Cert           *x509.Certificate
-	Key            crypto.PrivateKey
-	ExtraCerts     []*x509.Certificate
-	CustomRoots    []*x509.Certificate
-	CheckKeyMatch  bool
-	CheckChain     bool
-	ExpiryDuration time.Duration
-	TrustStore     string
-	Verbose        bool
-	CheckOCSP      bool
-	CheckCRL       bool
+	Cert                 *x509.Certificate
+	Key                  crypto.PrivateKey
+	ExtraCerts           []*x509.Certificate
+	CustomRoots          []*x509.Certificate
+	CheckKeyMatch        bool
+	CheckChain           bool
+	ExpiryDuration       time.Duration
+	TrustStore           string
+	Verbose              bool
+	CheckOCSP            bool
+	CheckCRL             bool
+	AllowPrivateNetworks bool
 }
 
 // ChainCert holds display information for one certificate in the chain.
@@ -143,6 +144,7 @@ func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) 
 		opts.TrustStore = input.TrustStore
 		opts.ExtraIntermediates = input.ExtraCerts
 		opts.CustomRoots = input.CustomRoots
+		opts.AllowPrivateNetworks = input.AllowPrivateNetworks
 		var bundleErr error
 		bundle, bundleErr = certkit.Bundle(ctx, certkit.BundleInput{
 			Leaf:    cert,
@@ -171,7 +173,7 @@ func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) 
 		}
 		if issuer != nil {
 			if input.CheckOCSP {
-				result.OCSP = checkVerifyOCSP(ctx, certkit.CheckOCSPInput{Cert: cert, Issuer: issuer})
+				result.OCSP = checkVerifyOCSP(ctx, certkit.CheckOCSPInput{Cert: cert, Issuer: issuer, AllowPrivateNetworks: input.AllowPrivateNetworks})
 				if result.OCSP.Status == "revoked" {
 					msg := "certificate is revoked (OCSP)"
 					if result.OCSP.RevokedAt != nil {
@@ -185,8 +187,9 @@ func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) 
 			}
 			if input.CheckCRL {
 				result.CRL = certkit.CheckLeafCRL(ctx, certkit.CheckLeafCRLInput{
-					Leaf:   cert,
-					Issuer: issuer,
+					Leaf:                 cert,
+					Issuer:               issuer,
+					AllowPrivateNetworks: input.AllowPrivateNetworks,
 				})
 				if result.CRL.Status == "revoked" {
 					result.Errors = append(result.Errors, fmt.Sprintf("certificate is revoked (CRL, %s)", result.CRL.Detail))

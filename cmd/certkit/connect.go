@@ -18,11 +18,12 @@ import (
 )
 
 var (
-	connectServerName string
-	connectFormat     string
-	connectCRL        bool
-	connectNoOCSP     bool
-	connectCiphers    bool
+	connectServerName          string
+	connectFormat              string
+	connectCRL                 bool
+	connectNoOCSP              bool
+	connectCiphers             bool
+	connectAllowPrivateNetwork bool
 )
 
 var connectCmd = &cobra.Command{
@@ -35,6 +36,9 @@ Port defaults to 443 if not specified. OCSP revocation status is checked
 automatically (best-effort). Use --no-ocsp to disable. Use --crl to also
 check CRL distribution points. Use --ciphers to enumerate all cipher suites
 the server supports with security ratings.
+
+Network fetches for AIA/OCSP/CRL block private/internal endpoints by default.
+Use --allow-private-network to opt in for internal PKI environments.
 
 Exits with code 2 if chain verification fails or the certificate is revoked.`,
 	Example: `  certkit connect example.com
@@ -53,6 +57,7 @@ func init() {
 	connectCmd.Flags().BoolVar(&connectCRL, "crl", false, "Check CRL distribution points for revocation")
 	connectCmd.Flags().BoolVar(&connectNoOCSP, "no-ocsp", false, "Disable automatic OCSP revocation check")
 	connectCmd.Flags().BoolVar(&connectCiphers, "ciphers", false, "Enumerate all supported cipher suites with security ratings")
+	connectCmd.Flags().BoolVar(&connectAllowPrivateNetwork, "allow-private-network", false, "Allow AIA/OCSP/CRL fetches to private/internal endpoints")
 
 	registerCompletion(connectCmd, completionInput{"format", fixedCompletion("text", "json")})
 }
@@ -114,11 +119,12 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	defer cancel()
 
 	result, err := certkit.ConnectTLS(ctx, certkit.ConnectTLSInput{
-		Host:        host,
-		Port:        port,
-		ServerName:  connectServerName,
-		DisableOCSP: connectNoOCSP,
-		CheckCRL:    connectCRL,
+		Host:                 host,
+		Port:                 port,
+		ServerName:           connectServerName,
+		DisableOCSP:          connectNoOCSP,
+		CheckCRL:             connectCRL,
+		AllowPrivateNetworks: connectAllowPrivateNetwork,
 	})
 	if err != nil {
 		spin.Stop()

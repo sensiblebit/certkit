@@ -15,13 +15,14 @@ import (
 )
 
 var (
-	verifyKeyPath    string
-	verifyExpiry     string
-	verifyTrustStore string
-	verifyFormat     string
-	verifyDiagnose   bool
-	verifyOCSP       bool
-	verifyCRL        bool
+	verifyKeyPath             string
+	verifyExpiry              string
+	verifyTrustStore          string
+	verifyFormat              string
+	verifyDiagnose            bool
+	verifyOCSP                bool
+	verifyCRL                 bool
+	verifyAllowPrivateNetwork bool
 )
 
 var verifyCmd = &cobra.Command{
@@ -36,7 +37,9 @@ is checked automatically. Use --key to check against an external key file.
 
 Use --ocsp to check OCSP revocation status, and --crl to check CRL distribution
 points. Both require network access and a valid chain (the issuer certificate
-is needed to verify the response). Exits with code 2 if verification finds any errors (including revocation).`,
+is needed to verify the response). Network fetches for AIA/OCSP/CRL block
+private/internal endpoints by default; use --allow-private-network to opt in.
+Exits with code 2 if verification finds any errors (including revocation).`,
 	Example: `  certkit verify cert.pem
   certkit verify cert.pem --key key.pem
   certkit verify cert.pem --expiry 30d
@@ -57,6 +60,7 @@ func init() {
 	verifyCmd.Flags().BoolVar(&verifyDiagnose, "diagnose", false, "Show diagnostics when chain verification fails")
 	verifyCmd.Flags().BoolVar(&verifyOCSP, "ocsp", false, "Check OCSP revocation status")
 	verifyCmd.Flags().BoolVar(&verifyCRL, "crl", false, "Check CRL distribution points for revocation")
+	verifyCmd.Flags().BoolVar(&verifyAllowPrivateNetwork, "allow-private-network", false, "Allow AIA/OCSP/CRL fetches to private/internal endpoints")
 
 	registerCompletion(verifyCmd, completionInput{"format", fixedCompletion("text", "json")})
 	registerCompletion(verifyCmd, completionInput{"trust-store", fixedCompletion("system", "mozilla")})
@@ -128,16 +132,17 @@ func runVerify(cmd *cobra.Command, args []string) error {
 	}
 
 	input := &internal.VerifyInput{
-		Cert:           contents.Leaf,
-		Key:            key,
-		ExtraCerts:     contents.ExtraCerts,
-		CheckKeyMatch:  key != nil,
-		CheckChain:     true, // Always verify chain
-		ExpiryDuration: expiryDuration,
-		TrustStore:     verifyTrustStore,
-		Verbose:        verbose,
-		CheckOCSP:      verifyOCSP,
-		CheckCRL:       verifyCRL,
+		Cert:                 contents.Leaf,
+		Key:                  key,
+		ExtraCerts:           contents.ExtraCerts,
+		CheckKeyMatch:        key != nil,
+		CheckChain:           true, // Always verify chain
+		ExpiryDuration:       expiryDuration,
+		TrustStore:           verifyTrustStore,
+		Verbose:              verbose,
+		CheckOCSP:            verifyOCSP,
+		CheckCRL:             verifyCRL,
+		AllowPrivateNetworks: verifyAllowPrivateNetwork,
 	}
 
 	result, err := internal.VerifyCert(cmd.Context(), input)

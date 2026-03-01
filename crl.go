@@ -40,13 +40,13 @@ type FetchCRLInput struct {
 }
 
 // FetchCRL downloads a CRL from an HTTP or HTTPS URL.
-// By default, the URL is validated against SSRF (literal private/loopback IPs
-// are blocked; hostnames are allowed). Set AllowPrivateNetworks to bypass this
-// for user-provided URLs.
+// By default, the URL is validated against SSRF (literal and DNS-resolved
+// private/loopback/link-local/unspecified IPs are blocked). Set
+// AllowPrivateNetworks to bypass this for user-provided URLs.
 // The response is limited to 10 MB.
 func FetchCRL(ctx context.Context, input FetchCRLInput) ([]byte, error) {
 	if !input.AllowPrivateNetworks {
-		if err := ValidateAIAURL(input.URL); err != nil {
+		if err := ValidateAIAURLWithOptions(ValidateAIAURLInput{URL: input.URL, AllowPrivateNetworks: input.AllowPrivateNetworks}); err != nil {
 			return nil, fmt.Errorf("validating CRL URL: %w", err)
 		}
 	}
@@ -59,7 +59,7 @@ func FetchCRL(ctx context.Context, input FetchCRLInput) ([]byte, error) {
 				return fmt.Errorf("stopped after %d redirects", maxRedirects)
 			}
 			if !input.AllowPrivateNetworks {
-				if err := ValidateAIAURL(req.URL.String()); err != nil {
+				if err := ValidateAIAURLWithOptions(ValidateAIAURLInput{URL: req.URL.String(), AllowPrivateNetworks: input.AllowPrivateNetworks}); err != nil {
 					return fmt.Errorf("redirect blocked: %w", err)
 				}
 			}
