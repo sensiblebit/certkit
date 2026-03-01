@@ -307,11 +307,20 @@ export function isAllowedDomain(hostname: string): boolean {
 // arbitrary URLs.
 const MAX_REDIRECTS = 5;
 
-async function safeFetch(url: string): Promise<Response> {
+type safeFetchResult = {
+  response: Response;
+  release: () => void;
+};
+
+async function safeFetch(url: string): Promise<safeFetchResult> {
   let currentURL = url;
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+    const release = (): void => {
+      clearTimeout(timer);
+      controller.abort();
+    };
 
     let resp: Response;
     try {
@@ -320,30 +329,34 @@ async function safeFetch(url: string): Promise<Response> {
         redirect: "manual",
         signal: controller.signal,
       });
-    } finally {
-      clearTimeout(timer);
+    } catch (err) {
+      release();
+      throw err;
     }
 
     // Not a redirect — return as-is.
     if (resp.status < 300 || resp.status >= 400) {
-      return resp;
+      return { response: resp, release };
     }
 
     const location = resp.headers.get("Location");
     if (!location) {
-      return resp;
+      return { response: resp, release };
     }
 
     const target = new URL(location, currentURL);
     if (target.protocol !== "https:" && target.protocol !== "http:") {
+      release();
       throw new Error("Redirect to non-HTTP protocol");
     }
     if (!isAllowedDomain(target.hostname)) {
+      release();
       throw new Error(`Redirect to disallowed domain '${target.hostname}'`);
     }
 
     // Sanitize redirect URL — only keep protocol, host, and path.
     currentURL = `${target.protocol}//${target.hostname}${target.pathname}`;
+    release();
   }
 
   throw new Error("Too many redirects");
@@ -456,41 +469,45 @@ export const onRequestGet: PagesFunction = async ({ request }) => {
 
   for (const tryURL of urlsToTry) {
     try {
-      const upstream = await safeFetch(tryURL);
+      const { response: upstream, release } = await safeFetch(tryURL);
 
-      if (!upstream.ok) {
-        lastStatus = upstream.status;
-        lastMessage = `Upstream returned ${upstream.status}`;
-        continue; // try next URL (HTTP fallback)
+      try {
+        if (!upstream.ok) {
+          lastStatus = upstream.status;
+          lastMessage = `Upstream returned ${upstream.status}`;
+          continue; // try next URL (HTTP fallback)
+        }
+
+        const contentLength = upstream.headers.get("content-length");
+        if (contentLength && parseInt(contentLength, 10) > MAX_RESPONSE_SIZE) {
+          return errorResponse(413, "Response too large", origin);
+        }
+
+        const body = await upstream.arrayBuffer();
+        if (body.byteLength > MAX_RESPONSE_SIZE) {
+          return errorResponse(413, "Response too large", origin);
+        }
+
+        if (body.byteLength === 0) {
+          lastStatus = 502;
+          lastMessage = "Upstream returned empty response";
+          continue;
+        }
+
+        const responseHeaders = new Headers(corsHeaders(origin));
+        responseHeaders.set("Content-Type", "application/octet-stream");
+        responseHeaders.set("Content-Length", body.byteLength.toString());
+        responseHeaders.set("X-Content-Type-Options", "nosniff");
+        // Cache forever — AIA certificates are immutable (same URL = same cert)
+        responseHeaders.set(
+          "Cache-Control",
+          "public, max-age=31536000, immutable",
+        );
+
+        return new Response(body, { status: 200, headers: responseHeaders });
+      } finally {
+        release();
       }
-
-      const contentLength = upstream.headers.get("content-length");
-      if (contentLength && parseInt(contentLength, 10) > MAX_RESPONSE_SIZE) {
-        return errorResponse(413, "Response too large", origin);
-      }
-
-      const body = await upstream.arrayBuffer();
-      if (body.byteLength > MAX_RESPONSE_SIZE) {
-        return errorResponse(413, "Response too large", origin);
-      }
-
-      if (body.byteLength === 0) {
-        lastStatus = 502;
-        lastMessage = "Upstream returned empty response";
-        continue;
-      }
-
-      const responseHeaders = new Headers(corsHeaders(origin));
-      responseHeaders.set("Content-Type", "application/octet-stream");
-      responseHeaders.set("Content-Length", body.byteLength.toString());
-      responseHeaders.set("X-Content-Type-Options", "nosniff");
-      // Cache forever — AIA certificates are immutable (same URL = same cert)
-      responseHeaders.set(
-        "Cache-Control",
-        "public, max-age=31536000, immutable",
-      );
-
-      return new Response(body, { status: 200, headers: responseHeaders });
     } catch (err) {
       if (isAbortError(err)) {
         lastStatus = 504;
