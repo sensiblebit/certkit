@@ -87,7 +87,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Fix `FormatDN` to preserve ASN.1 DER attribute order (matching OpenSSL) and render non-standard OIDs with standard labels instead of raw `OID=#hex`: personal name attributes (`SN`, `GN`, `initials`, `generationQualifier`, `dnQualifier`, `pseudonym`), `businessCategory`, `organizationIdentifier` (eIDAS/QWAC), and EV jurisdiction fields (`jurisdictionL`, `jurisdictionST`, `jurisdictionC`) ([#85])
+- Fix `FormatDN` to preserve ASN.1 DER attribute order and multi-valued RDN boundaries (OpenSSL-style), emit `<unencodable>` placeholders for attributes that cannot be marshaled, and render non-standard OIDs with standard labels instead of raw dotted-decimal `OID=#hex` values: personal name attributes (`SN`, `GN`, `initials`, `generationQualifier`, `dnQualifier`, `pseudonym`), `businessCategory`, `organizationIdentifier` (eIDAS/QWAC), and EV jurisdiction fields (`jurisdictionL`, `jurisdictionST`, `jurisdictionC`) ([#85])
+- Fix `ParseOtherNameSANs` to aggregate OtherName, DirectoryName, and RegisteredID entries across multiple SAN extensions ([#85])
 - Fix `verify` returning a panic when the certificate input is missing — now returns a clear error ([#85])
 - Fix `connect` legacy probe showing `Verify: N/A` despite performing full x509 chain verification — now shows the real verify result (`OK`/`FAILED`); Note line updated to clarify only server key possession is unverified ([`772742c`])
 - Fix `connect --ciphers` showing "none detected" on QUIC-only servers — empty check now covers both TCP and QUIC cipher lists ([`6492fa5`])

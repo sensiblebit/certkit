@@ -499,6 +499,8 @@ func TestParseOtherNameSANs(t *testing.T) {
 	// WHY: ParseOtherNameSANs recovers SAN entries that Go silently drops
 	// (OtherName, DirName, RegisteredID); failure to parse means critical
 	// identity info (like UPN) is invisible in inspect output.
+	// TODO(ralph): Add malformed GeneralName-first cases to ensure later valid entries are retained.
+	// TODO(ralph): Add coverage for non-UTF8 OtherName value types (IA5/BMP/PrintableString).
 	t.Parallel()
 
 	t.Run("OtherName with UPN", func(t *testing.T) {
@@ -596,6 +598,25 @@ func TestParseOtherNameSANs(t *testing.T) {
 		}}
 		got := ParseOtherNameSANs(exts)
 		want := []string{"UPN:mix@example.com", "DirName:CN=mixed-dir", "RegisteredID:1.2.3.4.5"}
+		if !slices.Equal(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("multiple SAN extensions", func(t *testing.T) {
+		// WHY: Multiple SAN extensions should be aggregated, not truncated to the first.
+		t.Parallel()
+		san1 := buildSANWithOtherName(t,
+			asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3},
+			"first@example.com",
+		)
+		san2 := buildSANWithDirectoryName(t, pkix.Name{CommonName: "second-dir"})
+		exts := []pkix.Extension{
+			{Id: asn1.ObjectIdentifier{2, 5, 29, 17}, Value: san1},
+			{Id: asn1.ObjectIdentifier{2, 5, 29, 17}, Value: san2},
+		}
+		got := ParseOtherNameSANs(exts)
+		want := []string{"UPN:first@example.com", "DirName:CN=second-dir"}
 		if !slices.Equal(got, want) {
 			t.Errorf("got %v, want %v", got, want)
 		}
@@ -1014,31 +1035,31 @@ func TestFormatDN(t *testing.T) {
 	// end-to-end, not just with hand-crafted Names slices.
 
 	roundTripTests := []struct {
-		name       string
-		email      string
-		cn         string
-		wantSubstr []string // substrings that must appear in the output
-		noSubstr   []string // substrings that must NOT appear in the output
+		name     string
+		email    string
+		cn       string
+		want     string
+		noSubstr []string // substrings that must NOT appear in the output
 	}{
 		{
-			name:       "emailAddress OID rendered as label via cert round-trip",
-			email:      "info@example.com",
-			cn:         "example.com",
-			wantSubstr: []string{"emailAddress=info@example.com"},
-			noSubstr:   []string{"1.2.840.113549.1.9.1=#"},
+			name:     "emailAddress OID rendered as label via cert round-trip",
+			email:    "info@example.com",
+			cn:       "example.com",
+			want:     "CN=example.com,emailAddress=info@example.com",
+			noSubstr: []string{"1.2.840.113549.1.9.1=#"},
 		},
 		{
 			name:  "email with special characters is escaped via cert round-trip",
 			email: "user+tag@example.com",
 			cn:    "example.com",
 			// The '+' in the local part must be escaped per RFC 4514.
-			wantSubstr: []string{"emailAddress=user\\+tag@example.com"},
+			want: "CN=example.com,emailAddress=user\\+tag@example.com",
 		},
 		{
-			name:       "emailAddress and standard attributes coexist via cert round-trip",
-			email:      "admin@corp.example.com",
-			cn:         "corp.example.com",
-			wantSubstr: []string{"emailAddress=admin@corp.example.com", "CN=corp.example.com"},
+			name:  "emailAddress and standard attributes coexist via cert round-trip",
+			email: "admin@corp.example.com",
+			cn:    "corp.example.com",
+			want:  "CN=corp.example.com,emailAddress=admin@corp.example.com",
 		},
 	}
 	for _, tt := range roundTripTests {
@@ -1047,10 +1068,8 @@ func TestFormatDN(t *testing.T) {
 			t.Parallel()
 			name := certSubjectWithEmail(t, tt.email, tt.cn)
 			got := FormatDN(name)
-			for _, want := range tt.wantSubstr {
-				if !strings.Contains(got, want) {
-					t.Errorf("expected %q in %q", want, got)
-				}
+			if got != tt.want {
+				t.Errorf("FormatDN() = %q, want %q", got, tt.want)
 			}
 			for _, bad := range tt.noSubstr {
 				if strings.Contains(got, bad) {
@@ -1058,6 +1077,109 @@ func TestFormatDN(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestFormatDNFromRaw_MultiValuedRDN(t *testing.T) {
+	// WHY: Multi-valued RDNs must preserve '+' boundaries when formatting raw DER.
+	// TODO(ralph): Add multi-valued RDN cases that exercise special-character escaping.
+	t.Parallel()
+
+	emailOID := asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 1}
+	rdns := pkix.RDNSequence{
+		pkix.RelativeDistinguishedNameSET{
+			{Type: asn1.ObjectIdentifier{2, 5, 4, 3}, Value: "multi.example.com"},
+			{Type: emailOID, Value: "admin+tag@multi.example.com"},
+		},
+		pkix.RelativeDistinguishedNameSET{
+			{Type: asn1.ObjectIdentifier{2, 5, 4, 6}, Value: "US"},
+		},
+	}
+	raw, err := asn1.Marshal(rdns)
+	if err != nil {
+		t.Fatalf("marshal RDNSequence: %v", err)
+	}
+
+	got := FormatDNFromRaw(raw, pkix.Name{})
+	want := "CN=multi.example.com+emailAddress=admin\\+tag@multi.example.com,C=US"
+	if got != want {
+		t.Errorf("FormatDNFromRaw() = %q, want %q", got, want)
+	}
+}
+
+func TestFormatDNFromRaw_InvalidDER(t *testing.T) {
+	// WHY: Invalid raw DER should fall back to FormatDN output.
+	t.Parallel()
+
+	fallback := pkix.Name{CommonName: "fallback.example.com"}
+	got := FormatDNFromRaw([]byte{0x30, 0x01, 0xff}, fallback)
+	want := "CN=fallback.example.com"
+	if got != want {
+		t.Errorf("FormatDNFromRaw() = %q, want %q", got, want)
+	}
+}
+
+func TestFormatDNFromRaw_CertificateMultiValuedRDN(t *testing.T) {
+	// WHY: Parsed certificates must preserve multi-valued RDN boundaries in raw subjects.
+	t.Parallel()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	emailOID := asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 1}
+	rdns := pkix.RDNSequence{
+		pkix.RelativeDistinguishedNameSET{
+			{Type: asn1.ObjectIdentifier{2, 5, 4, 3}, Value: "multi.example.com"},
+			{Type: emailOID, Value: "admin+tag@multi.example.com"},
+		},
+		pkix.RelativeDistinguishedNameSET{
+			{Type: asn1.ObjectIdentifier{2, 5, 4, 10}, Value: "Example Corp"},
+		},
+	}
+	rawSubject, err := asn1.Marshal(rdns)
+	if err != nil {
+		t.Fatalf("marshal RDNSequence: %v", err)
+	}
+
+	template := &x509.Certificate{
+		SerialNumber: randomSerial(t),
+		Subject:      pkix.Name{CommonName: "multi.example.com"},
+		RawSubject:   rawSubject,
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := FormatDNFromRaw(cert.RawSubject, cert.Subject)
+	want := "CN=multi.example.com+emailAddress=admin\\+tag@multi.example.com,O=Example Corp"
+	if got != want {
+		t.Errorf("FormatDNFromRaw() = %q, want %q", got, want)
+	}
+}
+
+func TestFormatDN_UnencodableValue(t *testing.T) {
+	// WHY: FormatDN should not silently drop attributes when ASN.1 marshaling fails.
+	t.Parallel()
+
+	dn := pkix.Name{
+		Names: []pkix.AttributeTypeAndValue{
+			{Type: asn1.ObjectIdentifier{2, 5, 4, 3}, Value: "example.com"},
+			{Type: asn1.ObjectIdentifier{1, 2, 3}, Value: make(chan int)},
+		},
+	}
+
+	got := FormatDN(dn)
+	want := "CN=example.com,1.2.3=<unencodable>"
+	if got != want {
+		t.Errorf("FormatDN() = %q, want %q", got, want)
 	}
 }
 

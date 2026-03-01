@@ -364,7 +364,7 @@ func buildScanCertList(store *certstore.MemStore) []scanCertEntry {
 	for _, rec := range certs {
 		c := rec.Cert
 		entries = append(entries, scanCertEntry{
-			Subject:   certkit.FormatDN(c.Subject),
+			Subject:   certkit.FormatDNFromRaw(c.RawSubject, c.Subject),
 			CertType:  rec.CertType,
 			NotBefore: c.NotBefore.UTC().Format(time.RFC3339),
 			NotAfter:  c.NotAfter.UTC().Format(time.RFC3339),
@@ -404,7 +404,7 @@ func printScanVerboseText(store *certstore.MemStore) {
 			if now.After(c.NotAfter) {
 				expired = " [EXPIRED]"
 			}
-			fmt.Printf("  %s (%s)%s\n", certkit.FormatDN(c.Subject), rec.CertType, expired)
+			fmt.Printf("  %s (%s)%s\n", certkit.FormatDNFromRaw(c.RawSubject, c.Subject), rec.CertType, expired)
 			fmt.Printf("    Not After:  %s\n", c.NotAfter.UTC().Format(time.RFC3339))
 			fmt.Printf("    Key:        %s %s\n", certkit.PublicKeyAlgorithmName(c.PublicKey), publicKeySize(c.PublicKey))
 			fmt.Printf("    Signature:  %s\n", c.SignatureAlgorithm)

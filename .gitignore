@@ -26,6 +26,7 @@ bundles/
 
 changes.md
 RALPH.md
+IMPLEMENTATION_PLAN.md
 *.local.*
 
 node_modules/

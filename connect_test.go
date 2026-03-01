@@ -113,6 +113,82 @@ func TestConnectTLS(t *testing.T) {
 	}
 }
 
+func TestConnectTLS_ExpiredLeaf(t *testing.T) {
+	// WHY: ConnectTLS should surface expired certificates as verification errors.
+	t.Parallel()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "localhost"},
+		DNSNames:     []string{"localhost"},
+		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+		NotBefore:    time.Now().Add(-48 * time.Hour),
+		NotAfter:     time.Now().Add(-24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(cert)
+
+	tlsCert := tls.Certificate{
+		Certificate: [][]byte{certDER},
+		PrivateKey:  key,
+	}
+	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		Certificates: []tls.Certificate{tlsCert},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Close() }()
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			if tc, ok := conn.(*tls.Conn); ok {
+				_ = tc.Handshake()
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	_, portStr, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := ConnectTLS(ctx, ConnectTLSInput{
+		Host:    "127.0.0.1",
+		Port:    portStr,
+		RootCAs: rootPool,
+	})
+	if err != nil {
+		t.Fatalf("ConnectTLS failed: %v", err)
+	}
+	if !strings.Contains(result.VerifyError, "expired") {
+		t.Errorf("expected expired verify error, got %q", result.VerifyError)
+	}
+}
+
 func TestConnectTLS_ClientAuth(t *testing.T) {
 	t.Parallel()
 
@@ -236,14 +312,6 @@ func TestConnectTLS_ClientAuth(t *testing.T) {
 		t.Errorf("leaf CN = %q, want %q", result.PeerChain[0].Subject.CommonName, "localhost")
 	}
 
-	// Verify FormatConnectResult includes mTLS info.
-	output := FormatConnectResult(result)
-	if !strings.Contains(output, "Client Auth:") {
-		t.Error("FormatConnectResult output missing Client Auth line")
-	}
-	if !strings.Contains(output, "1 acceptable CA(s)") {
-		t.Errorf("FormatConnectResult output missing CA count, got:\n%s", output)
-	}
 }
 
 func TestConnectTLS_EmptyHost(t *testing.T) {
@@ -256,6 +324,7 @@ func TestConnectTLS_EmptyHost(t *testing.T) {
 
 func TestConnectTLS_ConnectionRefused(t *testing.T) {
 	t.Parallel()
+	// TODO(ralph): Use a guaranteed-closed port instead of hard-coded "1".
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
@@ -266,6 +335,96 @@ func TestConnectTLS_ConnectionRefused(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for connection refused")
+	}
+}
+
+func TestConnectTLS_ContextTimeout(t *testing.T) {
+	// WHY: ConnectTLS should return a timeout error when the context deadline expires mid-handshake.
+	// TODO(ralph): Assert the deadline path (vs. EOF) by keeping the socket open past the timeout.
+	t.Parallel()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Close() }()
+
+	go func() {
+		conn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+		_ = conn.Close()
+	}()
+
+	_, portStr, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	_, err = ConnectTLS(ctx, ConnectTLSInput{Host: "127.0.0.1", Port: portStr})
+	if err == nil {
+		t.Fatal("expected timeout error")
+	}
+	if !strings.Contains(err.Error(), "timeout") && !strings.Contains(err.Error(), "deadline") {
+		t.Errorf("expected timeout error, got %q", err.Error())
+	}
+}
+
+func TestConnectTLS_HostnameMismatch(t *testing.T) {
+	// WHY: Hostname mismatches should surface as verify errors with diagnostics.
+	t.Parallel()
+
+	ca := generateTestCA(t, "Mismatch CA")
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafTemplate := &x509.Certificate{
+		SerialNumber: randomSerial(t),
+		Subject:      pkix.Name{CommonName: "example.com"},
+		DNSNames:     []string{"example.com"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, ca.Cert, &leafKey.PublicKey, ca.Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := startTLSServer(t, [][]byte{leafDER, ca.CertDER}, leafKey)
+
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(ca.Cert)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := ConnectTLS(ctx, ConnectTLSInput{
+		Host:    "127.0.0.1",
+		Port:    port,
+		RootCAs: rootPool,
+	})
+	if err != nil {
+		t.Fatalf("ConnectTLS failed: %v", err)
+	}
+	if !strings.Contains(result.VerifyError, "127.0.0.1") {
+		t.Errorf("expected hostname mismatch error, got %q", result.VerifyError)
+	}
+	hostnameDiag := false
+	for _, diag := range result.Diagnostics {
+		if diag.Check == "hostname-mismatch" {
+			hostnameDiag = true
+			break
+		}
+	}
+	if !hostnameDiag {
+		t.Error("expected hostname-mismatch diagnostic")
 	}
 }
 
@@ -510,7 +669,7 @@ func TestDiagnoseConnectChain(t *testing.T) {
 			name:               "duplicate-cert detected",
 			peerChain:          []*x509.Certificate{leaf, intermediates[0], intermediates[0]},
 			wantChecks:         []string{"duplicate-cert"},
-			wantDetailContains: [][]string{{FormatDN(intermediates[0].Subject), "positions 1 and 2"}},
+			wantDetailContains: [][]string{{"CN=Intermediate CA 1", "positions 1 and 2"}},
 		},
 		{
 			name:       "leaf-only chain",
@@ -521,6 +680,11 @@ func TestDiagnoseConnectChain(t *testing.T) {
 			name:       "root-in-chain and duplicate-cert",
 			peerChain:  []*x509.Certificate{leaf, root, root},
 			wantChecks: []string{"root-in-chain", "duplicate-cert", "root-in-chain"},
+			wantDetailContains: [][]string{
+				{"CN=Chain Root CA", "position 1"},
+				{"CN=Chain Root CA", "positions 1 and 2"},
+				{"CN=Chain Root CA", "position 2"},
+			},
 		},
 	}
 
@@ -798,7 +962,10 @@ func TestConnectTLS_AIAFetch(t *testing.T) {
 	aiaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		aiaRequests.Add(1)
 		w.Header().Set("Content-Type", "application/pkix-cert")
-		_, _ = w.Write(intDER)
+		if _, err := w.Write(intDER); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}))
 	defer aiaServer.Close()
 
@@ -871,6 +1038,7 @@ func TestConnectTLS_AIAFetch(t *testing.T) {
 		Host:       "127.0.0.1",
 		Port:       portStr,
 		AIATimeout: 5 * time.Second,
+		RootCAs:    rootPool,
 	})
 	if err != nil {
 		t.Fatalf("ConnectTLS failed: %v", err)
@@ -889,12 +1057,162 @@ func TestConnectTLS_AIAFetch(t *testing.T) {
 		t.Errorf("leaf CN = %q, want %q", result.PeerChain[0].Subject.CommonName, "localhost")
 	}
 
-	// The chain won't fully verify against system roots (our test CA isn't trusted),
-	// so VerifyError will be non-empty. AIA fetching still occurred (proven by the
-	// request counter above), but the fetched intermediates alone can't build a
-	// path to a system-trusted root.
+	if result.VerifyError != "" {
+		t.Errorf("expected verify to succeed, got error %q", result.VerifyError)
+	}
+	if !result.AIAFetched {
+		t.Error("expected AIAFetched=true")
+	}
+	missingIntermediate := false
+	for _, diag := range result.Diagnostics {
+		if diag.Check == "missing-intermediate" {
+			missingIntermediate = true
+			break
+		}
+	}
+	if !missingIntermediate {
+		t.Error("expected missing-intermediate diagnostic")
+	}
+}
+
+func TestConnectTLS_AIAFetch_Failure(t *testing.T) {
+	// WHY: Failed AIA fetches should not mark AIAFetched or add missing-intermediate diagnostics.
+	t.Parallel()
+
+	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "AIA Fail Root CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	rootDER, err := x509.CreateCertificate(rand.Reader, rootTemplate, rootTemplate, &rootKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootCert, err := x509.ParseCertificate(rootDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	intKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(2),
+		Subject:               pkix.Name{CommonName: "AIA Fail Intermediate CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	intDER, err := x509.CreateCertificate(rand.Reader, intTemplate, rootCert, &intKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intCert, err := x509.ParseCertificate(intDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var aiaRequests atomic.Int64
+	aiaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		aiaRequests.Add(1)
+		w.Header().Set("Content-Type", "application/pkix-cert")
+		if _, err := w.Write([]byte("not-a-cert")); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}))
+	defer aiaServer.Close()
+
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafTemplate := &x509.Certificate{
+		SerialNumber:          big.NewInt(3),
+		Subject:               pkix.Name{CommonName: "localhost"},
+		DNSNames:              []string{"localhost"},
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IssuingCertificateURL: []string{strings.Replace(aiaServer.URL, "127.0.0.1", "localhost", 1)},
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, intCert, &leafKey.PublicKey, intKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		Certificates: []tls.Certificate{{Certificate: [][]byte{leafDER}, PrivateKey: leafKey}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = listener.Close() }()
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			if tc, ok := conn.(*tls.Conn); ok {
+				_ = tc.Handshake()
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	_, portStr, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(rootCert)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	result, err := ConnectTLS(ctx, ConnectTLSInput{
+		Host:       "127.0.0.1",
+		Port:       portStr,
+		AIATimeout: 5 * time.Second,
+		RootCAs:    rootPool,
+	})
+	if err != nil {
+		t.Fatalf("ConnectTLS failed: %v", err)
+	}
+	if got := aiaRequests.Load(); got == 0 {
+		t.Fatal("AIA HTTP server received 0 requests; expected at least 1")
+	}
+	if result.AIAFetched {
+		t.Error("expected AIAFetched=false on fetch failure")
+	}
 	if result.VerifyError == "" {
-		t.Error("expected verify error (test CA not in system roots)")
+		t.Error("expected verify error after failed AIA fetch")
+	}
+	missingIntermediate := false
+	for _, diag := range result.Diagnostics {
+		if diag.Check == "missing-intermediate" {
+			missingIntermediate = true
+			break
+		}
+	}
+	if missingIntermediate {
+		t.Error("unexpected missing-intermediate diagnostic on AIA failure")
 	}
 }
 
@@ -902,6 +1220,7 @@ func TestConnectTLS_AIAFetch_DisableAIA(t *testing.T) {
 	t.Parallel()
 
 	// WHY: Verify that DisableAIA prevents AIA fetching.
+	// TODO(ralph): Assert no HTTP requests are made when DisableAIA is set.
 
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {

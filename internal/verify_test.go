@@ -20,6 +20,7 @@ func TestVerifyCert_KeyMatch(t *testing.T) {
 	// WHY: Verifies VerifyCert correctly detects both key-certificate match
 	// and mismatch. A false negative excludes valid keys; a false positive
 	// allows deploying certs with wrong keys.
+	// TODO(ralph): Use TrustStore=custom to avoid environment dependencies when chain checks are off.
 	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "verify-rsa.example.com", []string{"verify-rsa.example.com"}, nil)
@@ -38,10 +39,11 @@ func TestVerifyCert_KeyMatch(t *testing.T) {
 		wantKeyErr  bool
 		wantErrors  bool
 		wantKeyInfo bool
+		wantErrSubs []string
 	}{
-		{"matching key", leaf.key, &matchTrue, false, false, true},
-		{"mismatched key", wrongKey, &matchFalse, false, true, true},
-		{"unsupported key type", struct{}{}, nil, true, true, false},
+		{"matching key", leaf.key, &matchTrue, false, false, true, nil},
+		{"mismatched key", wrongKey, &matchFalse, false, true, true, []string{"key does not match certificate"}},
+		{"unsupported key type", struct{}{}, nil, true, true, false, []string{"unsupported private key type"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -87,6 +89,18 @@ func TestVerifyCert_KeyMatch(t *testing.T) {
 			}
 			if !tt.wantErrors && len(result.Errors) != 0 {
 				t.Errorf("expected no errors, got %v", result.Errors)
+			}
+			for _, want := range tt.wantErrSubs {
+				found := false
+				for _, errMsg := range result.Errors {
+					if strings.Contains(errMsg, want) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("expected error containing %q, got %v", want, result.Errors)
+				}
 			}
 		})
 	}
@@ -149,6 +163,99 @@ func TestVerifyCert_ExpiryCheck(t *testing.T) {
 	}
 }
 
+func TestVerifyCert_ExpiredLeafChain(t *testing.T) {
+	// WHY: Chain validation must fail for expired leaf certificates even with a trusted root.
+	t.Parallel()
+	ca := newRSACA(t)
+	expired := newExpiredLeaf(t, ca)
+
+	result, err := VerifyCert(context.Background(), &VerifyInput{
+		Cert:        expired.cert,
+		CheckChain:  true,
+		TrustStore:  "custom",
+		CustomRoots: []*x509.Certificate{ca.cert},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ChainValid == nil || *result.ChainValid {
+		t.Fatalf("expected chain to be invalid for expired leaf, got %v", result.ChainValid)
+	}
+	if result.ChainErr == "" {
+		t.Fatal("expected ChainErr to be populated for expired leaf")
+	}
+	if !strings.Contains(result.ChainErr, "expired") {
+		t.Errorf("expected ChainErr to mention expired, got %q", result.ChainErr)
+	}
+	chainErrFound := false
+	for _, errMsg := range result.Errors {
+		if strings.Contains(errMsg, "chain validation") {
+			chainErrFound = true
+			break
+		}
+	}
+	if !chainErrFound {
+		t.Errorf("expected chain validation error, got %v", result.Errors)
+	}
+}
+
+func TestVerifyCert_NotYetValidLeafChain(t *testing.T) {
+	// WHY: Chain validation must fail for not-yet-valid leaf certificates with a clear error.
+	t.Parallel()
+	ca := newRSACA(t)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafTemplate := &x509.Certificate{
+		SerialNumber:   randomSerial(t),
+		Subject:        pkix.Name{CommonName: "future.example.com", Organization: []string{"TestOrg"}},
+		NotBefore:      time.Now().Add(24 * time.Hour),
+		NotAfter:       time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:       x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:    []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		SubjectKeyId:   []byte{0xaa, 0xbb, 0xcc},
+		AuthorityKeyId: ca.cert.SubjectKeyId,
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, ca.cert, &key.PublicKey, ca.key.(*rsa.PrivateKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafCert, err := x509.ParseCertificate(leafDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := VerifyCert(context.Background(), &VerifyInput{
+		Cert:        leafCert,
+		CheckChain:  true,
+		TrustStore:  "custom",
+		CustomRoots: []*x509.Certificate{ca.cert},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ChainValid == nil || *result.ChainValid {
+		t.Fatalf("expected chain to be invalid for not-yet-valid leaf, got %v", result.ChainValid)
+	}
+	if result.ChainErr == "" {
+		t.Fatal("expected ChainErr to be populated for not-yet-valid leaf")
+	}
+	if !strings.Contains(result.ChainErr, "not yet valid") {
+		t.Errorf("expected ChainErr to mention not yet valid, got %q", result.ChainErr)
+	}
+	chainErrFound := false
+	for _, errMsg := range result.Errors {
+		if strings.Contains(errMsg, "chain validation") {
+			chainErrFound = true
+			break
+		}
+	}
+	if !chainErrFound {
+		t.Errorf("expected chain validation error, got %v", result.Errors)
+	}
+}
+
 func TestVerifyCert_ChainInvalid(t *testing.T) {
 	// WHY: Chain validation against an unrelated CA must report ChainValid=false with a descriptive error; silent acceptance would be a security issue.
 	t.Parallel()
@@ -176,8 +283,54 @@ func TestVerifyCert_ChainInvalid(t *testing.T) {
 	if result.ChainErr == "" {
 		t.Error("expected ChainErr to be populated for invalid chain")
 	}
+	if !strings.Contains(result.ChainErr, "unknown authority") {
+		t.Errorf("expected ChainErr to mention unknown authority, got %q", result.ChainErr)
+	}
 	if len(result.Errors) == 0 {
 		t.Error("expected errors to be populated for invalid chain")
+	}
+	chainErrFound := false
+	for _, errMsg := range result.Errors {
+		if strings.Contains(errMsg, "chain validation") {
+			chainErrFound = true
+			break
+		}
+	}
+	if !chainErrFound {
+		t.Errorf("expected chain validation error, got %v", result.Errors)
+	}
+}
+
+func TestVerifyCert_CustomRootsEmpty(t *testing.T) {
+	// WHY: TrustStore=custom with no CustomRoots should fail chain validation.
+	t.Parallel()
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "empty-roots.example.com", []string{"empty-roots.example.com"}, nil)
+
+	result, err := VerifyCert(context.Background(), &VerifyInput{
+		Cert:       leaf.cert,
+		CheckChain: true,
+		TrustStore: "custom",
+		// CustomRoots intentionally empty.
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ChainValid == nil || *result.ChainValid {
+		t.Fatalf("expected chain to be invalid with empty custom roots, got %v", result.ChainValid)
+	}
+	if result.ChainErr == "" {
+		t.Error("expected ChainErr to be populated for empty custom roots")
+	}
+	chainErrFound := false
+	for _, errMsg := range result.Errors {
+		if strings.Contains(errMsg, "chain validation") {
+			chainErrFound = true
+			break
+		}
+	}
+	if !chainErrFound {
+		t.Errorf("expected chain validation error, got %v", result.Errors)
 	}
 }
 
@@ -289,6 +442,22 @@ func TestVerifyCert_SimultaneousChainAndKeyFailures(t *testing.T) {
 	if len(result.Errors) < 2 {
 		t.Fatalf("expected at least 2 errors (key + chain), got %d: %v", len(result.Errors), result.Errors)
 	}
+	keyMismatchFound := false
+	chainErrFound := false
+	for _, errMsg := range result.Errors {
+		if strings.Contains(errMsg, "key does not match certificate") {
+			keyMismatchFound = true
+		}
+		if strings.Contains(errMsg, "chain validation") {
+			chainErrFound = true
+		}
+	}
+	if !keyMismatchFound {
+		t.Errorf("expected key mismatch error, got %v", result.Errors)
+	}
+	if !chainErrFound {
+		t.Errorf("expected chain validation error, got %v", result.Errors)
+	}
 }
 
 func TestVerifyCert_ChainAndKeyMatchSuccess(t *testing.T) {
@@ -328,6 +497,34 @@ func TestVerifyCert_ChainAndKeyMatchSuccess(t *testing.T) {
 	}
 }
 
+func TestVerifyCert_SelfSignedTrustedRoot(t *testing.T) {
+	// WHY: A self-signed leaf included in the custom root pool must verify as trusted.
+	t.Parallel()
+	ca := newRSACA(t)
+
+	result, err := VerifyCert(context.Background(), &VerifyInput{
+		Cert:        ca.cert,
+		CheckChain:  true,
+		TrustStore:  "custom",
+		CustomRoots: []*x509.Certificate{ca.cert},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ChainValid == nil || !*result.ChainValid {
+		t.Fatalf("expected ChainValid true, got %v", result.ChainValid)
+	}
+	if result.ChainErr != "" {
+		t.Errorf("expected no ChainErr, got %q", result.ChainErr)
+	}
+	if len(result.Chain) == 0 {
+		t.Fatal("expected chain display to be populated")
+	}
+	if len(result.Errors) != 0 {
+		t.Errorf("expected no errors, got %v", result.Errors)
+	}
+}
+
 func TestVerifyCert_ExtraIntermediates(t *testing.T) {
 	// WHY: ExtraCerts should allow chain validation to succeed when intermediates are missing.
 	t.Parallel()
@@ -347,6 +544,45 @@ func TestVerifyCert_ExtraIntermediates(t *testing.T) {
 	if missingResult.ChainValid == nil || *missingResult.ChainValid {
 		t.Fatalf("expected chain to be invalid without intermediates, got %v", missingResult.ChainValid)
 	}
+	if missingResult.ChainErr == "" {
+		t.Error("expected ChainErr to be populated for missing intermediate")
+	}
+	chainErrFound := false
+	for _, errMsg := range missingResult.Errors {
+		if strings.Contains(errMsg, "chain validation") {
+			chainErrFound = true
+			break
+		}
+	}
+	if !chainErrFound {
+		t.Errorf("expected chain validation error, got %v", missingResult.Errors)
+	}
+
+	missingRootsResult, err := VerifyCert(context.Background(), &VerifyInput{
+		Cert:       leaf.cert,
+		CheckChain: true,
+		TrustStore: "custom",
+		ExtraCerts: []*x509.Certificate{intermediate.cert},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if missingRootsResult.ChainValid == nil || *missingRootsResult.ChainValid {
+		t.Fatalf("expected chain to be invalid without custom roots, got %v", missingRootsResult.ChainValid)
+	}
+	if missingRootsResult.ChainErr == "" {
+		t.Error("expected ChainErr to be populated for missing custom roots")
+	}
+	missingRootsErrFound := false
+	for _, errMsg := range missingRootsResult.Errors {
+		if strings.Contains(errMsg, "chain validation") {
+			missingRootsErrFound = true
+			break
+		}
+	}
+	if !missingRootsErrFound {
+		t.Errorf("expected chain validation error, got %v", missingRootsResult.Errors)
+	}
 
 	result, err := VerifyCert(context.Background(), &VerifyInput{
 		Cert:        leaf.cert,
@@ -365,6 +601,7 @@ func TestVerifyCert_ExtraIntermediates(t *testing.T) {
 
 func TestVerifyCert_NoChecksEnabled(t *testing.T) {
 	// WHY: When all checks are disabled (no key match, no chain, no expiry), VerifyCert must still return basic cert info (subject, SANs, NotAfter, SKI) without errors.
+	// TODO(ralph): Use TrustStore=custom to avoid environment dependencies when chain checks are off.
 	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "info-only.example.com", []string{"info-only.example.com"}, nil)
@@ -406,6 +643,7 @@ func TestFormatVerifyResult(t *testing.T) {
 	// WHY: FormatVerifyResult has distinct rendering branches for key match
 	// (OK/MISMATCH/ERROR), chain display, SANs, expiry, and overall status.
 	// Each subtest covers a different branch to catch rendering regressions.
+	// TODO(ralph): Tighten assertions to detect duplicated/misordered lines.
 	t.Parallel()
 
 	matchTrue := true
@@ -683,12 +921,20 @@ func TestDiagnoseChain(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	zero := 0
 	tests := []struct {
 		name             string
 		input            DiagnoseChainInput
 		wantChecks       map[string]string // check -> expected status
 		wantDetailSubstr map[string]string // check -> substring expected in Detail
+		denyChecks       []string
+		wantDiagCount    *int
 	}{
+		{
+			name:          "nil input",
+			input:         DiagnoseChainInput{Cert: nil},
+			wantDiagCount: &zero,
+		},
 		{
 			name: "valid leaf with intermediates",
 			input: DiagnoseChainInput{
@@ -698,6 +944,7 @@ func TestDiagnoseChain(t *testing.T) {
 			wantChecks: map[string]string{
 				"expired": "pass",
 			},
+			denyChecks: []string{"missing-intermediate"},
 		},
 		{
 			name: "expired leaf",
@@ -737,6 +984,7 @@ func TestDiagnoseChain(t *testing.T) {
 			wantChecks: map[string]string{
 				"self-signed": "warn",
 			},
+			denyChecks: []string{"missing-intermediate"},
 		},
 		{
 			name: "missing intermediate",
@@ -759,6 +1007,7 @@ func TestDiagnoseChain(t *testing.T) {
 				ExtraCerts: []*x509.Certificate{expInt, ca.cert},
 			},
 			wantChecks: map[string]string{
+				"expired":              "pass",
 				"intermediate-expired": "fail",
 			},
 			wantDetailSubstr: map[string]string{
@@ -780,6 +1029,11 @@ func TestDiagnoseChain(t *testing.T) {
 				diagMap[d.Check] = d.Status
 				detailMap[d.Check] = d.Detail
 			}
+			if tc.wantDiagCount != nil {
+				if len(diags) != *tc.wantDiagCount {
+					t.Fatalf("got %d diagnostics, want %d", len(diags), *tc.wantDiagCount)
+				}
+			}
 
 			for check, wantStatus := range tc.wantChecks {
 				gotStatus, found := diagMap[check]
@@ -800,6 +1054,11 @@ func TestDiagnoseChain(t *testing.T) {
 				}
 				if !strings.Contains(detail, wantSubstr) {
 					t.Errorf("check %q: detail = %q, want substring %q", check, detail, wantSubstr)
+				}
+			}
+			for _, check := range tc.denyChecks {
+				if _, found := diagMap[check]; found {
+					t.Errorf("unexpected check %q in diagnostics", check)
 				}
 			}
 		})
@@ -834,6 +1093,7 @@ func TestVerifyCert_RevocationBehavior(t *testing.T) {
 	// WHY: Table-driven test for revocation flag combinations — verifies that
 	// OCSP/CRL results are correctly populated, skipped, or nil based on flags
 	// and chain validity.
+	// TODO(ralph): Add wrong-issuer OCSP/CRL signature cases and chain-invalid cases with endpoints.
 	t.Parallel()
 
 	ca := newRSACA(t)
@@ -940,6 +1200,17 @@ func TestVerifyCert_RevocationBehavior(t *testing.T) {
 					t.Errorf("CRL.Detail = %q, want substring %q", result.CRL.Detail, tc.wantCRLDetail)
 				}
 			}
+
+			revokedFound := false
+			for _, errMsg := range result.Errors {
+				if strings.Contains(errMsg, "revoked") {
+					revokedFound = true
+					break
+				}
+			}
+			if tc.wantOCSPStatus != "revoked" && tc.wantCRLStatus != "revoked" && revokedFound {
+				t.Errorf("unexpected revoked error, got %v", result.Errors)
+			}
 		})
 	}
 }
@@ -1007,7 +1278,10 @@ func TestVerifyCert_OCSPRevoked(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/ocsp-response")
-		_, _ = w.Write(respBytes)
+		if _, err := w.Write(respBytes); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}))
 	defer server.Close()
 
@@ -1040,6 +1314,111 @@ func TestVerifyCert_OCSPRevoked(t *testing.T) {
 	}
 }
 
+func TestVerifyCert_OCSPStatus(t *testing.T) {
+	// WHY: VerifyCert should surface OCSP good/unknown statuses without errors.
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		ocspStatus int
+		want       string
+	}{
+		{name: "good", ocspStatus: ocsp.Good, want: "good"},
+		{name: "unknown", ocspStatus: ocsp.Unknown, want: "unknown"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// WHY: Ensures VerifyCert reports this OCSP status correctly.
+			ca := newRSACA(t)
+			leaf := newRSALeaf(t, ca, "ocsp-status.example.com", []string{"ocsp-status.example.com"}, nil)
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				resp := ocsp.Response{
+					Status:       tt.ocspStatus,
+					SerialNumber: leaf.cert.SerialNumber,
+					ThisUpdate:   time.Now().Add(-time.Hour),
+					NextUpdate:   time.Now().Add(24 * time.Hour),
+				}
+				respBytes, err := ocsp.CreateResponse(ca.cert, ca.cert, resp, ca.key.(*rsa.PrivateKey))
+				if err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+				w.Header().Set("Content-Type", "application/ocsp-response")
+				if _, err := w.Write(respBytes); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+			}))
+			defer server.Close()
+
+			leaf.cert.OCSPServer = []string{strings.Replace(server.URL, "127.0.0.1", "localhost", 1)}
+
+			result, err := VerifyCert(context.Background(), &VerifyInput{
+				Cert:        leaf.cert,
+				CheckChain:  true,
+				TrustStore:  "custom",
+				CustomRoots: []*x509.Certificate{ca.cert},
+				CheckOCSP:   true,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.OCSP == nil {
+				t.Fatal("expected OCSP result")
+			}
+			if result.OCSP.Status != tt.want {
+				t.Errorf("OCSP.Status = %q, want %q", result.OCSP.Status, tt.want)
+			}
+			if len(result.Errors) != 0 {
+				t.Errorf("expected no errors, got %v", result.Errors)
+			}
+		})
+	}
+}
+
+func TestVerifyCert_OCSPUnavailable(t *testing.T) {
+	// WHY: VerifyCert should surface OCSP fetch failures as unavailable without adding errors.
+	t.Parallel()
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "ocsp-unavailable.example.com", []string{"ocsp-unavailable.example.com"}, nil)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/ocsp-response")
+		if _, err := w.Write([]byte("not-ocsp")); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}))
+	defer server.Close()
+
+	leaf.cert.OCSPServer = []string{strings.Replace(server.URL, "127.0.0.1", "localhost", 1)}
+
+	result, err := VerifyCert(context.Background(), &VerifyInput{
+		Cert:        leaf.cert,
+		CheckChain:  true,
+		TrustStore:  "custom",
+		CustomRoots: []*x509.Certificate{ca.cert},
+		CheckOCSP:   true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.OCSP == nil {
+		t.Fatal("expected OCSP result")
+	}
+	if result.OCSP.Status != "unavailable" {
+		t.Errorf("OCSP.Status = %q, want %q", result.OCSP.Status, "unavailable")
+	}
+	if result.OCSP.Detail == "" {
+		t.Error("expected OCSP.Detail to be populated")
+	}
+	if len(result.Errors) != 0 {
+		t.Errorf("expected no errors, got %v", result.Errors)
+	}
+}
+
 func TestVerifyCert_CRLRevoked(t *testing.T) {
 	// WHY: VerifyCert should surface CRL revoked results as verification errors.
 	t.Parallel()
@@ -1061,7 +1440,10 @@ func TestVerifyCert_CRLRevoked(t *testing.T) {
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/pkix-crl")
-		_, _ = w.Write(crlDER)
+		if _, err := w.Write(crlDER); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
 	}))
 	defer server.Close()
 
@@ -1088,6 +1470,146 @@ func TestVerifyCert_CRLRevoked(t *testing.T) {
 	}
 	if len(result.Errors) == 0 {
 		t.Error("expected errors for revoked CRL")
+	}
+}
+
+func TestVerifyCert_CRLGood(t *testing.T) {
+	// WHY: VerifyCert should surface good CRL checks without adding errors.
+	t.Parallel()
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "crl-good.example.com", []string{"crl-good.example.com"}, nil)
+
+	now := time.Now()
+	crlDER, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+		Number:     big.NewInt(1),
+		ThisUpdate: now,
+		NextUpdate: now.Add(24 * time.Hour),
+	}, ca.cert, ca.key.(*rsa.PrivateKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pkix-crl")
+		if _, err := w.Write(crlDER); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}))
+	defer server.Close()
+
+	leaf.cert.CRLDistributionPoints = []string{strings.Replace(server.URL, "127.0.0.1", "localhost", 1)}
+
+	result, err := VerifyCert(context.Background(), &VerifyInput{
+		Cert:        leaf.cert,
+		CheckChain:  true,
+		TrustStore:  "custom",
+		CustomRoots: []*x509.Certificate{ca.cert},
+		CheckCRL:    true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.CRL == nil {
+		t.Fatal("expected CRL result")
+	}
+	if result.CRL.Status != "good" {
+		t.Errorf("CRL.Status = %q, want %q", result.CRL.Status, "good")
+	}
+	if len(result.Errors) != 0 {
+		t.Errorf("expected no errors, got %v", result.Errors)
+	}
+}
+
+func TestVerifyCert_CRLExpired(t *testing.T) {
+	// WHY: Expired CRLs should be reported as unavailable with an explicit detail.
+	t.Parallel()
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "crl-expired.example.com", []string{"crl-expired.example.com"}, nil)
+
+	now := time.Now()
+	crlDER, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+		Number:     big.NewInt(2),
+		ThisUpdate: now.Add(-24 * time.Hour),
+		NextUpdate: now.Add(-time.Hour),
+	}, ca.cert, ca.key.(*rsa.PrivateKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pkix-crl")
+		if _, err := w.Write(crlDER); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}))
+	defer server.Close()
+
+	leaf.cert.CRLDistributionPoints = []string{strings.Replace(server.URL, "127.0.0.1", "localhost", 1)}
+
+	result, err := VerifyCert(context.Background(), &VerifyInput{
+		Cert:        leaf.cert,
+		CheckChain:  true,
+		TrustStore:  "custom",
+		CustomRoots: []*x509.Certificate{ca.cert},
+		CheckCRL:    true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.CRL == nil {
+		t.Fatal("expected CRL result")
+	}
+	if result.CRL.Status != "unavailable" {
+		t.Errorf("CRL.Status = %q, want %q", result.CRL.Status, "unavailable")
+	}
+	if !strings.Contains(result.CRL.Detail, "CRL expired") {
+		t.Errorf("CRL.Detail = %q, want expired message", result.CRL.Detail)
+	}
+	if len(result.Errors) != 0 {
+		t.Errorf("expected no errors, got %v", result.Errors)
+	}
+}
+
+func TestVerifyCert_CRLUnavailable(t *testing.T) {
+	// WHY: VerifyCert should surface CRL fetch failures as unavailable without adding errors.
+	t.Parallel()
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "crl-unavailable.example.com", []string{"crl-unavailable.example.com"}, nil)
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pkix-crl")
+		if _, err := w.Write([]byte("not-crl")); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}))
+	defer server.Close()
+
+	leaf.cert.CRLDistributionPoints = []string{strings.Replace(server.URL, "127.0.0.1", "localhost", 1)}
+
+	result, err := VerifyCert(context.Background(), &VerifyInput{
+		Cert:        leaf.cert,
+		CheckChain:  true,
+		TrustStore:  "custom",
+		CustomRoots: []*x509.Certificate{ca.cert},
+		CheckCRL:    true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.CRL == nil {
+		t.Fatal("expected CRL result")
+	}
+	if result.CRL.Status != "unavailable" {
+		t.Errorf("CRL.Status = %q, want %q", result.CRL.Status, "unavailable")
+	}
+	if result.CRL.Detail == "" {
+		t.Error("expected CRL.Detail to be populated")
+	}
+	if len(result.Errors) != 0 {
+		t.Errorf("expected no errors, got %v", result.Errors)
 	}
 }
 
