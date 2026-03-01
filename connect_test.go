@@ -738,6 +738,7 @@ func TestFormatConnectResult(t *testing.T) {
 		clientAuth     *ClientAuthInfo
 		ocsp           *OCSPResult
 		crl            *CRLCheckResult
+		ct             *CTResult
 		peerChain      []*x509.Certificate
 		usePeerChain   bool
 		wantStrings    []string
@@ -869,6 +870,18 @@ func TestFormatConnectResult(t *testing.T) {
 			},
 		},
 		{
+			name: "CT summary",
+			ct: &CTResult{
+				Status: "ok",
+				Total:  2,
+				Valid:  2,
+			},
+			wantStrings: []string{
+				"CT:",
+				"2 valid",
+			},
+		},
+		{
 			name:         "empty peer chain",
 			peerChain:    nil,
 			usePeerChain: true,
@@ -923,6 +936,7 @@ func TestFormatConnectResult(t *testing.T) {
 				ClientAuth:  tt.clientAuth,
 				OCSP:        tt.ocsp,
 				CRL:         tt.crl,
+				CT:          tt.ct,
 			}
 			if tt.usePeerChain {
 				result.PeerChain = tt.peerChain

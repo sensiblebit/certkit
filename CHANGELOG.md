@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add Certificate Transparency (SCT) verification warnings to `connect` output and JSON ([#86])
 - Add raw TLS 1.0–1.2 legacy prober for DHE/DHE-DSS cipher suites that Go's `crypto/tls` doesn't implement — probes individual suites via byte-level ClientHello construction ([`715cb81`])
 - Add legacy fallback to `connect` — when Go's TLS handshake fails, attempts a raw handshake to extract server certificates from DHE-only or static-RSA-only servers ([`715cb81`])
 - Add DHE cipher suite probing to `connect --ciphers` — detects 13 DHE/DHE-DSS cipher suites using raw ClientHello packets, all rated "weak" ([`715cb81`])
@@ -89,6 +90,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fix Certificate Transparency availability handling to preserve parsed SCT candidates when the log list cannot be loaded and mark them as unavailable instead of dropping them ([#86])
+- Fix chain conversion failures in Certificate Transparency checks to report SCTs as `unavailable` instead of `invalid` and keep diagnostics as warnings ([#86])
 - Fix `FormatDN` to preserve ASN.1 DER attribute order and multi-valued RDN boundaries (OpenSSL-style), escape RFC 4514 special/control characters (including `=`), emit `<unencodable>` placeholders for attributes that cannot be marshaled, and render non-standard OIDs with standard labels instead of raw dotted-decimal `1.2.3.4=#hex` values: personal name attributes (`SN`, `GN`, `initials`, `generationQualifier`, `dnQualifier`, `pseudonym`), `businessCategory`, `organizationIdentifier` (eIDAS/QWAC), and EV jurisdiction fields (`jurisdictionL`, `jurisdictionST`, `jurisdictionC`) ([#85])
 - Fix `ParseOtherNameSANs` to aggregate OtherName, DirectoryName, and RegisteredID entries across multiple SAN extensions ([#85])
 - Fix `verify` returning a panic when the certificate input is missing — now returns a clear error ([#85])
@@ -926,6 +929,7 @@ Initial release.
 [#80]: https://github.com/sensiblebit/certkit/pull/80
 [#82]: https://github.com/sensiblebit/certkit/pull/82
 [#85]: https://github.com/sensiblebit/certkit/pull/85
+[#86]: https://github.com/sensiblebit/certkit/pull/86
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63
