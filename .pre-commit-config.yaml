@@ -8,7 +8,7 @@ repos:
         args: [--branch, main]
 
   - repo: https://github.com/sensiblebit/.github
-    rev: "15d19ac"
+    rev: "9bff7f460e6a6ac40de0798d7bc2f191d5143404"
     hooks:
       - id: branch-name
       - id: commit-message
@@ -19,74 +19,13 @@ repos:
       - id: wasm
       - id: go-build
       - id: go-test
-
-  # ── Security ──
-  - repo: local
-    hooks:
       - id: govulncheck
-        name: govulncheck
-        entry: govulncheck
-        language: golang
-        args: ["./..."]
-        additional_dependencies:
-          - golang.org/x/vuln/cmd/govulncheck@v1.1.4
-        files: (^go\.mod$|^go\.sum$|\.go$)
-        pass_filenames: false
-
-  # ── Dependency Updates ──
-  - repo: local
-    hooks:
-      - id: go-mod-update
-        name: go mod update
-        entry: bash -c 'go get -u ./... && go mod tidy'
-        language: system
-        files: \.go$
-        pass_filenames: false
-        stages: [manual]
-
-      - id: npm-update
-        name: npm update
-        entry: bash -c 'cd web && npm update'
-        language: system
-        files: ^web/
-        pass_filenames: false
-        stages: [manual]
-
-  # ── Docs ──
-  - repo: local
-    hooks:
       - id: gendocs
-        name: gendocs
-        entry: bash -c 'go generate ./... && git diff --exit-code README.md'
-        language: system
-        files: (^cmd/certkit/.*\.go$|^README\.md$|^doc\.go$)
-        pass_filenames: false
-
-  # ── JS / TS ──
-  - repo: local
-    hooks:
       - id: prettier
-        name: prettier
-        entry: npx prettier --write
-        language: system
-        types_or: [javascript, ts, css, html]
-        exclude: wasm_exec\.js$
-
       - id: vitest
-        name: vitest
-        entry: bash -c 'cd web && npm test'
-        language: system
-        files: ^web/
-        exclude: wasm_exec\.js$
-        pass_filenames: false
-
       - id: wrangler-build
-        name: wrangler build
-        entry: bash -c 'cd web && wrangler pages functions build --outdir /tmp/certkit-fn-check'
-        language: system
-        files: ^web/functions/
-        types: [ts]
-        pass_filenames: false
+      - id: go-mod-update
+      - id: npm-update
 
   # ── Markdown ──
   - repo: https://github.com/igorshubovych/markdownlint-cli
