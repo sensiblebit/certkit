@@ -46,8 +46,8 @@ func TestCheckCT_MissingSCTs(t *testing.T) {
 	}
 }
 
-func TestCheckCT_TLSSCTValid(t *testing.T) {
-	// WHY: CheckCT should verify TLS-delivered SCTs against known logs.
+func TestCheckCT_TLSSCTStatus(t *testing.T) {
+	// WHY: CheckCT should classify TLS-delivered SCTs based on log list state.
 	t.Parallel()
 
 	ca := generateTestCA(t, "CT TLS CA")
@@ -58,35 +58,97 @@ func TestCheckCT_TLSSCTValid(t *testing.T) {
 	}
 
 	logKey, logKeyDER := buildTestLogKey(t)
-	logList := buildTestLogList(t, "Test Log", logKeyDER)
 	stamp := uint64(time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC).UnixMilli())
 	sctBytes := buildTestSCT(t, logKey, []*x509.Certificate{leafCert, ca.Cert}, stamp)
+	validLogList := buildTestLogList(t, "Test Log", logKeyDER)
 
-	result, diags := CheckCT(CheckCTInput{
-		Chain:   []*x509.Certificate{leafCert, ca.Cert},
-		TLSSCTs: [][]byte{sctBytes},
-		LogList: logList,
-	})
-	if result == nil {
-		t.Fatal("expected CT result")
+	_, otherKeyDER := buildTestLogKey(t)
+	unknownLogList := buildTestLogList(t, "Other Log", otherKeyDER)
+
+	chain := []*x509.Certificate{leafCert, ca.Cert}
+
+	type countExpect struct {
+		valid   int
+		unknown int
+		total   int
 	}
-	if result.Status != "ok" {
-		t.Fatalf("status=%q, want %q", result.Status, "ok")
+
+	tests := []struct {
+		name          string
+		logList       []byte
+		wantStatus    string
+		wantCounts    *countExpect
+		wantSCTStatus string
+		wantDiag      string
+	}{
+		{
+			name:          "valid log",
+			logList:       validLogList,
+			wantStatus:    "ok",
+			wantCounts:    &countExpect{valid: 1, unknown: 0, total: 1},
+			wantSCTStatus: "valid",
+		},
+		{
+			name:          "unknown log",
+			logList:       unknownLogList,
+			wantStatus:    "unknown-log",
+			wantCounts:    &countExpect{valid: 0, unknown: 1, total: 1},
+			wantSCTStatus: "unknown-log",
+			wantDiag:      "ct-unknown-log",
+		},
+		{
+			name:       "log list unavailable",
+			logList:    []byte("not-json"),
+			wantStatus: "unavailable",
+			wantDiag:   "ct-unavailable",
+		},
 	}
-	if result.Valid != 1 || result.Total != 1 {
-		t.Fatalf("valid=%d total=%d, want 1", result.Valid, result.Total)
-	}
-	if result.Invalid != 0 || result.UnknownLog != 0 {
-		t.Fatalf("invalid=%d unknown=%d, want 0", result.Invalid, result.UnknownLog)
-	}
-	if len(result.SCTs) != 1 {
-		t.Fatalf("SCTs=%d, want 1", len(result.SCTs))
-	}
-	if result.SCTs[0].Source != "tls" || result.SCTs[0].Status != "valid" {
-		t.Fatalf("SCT source=%q status=%q", result.SCTs[0].Source, result.SCTs[0].Status)
-	}
-	if len(diags) != 0 {
-		t.Fatalf("unexpected diagnostics: %v", diags)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// WHY: Each case verifies the expected CT status and diagnostics.
+			t.Parallel()
+			result, diags := CheckCT(CheckCTInput{
+				Chain:   chain,
+				TLSSCTs: [][]byte{sctBytes},
+				LogList: tt.logList,
+			})
+			if result == nil {
+				t.Fatal("expected CT result")
+			}
+			if result.Status != tt.wantStatus {
+				t.Fatalf("status=%q, want %q", result.Status, tt.wantStatus)
+			}
+			if tt.wantCounts != nil {
+				if result.Valid != tt.wantCounts.valid {
+					t.Fatalf("valid=%d, want %d", result.Valid, tt.wantCounts.valid)
+				}
+				if result.UnknownLog != tt.wantCounts.unknown {
+					t.Fatalf("unknown=%d, want %d", result.UnknownLog, tt.wantCounts.unknown)
+				}
+				if result.Total != tt.wantCounts.total {
+					t.Fatalf("total=%d, want %d", result.Total, tt.wantCounts.total)
+				}
+			}
+			if tt.wantSCTStatus != "" {
+				if len(result.SCTs) != 1 {
+					t.Fatalf("SCTs=%d, want 1", len(result.SCTs))
+				}
+				if result.SCTs[0].Source != "tls" {
+					t.Fatalf("SCT source=%q, want tls", result.SCTs[0].Source)
+				}
+				if result.SCTs[0].Status != tt.wantSCTStatus {
+					t.Fatalf("SCT status=%q, want %q", result.SCTs[0].Status, tt.wantSCTStatus)
+				}
+			}
+			if tt.wantDiag != "" {
+				if !hasDiagnostic(diags, tt.wantDiag) {
+					t.Fatalf("expected %s diagnostic", tt.wantDiag)
+				}
+			} else if len(diags) != 0 {
+				t.Fatalf("unexpected diagnostics: %v", diags)
+			}
+		})
 	}
 }
 
@@ -129,6 +191,64 @@ func TestCheckCT_EmbeddedSCTInvalid(t *testing.T) {
 	}
 	if !hasDiagnostic(diags, "ct-invalid") {
 		t.Fatal("expected ct-invalid diagnostic")
+	}
+}
+
+func TestFormatCTLine(t *testing.T) {
+	// WHY: FormatCTLine should render CT status summaries consistently.
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input *CTResult
+		want  string
+	}{
+		{
+			name:  "nil",
+			input: nil,
+			want:  "",
+		},
+		{
+			name:  "missing",
+			input: &CTResult{Status: "missing"},
+			want:  "CT:           missing (no SCTs)\n",
+		},
+		{
+			name:  "unavailable",
+			input: &CTResult{Status: "unavailable"},
+			want:  "CT:           unavailable\n",
+		},
+		{
+			name:  "ok",
+			input: &CTResult{Status: "ok", Valid: 1, Total: 1},
+			want:  "CT:           ok (1 valid)\n",
+		},
+		{
+			name:  "invalid",
+			input: &CTResult{Status: "invalid", Invalid: 2, Total: 2},
+			want:  "CT:           invalid (2 invalid)\n",
+		},
+		{
+			name:  "unknown log",
+			input: &CTResult{Status: "unknown-log", UnknownLog: 1, Total: 1},
+			want:  "CT:           unknown log (1 unknown log)\n",
+		},
+		{
+			name:  "mixed",
+			input: &CTResult{Status: "mixed", Valid: 1, Invalid: 1, UnknownLog: 1, Total: 3},
+			want:  "CT:           issues (1 valid, 1 invalid, 1 unknown log)\n",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// WHY: Ensures FormatCTLine output matches expected text.
+			t.Parallel()
+			got := FormatCTLine(tt.input)
+			if got != tt.want {
+				t.Fatalf("FormatCTLine()=%q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
