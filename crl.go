@@ -116,7 +116,7 @@ func CRLContainsCertificate(crl *x509.RevocationList, cert *x509.Certificate) bo
 // CRLInfoFromList extracts display information from a parsed RevocationList.
 func CRLInfoFromList(crl *x509.RevocationList) *CRLInfo {
 	info := &CRLInfo{
-		Issuer:             FormatDN(crl.Issuer),
+		Issuer:             FormatDNFromRaw(crl.RawIssuer, crl.Issuer),
 		ThisUpdate:         crl.ThisUpdate.UTC().Format(time.RFC3339),
 		NextUpdate:         crl.NextUpdate.UTC().Format(time.RFC3339),
 		NumEntries:         len(crl.RevokedCertificateEntries),

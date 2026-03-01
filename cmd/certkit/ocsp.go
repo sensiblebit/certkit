@@ -102,8 +102,8 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 		if verbose {
 			verboseResult := ocspVerboseJSON{
 				OCSPResult:  result,
-				CertSubject: certkit.FormatDN(contents.Leaf.Subject),
-				CertIssuer:  certkit.FormatDN(contents.Leaf.Issuer),
+				CertSubject: certkit.FormatDNFromRaw(contents.Leaf.RawSubject, contents.Leaf.Subject),
+				CertIssuer:  certkit.FormatDNFromRaw(contents.Leaf.RawIssuer, contents.Leaf.Issuer),
 			}
 			data, err := json.MarshalIndent(verboseResult, "", "  ")
 			if err != nil {
@@ -119,8 +119,8 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 		}
 	case "text":
 		if verbose {
-			fmt.Printf("Subject:      %s\n", certkit.FormatDN(contents.Leaf.Subject))
-			fmt.Printf("Issuer:       %s\n", certkit.FormatDN(contents.Leaf.Issuer))
+			fmt.Printf("Subject:      %s\n", certkit.FormatDNFromRaw(contents.Leaf.RawSubject, contents.Leaf.Subject))
+			fmt.Printf("Issuer:       %s\n", certkit.FormatDNFromRaw(contents.Leaf.RawIssuer, contents.Leaf.Issuer))
 		}
 		fmt.Print(certkit.FormatOCSPResult(result))
 	default:

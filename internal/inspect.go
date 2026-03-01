@@ -177,8 +177,8 @@ func inspectCert(cert *x509.Certificate) InspectResult {
 
 	return InspectResult{
 		Type:      "certificate",
-		Subject:   certkit.FormatDN(cert.Subject),
-		Issuer:    certkit.FormatDN(cert.Issuer),
+		Subject:   certkit.FormatDNFromRaw(cert.RawSubject, cert.Subject),
+		Issuer:    certkit.FormatDNFromRaw(cert.RawIssuer, cert.Issuer),
 		Serial:    cert.SerialNumber.String(),
 		NotBefore: cert.NotBefore.UTC().Format(time.RFC3339),
 		NotAfter:  cert.NotAfter.UTC().Format(time.RFC3339),
@@ -215,7 +215,7 @@ func inspectCSR(csr *x509.CertificateRequest) InspectResult {
 
 	r := InspectResult{
 		Type:       "csr",
-		CSRSubject: certkit.FormatDN(csr.Subject),
+		CSRSubject: certkit.FormatDNFromRaw(csr.RawSubject, csr.Subject),
 		KeyAlgo:    certkit.PublicKeyAlgorithmName(csr.PublicKey),
 		KeySize:    publicKeySize(csr.PublicKey),
 		SigAlg:     csr.SignatureAlgorithm.String(),

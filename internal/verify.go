@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -87,10 +88,17 @@ type VerifyResult struct {
 
 // VerifyCert verifies a certificate with optional key matching, chain validation, and expiry checking.
 func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) {
+	if input == nil {
+		return nil, errors.New("verify input is nil")
+	}
+	if input.Cert == nil {
+		return nil, errors.New("certificate is nil")
+	}
+
 	cert := input.Cert
 
 	result := &VerifyResult{
-		Subject:  cert.Subject.String(),
+		Subject:  certkit.FormatDNFromRaw(cert.RawSubject, cert.Subject),
 		SANs:     cert.DNSNames,
 		NotAfter: cert.NotAfter.UTC().Format(time.RFC3339),
 		SKI:      certkit.CertSKIEmbedded(cert),
@@ -98,7 +106,7 @@ func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) 
 
 	if input.Verbose {
 		isCA := cert.IsCA
-		result.Issuer = certkit.FormatDN(cert.Issuer)
+		result.Issuer = certkit.FormatDNFromRaw(cert.RawIssuer, cert.Issuer)
 		result.Serial = cert.SerialNumber.String()
 		result.NotBefore = cert.NotBefore.UTC().Format(time.RFC3339)
 		result.CertType = certkit.GetCertificateType(cert)
@@ -243,13 +251,13 @@ func checkVerifyOCSP(ctx context.Context, input certkit.CheckOCSPInput) *certkit
 func buildChainDisplay(bundle *certkit.BundleResult, verbose bool) []ChainCert {
 	buildEntry := func(c *x509.Certificate, isRoot bool) ChainCert {
 		cc := ChainCert{
-			Subject: c.Subject.String(),
+			Subject: certkit.FormatDNFromRaw(c.RawSubject, c.Subject),
 			Expiry:  c.NotAfter.UTC().Format(time.RFC3339),
 			SKI:     certkit.CertSKIEmbedded(c),
 			IsRoot:  isRoot,
 		}
 		if verbose {
-			cc.Issuer = certkit.FormatDN(c.Issuer)
+			cc.Issuer = certkit.FormatDNFromRaw(c.RawIssuer, c.Issuer)
 			cc.Serial = c.SerialNumber.String()
 			cc.NotBefore = c.NotBefore.UTC().Format(time.RFC3339)
 			cc.CertType = certkit.GetCertificateType(c)
@@ -344,7 +352,7 @@ func DiagnoseChain(input DiagnoseChainInput) []Diagnosis {
 			diags = append(diags, Diagnosis{
 				Check:  "intermediate-expired",
 				Status: "fail",
-				Detail: fmt.Sprintf("intermediate %q expired on %s", certkit.FormatDN(extra.Subject), extra.NotAfter.UTC().Format(time.RFC3339)),
+				Detail: fmt.Sprintf("intermediate %q expired on %s", certkit.FormatDNFromRaw(extra.RawSubject, extra.Subject), extra.NotAfter.UTC().Format(time.RFC3339)),
 			})
 		}
 	}
@@ -362,7 +370,7 @@ func DiagnoseChain(input DiagnoseChainInput) []Diagnosis {
 			diags = append(diags, Diagnosis{
 				Check:  "missing-intermediate",
 				Status: "fail",
-				Detail: fmt.Sprintf("no intermediate certificate found for issuer %q", certkit.FormatDN(input.Cert.Issuer)),
+				Detail: fmt.Sprintf("no intermediate certificate found for issuer %q", certkit.FormatDNFromRaw(input.Cert.RawIssuer, input.Cert.Issuer)),
 			})
 		}
 	}

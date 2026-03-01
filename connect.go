@@ -49,7 +49,7 @@ func DiagnoseConnectChain(input DiagnoseConnectChainInput) []ChainDiagnostic {
 			diags = append(diags, ChainDiagnostic{
 				Check:  "duplicate-cert",
 				Status: "warn",
-				Detail: fmt.Sprintf("certificate %q appears at positions %d and %d", FormatDN(cert.Subject), firstPos, i),
+				Detail: fmt.Sprintf("certificate %q appears at positions %d and %d", FormatDNFromRaw(cert.RawSubject, cert.Subject), firstPos, i),
 			})
 		} else {
 			fingerprints[fp] = i
@@ -60,7 +60,7 @@ func DiagnoseConnectChain(input DiagnoseConnectChainInput) []ChainDiagnostic {
 			diags = append(diags, ChainDiagnostic{
 				Check:  "root-in-chain",
 				Status: "warn",
-				Detail: fmt.Sprintf("server sent root certificate %q (position %d)", FormatDN(cert.Subject), i),
+				Detail: fmt.Sprintf("server sent root certificate %q (position %d)", FormatDNFromRaw(cert.RawSubject, cert.Subject), i),
 			})
 		}
 	}
@@ -1598,8 +1598,8 @@ func FormatConnectResult(r *ConnectResult) string {
 			expired = " [EXPIRED]"
 		}
 		certType := GetCertificateType(cert)
-		fmt.Fprintf(&out, "  %d: %s (%s)%s\n", i, FormatDN(cert.Subject), certType, expired)
-		fmt.Fprintf(&out, "     Issuer:      %s\n", FormatDN(cert.Issuer))
+		fmt.Fprintf(&out, "  %d: %s (%s)%s\n", i, FormatDNFromRaw(cert.RawSubject, cert.Subject), certType, expired)
+		fmt.Fprintf(&out, "     Issuer:      %s\n", FormatDNFromRaw(cert.RawIssuer, cert.Issuer))
 		fmt.Fprintf(&out, "     Not Before:  %s\n", cert.NotBefore.UTC().Format(time.RFC3339))
 		fmt.Fprintf(&out, "     Not After:   %s\n", cert.NotAfter.UTC().Format(time.RFC3339))
 		fmt.Fprintf(&out, "     Fingerprint: %s\n", CertFingerprintColonSHA256(cert))

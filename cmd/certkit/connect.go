@@ -227,8 +227,8 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		}
 		for _, cert := range result.PeerChain {
 			cj := connectCertJSON{
-				Subject:   certkit.FormatDN(cert.Subject),
-				Issuer:    certkit.FormatDN(cert.Issuer),
+				Subject:   certkit.FormatDNFromRaw(cert.RawSubject, cert.Subject),
+				Issuer:    certkit.FormatDNFromRaw(cert.RawIssuer, cert.Issuer),
 				NotBefore: cert.NotBefore.UTC().Format(time.RFC3339),
 				NotAfter:  cert.NotAfter.UTC().Format(time.RFC3339),
 				SHA256:    certkit.CertFingerprintColonSHA256(cert),
@@ -342,8 +342,8 @@ func formatConnectVerbose(r *certkit.ConnectResult, now time.Time) string {
 			expired = " [EXPIRED]"
 		}
 		certType := certkit.GetCertificateType(cert)
-		fmt.Fprintf(&out, "  %d: %s (%s)%s\n", i, certkit.FormatDN(cert.Subject), certType, expired)
-		fmt.Fprintf(&out, "     Issuer:      %s\n", certkit.FormatDN(cert.Issuer))
+		fmt.Fprintf(&out, "  %d: %s (%s)%s\n", i, certkit.FormatDNFromRaw(cert.RawSubject, cert.Subject), certType, expired)
+		fmt.Fprintf(&out, "     Issuer:      %s\n", certkit.FormatDNFromRaw(cert.RawIssuer, cert.Issuer))
 		fmt.Fprintf(&out, "     Serial:      %s\n", formatSerial(cert.SerialNumber))
 		fmt.Fprintf(&out, "     Not Before:  %s\n", cert.NotBefore.UTC().Format(time.RFC3339))
 		fmt.Fprintf(&out, "     Not After:   %s\n", cert.NotAfter.UTC().Format(time.RFC3339))

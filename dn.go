@@ -68,7 +68,8 @@ var ekuOIDNames = map[string]string{
 // populate ExtKeyUsage typed fields.
 func FormatEKUOIDs(raw []byte) []string {
 	var oids []asn1.ObjectIdentifier
-	if _, err := asn1.Unmarshal(raw, &oids); err != nil {
+	rest, err := asn1.Unmarshal(raw, &oids)
+	if err != nil || len(rest) != 0 {
 		return nil
 	}
 	var out []string
@@ -113,7 +114,8 @@ func FormatKeyUsage(ku x509.KeyUsage) []string {
 // CSRs where Go does not populate KeyUsage typed fields.
 func FormatKeyUsageBitString(raw []byte) []string {
 	var bs asn1.BitString
-	if _, err := asn1.Unmarshal(raw, &bs); err != nil {
+	rest, err := asn1.Unmarshal(raw, &bs)
+	if err != nil || len(rest) != 0 {
 		return nil
 	}
 	// Reconstruct x509.KeyUsage by reading each bit from the BIT STRING,
@@ -463,6 +465,15 @@ func walkOtherNameSANs(raw []byte, fn func(oid asn1.ObjectIdentifier, valueBytes
 			slog.Debug("skipping OtherName entry: explicit tag parse failed", "oid", oid, "error", explErr)
 			continue
 		}
+		if explicit.Class != asn1.ClassContextSpecific || explicit.Tag != 0 || !explicit.IsCompound {
+			slog.Debug("skipping OtherName entry: explicit tag invalid",
+				"oid", oid,
+				"class", explicit.Class,
+				"tag", explicit.Tag,
+				"compound", explicit.IsCompound,
+			)
+			continue
+		}
 
 		fn(oid, explicit.Bytes)
 	}
@@ -474,13 +485,17 @@ func walkOtherNameSANs(raw []byte, fn func(oid asn1.ObjectIdentifier, valueBytes
 // "OtherName(1.2.3.4):value". Pass the raw extensions list from a certificate
 // or CSR.
 func ParseOtherNameSANs(extensions []pkix.Extension) []string {
+	var sans []string
 	for _, ext := range extensions {
 		if !ext.Id.Equal(oidSubjectAltName) {
 			continue
 		}
-		return parseOtherNamesFromSANBytes(ext.Value)
+		sans = append(sans, parseOtherNamesFromSANBytes(ext.Value)...)
 	}
-	return nil
+	if len(sans) == 0 {
+		return nil
+	}
+	return sans
 }
 
 // CollectCertificateSANs returns all Subject Alternative Names from a
@@ -569,39 +584,172 @@ func parseOtherNamesFromSANBytes(raw []byte) []string {
 	return sans
 }
 
-// extraOIDLabels maps OIDs not handled by Go's pkix.Name.String() to their
-// standard human-readable labels.
-var extraOIDLabels = map[string]string{
+// oidLabel maps certificate subject OIDs to their standard human-readable
+// labels. It includes both the standard X.500 attributes that Go's
+// crypto/x509/pkix package handles natively and the additional OIDs that
+// Go renders as raw dotted-decimal 1.2.3.4=#hex values.
+//
+// When name.Names is populated (always the case for parsed certificates),
+// FormatDN iterates it in ASN.1 DER order and looks up each OID here,
+// matching the display order that OpenSSL uses.
+var oidLabel = map[string]string{
+	// Standard X.500 attributes rendered natively by Go's pkix package.
+	"2.5.4.3":  "CN",
+	"2.5.4.5":  "SERIALNUMBER",
+	"2.5.4.6":  "C",
+	"2.5.4.7":  "L",
+	"2.5.4.8":  "ST",
+	"2.5.4.9":  "STREET",
+	"2.5.4.10": "O",
+	"2.5.4.11": "OU",
+	"2.5.4.17": "POSTALCODE",
+
+	// X.500 personal name attributes (RFC 4519).
+	"2.5.4.4":  "SN",       // surname
+	"2.5.4.41": "name",     // name
+	"2.5.4.42": "GN",       // givenName
+	"2.5.4.43": "initials", // initials
+	"2.5.4.44": "generationQualifier",
+	"2.5.4.46": "dnQualifier",
+	"2.5.4.65": "pseudonym",
+
+	// X.500 organization attributes.
+	"2.5.4.15": "businessCategory",
+	"2.5.4.16": "postalAddress",
+	"2.5.4.20": "telephoneNumber",
+	"2.5.4.97": "organizationIdentifier", // eIDAS / QWAC
+
+	// Email (RFC 2985).
 	"1.2.840.113549.1.9.1": "emailAddress",
+
+	// EV certificate jurisdiction fields (CA/B Forum EV Guidelines).
+	// OpenSSL abbreviates these as jurisdictionL/ST/C, mirroring the base
+	// X.500 locality/state/country abbreviations.
+	"1.3.6.1.4.1.311.60.2.1.1": "jurisdictionL",
+	"1.3.6.1.4.1.311.60.2.1.2": "jurisdictionST",
+	"1.3.6.1.4.1.311.60.2.1.3": "jurisdictionC",
 }
 
-// FormatDN formats a pkix.Name as a Distinguished Name string. Unlike
-// pkix.Name.String(), it renders the emailAddress OID (1.2.840.113549.1.9.1)
-// and serialNumber OID (2.5.4.5) with their standard labels instead of raw
-// OID=#hex notation.
+// FormatDN formats a pkix.Name as a Distinguished Name string in ASN.1 DER
+// order, matching the display order used by OpenSSL. When name.Names is
+// populated (always the case for certificates parsed from DER/PEM), attributes
+// are emitted in their original encoded order with human-readable labels.
+// Unknown OIDs are rendered as dotted-decimal 1.2.3.4=#hex values. Multi-valued RDNs are
+// flattened because pkix.Name does not preserve SET boundaries; prefer
+// FormatDNFromRaw when raw DER is available. When name.Names is empty (e.g. a
+// pkix.Name constructed programmatically without setting Names), it falls back
+// to pkix.Name.String().
 func FormatDN(name pkix.Name) string {
-	s := name.String()
-	for _, atv := range name.Names {
-		oid := atv.Type.String()
-		label, ok := extraOIDLabels[oid]
-		if !ok {
-			continue
-		}
-		value, isStr := atv.Value.(string)
-		if !isStr {
-			continue
-		}
-		// Reconstruct the exact hex that Go's String() produces so the
-		// string replacement is reliable.
-		derBytes, err := asn1.Marshal(atv.Value)
-		if err != nil {
-			continue
-		}
-		old := oid + "=#" + hex.EncodeToString(derBytes)
-		repl := label + "=" + escapeDNValue(value)
-		s = strings.Replace(s, old, repl, 1)
+	if len(name.Names) == 0 {
+		return name.String()
 	}
-	return s
+	parts := make([]string, 0, len(name.Names))
+	for _, atv := range name.Names {
+		parts = append(parts, formatDNAttribute(atv))
+	}
+	return strings.Join(parts, ",")
+}
+
+// FormatDNFromRaw formats a Distinguished Name from the raw DER-encoded
+// RDNSequence (e.g. Certificate.RawSubject/RawIssuer). When raw is empty or
+// unparsable, it falls back to FormatDN.
+func FormatDNFromRaw(raw []byte, fallback pkix.Name) string {
+	if len(raw) == 0 {
+		return FormatDN(fallback)
+	}
+
+	formatted, err := formatDERRDN(raw)
+	if err != nil {
+		slog.Debug("formatting DN from raw DER failed", "error", err)
+		return FormatDN(fallback)
+	}
+	return formatted
+}
+
+func formatDERRDN(raw []byte) (string, error) {
+	var rdns pkix.RDNSequence
+	rest, err := asn1.Unmarshal(raw, &rdns)
+	if err != nil {
+		return "", fmt.Errorf("parse DN: %w", err)
+	}
+	if len(rest) != 0 {
+		return "", fmt.Errorf("parse DN: trailing data")
+	}
+	return formatRDNSequence(rdns), nil
+}
+
+func formatRDNSequence(rdns pkix.RDNSequence) string {
+	if len(rdns) == 0 {
+		return ""
+	}
+
+	parts := make([]string, 0, len(rdns))
+	for _, rdn := range rdns {
+		if len(rdn) == 0 {
+			continue
+		}
+		attributes := make([]string, 0, len(rdn))
+		for _, atv := range rdn {
+			attributes = append(attributes, formatDNAttribute(atv))
+		}
+		if len(attributes) == 0 {
+			continue
+		}
+		parts = append(parts, strings.Join(attributes, "+"))
+	}
+	return strings.Join(parts, ",")
+}
+
+func formatDNAttribute(atv pkix.AttributeTypeAndValue) string {
+	oid := atv.Type.String()
+	label, hasLabel := oidLabel[oid]
+	if hasLabel {
+		if value, ok := stringFromASN1Value(atv.Value); ok {
+			return label + "=" + escapeDNValue(value)
+		}
+	}
+	// Unknown OID or non-string value: render as dotted-decimal 1.2.3.4=#hex.
+	derBytes, err := marshalDNValue(atv.Value)
+	if err != nil {
+		slog.Debug("failed to marshal DN attribute value",
+			"oid", oid,
+			"error", err,
+		)
+		if hasLabel {
+			return label + "=<unencodable>"
+		}
+		return oid + "=<unencodable>"
+	}
+	if hasLabel {
+		return label + "=#" + hex.EncodeToString(derBytes)
+	}
+	return oid + "=#" + hex.EncodeToString(derBytes)
+}
+
+func stringFromASN1Value(value any) (string, bool) {
+	switch typed := value.(type) {
+	case string:
+		return typed, true
+	case asn1.RawValue:
+		if len(typed.FullBytes) == 0 {
+			return "", false
+		}
+		var s string
+		rest, err := asn1.Unmarshal(typed.FullBytes, &s)
+		if err != nil || len(rest) != 0 {
+			return "", false
+		}
+		return s, true
+	default:
+		return "", false
+	}
+}
+
+func marshalDNValue(value any) ([]byte, error) {
+	if raw, ok := value.(asn1.RawValue); ok && len(raw.FullBytes) > 0 {
+		return raw.FullBytes, nil
+	}
+	return asn1.Marshal(value)
 }
 
 // escapeDNValue escapes special characters in a DN attribute value per RFC 4514.
@@ -613,7 +761,7 @@ func escapeDNValue(s string) string {
 	b.Grow(len(s))
 	for i, r := range s {
 		switch r {
-		case ',', '+', '"', '\\', '<', '>', ';':
+		case ',', '+', '"', '\\', '<', '>', ';', '=':
 			b.WriteByte('\\')
 			b.WriteRune(r)
 		case '#':
@@ -627,6 +775,10 @@ func escapeDNValue(s string) string {
 			}
 			b.WriteRune(r)
 		default:
+			if r < 0x20 || r == 0x7f {
+				fmt.Fprintf(&b, "\\%02X", r)
+				continue
+			}
 			b.WriteRune(r)
 		}
 	}

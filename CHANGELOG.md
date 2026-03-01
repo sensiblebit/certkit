@@ -65,6 +65,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Move local pre-commit hook definitions from repo config into the shared `sensiblebit/.github` hook set, and pin this branch to the shared commit so all repositories can consume the same workflow checks and Node tool bootstrapping behavior from one source ([#85])
+
 - `connect` diagnostics now distinguish `[ERR]` (verification failures) from `[WARN]` (configuration issues) ([`910b977`])
 - Harden QUIC response parser — add bounds checks for DCID/SCID lengths, varint decode guards to prevent infinite loops on malformed ACK frames, and increase UDP read buffer to 65535 bytes ([#82])
 - Harden TLS ServerHello parser — add explicit bounds check for oversized session ID length before advancing position ([#82])
@@ -87,6 +89,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fix `FormatDN` to preserve ASN.1 DER attribute order and multi-valued RDN boundaries (OpenSSL-style), escape RFC 4514 special/control characters (including `=`), emit `<unencodable>` placeholders for attributes that cannot be marshaled, and render non-standard OIDs with standard labels instead of raw dotted-decimal `1.2.3.4=#hex` values: personal name attributes (`SN`, `GN`, `initials`, `generationQualifier`, `dnQualifier`, `pseudonym`), `businessCategory`, `organizationIdentifier` (eIDAS/QWAC), and EV jurisdiction fields (`jurisdictionL`, `jurisdictionST`, `jurisdictionC`) ([#85])
+- Fix `ParseOtherNameSANs` to aggregate OtherName, DirectoryName, and RegisteredID entries across multiple SAN extensions ([#85])
+- Fix `verify` returning a panic when the certificate input is missing — now returns a clear error ([#85])
+- Reject EKU and KeyUsage extension values with trailing ASN.1 data instead of silently formatting partial data ([#85])
 - Fix `connect` legacy probe showing `Verify: N/A` despite performing full x509 chain verification — now shows the real verify result (`OK`/`FAILED`); Note line updated to clarify only server key possession is unverified ([`772742c`])
 - Fix `connect --ciphers` showing "none detected" on QUIC-only servers — empty check now covers both TCP and QUIC cipher lists ([`6492fa5`])
 - Fix `probeLegacyCipher` hardcoding `"TLS 1.2"` for negotiated version — now returns the actual negotiated version from the ServerHello ([`6492fa5`])
@@ -919,6 +925,7 @@ Initial release.
 [#78]: https://github.com/sensiblebit/certkit/pull/78
 [#80]: https://github.com/sensiblebit/certkit/pull/80
 [#82]: https://github.com/sensiblebit/certkit/pull/82
+[#85]: https://github.com/sensiblebit/certkit/pull/85
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63
