@@ -20,6 +20,16 @@ repos:
       - id: go-build
       - id: go-test
 
+  # ── Security ──
+  - repo: local
+    hooks:
+      - id: govulncheck
+        name: govulncheck
+        entry: govulncheck ./...
+        language: system
+        files: (^go\.mod$|^go\.sum$|\.go$)
+        pass_filenames: false
+
   # ── Dependency Updates ──
   - repo: local
     hooks:
