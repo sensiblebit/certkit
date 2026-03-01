@@ -40,6 +40,8 @@ func (w *filesystemWriter) WriteBundleFiles(folder string, files []certstore.Bun
 	return nil
 }
 
+// safeJoin joins base and folder while ensuring the result stays within base.
+// It rejects absolute paths, dot-path escapes, and traversal outside base.
 func safeJoin(base, folder string) (string, error) {
 	if folder == "" {
 		return "", fmt.Errorf("bundle folder name is empty")
@@ -77,6 +79,7 @@ type ExportBundlesInput struct {
 // certificates and keys, builds certificate bundles, and writes output files.
 func ExportBundles(ctx context.Context, input ExportBundlesInput) error {
 	bundleNames := input.Store.BundleNames()
+	usedFolders := make(map[string]string)
 
 	for _, bundleName := range bundleNames {
 		opts := certkit.DefaultOptions()
@@ -92,6 +95,7 @@ func ExportBundles(ctx context.Context, input ExportBundlesInput) error {
 			BundleName:  bundleName,
 			Duplicates:  input.Duplicates,
 			P12Password: input.P12Password,
+			UsedFolders: usedFolders,
 		}); err != nil {
 			return fmt.Errorf("exporting bundle %q: %w", bundleName, err)
 		}
@@ -107,6 +111,7 @@ type exportBundleCertsInput struct {
 	BundleName  string
 	Duplicates  bool
 	P12Password string
+	UsedFolders map[string]string
 }
 
 // exportBundleCerts processes all certificates for a given bundle name, creating
@@ -157,6 +162,10 @@ func exportBundleCerts(ctx context.Context, input exportBundleCertsInput) error 
 		if err != nil {
 			return fmt.Errorf("sanitizing bundle folder %q: %w", bundleFolder, err)
 		}
+		if previousBundle, exists := input.UsedFolders[folder]; exists && previousBundle != input.BundleName {
+			return fmt.Errorf("sanitized bundle folder collision: %q and %q both map to %q", previousBundle, input.BundleName, folder)
+		}
+		input.UsedFolders[folder] = input.BundleName
 
 		// Look up the matching key
 		keyRec := input.Store.GetKey(certRec.SKI)

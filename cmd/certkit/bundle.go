@@ -59,14 +59,11 @@ func init() {
 }
 
 func runBundle(cmd *cobra.Command, args []string) error {
-	passwords, err := internal.ProcessPasswords(passwordList, passwordFile)
+	passwordSets, err := internal.ProcessPasswordSets(passwordList, passwordFile)
 	if err != nil {
 		return fmt.Errorf("loading passwords: %w", err)
 	}
-	exportPasswords, err := internal.ProcessUserPasswords(passwordList, passwordFile)
-	if err != nil {
-		return fmt.Errorf("loading export passwords: %w", err)
-	}
+	passwords := passwordSets.Decode
 
 	leaf, key, extraCerts, err := loadBundleInput(args[0], passwords)
 	if err != nil {
@@ -117,7 +114,7 @@ func runBundle(cmd *cobra.Command, args []string) error {
 		slog.Warn("bundle", "warning", w)
 	}
 
-	output, err := formatBundleOutput(bundle, key, bundleFormat, exportPasswords)
+	output, err := formatBundleOutput(bundle, key, bundleFormat, passwordSets.Export)
 	if err != nil {
 		return fmt.Errorf("formatting bundle output: %w", err)
 	}
@@ -198,14 +195,16 @@ func selectLeafByKey(key crypto.PrivateKey, currentLeaf *x509.Certificate, extra
 	return nil, nil, fmt.Errorf("private key does not match any of the %d certificate(s) provided", len(all))
 }
 
-// bundlePassword returns the first non-empty password for PKCS#12/JKS export.
-func bundlePassword(passwords []string) (string, bool) {
+// bundlePassword returns the first non-empty user-provided password.
+// Falls back to "changeit" when no explicit password is provided.
+// This fallback is intentional for interoperability with common PKCS#12/JKS defaults.
+func bundlePassword(passwords []string) string {
 	for _, pw := range passwords {
 		if pw != "" {
-			return pw, true
+			return pw
 		}
 	}
-	return "", false
+	return "changeit"
 }
 
 func formatBundleOutput(bundle *certkit.BundleResult, key crypto.PrivateKey, format string, passwords []string) ([]byte, error) {
@@ -235,10 +234,7 @@ func formatBundleOutput(bundle *certkit.BundleResult, key crypto.PrivateKey, for
 		if key == nil {
 			return nil, fmt.Errorf("p12 output requires a private key (use --key)")
 		}
-		pw, ok := bundlePassword(passwords)
-		if !ok {
-			return nil, fmt.Errorf("p12 output requires a password (use --passwords or --password-file)")
-		}
+		pw := bundlePassword(passwords)
 		p12, err := certkit.EncodePKCS12(key, bundle.Leaf, bundle.Intermediates, pw)
 		if err != nil {
 			return nil, fmt.Errorf("encoding PKCS#12: %w", err)
@@ -249,10 +245,7 @@ func formatBundleOutput(bundle *certkit.BundleResult, key crypto.PrivateKey, for
 		if key == nil {
 			return nil, fmt.Errorf("jks output requires a private key (use --key)")
 		}
-		pw, ok := bundlePassword(passwords)
-		if !ok {
-			return nil, fmt.Errorf("jks output requires a password (use --passwords or --password-file)")
-		}
+		pw := bundlePassword(passwords)
 		jks, err := certkit.EncodeJKS(key, bundle.Leaf, bundle.Intermediates, pw)
 		if err != nil {
 			return nil, fmt.Errorf("encoding JKS: %w", err)

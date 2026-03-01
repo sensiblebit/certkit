@@ -74,14 +74,11 @@ type formatConvertInput struct {
 }
 
 func runConvert(cmd *cobra.Command, args []string) error {
-	passwords, err := internal.ProcessPasswords(passwordList, passwordFile)
+	passwordSets, err := internal.ProcessPasswordSets(passwordList, passwordFile)
 	if err != nil {
 		return fmt.Errorf("loading passwords: %w", err)
 	}
-	outputPasswords, err := internal.ProcessUserPasswords(passwordList, passwordFile)
-	if err != nil {
-		return fmt.Errorf("loading output passwords: %w", err)
-	}
+	passwords := passwordSets.Decode
 
 	contents, err := internal.LoadContainerFile(args[0], passwords)
 	if err != nil {
@@ -141,7 +138,7 @@ func runConvert(cmd *cobra.Command, args []string) error {
 		allCerts:        allCerts,
 		pairs:           pairs,
 		format:          convertTo,
-		outputPasswords: outputPasswords,
+		outputPasswords: passwordSets.Export,
 	})
 	if err != nil {
 		return fmt.Errorf("formatting output: %w", err)
@@ -210,10 +207,7 @@ func formatConvertOutput(input formatConvertInput) ([]byte, error) {
 		if len(input.pairs) > 1 {
 			return nil, &ValidationError{Message: fmt.Sprintf("PKCS#12 supports only one key entry; %d matches found (use JKS for multiple)", len(input.pairs))}
 		}
-		pw, ok := bundlePassword(input.outputPasswords)
-		if !ok {
-			return nil, fmt.Errorf("PKCS#12 output requires a password (use --passwords or --password-file)")
-		}
+		pw := bundlePassword(input.outputPasswords)
 		data, err := certkit.EncodePKCS12(input.contents.Key, input.contents.Leaf, input.contents.ExtraCerts, pw)
 		if err != nil {
 			return nil, fmt.Errorf("encoding PKCS#12: %w", err)
@@ -271,10 +265,7 @@ func formatConvertPEM(input formatConvertInput) ([]byte, error) {
 }
 
 func formatConvertJKS(input formatConvertInput) ([]byte, error) {
-	pw, ok := bundlePassword(input.outputPasswords)
-	if !ok {
-		return nil, fmt.Errorf("JKS output requires a password (use --passwords or --password-file)")
-	}
+	pw := bundlePassword(input.outputPasswords)
 
 	if len(input.pairs) > 1 {
 		entries := make([]certkit.JKSEntry, len(input.pairs))

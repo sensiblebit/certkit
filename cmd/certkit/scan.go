@@ -75,14 +75,11 @@ func runScan(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	passwords, err := internal.ProcessPasswords(passwordList, passwordFile)
+	passwordSets, err := internal.ProcessPasswordSets(passwordList, passwordFile)
 	if err != nil {
 		return fmt.Errorf("loading passwords: %w", err)
 	}
-	exportPasswords, err := internal.ProcessUserPasswords(passwordList, passwordFile)
-	if err != nil {
-		return fmt.Errorf("loading export passwords: %w", err)
-	}
+	passwords := passwordSets.Decode
 
 	// Only load bundle configs when exporting
 	var bundleConfigs []internal.BundleConfig
@@ -274,7 +271,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 
 	if scanExport {
-		p12Password, _ := bundlePassword(exportPasswords)
+		p12Password := bundlePassword(passwordSets.Export)
 		// Full export workflow — MemStore handles chain resolution via raw ASN.1 matching
 		if err := os.MkdirAll(scanBundlePath, 0755); err != nil {
 			return fmt.Errorf("creating output directory %s: %w", scanBundlePath, err)

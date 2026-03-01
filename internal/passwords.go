@@ -11,6 +11,12 @@ import (
 	"github.com/sensiblebit/certkit"
 )
 
+// PasswordSets holds decode and export password lists.
+type PasswordSets struct {
+	Decode []string
+	Export []string
+}
+
 // LoadPasswordsFromFile loads passwords from a file, one password per line.
 func LoadPasswordsFromFile(filename string) ([]string, error) {
 	file, err := os.Open(filename)
@@ -40,35 +46,46 @@ func LoadPasswordsFromFile(filename string) ([]string, error) {
 // with defaults, and deduplicates. Delegates core logic to
 // certkit.DeduplicatePasswords.
 func ProcessPasswords(passwordList []string, passwordFile string) ([]string, error) {
+	sets, err := ProcessPasswordSets(passwordList, passwordFile)
+	if err != nil {
+		return nil, err
+	}
+	return sets.Decode, nil
+}
+
+// ProcessPasswordSets loads password inputs once and returns both decode and
+// export password sets.
+func ProcessPasswordSets(passwordList []string, passwordFile string) (PasswordSets, error) {
 	extra := slices.Clone(passwordList)
 
 	if passwordFile != "" {
 		filePasswords, err := LoadPasswordsFromFile(passwordFile)
 		if err != nil {
-			return nil, fmt.Errorf("loading passwords from file: %w", err)
+			return PasswordSets{}, fmt.Errorf("loading passwords from file: %w", err)
 		}
 		extra = slices.Concat(extra, filePasswords)
 	}
 
-	return certkit.DeduplicatePasswords(extra), nil
+	return PasswordSets{
+		Decode: certkit.DeduplicatePasswords(extra),
+		Export: deduplicateNonEmptyPasswords(extra),
+	}, nil
 }
 
 // ProcessUserPasswords returns only explicitly provided non-empty passwords.
 // Unlike ProcessPasswords, it does not inject built-in defaults.
 func ProcessUserPasswords(passwordList []string, passwordFile string) ([]string, error) {
-	extra := slices.Clone(passwordList)
-
-	if passwordFile != "" {
-		filePasswords, err := LoadPasswordsFromFile(passwordFile)
-		if err != nil {
-			return nil, fmt.Errorf("loading passwords from file: %w", err)
-		}
-		extra = slices.Concat(extra, filePasswords)
+	sets, err := ProcessPasswordSets(passwordList, passwordFile)
+	if err != nil {
+		return nil, err
 	}
+	return sets.Export, nil
+}
 
-	seen := make(map[string]bool, len(extra))
-	out := make([]string, 0, len(extra))
-	for _, password := range extra {
+func deduplicateNonEmptyPasswords(passwords []string) []string {
+	seen := make(map[string]bool, len(passwords))
+	out := make([]string, 0, len(passwords))
+	for _, password := range passwords {
 		password = strings.TrimSpace(password)
 		if password == "" {
 			continue
@@ -79,6 +96,5 @@ func ProcessUserPasswords(passwordList []string, passwordFile string) ([]string,
 		seen[password] = true
 		out = append(out, password)
 	}
-
-	return out, nil
+	return out
 }

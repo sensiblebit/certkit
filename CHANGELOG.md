@@ -67,8 +67,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- **Breaking:** Require explicit passwords for PKCS#12/JKS outputs; no default `changeit` (scan export skips `.p12` when missing) ([#87])
-- Standardize certificate serial number formatting to `0x`-prefixed hex across CLI/JSON output ([#87])
+- Prefer user-provided passwords for PKCS#12/JKS outputs while keeping `changeit` as the default fallback for compatibility ([#87])
+- **Breaking:** Standardize certificate serial number formatting to `0x`-prefixed hex across CLI/JSON output ([#87])
 - Move local pre-commit hook definitions from repo config into the shared `sensiblebit/.github` hook set, and pin this branch to the shared commit so all repositories can consume the same workflow checks and Node tool bootstrapping behavior from one source ([#85])
 
 - `connect` diagnostics now distinguish `[ERR]` (verification failures) from `[WARN]` (configuration issues) ([`910b977`])

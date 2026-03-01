@@ -67,3 +67,27 @@ func TestLoadPasswordsFromFile_BlankLines(t *testing.T) {
 		t.Errorf("expected [pass1, pass2], got %v", passwords)
 	}
 }
+
+func TestProcessPasswordSets(t *testing.T) {
+	// WHY: ProcessPasswordSets must return decode and export lists from one loaded
+	// source set: decode includes defaults; export keeps only user-provided non-empty values.
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "passwords.txt")
+	if err := os.WriteFile(path, []byte("filepass\n\nfilepass\n"), 0644); err != nil {
+		t.Fatalf("write password file: %v", err)
+	}
+
+	sets, err := ProcessPasswordSets([]string{"cli-pass", ""}, path)
+	if err != nil {
+		t.Fatalf("ProcessPasswordSets error: %v", err)
+	}
+
+	if !slices.Contains(sets.Decode, "cli-pass") || !slices.Contains(sets.Decode, "filepass") {
+		t.Fatalf("decode passwords missing expected values: %v", sets.Decode)
+	}
+	if !slices.Equal(sets.Export, []string{"cli-pass", "filepass"}) {
+		t.Fatalf("export passwords = %v, want [cli-pass filepass]", sets.Export)
+	}
+}

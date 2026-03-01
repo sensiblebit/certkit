@@ -10,6 +10,9 @@ import (
 
 const defaultMaxInputBytes int64 = 10 * 1024 * 1024
 
+// readAllLimited reads from r with an optional hard byte limit.
+// When maxBytes <= 0, no limit is applied.
+// The maxBytes+1 sentinel detects oversized input without truncating silently.
 func readAllLimited(r io.Reader, maxBytes int64) ([]byte, error) {
 	if maxBytes <= 0 || maxBytes == math.MaxInt64 {
 		data, err := io.ReadAll(r)
@@ -29,6 +32,8 @@ func readAllLimited(r io.Reader, maxBytes int64) ([]byte, error) {
 	return data, nil
 }
 
+// readFileLimited reads a file with an optional hard byte limit.
+// When maxBytes > 0, it performs a stat pre-check before reading.
 func readFileLimited(path string, maxBytes int64) ([]byte, error) {
 	if maxBytes > 0 {
 		info, err := os.Stat(path)

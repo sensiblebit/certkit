@@ -46,8 +46,8 @@ type BundleExportInput struct {
 	Prefix     string              // sanitized file name prefix
 	SecretName string              // Kubernetes secret metadata.name
 	CSRSubject *CSRSubjectOverride // optional; nil uses cert's own subject
-	// P12Password is required to generate the .p12 output file.
-	// When empty, the .p12 file is skipped.
+	// P12Password controls the .p12 output file password.
+	// When empty, "changeit" is used.
 	P12Password string
 }
 
@@ -106,19 +106,21 @@ func GenerateBundleFiles(input BundleExportInput) ([]BundleFile, error) {
 	files = append(files, BundleFile{Name: prefix + ".key", Data: input.KeyPEM, Sensitive: true})
 
 	// PKCS#12
-	if input.P12Password == "" {
-		slog.Warn("skipping P12 export: password required", "prefix", prefix)
-	} else {
-		privKey, err := certkit.ParsePEMPrivateKey(input.KeyPEM)
-		if err != nil {
-			return nil, fmt.Errorf("parsing private key for P12: %w", err)
-		}
-		p12Data, err := certkit.EncodePKCS12Legacy(privKey, bundle.Leaf, bundle.Intermediates, input.P12Password)
-		if err != nil {
-			return nil, fmt.Errorf("creating P12: %w", err)
-		}
-		files = append(files, BundleFile{Name: prefix + ".p12", Data: p12Data, Sensitive: true})
+	p12Password := input.P12Password
+	if p12Password == "" {
+		// Keep "changeit" as the default PKCS#12 password for interoperability.
+		// This mirrors widespread tooling expectations for .p12/.jks artifacts.
+		p12Password = "changeit"
 	}
+	privKey, err := certkit.ParsePEMPrivateKey(input.KeyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("parsing private key for P12: %w", err)
+	}
+	p12Data, err := certkit.EncodePKCS12Legacy(privKey, bundle.Leaf, bundle.Intermediates, p12Password)
+	if err != nil {
+		return nil, fmt.Errorf("creating P12: %w", err)
+	}
+	files = append(files, BundleFile{Name: prefix + ".p12", Data: p12Data, Sensitive: true})
 
 	// Kubernetes TLS secret
 	k8sSecret := K8sSecret{
@@ -320,7 +322,7 @@ type ExportMatchedBundleInput struct {
 	Writer        BundleWriter
 	CSRSubject    *CSRSubjectOverride // optional; nil uses cert's own subject
 	RetryNoVerify bool                // retry bundle without verification on failure
-	P12Password   string              // optional; empty skips .p12 generation
+	P12Password   string              // optional; empty uses "changeit"
 }
 
 // ExportMatchedBundles builds certificate chains and writes bundle files for

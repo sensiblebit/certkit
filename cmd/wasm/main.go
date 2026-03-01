@@ -293,6 +293,7 @@ func exportBundlesJS(_ js.Value, args []js.Value) any {
 		}
 	}
 
+	// Keep "changeit" default for PKCS#12 export compatibility with common tooling.
 	p12Password := "changeit"
 	if len(args) >= 2 && args[1].Type() != js.TypeUndefined && args[1].Type() != js.TypeNull {
 		if candidate := strings.TrimSpace(args[1].String()); candidate != "" {
