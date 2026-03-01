@@ -82,6 +82,20 @@ func TestFormatEKUs(t *testing.T) {
 			},
 			want: []string{"Server Authentication", "Unknown (42)", "OCSP Signing"},
 		},
+		{
+			name: "duplicate EKUs preserved",
+			ekus: []x509.ExtKeyUsage{
+				x509.ExtKeyUsageServerAuth,
+				x509.ExtKeyUsageServerAuth,
+				x509.ExtKeyUsageClientAuth,
+			},
+			want: []string{"Server Authentication", "Server Authentication", "Client Authentication"},
+		},
+		{
+			name: "empty but non-nil input returns empty",
+			ekus: []x509.ExtKeyUsage{},
+			want: []string{},
+		},
 	}
 
 	for _, tt := range tests {
@@ -139,6 +153,11 @@ func TestFormatEKUOIDs(t *testing.T) {
 		{
 			name: "wrong ASN.1 element type returns nil",
 			raw:  mustMarshalInts(t, 1, 2),
+			want: nil,
+		},
+		{
+			name: "trailing bytes return nil",
+			raw:  append(mustMarshalOIDs(t, asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 3, 1}), 0x00),
 			want: nil,
 		},
 		{
@@ -265,6 +284,11 @@ func TestFormatKeyUsage(t *testing.T) {
 			ku:   x509.KeyUsage(1 << 12),
 			want: nil,
 		},
+		{
+			name: "known and unknown bits",
+			ku:   x509.KeyUsageDigitalSignature | x509.KeyUsage(1<<12),
+			want: []string{"Digital Signature"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -313,9 +337,24 @@ func TestFormatKeyUsageBitString(t *testing.T) {
 			want: nil,
 		},
 		{
+			name: "wrong ASN.1 element type returns nil",
+			raw:  mustMarshalInts(t, 1),
+			want: nil,
+		},
+		{
 			name: "extra bits ignored",
 			raw:  mustMarshalBitString(t, 12, 0, 10),
 			want: []string{"Digital Signature"},
+		},
+		{
+			name: "short bitstring length",
+			raw:  mustMarshalBitString(t, 1, 0),
+			want: []string{"Digital Signature"},
+		},
+		{
+			name: "trailing bytes return nil",
+			raw:  append(mustMarshalKeyUsageBitString(t, x509.KeyUsageDigitalSignature), 0x00),
+			want: nil,
 		},
 	}
 
@@ -495,6 +534,25 @@ func TestParseOtherNameSANs(t *testing.T) {
 		}
 	})
 
+	t.Run("RegisteredID with invalid bytes is ignored", func(t *testing.T) {
+		// WHY: Ensures malformed registeredID payloads don't break parsing.
+		t.Parallel()
+		regIDGN := mustMarshalGeneralName(t, asn1.RawValue{
+			Class: asn1.ClassContextSpecific,
+			Tag:   8,
+			Bytes: []byte{0x80},
+		})
+		sanBytes := buildSANWithGeneralNames(t, regIDGN)
+		exts := []pkix.Extension{{
+			Id:    asn1.ObjectIdentifier{2, 5, 29, 17},
+			Value: sanBytes,
+		}}
+		got := ParseOtherNameSANs(exts)
+		if got != nil {
+			t.Errorf("expected nil for invalid registeredID, got %v", got)
+		}
+	})
+
 	t.Run("mixed SAN entries", func(t *testing.T) {
 		// WHY: Ensures OtherName/DirName/RegisteredID are extracted while standard SANs are ignored.
 		t.Parallel()
@@ -537,6 +595,28 @@ func TestParseOtherNameSANs(t *testing.T) {
 		}
 	})
 
+	t.Run("duplicate OtherName entries preserve order", func(t *testing.T) {
+		// WHY: Duplicate SAN entries must not be deduplicated or reordered.
+		t.Parallel()
+		san1 := buildSANWithOtherName(t,
+			asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3},
+			"first@example.com",
+		)
+		san2 := buildSANWithOtherName(t,
+			asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3},
+			"second@example.com",
+		)
+		exts := []pkix.Extension{
+			{Id: asn1.ObjectIdentifier{2, 5, 29, 17}, Value: san1},
+			{Id: asn1.ObjectIdentifier{2, 5, 29, 17}, Value: san2},
+		}
+		got := ParseOtherNameSANs(exts)
+		want := []string{"UPN:first@example.com", "UPN:second@example.com"}
+		if !slices.Equal(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
 	t.Run("no SAN extension returns nil", func(t *testing.T) {
 		// WHY: Ensures non-SAN extensions are ignored.
 		t.Parallel()
@@ -572,6 +652,25 @@ func TestParseOtherNameSANs(t *testing.T) {
 		got := ParseOtherNameSANs(exts)
 		if got != nil {
 			t.Errorf("expected nil for dNSName-only SAN, got %v", got)
+		}
+	})
+
+	t.Run("unknown GeneralName tag is ignored", func(t *testing.T) {
+		// WHY: Ensures non-OtherName/DirName/RegisteredID GeneralNames don't affect output.
+		t.Parallel()
+		ipGN := mustMarshalGeneralName(t, asn1.RawValue{
+			Class: asn1.ClassContextSpecific,
+			Tag:   7,
+			Bytes: []byte{127, 0, 0, 1},
+		})
+		sanBytes := buildSANWithGeneralNames(t, ipGN)
+		exts := []pkix.Extension{{
+			Id:    asn1.ObjectIdentifier{2, 5, 29, 17},
+			Value: sanBytes,
+		}}
+		got := ParseOtherNameSANs(exts)
+		if got != nil {
+			t.Errorf("expected nil for unknown GeneralName tag, got %v", got)
 		}
 	})
 
@@ -696,7 +795,11 @@ func TestParseOtherNameSANs_FromCertificate(t *testing.T) {
 	t.Parallel()
 
 	upnOID := asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3}
-	sanBytes := buildSANWithOtherName(t, upnOID, "admin@corp.example.com")
+	sanBytes := buildSANWithGeneralNames(t,
+		marshalOtherNameGeneralName(t, upnOID, "admin@corp.example.com"),
+		marshalDirectoryNameGeneralName(t, pkix.Name{CommonName: "dir-name"}),
+		marshalRegisteredIDGeneralName(t, asn1.ObjectIdentifier{1, 2, 3, 4}),
+	)
 
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -722,11 +825,9 @@ func TestParseOtherNameSANs_FromCertificate(t *testing.T) {
 	}
 
 	got := ParseOtherNameSANs(cert.Extensions)
-	if len(got) != 1 {
-		t.Fatalf("expected 1 result, got %d: %v", len(got), got)
-	}
-	if got[0] != "UPN:admin@corp.example.com" {
-		t.Errorf("got %q, want %q", got[0], "UPN:admin@corp.example.com")
+	want := []string{"UPN:admin@corp.example.com", "DirName:CN=dir-name", "RegisteredID:1.2.3.4"}
+	if !slices.Equal(got, want) {
+		t.Errorf("got %v, want %v", got, want)
 	}
 }
 
@@ -869,6 +970,16 @@ func marshalDNSNameGeneralName(t *testing.T, dnsName string) []byte {
 	gnBytes, err := asn1.Marshal(dnsGN)
 	if err != nil {
 		t.Fatalf("marshal dNSName GN: %v", err)
+	}
+	return gnBytes
+}
+
+func mustMarshalGeneralName(t *testing.T, gn asn1.RawValue) []byte {
+	t.Helper()
+
+	gnBytes, err := asn1.Marshal(gn)
+	if err != nil {
+		t.Fatalf("marshal GeneralName: %v", err)
 	}
 	return gnBytes
 }
@@ -1181,6 +1292,12 @@ func TestFormatDNFromRaw(t *testing.T) {
 		want     string
 	}{
 		{
+			name:     "empty raw falls back",
+			raw:      nil,
+			fallback: pkix.Name{CommonName: "fallback.example.com"},
+			want:     "CN=fallback.example.com",
+		},
+		{
 			name: "multi-valued RDN preserves plus separators",
 			raw: func() []byte {
 				rdns := pkix.RDNSequence{
@@ -1355,6 +1472,21 @@ func TestResolveOtherNameOID(t *testing.T) {
 		{
 			name:    "negative OID component",
 			input:   "1.2.-3.4",
+			wantErr: true,
+		},
+		{
+			name:    "lowercase label",
+			input:   "upn",
+			wantErr: true,
+		},
+		{
+			name:    "whitespace padded label",
+			input:   " UPN ",
+			wantErr: true,
+		},
+		{
+			name:    "trailing dot",
+			input:   "1.2.3.",
 			wantErr: true,
 		},
 	}
@@ -1561,6 +1693,10 @@ func TestMarshalSANExtension_ValidationErrors(t *testing.T) {
 		{
 			name:  "nil URI in slice",
 			input: MarshalSANExtensionInput{URIs: []*url.URL{nil}},
+		},
+		{
+			name:  "empty URI string",
+			input: MarshalSANExtensionInput{URIs: []*url.URL{{}}},
 		},
 		{
 			name:  "non-ASCII SRV OtherName",

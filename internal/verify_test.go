@@ -128,6 +128,28 @@ func TestVerifyCert_NilInputs(t *testing.T) {
 	}
 }
 
+func TestVerifyCert_InvalidTrustStore(t *testing.T) {
+	// WHY: VerifyCert should surface invalid trust store values as chain errors.
+	t.Parallel()
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "invalid-store.example.com", []string{"invalid-store.example.com"}, nil)
+
+	result, err := VerifyCert(context.Background(), &VerifyInput{
+		Cert:       leaf.cert,
+		CheckChain: true,
+		TrustStore: "invalid",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ChainValid == nil || *result.ChainValid {
+		t.Fatalf("expected ChainValid false, got %v", result.ChainValid)
+	}
+	if !strings.Contains(result.ChainErr, "unknown trust_store") {
+		t.Errorf("expected ChainErr to mention unknown trust_store, got %q", result.ChainErr)
+	}
+}
+
 func TestVerifyCert_ExpiryCheck(t *testing.T) {
 	// WHY: Verifies VerifyCert wires ExpiryDuration to result.Expiry correctly.
 	// The "already expired" case is covered by TestCertExpiresWithin in the
@@ -518,6 +540,27 @@ func TestVerifyCert_SelfSignedTrustedRoot(t *testing.T) {
 	}
 	if len(result.Errors) != 0 {
 		t.Errorf("expected no errors, got %v", result.Errors)
+	}
+}
+
+func TestVerifyCert_SelfSignedUntrusted(t *testing.T) {
+	// WHY: A self-signed leaf not in the trust store must fail chain validation.
+	t.Parallel()
+	ca := newRSACA(t)
+
+	result, err := VerifyCert(context.Background(), &VerifyInput{
+		Cert:       ca.cert,
+		CheckChain: true,
+		TrustStore: "custom",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ChainValid == nil || *result.ChainValid {
+		t.Fatalf("expected ChainValid false, got %v", result.ChainValid)
+	}
+	if result.ChainErr == "" {
+		t.Error("expected ChainErr to be populated")
 	}
 }
 

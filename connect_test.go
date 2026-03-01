@@ -223,8 +223,12 @@ func TestConnectTLS(t *testing.T) {
 				if err == nil {
 					t.Fatal("expected timeout error")
 				}
-				if !strings.Contains(err.Error(), "timeout") && !strings.Contains(err.Error(), "deadline") {
-					t.Errorf("expected timeout error, got %q", err.Error())
+				if errors.Is(err, context.DeadlineExceeded) {
+					return
+				}
+				var netErr net.Error
+				if !errors.As(err, &netErr) || !netErr.Timeout() {
+					t.Errorf("expected timeout error, got %v", err)
 				}
 			},
 		},
@@ -264,6 +268,9 @@ func TestConnectTLS(t *testing.T) {
 				})
 				if err != nil {
 					t.Fatalf("ConnectTLS failed: %v", err)
+				}
+				if result.ServerName != "127.0.0.1" {
+					t.Errorf("ServerName = %q, want %q", result.ServerName, "127.0.0.1")
 				}
 				if !strings.Contains(result.VerifyError, "127.0.0.1") {
 					t.Errorf("expected hostname mismatch error, got %q", result.VerifyError)
@@ -415,11 +422,28 @@ func TestConnectTLS_ClientAuth(t *testing.T) {
 }
 
 func TestConnectTLS_EmptyHost(t *testing.T) {
-	// WHY: Empty host input should fail fast with a clear error.
+	// WHY: Input validation must reject missing or malformed host/port values.
 	t.Parallel()
-	_, err := ConnectTLS(context.Background(), ConnectTLSInput{})
-	if err == nil {
-		t.Fatal("expected error for empty host")
+
+	tests := []struct {
+		name  string
+		input ConnectTLSInput
+	}{
+		{name: "empty input", input: ConnectTLSInput{}},
+		{name: "empty host", input: ConnectTLSInput{Host: "", Port: "443"}},
+		{name: "non-numeric port", input: ConnectTLSInput{Host: "example.com", Port: "abc"}},
+		{name: "negative port", input: ConnectTLSInput{Host: "example.com", Port: "-1"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// WHY: Ensures invalid input is rejected before any network activity.
+			t.Parallel()
+			_, err := ConnectTLS(context.Background(), tt.input)
+			if err == nil {
+				t.Fatal("expected error for invalid input")
+			}
+		})
 	}
 }
 

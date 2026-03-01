@@ -68,7 +68,8 @@ var ekuOIDNames = map[string]string{
 // populate ExtKeyUsage typed fields.
 func FormatEKUOIDs(raw []byte) []string {
 	var oids []asn1.ObjectIdentifier
-	if _, err := asn1.Unmarshal(raw, &oids); err != nil {
+	rest, err := asn1.Unmarshal(raw, &oids)
+	if err != nil || len(rest) != 0 {
 		return nil
 	}
 	var out []string
@@ -113,7 +114,8 @@ func FormatKeyUsage(ku x509.KeyUsage) []string {
 // CSRs where Go does not populate KeyUsage typed fields.
 func FormatKeyUsageBitString(raw []byte) []string {
 	var bs asn1.BitString
-	if _, err := asn1.Unmarshal(raw, &bs); err != nil {
+	rest, err := asn1.Unmarshal(raw, &bs)
+	if err != nil || len(rest) != 0 {
 		return nil
 	}
 	// Reconstruct x509.KeyUsage by reading each bit from the BIT STRING,
