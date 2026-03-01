@@ -335,7 +335,7 @@ When running `certkit scan --bundle-path`, each bundle produces the following fi
 | `<cn>.intermediates.pem` | Intermediate certificates                                                             |
 | `<cn>.root.pem`          | Root certificate                                                                      |
 | `<cn>.key`               | Private key (PEM, mode 0600)                                                          |
-| `<cn>.p12`               | PKCS#12 archive (requires `--passwords`/`--password-file`, mode 0600)                 |
+| `<cn>.p12`               | PKCS#12 archive (default password: `changeit`, override via `--passwords`, mode 0600) |
 | `<cn>.k8s.yaml`          | Kubernetes `kubernetes.io/tls` Secret (mode 0600)                                     |
 | `<cn>.json`              | Certificate metadata                                                                  |
 | `<cn>.yaml`              | Certificate and key metadata                                                          |
