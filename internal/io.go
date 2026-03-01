@@ -61,3 +61,8 @@ func readFileLimited(path string, maxBytes int64) ([]byte, error) {
 	}
 	return data, nil
 }
+
+// ReadFileLimited reads a file with an optional hard byte limit.
+func ReadFileLimited(path string, maxBytes int64) ([]byte, error) {
+	return readFileLimited(path, maxBytes)
+}

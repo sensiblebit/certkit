@@ -7,11 +7,9 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
-	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -106,68 +104,41 @@ func runScan(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("input path %s: %w", inputPath, err)
 		}
 
-		err := filepath.WalkDir(inputPath, func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				slog.Warn("skipping inaccessible path", "path", path, "error", err)
-				return filepath.SkipDir
-			}
-			if d.IsDir() {
-				if internal.IsSkippableDir(d.Name()) {
-					slog.Debug("skipping directory", "path", path)
-					return filepath.SkipDir
+		err := internal.WalkScanFiles(internal.WalkScanFilesInput{
+			RootPath:    inputPath,
+			MaxFileSize: scanMaxFileSize,
+			OnFile: func(path string) error {
+				if archiveFormat := internal.ArchiveFormat(path); archiveFormat != "" {
+					data, readErr := internal.ReadFileLimited(path, scanMaxFileSize)
+					if readErr != nil {
+						return fmt.Errorf("reading archive %s: %w", path, readErr)
+					}
+					limits := internal.DefaultArchiveLimits()
+					if scanMaxFileSize > 0 {
+						limits.MaxEntrySize = scanMaxFileSize
+					}
+					if _, archiveErr := internal.ProcessArchive(internal.ProcessArchiveInput{
+						ArchivePath: path,
+						Data:        data,
+						Format:      archiveFormat,
+						Limits:      limits,
+						Store:       store,
+						Passwords:   passwords,
+					}); archiveErr != nil {
+						return fmt.Errorf("processing archive %s: %w", path, archiveErr)
+					}
+					return nil
+				}
+				if err := internal.ProcessFile(internal.ProcessFileInput{
+					Path:      path,
+					Store:     store,
+					Passwords: passwords,
+					MaxBytes:  scanMaxFileSize,
+				}); err != nil {
+					return fmt.Errorf("processing file %s: %w", path, err)
 				}
 				return nil
-			}
-			// Resolve symlinks: skip broken links and links to directories
-			if d.Type()&fs.ModeSymlink != 0 {
-				fi, err := os.Stat(path)
-				if err != nil {
-					slog.Debug("skipping broken symlink", "path", path)
-					return nil
-				}
-				if fi.IsDir() {
-					slog.Debug("skipping symlink to directory", "path", path)
-					return nil
-				}
-			}
-			if scanMaxFileSize > 0 {
-				if info, err := d.Info(); err == nil && info.Size() > scanMaxFileSize {
-					slog.Debug("skipping large file", "path", path, "size", info.Size(), "max", scanMaxFileSize)
-					return nil
-				}
-			}
-			// Check for archive formats before falling through to ProcessFile
-			if archiveFormat := internal.ArchiveFormat(path); archiveFormat != "" {
-				data, readErr := os.ReadFile(path)
-				if readErr != nil {
-					slog.Warn("reading archive", "path", path, "error", readErr)
-					return nil
-				}
-				limits := internal.DefaultArchiveLimits()
-				if scanMaxFileSize > 0 {
-					limits.MaxEntrySize = scanMaxFileSize
-				}
-				if _, archiveErr := internal.ProcessArchive(internal.ProcessArchiveInput{
-					ArchivePath: path,
-					Data:        data,
-					Format:      archiveFormat,
-					Limits:      limits,
-					Store:       store,
-					Passwords:   passwords,
-				}); archiveErr != nil {
-					slog.Warn("processing archive", "path", path, "error", archiveErr)
-				}
-				return nil
-			}
-			if err := internal.ProcessFile(internal.ProcessFileInput{
-				Path:      path,
-				Store:     store,
-				Passwords: passwords,
-				MaxBytes:  scanMaxFileSize,
-			}); err != nil {
-				slog.Warn("processing file", "path", path, "error", err)
-			}
-			return nil
+			},
 		})
 		if err != nil {
 			return fmt.Errorf("walking input path: %w", err)
@@ -304,6 +275,28 @@ func runScan(cmd *cobra.Command, args []string) error {
 				return fmt.Errorf("marshaling JSON: %w", err)
 			}
 			fmt.Println(string(data))
+		} else {
+			mozillaPool, err := certkit.MozillaRootPool()
+			if err != nil {
+				return fmt.Errorf("loading Mozilla root pool: %w", err)
+			}
+			summary := store.ScanSummary(certstore.ScanSummaryInput{
+				RootPool: mozillaPool,
+			})
+			fmt.Print(internal.FormatScanTextSummary(internal.ScanTextSummaryInput{
+				Roots:                  summary.Roots,
+				Intermediates:          summary.Intermediates,
+				Leaves:                 summary.Leaves,
+				Keys:                   summary.Keys,
+				Matched:                summary.Matched,
+				ExpiredRoots:           summary.ExpiredRoots,
+				ExpiredIntermediates:   summary.ExpiredIntermediates,
+				ExpiredLeaves:          summary.ExpiredLeaves,
+				UntrustedRoots:         summary.UntrustedRoots,
+				UntrustedIntermediates: summary.UntrustedIntermediates,
+				UntrustedLeaves:        summary.UntrustedLeaves,
+				BundlePath:             scanBundlePath,
+			}))
 		}
 	} else {
 		// Print summary with trust and expiry annotations
@@ -335,19 +328,19 @@ func runScan(cmd *cobra.Command, args []string) error {
 				fmt.Println(string(data))
 			}
 		case "text":
-			total := summary.Roots + summary.Intermediates + summary.Leaves
-			fmt.Printf("\nFound %d certificate(s) and %d key(s)\n", total, summary.Keys)
-			if total > 0 {
-				fmt.Printf("  Roots:          %d%s\n", summary.Roots,
-					internal.CertAnnotation(summary.ExpiredRoots, summary.UntrustedRoots))
-				fmt.Printf("  Intermediates:  %d%s\n", summary.Intermediates,
-					internal.CertAnnotation(summary.ExpiredIntermediates, summary.UntrustedIntermediates))
-				fmt.Printf("  Leaves:         %d%s\n", summary.Leaves,
-					internal.CertAnnotation(summary.ExpiredLeaves, summary.UntrustedLeaves))
-			}
-			if summary.Keys > 0 {
-				fmt.Printf("  Key-cert pairs: %d\n", summary.Matched)
-			}
+			fmt.Print(internal.FormatScanTextSummary(internal.ScanTextSummaryInput{
+				Roots:                  summary.Roots,
+				Intermediates:          summary.Intermediates,
+				Leaves:                 summary.Leaves,
+				Keys:                   summary.Keys,
+				Matched:                summary.Matched,
+				ExpiredRoots:           summary.ExpiredRoots,
+				ExpiredIntermediates:   summary.ExpiredIntermediates,
+				ExpiredLeaves:          summary.ExpiredLeaves,
+				UntrustedRoots:         summary.UntrustedRoots,
+				UntrustedIntermediates: summary.UntrustedIntermediates,
+				UntrustedLeaves:        summary.UntrustedLeaves,
+			}))
 			if verbose {
 				printScanVerboseText(store)
 			}

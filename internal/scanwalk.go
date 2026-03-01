@@ -1,0 +1,135 @@
+package internal
+
+import (
+	"fmt"
+	"io/fs"
+	"log/slog"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+// WalkScanFilesInput configures WalkScanFiles.
+type WalkScanFilesInput struct {
+	RootPath    string
+	MaxFileSize int64
+	OnFile      func(path string) error
+}
+
+// WalkScanFiles iterates scan-eligible files under RootPath.
+func WalkScanFiles(input WalkScanFilesInput) error {
+	if input.RootPath == "" {
+		return fmt.Errorf("root path is required")
+	}
+	if input.OnFile == nil {
+		return fmt.Errorf("file handler is required")
+	}
+
+	info, err := os.Stat(input.RootPath)
+	if err != nil {
+		return fmt.Errorf("stat %s: %w", input.RootPath, err)
+	}
+	if !info.IsDir() {
+		if exceedsSizeLimit(input.RootPath, input.MaxFileSize) {
+			return nil
+		}
+		if err := input.OnFile(input.RootPath); err != nil {
+			return fmt.Errorf("handling file %s: %w", input.RootPath, err)
+		}
+		return nil
+	}
+
+	rootBoundary, err := scanRootBoundary(input.RootPath)
+	if err != nil {
+		return fmt.Errorf("resolving root boundary: %w", err)
+	}
+
+	return filepath.WalkDir(input.RootPath, func(path string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			slog.Warn("skipping inaccessible path", "path", path, "error", walkErr)
+			if d != nil && d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.IsDir() {
+			if IsSkippableDir(d.Name()) {
+				slog.Debug("skipping directory", "path", path)
+				return filepath.SkipDir
+			}
+			return nil
+		}
+
+		if d.Type()&fs.ModeSymlink != 0 {
+			resolvedPath, resolveErr := filepath.EvalSymlinks(path)
+			if resolveErr != nil {
+				slog.Debug("skipping broken symlink", "path", path)
+				return nil
+			}
+			resolvedInfo, resolvedErr := os.Stat(resolvedPath)
+			if resolvedErr != nil {
+				slog.Debug("skipping broken symlink", "path", path)
+				return nil
+			}
+			if resolvedInfo.IsDir() {
+				slog.Debug("skipping symlink to directory", "path", path)
+				return nil
+			}
+			if !pathWithinBoundary(resolvedPath, rootBoundary) {
+				slog.Debug("skipping symlink outside scan root", "path", path, "target", resolvedPath)
+				return nil
+			}
+		}
+
+		if exceedsSizeLimit(path, input.MaxFileSize) {
+			return nil
+		}
+
+		if err := input.OnFile(path); err != nil {
+			slog.Warn("processing file", "path", path, "error", err)
+		}
+		return nil
+	})
+}
+
+func scanRootBoundary(root string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(root)
+	if err == nil {
+		return filepath.Abs(resolved)
+	}
+	return filepath.Abs(root)
+}
+
+func pathWithinBoundary(path, rootBoundary string) bool {
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(rootBoundary, absPath)
+	if err != nil {
+		return false
+	}
+	if rel == "." {
+		return true
+	}
+	if rel == ".." {
+		return false
+	}
+	return !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+}
+
+func exceedsSizeLimit(path string, maxFileSize int64) bool {
+	if maxFileSize <= 0 {
+		return false
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		slog.Warn("stat file", "path", path, "error", err)
+		return true
+	}
+	if info.Size() <= maxFileSize {
+		return false
+	}
+	slog.Debug("skipping large file", "path", path, "size", info.Size(), "max", maxFileSize)
+	return true
+}

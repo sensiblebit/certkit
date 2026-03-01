@@ -69,3 +69,32 @@ func TestReadFileLimited(t *testing.T) {
 		t.Fatalf("data = %q, want %q", string(data), "abcde")
 	}
 }
+
+func TestReadFileLimited_SymlinkUsesTargetSize(t *testing.T) {
+	// WHY: size checks must apply to the symlink target to enforce limits
+	// consistently for direct files and symlinked files.
+	t.Parallel()
+
+	dir := t.TempDir()
+	target := filepath.Join(dir, "target.bin")
+	if err := os.WriteFile(target, []byte("abcde"), 0644); err != nil {
+		t.Fatalf("write target file: %v", err)
+	}
+
+	link := filepath.Join(dir, "target-link.bin")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+
+	if _, err := readFileLimited(link, 4); err == nil || !strings.Contains(err.Error(), "file exceeds max size") {
+		t.Fatalf("expected size error for symlink target, got %v", err)
+	}
+
+	data, err := readFileLimited(link, 5)
+	if err != nil {
+		t.Fatalf("readFileLimited symlink error: %v", err)
+	}
+	if string(data) != "abcde" {
+		t.Fatalf("data = %q, want %q", string(data), "abcde")
+	}
+}
