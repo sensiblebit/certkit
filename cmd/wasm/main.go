@@ -19,6 +19,12 @@ import (
 	"github.com/sensiblebit/certkit/internal/certstore"
 )
 
+const (
+	wasmMaxInputFiles      = 200
+	wasmMaxInputFileBytes  = 10 * 1024 * 1024
+	wasmMaxInputTotalBytes = 50 * 1024 * 1024
+)
+
 // version is set at build time via -ldflags "-X main.version=v0.6.1".
 var version = "dev"
 
@@ -48,6 +54,9 @@ func addFiles(_ js.Value, args []js.Value) any {
 
 	filesArg := args[0]
 	length := filesArg.Length()
+	if length > wasmMaxInputFiles {
+		return jsError(fmt.Sprintf("too many files: %d (max %d)", length, wasmMaxInputFiles))
+	}
 
 	var passwords []string
 	if len(args) >= 2 && args[1].Type() == js.TypeString {
@@ -64,12 +73,19 @@ func addFiles(_ js.Value, args []js.Value) any {
 		resolve := promiseArgs[0]
 		reject := promiseArgs[1]
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					reject.Invoke(js.Global().Get("Error").New(fmt.Sprintf("internal error: %v", r)))
+				}
+			}()
+
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
 			storeMu.Lock()
 			defer storeMu.Unlock()
 			var results []map[string]any
+			var totalBytes int64
 			for i := range length {
 				select {
 				case <-ctx.Done():
@@ -79,11 +95,21 @@ func addFiles(_ js.Value, args []js.Value) any {
 				}
 				file := filesArg.Index(i)
 				name := file.Get("name").String()
-				dataJS := file.Get("data")
-				data := make([]byte, dataJS.Length())
-				js.CopyBytesToGo(data, dataJS)
+				if name == "" {
+					name = fmt.Sprintf("file[%d]", i)
+				}
 
-				err := certstore.ProcessData(certstore.ProcessInput{
+				data, err := readWASMFileData(file.Get("data"), name, &totalBytes)
+				if err != nil {
+					results = append(results, map[string]any{
+						"name":   name,
+						"status": "error",
+						"error":  err.Error(),
+					})
+					continue
+				}
+
+				err = certstore.ProcessData(certstore.ProcessInput{
 					Data:      data,
 					Path:      name,
 					Passwords: passwords,
@@ -281,7 +307,7 @@ func getState(_ js.Value, _ []js.Value) any {
 }
 
 // exportBundlesJS generates a ZIP and returns it as a Uint8Array.
-// JS signature: certkitExportBundles(skis: string[], p12Password?: string) → Promise<Uint8Array>
+// JS signature: certkitExportBundles(skis: string[], p12Password?: string, allowUnverifiedExport?: boolean) → Promise<Uint8Array>
 // Only bundles for the specified SKIs are included.
 func exportBundlesJS(_ js.Value, args []js.Value) any {
 	// Parse the SKI filter list from the JS array argument.
@@ -301,6 +327,11 @@ func exportBundlesJS(_ js.Value, args []js.Value) any {
 		}
 	}
 
+	allowUnverifiedExport := false
+	if len(args) >= 3 && args[2].Type() == js.TypeBoolean {
+		allowUnverifiedExport = args[2].Bool()
+	}
+
 	handler := js.FuncOf(func(_ js.Value, promiseArgs []js.Value) any {
 		resolve := promiseArgs[0]
 		reject := promiseArgs[1]
@@ -310,7 +341,7 @@ func exportBundlesJS(_ js.Value, args []js.Value) any {
 
 			storeMu.RLock()
 			defer storeMu.RUnlock()
-			zipData, err := exportBundles(ctx, globalStore, filterSKIs, p12Password)
+			zipData, err := exportBundles(ctx, globalStore, filterSKIs, p12Password, allowUnverifiedExport)
 
 			if err != nil {
 				reject.Invoke(js.Global().Get("Error").New(err.Error()))
@@ -359,4 +390,30 @@ func jsError(msg string) any {
 	p := js.Global().Get("Promise").New(handler)
 	handler.Release()
 	return p
+}
+
+// readWASMFileData copies a JS Uint8Array into Go memory with hard size caps.
+func readWASMFileData(dataJS js.Value, name string, totalBytes *int64) ([]byte, error) {
+	if dataJS.Type() != js.TypeObject {
+		return nil, fmt.Errorf("file %q has invalid data payload", name)
+	}
+
+	size := dataJS.Length()
+	if size < 0 {
+		return nil, fmt.Errorf("file %q has invalid size", name)
+	}
+
+	if size > wasmMaxInputFileBytes {
+		return nil, fmt.Errorf("file %q exceeds max size (%d bytes)", name, wasmMaxInputFileBytes)
+	}
+
+	nextTotal := *totalBytes + int64(size)
+	if nextTotal > wasmMaxInputTotalBytes {
+		return nil, fmt.Errorf("total upload exceeds max size (%d bytes)", wasmMaxInputTotalBytes)
+	}
+
+	data := make([]byte, size)
+	js.CopyBytesToGo(data, dataJS)
+	*totalBytes = nextTotal
+	return data, nil
 }

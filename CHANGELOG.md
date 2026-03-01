@@ -67,6 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Require verified WASM bundle export by default; retrying export without verification is now an explicit user action surfaced in the web UI ([#103])
 - Prefer user-provided passwords for PKCS#12/JKS outputs while keeping `changeit` as the default fallback for compatibility ([#87])
 - **Breaking:** Standardize certificate serial number formatting to `0x`-prefixed hex across CLI/JSON output ([#87])
 - Move local pre-commit hook definitions from repo config into the shared `sensiblebit/.github` hook set, and pin this branch to the shared commit so all repositories can consume the same workflow checks and Node tool bootstrapping behavior from one source ([#85])
@@ -87,6 +88,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Enforce bounded per-file and total upload limits in WASM `addFiles` and `inspect` ingestion paths to prevent unbounded memory growth ([#100])
+- Enforce local CRL file size limits for `certkit crl` and shared CRL readers to reject oversized inputs early ([#90])
 - Prevent bundle export path traversal by sanitizing bundle folder names and enforcing safe output paths ([#87])
 - Enforce size limits on input reads to avoid unbounded memory usage ([#87])
 - Add SSRF validation (`ValidateAIAURL`) to OCSP responder URLs and CRL distribution point URLs — previously only AIA certificate URLs were validated ([#78])
@@ -95,6 +98,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fix WASM ingestion promises to recover from internal panics instead of crashing asynchronous file processing ([#100])
+- Fix WASM AIA fetch callback lifecycle to release JS callbacks on cancellation paths after promise completion ([#90])
+- Fix web AIA proxy upstream handling to enforce explicit fetch timeout/abort behavior and return 504 timeout errors ([#90])
 - Fix verify JSON chain output to use `not_after` for consistency with other commands ([#87])
 - Fix Certificate Transparency availability handling to preserve parsed SCT candidates when the log list cannot be loaded and mark them as unavailable instead of dropping them ([#86])
 - Fix chain conversion failures in Certificate Transparency checks to report SCTs as `unavailable` instead of `invalid` and keep diagnostics as warnings ([#86])
@@ -937,6 +943,9 @@ Initial release.
 [#85]: https://github.com/sensiblebit/certkit/pull/85
 [#86]: https://github.com/sensiblebit/certkit/pull/86
 [#87]: https://github.com/sensiblebit/certkit/pull/87
+[#90]: https://github.com/sensiblebit/certkit/pull/90
+[#100]: https://github.com/sensiblebit/certkit/pull/100
+[#103]: https://github.com/sensiblebit/certkit/pull/103
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63

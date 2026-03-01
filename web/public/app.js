@@ -61,10 +61,20 @@ const STATUS_ICONS = {
 // certkitFetchURL is called from Go (WASM) to fetch AIA certificates.
 // Tries direct fetch first, then falls back to our own /api/fetch proxy
 // (same-origin, no CORS issues).
-window.certkitFetchURL = async function (url) {
+window.certkitFetchURL = async function (url, timeoutMs = 10000) {
+  const fetchWithTimeout = async (targetURL) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      return await fetch(targetURL, { signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
   // 1. Try direct fetch (works if CA serves CORS headers)
   try {
-    const resp = await fetch(url);
+    const resp = await fetchWithTimeout(url);
     if (resp.ok) {
       console.log("certkit: AIA direct fetch succeeded:", url);
       return new Uint8Array(await resp.arrayBuffer());
@@ -76,7 +86,7 @@ window.certkitFetchURL = async function (url) {
   // 2. Proxy through our own /api/fetch endpoint
   const proxiedURL = "/api/fetch?url=" + encodeURIComponent(url);
   console.log("certkit: AIA proxy fetch:", proxiedURL);
-  const resp = await fetch(proxiedURL);
+  const resp = await fetchWithTimeout(proxiedURL);
   if (!resp.ok) {
     const body = await resp.text();
     throw new Error(`Proxy returned ${resp.status}: ${body}`);
@@ -1184,7 +1194,25 @@ exportBtn.addEventListener("click", async () => {
     downloadBlob(zipData, "certkit-bundles.zip", "application/zip");
     hideStatus();
   } catch (err) {
-    showStatus(`Export error: ${err.message}`, true);
+    if (
+      err?.message?.includes("verified export failed") &&
+      window.confirm(
+        "Verified export failed. Retry without certificate chain verification?",
+      )
+    ) {
+      try {
+        const zipData = await certkitExportBundles(skis, undefined, true);
+        downloadBlob(zipData, "certkit-bundles.zip", "application/zip");
+        showStatus(
+          "Export completed without chain verification. Verify trust before use.",
+          false,
+        );
+      } catch (retryErr) {
+        showStatus(`Export error: ${retryErr.message}`, true);
+      }
+    } else {
+      showStatus(`Export error: ${err.message}`, true);
+    }
   } finally {
     exportBtn.disabled = false;
     updateExportBtn();

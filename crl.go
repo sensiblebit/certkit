@@ -7,8 +7,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
+	"strconv"
 	"time"
 )
+
+const maxCRLBytes int64 = 10 << 20
 
 // CRLInfo contains parsed CRL details for display.
 type CRLInfo struct {
@@ -80,9 +84,47 @@ func FetchCRL(ctx context.Context, input FetchCRLInput) ([]byte, error) {
 		return nil, fmt.Errorf("CRL server returned HTTP %d from %s", resp.StatusCode, input.URL)
 	}
 
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // 10MB limit
+	if contentLength := resp.Header.Get("Content-Length"); contentLength != "" {
+		parsedLength, err := strconv.ParseInt(contentLength, 10, 64)
+		if err == nil && parsedLength > maxCRLBytes {
+			return nil, fmt.Errorf("crl response exceeds max size (%d bytes)", maxCRLBytes)
+		}
+	}
+
+	data, err := readCRLData(resp.Body)
 	if err != nil {
 		return nil, fmt.Errorf("reading CRL response: %w", err)
+	}
+	return data, nil
+}
+
+// ReadCRLFile reads a local CRL file with the same hard size cap as FetchCRL.
+func ReadCRLFile(path string) ([]byte, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("opening CRL file: %w", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	if info, err := f.Stat(); err == nil && info.Size() > maxCRLBytes {
+		return nil, fmt.Errorf("crl file exceeds max size (%d bytes)", maxCRLBytes)
+	}
+
+	data, err := readCRLData(f)
+	if err != nil {
+		return nil, fmt.Errorf("reading CRL file: %w", err)
+	}
+	return data, nil
+}
+
+func readCRLData(r io.Reader) ([]byte, error) {
+	limited := io.LimitReader(r, maxCRLBytes+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxCRLBytes {
+		return nil, fmt.Errorf("crl data exceeds max size (%d bytes)", maxCRLBytes)
 	}
 	return data, nil
 }

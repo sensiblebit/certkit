@@ -1,6 +1,7 @@
 package certkit
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/x509"
@@ -8,6 +9,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -306,6 +308,44 @@ func TestFetchCRL_AllowPrivateNetworks(t *testing.T) {
 	}
 	if len(data) != len(crlDER) {
 		t.Errorf("got %d bytes, want %d", len(data), len(crlDER))
+	}
+}
+
+func TestFetchCRL_ResponseTooLarge(t *testing.T) {
+	t.Parallel()
+
+	tooLargeBody := bytes.Repeat([]byte("x"), int(maxCRLBytes+1))
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Length", "10485761")
+		_, _ = w.Write(tooLargeBody)
+	}))
+	t.Cleanup(srv.Close)
+
+	url := strings.Replace(srv.URL, "127.0.0.1", "localhost", 1)
+	_, err := FetchCRL(context.Background(), FetchCRLInput{URL: url})
+	if err == nil {
+		t.Fatal("expected size-limit error, got nil")
+	}
+	if !strings.Contains(err.Error(), "exceeds max size") {
+		t.Fatalf("error = %q, want size-limit message", err.Error())
+	}
+}
+
+func TestReadCRLFile_SizeLimit(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := dir + "/oversize.crl"
+	if err := os.WriteFile(path, bytes.Repeat([]byte("x"), int(maxCRLBytes+1)), 0o600); err != nil {
+		t.Fatalf("writing oversized CRL file: %v", err)
+	}
+
+	_, err := ReadCRLFile(path)
+	if err == nil {
+		t.Fatal("expected size-limit error, got nil")
+	}
+	if !strings.Contains(err.Error(), "exceeds max size") {
+		t.Fatalf("error = %q, want size-limit message", err.Error())
 	}
 }
 

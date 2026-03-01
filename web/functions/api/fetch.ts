@@ -6,6 +6,7 @@
 // Usage: GET /api/fetch?url=https://cacerts.digicert.com/...
 
 const MAX_RESPONSE_SIZE = 256 * 1024; // 256KB — certs are small
+const UPSTREAM_TIMEOUT_MS = 8_000;
 
 // Allowed origins for CORS. The proxy only serves requests from these origins.
 const ALLOWED_ORIGINS: string[] = [
@@ -309,10 +310,19 @@ const MAX_REDIRECTS = 5;
 async function safeFetch(url: string): Promise<Response> {
   let currentURL = url;
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
-    const resp = await fetch(currentURL, {
-      headers: { "User-Agent": "certkit AIA proxy/1.0" },
-      redirect: "manual",
-    });
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
+
+    let resp: Response;
+    try {
+      resp = await fetch(currentURL, {
+        headers: { "User-Agent": "certkit AIA proxy/1.0" },
+        redirect: "manual",
+        signal: controller.signal,
+      });
+    } finally {
+      clearTimeout(timer);
+    }
 
     // Not a redirect — return as-is.
     if (resp.status < 300 || resp.status >= 400) {
@@ -337,6 +347,10 @@ async function safeFetch(url: string): Promise<Response> {
   }
 
   throw new Error("Too many redirects");
+}
+
+function isAbortError(err: unknown): boolean {
+  return err instanceof Error && err.name === "AbortError";
 }
 
 export const onRequestOptions: PagesFunction = async ({ request }) => {
@@ -476,7 +490,12 @@ export const onRequestGet: PagesFunction = async ({ request }) => {
       );
 
       return new Response(body, { status: 200, headers: responseHeaders });
-    } catch {
+    } catch (err) {
+      if (isAbortError(err)) {
+        lastStatus = 504;
+        lastMessage = `Upstream fetch timed out after ${UPSTREAM_TIMEOUT_MS}ms for ${tryURL}`;
+        continue;
+      }
       lastStatus = 502;
       lastMessage = `Fetch failed for ${tryURL}`;
     }

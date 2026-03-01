@@ -5,7 +5,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"sync"
 	"syscall/js"
+	"time"
 
 	"github.com/sensiblebit/certkit/internal/certstore"
 )
@@ -50,25 +52,55 @@ func jsFetchURL(ctx context.Context, url string) ([]byte, error) {
 		err  error
 	}
 	ch := make(chan result, 1)
+	done := make(chan struct{})
+	var doneOnce sync.Once
+	markDone := func() {
+		doneOnce.Do(func() {
+			close(done)
+		})
+	}
+	var releaseOnce sync.Once
+	releaseCallbacks := func(thenCb js.Func, catchCb js.Func) {
+		releaseOnce.Do(func() {
+			thenCb.Release()
+			catchCb.Release()
+		})
+	}
+	sendResult := func(r result) {
+		select {
+		case ch <- r:
+		default:
+		}
+	}
 
-	promise := fetchFn.Invoke(url)
+	timeoutMillis := 10_000
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline).Milliseconds()
+		if remaining > 0 {
+			timeoutMillis = int(remaining)
+		}
+	}
+
+	promise := fetchFn.Invoke(url, timeoutMillis)
 
 	const maxAIAResponseSize = 1 << 20 // 1MB, consistent with CLI httpAIAFetcher
 
 	thenCb := js.FuncOf(func(_ js.Value, args []js.Value) any {
+		defer markDone()
 		uint8Array := args[0]
 		size := uint8Array.Length()
 		if size > maxAIAResponseSize {
-			ch <- result{err: fmt.Errorf("AIA response too large (%d bytes, max %d)", size, maxAIAResponseSize)}
+			sendResult(result{err: fmt.Errorf("AIA response too large (%d bytes, max %d)", size, maxAIAResponseSize)})
 			return nil
 		}
 		data := make([]byte, size)
 		js.CopyBytesToGo(data, uint8Array)
-		ch <- result{data: data}
+		sendResult(result{data: data})
 		return nil
 	})
 
 	catchCb := js.FuncOf(func(_ js.Value, args []js.Value) any {
+		defer markDone()
 		val := args[0]
 		var errMsg string
 		if val.Type() == js.TypeObject || val.Type() == js.TypeFunction {
@@ -76,7 +108,7 @@ func jsFetchURL(ctx context.Context, url string) ([]byte, error) {
 		} else {
 			errMsg = val.String()
 		}
-		ch <- result{err: fmt.Errorf("AIA fetch: %s", errMsg)}
+		sendResult(result{err: fmt.Errorf("AIA fetch: %s", errMsg)})
 		return nil
 	})
 
@@ -84,14 +116,13 @@ func jsFetchURL(ctx context.Context, url string) ([]byte, error) {
 
 	select {
 	case r := <-ch:
-		thenCb.Release()
-		catchCb.Release()
+		releaseCallbacks(thenCb, catchCb)
 		return r.data, r.err
 	case <-ctx.Done():
-		// Do NOT release callbacks here. The JS promise is still pending and
-		// will eventually invoke one of them. Calling a released js.Func panics.
-		// The buffered channel (cap 1) absorbs the late send harmlessly.
-		// The callbacks leak, but that is preferable to a crash.
+		go func() {
+			<-done
+			releaseCallbacks(thenCb, catchCb)
+		}()
 		return nil, ctx.Err()
 	}
 }

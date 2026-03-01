@@ -3,7 +3,6 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"os"
 	"strings"
 
 	"github.com/sensiblebit/certkit"
@@ -66,7 +65,7 @@ func runCRL(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("fetching CRL: %w", err)
 		}
 	} else {
-		data, err = os.ReadFile(source)
+		data, err = certkit.ReadCRLFile(source)
 		if err != nil {
 			return fmt.Errorf("reading CRL file: %w", err)
 		}

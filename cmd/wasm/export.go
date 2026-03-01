@@ -16,7 +16,8 @@ import (
 // exportBundles generates a ZIP file containing organized certificate bundles.
 // If filterSKIs is non-empty, only pairs whose colon-hex SKI appears in the
 // list are included. Otherwise all matched pairs are exported.
-func exportBundles(ctx context.Context, s *certstore.MemStore, filterSKIs []string, p12Password string) ([]byte, error) {
+// When allowUnverifiedExport is true, chain verification is disabled explicitly.
+func exportBundles(ctx context.Context, s *certstore.MemStore, filterSKIs []string, p12Password string, allowUnverifiedExport bool) ([]byte, error) {
 	matched := s.MatchedPairs()
 	if len(matched) == 0 {
 		return nil, fmt.Errorf("no matched key-certificate pairs found")
@@ -47,7 +48,7 @@ func exportBundles(ctx context.Context, s *certstore.MemStore, filterSKIs []stri
 	opts := certkit.BundleOptions{
 		FetchAIA:   false,
 		TrustStore: "mozilla",
-		Verify:     true,
+		Verify:     !allowUnverifiedExport,
 	}
 
 	if err := certstore.ExportMatchedBundles(ctx, certstore.ExportMatchedBundleInput{
@@ -55,9 +56,12 @@ func exportBundles(ctx context.Context, s *certstore.MemStore, filterSKIs []stri
 		SKIs:          matched,
 		BundleOpts:    opts,
 		Writer:        &zipBundleWriter{zw: zw},
-		RetryNoVerify: true,
+		RetryNoVerify: false,
 		P12Password:   p12Password,
 	}); err != nil {
+		if opts.Verify {
+			return nil, fmt.Errorf("verified export failed: %w", err)
+		}
 		return nil, err
 	}
 
