@@ -18,34 +18,6 @@ import (
 	ctx509 "github.com/google/certificate-transparency-go/x509"
 )
 
-func TestCheckCT_MissingSCTs(t *testing.T) {
-	// WHY: CheckCT should report missing SCTs when none are present.
-	t.Parallel()
-
-	ca := generateTestCA(t, "CT Missing CA")
-	leaf := generateTestLeafCert(t, ca)
-	leafCert, err := x509.ParseCertificate(leaf.DER)
-	if err != nil {
-		t.Fatalf("parse leaf cert: %v", err)
-	}
-
-	result, diags := CheckCT(CheckCTInput{
-		Chain: []*x509.Certificate{leafCert, ca.Cert},
-	})
-	if result == nil {
-		t.Fatal("expected CT result")
-	}
-	if result.Status != "missing" {
-		t.Fatalf("status=%q, want %q", result.Status, "missing")
-	}
-	if result.Total != 0 {
-		t.Fatalf("total=%d, want 0", result.Total)
-	}
-	if !hasDiagnostic(diags, "ct-missing") {
-		t.Fatal("expected ct-missing diagnostic")
-	}
-}
-
 func TestCheckCT_TLSSCTStatus(t *testing.T) {
 	// WHY: CheckCT should classify TLS-delivered SCTs based on log list state.
 	t.Parallel()
@@ -59,7 +31,11 @@ func TestCheckCT_TLSSCTStatus(t *testing.T) {
 
 	logKey, logKeyDER := buildTestLogKey(t)
 	stamp := uint64(time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC).UnixMilli())
-	sctBytes := buildTestSCT(t, logKey, []*x509.Certificate{leafCert, ca.Cert}, stamp)
+	sctBytes := buildTestSCT(t, buildTestSCTInput{
+		LogKey:    logKey,
+		Chain:     []*x509.Certificate{leafCert, ca.Cert},
+		Timestamp: stamp,
+	})
 	validLogList := buildTestLogList(t, "Test Log", logKeyDER)
 
 	_, otherKeyDER := buildTestLogKey(t)
@@ -68,39 +44,76 @@ func TestCheckCT_TLSSCTStatus(t *testing.T) {
 	chain := []*x509.Certificate{leafCert, ca.Cert}
 
 	type countExpect struct {
-		valid   int
-		unknown int
-		total   int
+		valid       int
+		invalid     int
+		unknown     int
+		unavailable int
+		total       int
 	}
 
 	tests := []struct {
 		name          string
-		logList       []byte
+		input         CheckCTInput
 		wantStatus    string
 		wantCounts    *countExpect
 		wantSCTStatus string
 		wantDiag      string
 	}{
 		{
-			name:          "valid log",
-			logList:       validLogList,
+			name: "missing",
+			input: CheckCTInput{
+				Chain: chain,
+			},
+			wantStatus: "missing",
+			wantCounts: &countExpect{total: 0},
+			wantDiag:   "ct-missing",
+		},
+		{
+			name: "valid log",
+			input: CheckCTInput{
+				Chain:   chain,
+				TLSSCTs: [][]byte{sctBytes},
+				LogList: validLogList,
+			},
 			wantStatus:    "ok",
-			wantCounts:    &countExpect{valid: 1, unknown: 0, total: 1},
+			wantCounts:    &countExpect{valid: 1, total: 1},
 			wantSCTStatus: "valid",
 		},
 		{
-			name:          "unknown log",
-			logList:       unknownLogList,
+			name: "unknown log",
+			input: CheckCTInput{
+				Chain:   chain,
+				TLSSCTs: [][]byte{sctBytes},
+				LogList: unknownLogList,
+			},
 			wantStatus:    "unknown-log",
-			wantCounts:    &countExpect{valid: 0, unknown: 1, total: 1},
+			wantCounts:    &countExpect{unknown: 1, total: 1},
 			wantSCTStatus: "unknown-log",
 			wantDiag:      "ct-unknown-log",
 		},
 		{
-			name:       "log list unavailable",
-			logList:    []byte("not-json"),
-			wantStatus: "unavailable",
-			wantDiag:   "ct-unavailable",
+			name: "log list unavailable",
+			input: CheckCTInput{
+				Chain:   chain,
+				TLSSCTs: [][]byte{sctBytes},
+				LogList: []byte("not-json"),
+			},
+			wantStatus:    "unavailable",
+			wantCounts:    &countExpect{unavailable: 1, total: 1},
+			wantSCTStatus: "unavailable",
+			wantDiag:      "ct-unavailable",
+		},
+		{
+			name: "chain conversion unavailable",
+			input: CheckCTInput{
+				Chain:   []*x509.Certificate{nil, ca.Cert},
+				TLSSCTs: [][]byte{sctBytes},
+				LogList: validLogList,
+			},
+			wantStatus:    "unavailable",
+			wantCounts:    &countExpect{unavailable: 1, total: 1},
+			wantSCTStatus: "unavailable",
+			wantDiag:      "ct-unavailable",
 		},
 	}
 
@@ -108,11 +121,7 @@ func TestCheckCT_TLSSCTStatus(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// WHY: Each case verifies the expected CT status and diagnostics.
 			t.Parallel()
-			result, diags := CheckCT(CheckCTInput{
-				Chain:   chain,
-				TLSSCTs: [][]byte{sctBytes},
-				LogList: tt.logList,
-			})
+			result, diags := CheckCT(tt.input)
 			if result == nil {
 				t.Fatal("expected CT result")
 			}
@@ -123,8 +132,14 @@ func TestCheckCT_TLSSCTStatus(t *testing.T) {
 				if result.Valid != tt.wantCounts.valid {
 					t.Fatalf("valid=%d, want %d", result.Valid, tt.wantCounts.valid)
 				}
+				if result.Invalid != tt.wantCounts.invalid {
+					t.Fatalf("invalid=%d, want %d", result.Invalid, tt.wantCounts.invalid)
+				}
 				if result.UnknownLog != tt.wantCounts.unknown {
 					t.Fatalf("unknown=%d, want %d", result.UnknownLog, tt.wantCounts.unknown)
+				}
+				if result.Unavailable != tt.wantCounts.unavailable {
+					t.Fatalf("unavailable=%d, want %d", result.Unavailable, tt.wantCounts.unavailable)
 				}
 				if result.Total != tt.wantCounts.total {
 					t.Fatalf("total=%d, want %d", result.Total, tt.wantCounts.total)
@@ -166,7 +181,11 @@ func TestCheckCT_EmbeddedSCTInvalid(t *testing.T) {
 	logKey, logKeyDER := buildTestLogKey(t)
 	logList := buildTestLogList(t, "Embedded Log", logKeyDER)
 	stamp := uint64(time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC).UnixMilli())
-	sctBytes := buildTestSCT(t, logKey, []*x509.Certificate{leafCert, ca.Cert}, stamp)
+	sctBytes := buildTestSCT(t, buildTestSCTInput{
+		LogKey:    logKey,
+		Chain:     []*x509.Certificate{leafCert, ca.Cert},
+		Timestamp: stamp,
+	})
 	leafWithSCT := generateTestLeafCert(t, ca, withExtraExtensions(sctListExtension(t, sctBytes)))
 	leafWithSCTCert, err := x509.ParseCertificate(leafWithSCT.DER)
 	if err != nil {
@@ -297,10 +316,16 @@ func buildTestLogList(t *testing.T, description string, keyDER []byte) []byte {
 	return data
 }
 
-func buildTestSCT(t *testing.T, logKey *ecdsa.PrivateKey, chain []*x509.Certificate, timestamp uint64) []byte {
+type buildTestSCTInput struct {
+	LogKey    *ecdsa.PrivateKey
+	Chain     []*x509.Certificate
+	Timestamp uint64
+}
+
+func buildTestSCT(t *testing.T, input buildTestSCTInput) []byte {
 	t.Helper()
-	ctChain := make([]*ctx509.Certificate, 0, len(chain))
-	for i, cert := range chain {
+	ctChain := make([]*ctx509.Certificate, 0, len(input.Chain))
+	for i, cert := range input.Chain {
 		ctCert, err := ctx509.ParseCertificate(cert.Raw)
 		if err != nil && ctx509.IsFatal(err) {
 			t.Fatalf("parse ct cert %d: %v", i, err)
@@ -310,7 +335,7 @@ func buildTestSCT(t *testing.T, logKey *ecdsa.PrivateKey, chain []*x509.Certific
 		}
 		ctChain = append(ctChain, ctCert)
 	}
-	keyDER, err := x509.MarshalPKIXPublicKey(&logKey.PublicKey)
+	keyDER, err := x509.MarshalPKIXPublicKey(&input.LogKey.PublicKey)
 	if err != nil {
 		t.Fatalf("marshal log key: %v", err)
 	}
@@ -319,17 +344,17 @@ func buildTestSCT(t *testing.T, logKey *ecdsa.PrivateKey, chain []*x509.Certific
 	sct := ct.SignedCertificateTimestamp{
 		SCTVersion: ct.V1,
 		LogID:      ct.LogID{KeyID: logID},
-		Timestamp:  timestamp,
+		Timestamp:  input.Timestamp,
 	}
-	leaf, err := ct.MerkleTreeLeafFromChain(ctChain, ct.X509LogEntryType, timestamp)
+	leaf, err := ct.MerkleTreeLeafFromChain(ctChain, ct.X509LogEntryType, input.Timestamp)
 	if err != nil {
 		t.Fatalf("build merkle leaf: %v", err)
 	}
-	input, err := ct.SerializeSCTSignatureInput(sct, ct.LogEntry{Leaf: *leaf})
+	signatureInput, err := ct.SerializeSCTSignatureInput(sct, ct.LogEntry{Leaf: *leaf})
 	if err != nil {
 		t.Fatalf("serialize sct input: %v", err)
 	}
-	sig, err := cttls.CreateSignature(*logKey, cttls.SHA256, input)
+	sig, err := cttls.CreateSignature(*input.LogKey, cttls.SHA256, signatureInput)
 	if err != nil {
 		t.Fatalf("sign sct input: %v", err)
 	}
