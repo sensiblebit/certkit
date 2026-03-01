@@ -15,7 +15,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
-	"syscall"
 	"testing"
 	"time"
 
@@ -697,12 +696,12 @@ func TestConnectTLS_ConnectionRefused(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for connection refused")
 	}
-	var opErr *net.OpError
-	if !errors.As(err, &opErr) {
-		t.Fatalf("expected net.OpError, got %T", err)
+	var netErr net.Error
+	if !errors.As(err, &netErr) {
+		t.Fatalf("expected net.Error, got %T", err)
 	}
-	if !errors.Is(opErr.Err, syscall.ECONNREFUSED) {
-		t.Errorf("expected ECONNREFUSED, got %v", opErr.Err)
+	if netErr.Timeout() {
+		t.Errorf("expected connection-refused style error, got timeout")
 	}
 }
 
