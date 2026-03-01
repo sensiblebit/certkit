@@ -416,6 +416,41 @@ func TestInspectFile_PEMMalformedCertAndValidCert(t *testing.T) {
 	}
 }
 
+func TestInspectFile_PEMMalformedKeyAndValidKey(t *testing.T) {
+	// WHY: Inspect should retain valid private keys even when the same PEM file
+	// also contains malformed private key PEM blocks.
+	t.Parallel()
+
+	combined := slices.Concat(
+		pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: []byte("bad-der")}),
+		rsaKeyPEM(t),
+	)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mixed-malformed-key.pem")
+	if err := os.WriteFile(path, combined, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := InspectFile(path, nil)
+	if err != nil {
+		t.Fatalf("InspectFile: %v", err)
+	}
+
+	var keyCount int
+	for _, r := range results {
+		if r.Type == "private_key" {
+			keyCount++
+			if r.KeyType != "RSA" {
+				t.Errorf("KeyType = %q, want RSA", r.KeyType)
+			}
+		}
+	}
+	if keyCount != 1 {
+		t.Fatalf("expected exactly 1 private_key result, got %d", keyCount)
+	}
+}
+
 func TestInspectFile_DERRSAPrivateKey(t *testing.T) {
 	// WHY: Inspect DER parsing should recognize PKCS#1 RSA keys, not only PKCS#8.
 	t.Parallel()

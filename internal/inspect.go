@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -94,13 +95,35 @@ func inspectPEMData(data []byte, passwords []string) []InspectResult {
 	}
 
 	// Try private key
-	if keys, err := certkit.ParsePEMPrivateKeys(data, passwords); err == nil {
-		for _, key := range keys {
-			results = append(results, inspectKey(key))
+	rest := data
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
 		}
+		if !isPrivateKeyPEMBlockType(block.Type) {
+			continue
+		}
+
+		key, err := certkit.ParsePEMPrivateKeyWithPasswords(pem.EncodeToMemory(block), passwords)
+		if err != nil {
+			slog.Debug("skipping malformed private key PEM block during inspect", "block_type", block.Type, "error", err)
+			continue
+		}
+		results = append(results, inspectKey(key))
 	}
 
 	return results
+}
+
+func isPrivateKeyPEMBlockType(blockType string) bool {
+	switch blockType {
+	case "RSA PRIVATE KEY", "EC PRIVATE KEY", "PRIVATE KEY", "ENCRYPTED PRIVATE KEY", "OPENSSH PRIVATE KEY":
+		return true
+	default:
+		return false
+	}
 }
 
 func inspectDERData(data []byte, passwords []string) []InspectResult {
