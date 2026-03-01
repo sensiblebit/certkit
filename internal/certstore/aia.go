@@ -135,7 +135,7 @@ func ResolveAIA(ctx context.Context, input ResolveAIAInput) []string {
 				}
 				seen[aiaURL] = true
 
-				if err := certkit.ValidateAIAURLWithOptions(certkit.ValidateAIAURLInput{URL: aiaURL, AllowPrivateNetworks: input.AllowPrivateNetworks}); err != nil {
+				if err := certkit.ValidateAIAURLWithOptions(ctx, certkit.ValidateAIAURLInput{URL: aiaURL, AllowPrivateNetworks: input.AllowPrivateNetworks}); err != nil {
 					warnings = append(warnings, fmt.Sprintf(
 						"AIA URL rejected for %q: %v",
 						rec.Cert.Subject.CommonName, err,

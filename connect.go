@@ -365,7 +365,7 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 			PeerChain:   legacyResult.certificates,
 			LegacyProbe: true,
 		}
-		result.populate(connectCtx, input)
+		result.populate(ctx, input)
 		result.Diagnostics = append(result.Diagnostics, ChainDiagnostic{
 			Check:  "legacy-only",
 			Status: "warn",
@@ -397,7 +397,7 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 		TLSSCTs:     state.SignedCertificateTimestamps,
 	}
 
-	result.populate(connectCtx, input)
+	result.populate(ctx, input)
 	return result, nil
 }
 

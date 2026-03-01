@@ -476,31 +476,32 @@ func printScanVerboseText(store *certstore.MemStore) {
 	}
 }
 
-// aiaHTTPClient is reused across AIA fetches to enable TCP connection reuse.
+// newAIAHTTPClient creates an HTTP client for AIA fetches.
 // Redirects are limited to 3 and validated against SSRF rules.
-var aiaHTTPClient = &http.Client{
-	Timeout: 2 * time.Second,
-	CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 3 {
-			return fmt.Errorf("stopped after 3 redirects")
-		}
-		if err := certkit.ValidateAIAURLWithOptions(certkit.ValidateAIAURLInput{URL: req.URL.String(), AllowPrivateNetworks: scanAllowPrivateNetwork}); err != nil {
-			return fmt.Errorf("redirect blocked: %w", err)
-		}
-		return nil
-	},
+func newAIAHTTPClient(allowPrivateNetworks bool) *http.Client {
+	return &http.Client{
+		Timeout: 2 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 3 {
+				return fmt.Errorf("stopped after 3 redirects")
+			}
+			if err := certkit.ValidateAIAURLWithOptions(req.Context(), certkit.ValidateAIAURLInput{URL: req.URL.String(), AllowPrivateNetworks: allowPrivateNetworks}); err != nil {
+				return fmt.Errorf("redirect blocked: %w", err)
+			}
+			return nil
+		},
+	}
 }
 
-// httpAIAFetcher fetches raw certificate bytes from a URL via HTTP.
-func httpAIAFetcher(ctx context.Context, rawURL string) ([]byte, error) {
-	if err := certkit.ValidateAIAURLWithOptions(certkit.ValidateAIAURLInput{URL: rawURL, AllowPrivateNetworks: scanAllowPrivateNetwork}); err != nil {
+func fetchAIAURL(ctx context.Context, rawURL string, allowPrivateNetworks bool) ([]byte, error) {
+	if err := certkit.ValidateAIAURLWithOptions(ctx, certkit.ValidateAIAURLInput{URL: rawURL, AllowPrivateNetworks: allowPrivateNetworks}); err != nil {
 		return nil, fmt.Errorf("AIA URL rejected: %w", err)
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating AIA request: %w", err)
 	}
-	resp, err := aiaHTTPClient.Do(req)
+	resp, err := newAIAHTTPClient(allowPrivateNetworks).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetching AIA URL %s: %w", rawURL, err)
 	}
@@ -513,6 +514,11 @@ func httpAIAFetcher(ctx context.Context, rawURL string) ([]byte, error) {
 		return nil, fmt.Errorf("reading AIA response from %s: %w", rawURL, err)
 	}
 	return data, nil
+}
+
+// httpAIAFetcher fetches raw certificate bytes from a URL via HTTP.
+func httpAIAFetcher(ctx context.Context, rawURL string) ([]byte, error) {
+	return fetchAIAURL(ctx, rawURL, scanAllowPrivateNetwork)
 }
 
 // formatDN formats a pkix.Name as a one-line distinguished name string

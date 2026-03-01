@@ -202,7 +202,7 @@ func ipBlockedForAIA(ip net.IP) error {
 // By default, it rejects non-HTTP(S) schemes plus literal and DNS-resolved
 // private/loopback/link-local/unspecified addresses to prevent SSRF and
 // DNS-rebind attacks. Set AllowPrivateNetworks to bypass IP restrictions.
-func ValidateAIAURLWithOptions(input ValidateAIAURLInput) error {
+func ValidateAIAURLWithOptions(ctx context.Context, input ValidateAIAURLInput) error {
 	parsed, err := url.Parse(input.URL)
 	if err != nil {
 		return fmt.Errorf("parsing URL: %w", err)
@@ -235,7 +235,7 @@ func ValidateAIAURLWithOptions(input ValidateAIAURLInput) error {
 		lookup = defaultLookupIPAddresses
 	}
 
-	resolveCtx, cancel := context.WithTimeout(context.Background(), aiaURLResolveTimeout)
+	resolveCtx, cancel := context.WithTimeout(ctx, aiaURLResolveTimeout)
 	defer cancel()
 
 	ips, err := lookup(resolveCtx, host)
@@ -258,7 +258,7 @@ func ValidateAIAURLWithOptions(input ValidateAIAURLInput) error {
 // requests. It rejects non-HTTP(S) schemes plus literal and DNS-resolved
 // private/loopback/link-local/unspecified addresses.
 func ValidateAIAURL(rawURL string) error {
-	return ValidateAIAURLWithOptions(ValidateAIAURLInput{URL: rawURL})
+	return ValidateAIAURLWithOptions(context.Background(), ValidateAIAURLInput{URL: rawURL})
 }
 
 // VerifyChainTrustInput holds parameters for VerifyChainTrust.
@@ -426,7 +426,7 @@ func FetchAIACertificates(ctx context.Context, input FetchAIACertificatesInput) 
 			if len(via) >= maxRedirects {
 				return fmt.Errorf("stopped after %d redirects", maxRedirects)
 			}
-			if err := ValidateAIAURLWithOptions(ValidateAIAURLInput{URL: req.URL.String(), AllowPrivateNetworks: input.AllowPrivateNetworks}); err != nil {
+			if err := ValidateAIAURLWithOptions(req.Context(), ValidateAIAURLInput{URL: req.URL.String(), AllowPrivateNetworks: input.AllowPrivateNetworks}); err != nil {
 				return fmt.Errorf("redirect blocked: %w", err)
 			}
 			return nil
@@ -445,7 +445,7 @@ func FetchAIACertificates(ctx context.Context, input FetchAIACertificatesInput) 
 			}
 			seen[aiaURL] = true
 
-			if err := ValidateAIAURLWithOptions(ValidateAIAURLInput{URL: aiaURL, AllowPrivateNetworks: input.AllowPrivateNetworks}); err != nil {
+			if err := ValidateAIAURLWithOptions(ctx, ValidateAIAURLInput{URL: aiaURL, AllowPrivateNetworks: input.AllowPrivateNetworks}); err != nil {
 				warnings = append(warnings, fmt.Sprintf("AIA URL rejected for %s: %v", aiaURL, err))
 				continue
 			}

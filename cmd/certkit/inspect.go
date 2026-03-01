@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -10,6 +11,7 @@ import (
 )
 
 var inspectFormat string
+var inspectAllowPrivateNetwork bool
 
 var inspectCmd = &cobra.Command{
 	Use:   "inspect <file>",
@@ -24,6 +26,7 @@ var inspectCmd = &cobra.Command{
 
 func init() {
 	inspectCmd.Flags().StringVar(&inspectFormat, "format", "text", "Output format: text, json")
+	inspectCmd.Flags().BoolVar(&inspectAllowPrivateNetwork, "allow-private-network", false, "Allow AIA fetches to private/internal endpoints")
 
 	registerCompletion(inspectCmd, completionInput{"format", fixedCompletion("text", "json")})
 }
@@ -41,8 +44,11 @@ func runInspect(cmd *cobra.Command, args []string) error {
 
 	// Resolve missing intermediates via AIA before trust annotation.
 	results, aiaWarnings := internal.ResolveInspectAIA(cmd.Context(), internal.ResolveInspectAIAInput{
-		Results: results,
-		Fetch:   httpAIAFetcher,
+		Results:              results,
+		AllowPrivateNetworks: inspectAllowPrivateNetwork,
+		Fetch: func(ctx context.Context, rawURL string) ([]byte, error) {
+			return fetchAIAURL(ctx, rawURL, inspectAllowPrivateNetwork)
+		},
 	})
 	for _, w := range aiaWarnings {
 		slog.Warn("AIA resolution", "warning", w)

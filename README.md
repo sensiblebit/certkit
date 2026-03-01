@@ -131,9 +131,10 @@ Common passwords (`""`, `"password"`, `"changeit"`, `"keypassword"`) are always 
 ### Inspect Flags
 
 <!-- certkit:flags:inspect -->
-| Flag       | Default | Description               |
-| ---------- | ------- | ------------------------- |
-| `--format` | `text`  | Output format: text, json |
+| Flag                      | Default | Description                                     |
+| ------------------------- | ------- | ----------------------------------------------- |
+| `--allow-private-network` | `false` | Allow AIA fetches to private/internal endpoints |
+| `--format`                | `text`  | Output format: text, json                       |
 <!-- /certkit:flags -->
 
 ### Verify Flags

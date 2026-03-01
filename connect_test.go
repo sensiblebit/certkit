@@ -592,9 +592,9 @@ func TestConnectTLS_CancelledContext(t *testing.T) {
 	}
 }
 
-func TestConnectTLS_DefaultTimeoutWhenContextHasNoDeadline(t *testing.T) {
-	// WHY: ConnectTLS must apply a safe timeout when callers pass context.Background()
-	// so stalled handshakes do not block indefinitely.
+func TestConnectTLS_UsesConnectTimeoutWhenContextHasNoDeadline(t *testing.T) {
+	// WHY: When callers pass a context without a deadline, ConnectTLS should
+	// honor ConnectTimeout to avoid hanging on stalled handshakes.
 	t.Parallel()
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")

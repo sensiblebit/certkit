@@ -58,7 +58,7 @@ func CheckOCSP(ctx context.Context, input CheckOCSPInput) (*OCSPResult, error) {
 
 	responderURL := input.Cert.OCSPServer[0]
 
-	if err := ValidateAIAURLWithOptions(ValidateAIAURLInput{URL: responderURL, AllowPrivateNetworks: input.AllowPrivateNetworks}); err != nil {
+	if err := ValidateAIAURLWithOptions(ctx, ValidateAIAURLInput{URL: responderURL, AllowPrivateNetworks: input.AllowPrivateNetworks}); err != nil {
 		return nil, fmt.Errorf("validating OCSP responder URL: %w", err)
 	}
 
@@ -80,7 +80,7 @@ func CheckOCSP(ctx context.Context, input CheckOCSPInput) (*OCSPResult, error) {
 			if len(via) >= maxRedirects {
 				return fmt.Errorf("stopped after %d redirects", maxRedirects)
 			}
-			if err := ValidateAIAURLWithOptions(ValidateAIAURLInput{URL: req.URL.String(), AllowPrivateNetworks: input.AllowPrivateNetworks}); err != nil {
+			if err := ValidateAIAURLWithOptions(req.Context(), ValidateAIAURLInput{URL: req.URL.String(), AllowPrivateNetworks: input.AllowPrivateNetworks}); err != nil {
 				return fmt.Errorf("redirect blocked: %w", err)
 			}
 			return nil

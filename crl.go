@@ -46,7 +46,7 @@ type FetchCRLInput struct {
 // The response is limited to 10 MB.
 func FetchCRL(ctx context.Context, input FetchCRLInput) ([]byte, error) {
 	if !input.AllowPrivateNetworks {
-		if err := ValidateAIAURLWithOptions(ValidateAIAURLInput{URL: input.URL, AllowPrivateNetworks: input.AllowPrivateNetworks}); err != nil {
+		if err := ValidateAIAURLWithOptions(ctx, ValidateAIAURLInput{URL: input.URL, AllowPrivateNetworks: input.AllowPrivateNetworks}); err != nil {
 			return nil, fmt.Errorf("validating CRL URL: %w", err)
 		}
 	}
@@ -59,7 +59,7 @@ func FetchCRL(ctx context.Context, input FetchCRLInput) ([]byte, error) {
 				return fmt.Errorf("stopped after %d redirects", maxRedirects)
 			}
 			if !input.AllowPrivateNetworks {
-				if err := ValidateAIAURLWithOptions(ValidateAIAURLInput{URL: req.URL.String(), AllowPrivateNetworks: input.AllowPrivateNetworks}); err != nil {
+				if err := ValidateAIAURLWithOptions(req.Context(), ValidateAIAURLInput{URL: req.URL.String(), AllowPrivateNetworks: input.AllowPrivateNetworks}); err != nil {
 					return fmt.Errorf("redirect blocked: %w", err)
 				}
 			}
