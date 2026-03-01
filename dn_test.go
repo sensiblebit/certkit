@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"encoding/hex"
 	"errors"
 	"net"
 	"net/url"
@@ -122,6 +123,16 @@ func TestFormatEKUOIDs(t *testing.T) {
 		raw  []byte
 		want []string
 	}{
+		{
+			name: "nil raw returns nil",
+			raw:  nil,
+			want: nil,
+		},
+		{
+			name: "empty raw returns nil",
+			raw:  []byte{},
+			want: nil,
+		},
 		{
 			name: "known OIDs",
 			raw: mustMarshalOIDs(t,
@@ -317,6 +328,16 @@ func TestFormatKeyUsageBitString(t *testing.T) {
 		want []string
 	}{
 		{
+			name: "nil raw returns nil",
+			raw:  nil,
+			want: nil,
+		},
+		{
+			name: "empty raw returns nil",
+			raw:  []byte{},
+			want: nil,
+		},
+		{
 			name: "DigitalSignature only",
 			raw:  mustMarshalKeyUsageBitString(t, x509.KeyUsageDigitalSignature),
 			want: []string{"Digital Signature"},
@@ -457,335 +478,259 @@ func TestParseOtherNameSANs(t *testing.T) {
 	// identity info (like UPN) is invisible in inspect output.
 	t.Parallel()
 
-	t.Run("OtherName with UPN", func(t *testing.T) {
-		// WHY: Confirms labeled OtherName values (UPN) are formatted correctly.
-		t.Parallel()
-		sanBytes := buildSANWithOtherName(t,
-			asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3}, // UPN OID
-			"user@example.com",
-		)
-		exts := []pkix.Extension{{
-			Id:    asn1.ObjectIdentifier{2, 5, 29, 17},
-			Value: sanBytes,
-		}}
-		got := ParseOtherNameSANs(exts)
-		if len(got) != 1 {
-			t.Fatalf("expected 1 result, got %d: %v", len(got), got)
-		}
-		if got[0] != "UPN:user@example.com" {
-			t.Errorf("got %q, want %q", got[0], "UPN:user@example.com")
-		}
-	})
+	sanOID := asn1.ObjectIdentifier{2, 5, 29, 17}
+	upnOID := asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3}
+	makeExts := func(value []byte) []pkix.Extension {
+		return []pkix.Extension{{Id: sanOID, Value: value}}
+	}
 
-	t.Run("OtherName with unknown OID falls back to OID string", func(t *testing.T) {
-		// WHY: Ensures unknown OtherName OIDs fall back to dotted-decimal labels.
-		t.Parallel()
-		sanBytes := buildSANWithOtherName(t,
-			asn1.ObjectIdentifier{1, 2, 3, 4, 5},
-			"some-value",
-		)
-		exts := []pkix.Extension{{
-			Id:    asn1.ObjectIdentifier{2, 5, 29, 17},
-			Value: sanBytes,
-		}}
-		got := ParseOtherNameSANs(exts)
-		if len(got) != 1 {
-			t.Fatalf("expected 1 result, got %d: %v", len(got), got)
-		}
-		if got[0] != "1.2.3.4.5:some-value" {
-			t.Errorf("got %q, want %q", got[0], "1.2.3.4.5:some-value")
-		}
-	})
-
-	t.Run("DirectoryName", func(t *testing.T) {
-		// WHY: Ensures DirectoryName SANs are surfaced as DirName entries.
-		t.Parallel()
-		sanBytes := buildSANWithDirectoryName(t, pkix.Name{CommonName: "test-dir"})
-		exts := []pkix.Extension{{
-			Id:    asn1.ObjectIdentifier{2, 5, 29, 17},
-			Value: sanBytes,
-		}}
-		got := ParseOtherNameSANs(exts)
-		if len(got) != 1 {
-			t.Fatalf("expected 1 result, got %d: %v", len(got), got)
-		}
-		if !strings.HasPrefix(got[0], "DirName:") {
-			t.Errorf("expected DirName: prefix, got %q", got[0])
-		}
-		if !strings.Contains(got[0], "test-dir") {
-			t.Errorf("expected CN=test-dir in output, got %q", got[0])
-		}
-	})
-
-	t.Run("RegisteredID", func(t *testing.T) {
-		// WHY: Ensures registeredID SANs are surfaced with dotted OID strings.
-		t.Parallel()
-		sanBytes := buildSANWithRegisteredID(t, asn1.ObjectIdentifier{1, 2, 3, 4})
-		exts := []pkix.Extension{{
-			Id:    asn1.ObjectIdentifier{2, 5, 29, 17},
-			Value: sanBytes,
-		}}
-		got := ParseOtherNameSANs(exts)
-		if len(got) != 1 {
-			t.Fatalf("expected 1 result, got %d: %v", len(got), got)
-		}
-		if got[0] != "RegisteredID:1.2.3.4" {
-			t.Errorf("got %q, want %q", got[0], "RegisteredID:1.2.3.4")
-		}
-	})
-
-	t.Run("RegisteredID with invalid bytes is ignored", func(t *testing.T) {
-		// WHY: Ensures malformed registeredID payloads don't break parsing.
-		t.Parallel()
-		regIDGN := mustMarshalGeneralName(t, asn1.RawValue{
-			Class: asn1.ClassContextSpecific,
-			Tag:   8,
-			Bytes: []byte{0x80},
-		})
-		sanBytes := buildSANWithGeneralNames(t, regIDGN)
-		exts := []pkix.Extension{{
-			Id:    asn1.ObjectIdentifier{2, 5, 29, 17},
-			Value: sanBytes,
-		}}
-		got := ParseOtherNameSANs(exts)
-		if got != nil {
-			t.Errorf("expected nil for invalid registeredID, got %v", got)
-		}
-	})
-
-	t.Run("mixed SAN entries", func(t *testing.T) {
-		// WHY: Ensures OtherName/DirName/RegisteredID are extracted while standard SANs are ignored.
-		t.Parallel()
-		sanBytes := buildSANWithGeneralNames(t,
-			marshalOtherNameGeneralName(t,
-				asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3},
-				"mix@example.com",
-			),
-			marshalDirectoryNameGeneralName(t, pkix.Name{CommonName: "mixed-dir"}),
-			marshalRegisteredIDGeneralName(t, asn1.ObjectIdentifier{1, 2, 3, 4, 5}),
-			marshalDNSNameGeneralName(t, "example.com"),
-		)
-		exts := []pkix.Extension{{
-			Id:    asn1.ObjectIdentifier{2, 5, 29, 17},
-			Value: sanBytes,
-		}}
-		got := ParseOtherNameSANs(exts)
-		want := []string{"UPN:mix@example.com", "DirName:CN=mixed-dir", "RegisteredID:1.2.3.4.5"}
-		if !slices.Equal(got, want) {
-			t.Errorf("got %v, want %v", got, want)
-		}
-	})
-
-	t.Run("multiple SAN extensions", func(t *testing.T) {
-		// WHY: Multiple SAN extensions should be aggregated, not truncated to the first.
-		t.Parallel()
-		san1 := buildSANWithOtherName(t,
-			asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3},
-			"first@example.com",
-		)
-		san2 := buildSANWithDirectoryName(t, pkix.Name{CommonName: "second-dir"})
-		exts := []pkix.Extension{
-			{Id: asn1.ObjectIdentifier{2, 5, 29, 17}, Value: san1},
-			{Id: asn1.ObjectIdentifier{2, 5, 29, 17}, Value: san2},
-		}
-		got := ParseOtherNameSANs(exts)
-		want := []string{"UPN:first@example.com", "DirName:CN=second-dir"}
-		if !slices.Equal(got, want) {
-			t.Errorf("got %v, want %v", got, want)
-		}
-	})
-
-	t.Run("duplicate OtherName entries preserve order", func(t *testing.T) {
-		// WHY: Duplicate SAN entries must not be deduplicated or reordered.
-		t.Parallel()
-		san1 := buildSANWithOtherName(t,
-			asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3},
-			"first@example.com",
-		)
-		san2 := buildSANWithOtherName(t,
-			asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3},
-			"second@example.com",
-		)
-		exts := []pkix.Extension{
-			{Id: asn1.ObjectIdentifier{2, 5, 29, 17}, Value: san1},
-			{Id: asn1.ObjectIdentifier{2, 5, 29, 17}, Value: san2},
-		}
-		got := ParseOtherNameSANs(exts)
-		want := []string{"UPN:first@example.com", "UPN:second@example.com"}
-		if !slices.Equal(got, want) {
-			t.Errorf("got %v, want %v", got, want)
-		}
-	})
-
-	t.Run("no SAN extension returns nil", func(t *testing.T) {
-		// WHY: Ensures non-SAN extensions are ignored.
-		t.Parallel()
-		exts := []pkix.Extension{{
-			Id:    asn1.ObjectIdentifier{2, 5, 29, 19}, // basicConstraints, not SAN
-			Value: []byte{0x30, 0x00},
-		}}
-		got := ParseOtherNameSANs(exts)
-		if got != nil {
-			t.Errorf("expected nil, got %v", got)
-		}
-	})
-
-	t.Run("nil extensions returns nil", func(t *testing.T) {
-		// WHY: Ensures nil extension slices are handled safely.
-		t.Parallel()
-		got := ParseOtherNameSANs(nil)
-		if got != nil {
-			t.Errorf("expected nil, got %v", got)
-		}
-	})
-
-	t.Run("SAN with only dNSName returns nil", func(t *testing.T) {
-		// WHY: Ensures standard SAN entries are ignored by ParseOtherNameSANs.
-		t.Parallel()
-		// Build a SAN extension containing only a dNSName (tag 2), which
-		// ParseOtherNameSANs should ignore.
-		sanBytes := buildSANWithDNSName(t, "example.com")
-		exts := []pkix.Extension{{
-			Id:    asn1.ObjectIdentifier{2, 5, 29, 17},
-			Value: sanBytes,
-		}}
-		got := ParseOtherNameSANs(exts)
-		if got != nil {
-			t.Errorf("expected nil for dNSName-only SAN, got %v", got)
-		}
-	})
-
-	t.Run("unknown GeneralName tag is ignored", func(t *testing.T) {
-		// WHY: Ensures non-OtherName/DirName/RegisteredID GeneralNames don't affect output.
-		t.Parallel()
-		ipGN := mustMarshalGeneralName(t, asn1.RawValue{
-			Class: asn1.ClassContextSpecific,
-			Tag:   7,
-			Bytes: []byte{127, 0, 0, 1},
-		})
-		sanBytes := buildSANWithGeneralNames(t, ipGN)
-		exts := []pkix.Extension{{
-			Id:    asn1.ObjectIdentifier{2, 5, 29, 17},
-			Value: sanBytes,
-		}}
-		got := ParseOtherNameSANs(exts)
-		if got != nil {
-			t.Errorf("expected nil for unknown GeneralName tag, got %v", got)
-		}
-	})
-
-	t.Run("invalid SAN bytes returns nil", func(t *testing.T) {
-		// WHY: Ensures malformed SAN extension bytes return nil without panic.
-		t.Parallel()
-		exts := []pkix.Extension{{
-			Id:    asn1.ObjectIdentifier{2, 5, 29, 17},
-			Value: []byte{0xFF, 0xFF, 0xFF},
-		}}
-		got := ParseOtherNameSANs(exts)
-		if got != nil {
-			t.Errorf("expected nil for invalid bytes, got %v", got)
-		}
-	})
-
-	t.Run("valid entry before malformed bytes", func(t *testing.T) {
-		// WHY: Ensures a malformed GeneralName after a valid OtherName doesn't drop earlier entries.
-		t.Parallel()
-		validGN := marshalOtherNameGeneralName(t,
-			asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3},
-			"ok@example.com",
-		)
-		sanBytes := buildSANWithGeneralNames(t, validGN, []byte{0xFF})
-		exts := []pkix.Extension{{
-			Id:    asn1.ObjectIdentifier{2, 5, 29, 17},
-			Value: sanBytes,
-		}}
-		got := ParseOtherNameSANs(exts)
-		want := []string{"UPN:ok@example.com"}
-		if !slices.Equal(got, want) {
-			t.Errorf("got %v, want %v", got, want)
-		}
-	})
-
-	t.Run("malformed entry before valid bytes", func(t *testing.T) {
-		// WHY: Ensures a malformed GeneralName before a valid OtherName doesn't drop later entries.
-		t.Parallel()
-		malformedGN, err := asn1.Marshal(asn1.RawValue{
-			Class:      asn1.ClassContextSpecific,
-			Tag:        0,
-			IsCompound: true,
-			Bytes:      []byte{0x30, 0x00},
-		})
-		if err != nil {
-			t.Fatalf("marshal malformed OtherName: %v", err)
-		}
-		validGN := marshalOtherNameGeneralName(t,
-			asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3},
-			"later@example.com",
-		)
-		sanBytes := buildSANWithGeneralNames(t, malformedGN, validGN)
-		exts := []pkix.Extension{{
-			Id:    asn1.ObjectIdentifier{2, 5, 29, 17},
-			Value: sanBytes,
-		}}
-		got := ParseOtherNameSANs(exts)
-		want := []string{"UPN:later@example.com"}
-		if !slices.Equal(got, want) {
-			t.Errorf("got %v, want %v", got, want)
-		}
-	})
-
-	t.Run("OtherName with non-UTF8 string types", func(t *testing.T) {
-		// WHY: Ensures IA5/Printable/BMP OtherName values are surfaced, not dropped.
-		t.Parallel()
-		upnOID := asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3}
-		tests := []struct {
-			name  string
-			tag   int
-			bytes []byte
-			want  string
-		}{
-			{
-				name:  "IA5String",
-				tag:   asn1.TagIA5String,
-				bytes: []byte("ia5@example.com"),
-				want:  "UPN:ia5@example.com",
+	tests := []struct {
+		name  string
+		build func(t *testing.T) ([]pkix.Extension, []string, bool)
+	}{
+		{
+			name: "OtherName with UPN",
+			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				sanBytes := buildSANWithOtherName(t, upnOID, "user@example.com")
+				return makeExts(sanBytes), []string{"UPN:user@example.com"}, false
 			},
-			{
-				name:  "PrintableString",
-				tag:   asn1.TagPrintableString,
-				bytes: []byte("PRINTABLE"),
-				want:  "UPN:PRINTABLE",
+		},
+		{
+			name: "OtherName with unknown OID falls back to OID string",
+			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				sanBytes := buildSANWithOtherName(t, asn1.ObjectIdentifier{1, 2, 3, 4, 5}, "some-value")
+				return makeExts(sanBytes), []string{"1.2.3.4.5:some-value"}, false
 			},
-			{
-				name:  "BMPString",
-				tag:   asn1.TagBMPString,
-				bytes: bmpStringBytes("BMP"),
-				want:  "UPN:BMP",
+		},
+		{
+			name: "OtherName with non-string value falls back to hex",
+			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				value := asn1.RawValue{Class: asn1.ClassUniversal, Tag: asn1.TagOctetString, Bytes: []byte{0xde, 0xad}}
+				valueBytes, err := asn1.Marshal(value)
+				if err != nil {
+					t.Fatalf("marshal OtherName value: %v", err)
+				}
+				otherNameGN := marshalOtherNameGeneralNameWithValue(t, upnOID, value)
+				sanBytes := buildSANWithGeneralNames(t, otherNameGN)
+				return makeExts(sanBytes), []string{"UPN:" + hex.EncodeToString(valueBytes)}, false
 			},
-		}
-
-		for _, tt := range tests {
-			t.Run(tt.name, func(t *testing.T) {
-				// WHY: Confirms OtherName with this ASN.1 string type is decoded correctly.
-				t.Parallel()
+		},
+		{
+			name: "DirectoryName",
+			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				sanBytes := buildSANWithDirectoryName(t, pkix.Name{CommonName: "test-dir"})
+				return makeExts(sanBytes), []string{"DirName:CN=test-dir"}, false
+			},
+		},
+		{
+			name: "RegisteredID",
+			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				sanBytes := buildSANWithRegisteredID(t, asn1.ObjectIdentifier{1, 2, 3, 4})
+				return makeExts(sanBytes), []string{"RegisteredID:1.2.3.4"}, false
+			},
+		},
+		{
+			name: "RegisteredID with invalid bytes is ignored",
+			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				regIDGN := mustMarshalGeneralName(t, asn1.RawValue{
+					Class: asn1.ClassContextSpecific,
+					Tag:   8,
+					Bytes: []byte{0x80},
+				})
+				sanBytes := buildSANWithGeneralNames(t, regIDGN)
+				return makeExts(sanBytes), nil, true
+			},
+		},
+		{
+			name: "malformed registeredID before valid OtherName",
+			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				badRegID := mustMarshalGeneralName(t, asn1.RawValue{
+					Class: asn1.ClassContextSpecific,
+					Tag:   8,
+					Bytes: []byte{0xff},
+				})
+				goodOther := marshalOtherNameGeneralName(t, upnOID, "later@example.com")
+				sanBytes := buildSANWithGeneralNames(t, badRegID, goodOther)
+				return makeExts(sanBytes), []string{"UPN:later@example.com"}, false
+			},
+		},
+		{
+			name: "malformed DirectoryName before valid OtherName",
+			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				badDir := mustMarshalGeneralName(t, asn1.RawValue{
+					Class:      asn1.ClassContextSpecific,
+					Tag:        4,
+					IsCompound: true,
+					Bytes:      []byte{0xff},
+				})
+				goodOther := marshalOtherNameGeneralName(t, upnOID, "later@example.com")
+				sanBytes := buildSANWithGeneralNames(t, badDir, goodOther)
+				return makeExts(sanBytes), []string{"UPN:later@example.com"}, false
+			},
+		},
+		{
+			name: "mixed SAN entries",
+			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				sanBytes := buildSANWithGeneralNames(t,
+					marshalOtherNameGeneralName(t, upnOID, "mix@example.com"),
+					marshalDirectoryNameGeneralName(t, pkix.Name{CommonName: "mixed-dir"}),
+					marshalRegisteredIDGeneralName(t, asn1.ObjectIdentifier{1, 2, 3, 4, 5}),
+					marshalDNSNameGeneralName(t, "example.com"),
+				)
+				want := []string{"UPN:mix@example.com", "DirName:CN=mixed-dir", "RegisteredID:1.2.3.4.5"}
+				return makeExts(sanBytes), want, false
+			},
+		},
+		{
+			name: "multiple SAN extensions",
+			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				san1 := buildSANWithOtherName(t, upnOID, "first@example.com")
+				san2 := buildSANWithDirectoryName(t, pkix.Name{CommonName: "second-dir"})
+				exts := []pkix.Extension{{Id: sanOID, Value: san1}, {Id: sanOID, Value: san2}}
+				want := []string{"UPN:first@example.com", "DirName:CN=second-dir"}
+				return exts, want, false
+			},
+		},
+		{
+			name: "multiple SAN extensions with invalid first",
+			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				san1 := []byte{0xff, 0xff, 0xff}
+				san2 := buildSANWithOtherName(t, upnOID, "second@example.com")
+				exts := []pkix.Extension{{Id: sanOID, Value: san1}, {Id: sanOID, Value: san2}}
+				return exts, []string{"UPN:second@example.com"}, false
+			},
+		},
+		{
+			name: "duplicate OtherName entries preserve order",
+			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				san1 := buildSANWithOtherName(t, upnOID, "first@example.com")
+				san2 := buildSANWithOtherName(t, upnOID, "second@example.com")
+				exts := []pkix.Extension{{Id: sanOID, Value: san1}, {Id: sanOID, Value: san2}}
+				return exts, []string{"UPN:first@example.com", "UPN:second@example.com"}, false
+			},
+		},
+		{
+			name: "no SAN extension returns nil",
+			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				exts := []pkix.Extension{{
+					Id:    asn1.ObjectIdentifier{2, 5, 29, 19},
+					Value: []byte{0x30, 0x00},
+				}}
+				return exts, nil, true
+			},
+		},
+		{
+			name: "nil extensions returns nil",
+			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				return nil, nil, true
+			},
+		},
+		{
+			name: "SAN with only dNSName returns nil",
+			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				sanBytes := buildSANWithDNSName(t, "example.com")
+				return makeExts(sanBytes), nil, true
+			},
+		},
+		{
+			name: "unknown GeneralName tag is ignored",
+			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				ipGN := mustMarshalGeneralName(t, asn1.RawValue{
+					Class: asn1.ClassContextSpecific,
+					Tag:   7,
+					Bytes: []byte{127, 0, 0, 1},
+				})
+				sanBytes := buildSANWithGeneralNames(t, ipGN)
+				return makeExts(sanBytes), nil, true
+			},
+		},
+		{
+			name: "invalid SAN bytes returns nil",
+			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				exts := []pkix.Extension{{Id: sanOID, Value: []byte{0xFF, 0xFF, 0xFF}}}
+				return exts, nil, true
+			},
+		},
+		{
+			name: "valid entry before malformed bytes",
+			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				validGN := marshalOtherNameGeneralName(t, upnOID, "ok@example.com")
+				sanBytes := buildSANWithGeneralNames(t, validGN, []byte{0xFF})
+				return makeExts(sanBytes), []string{"UPN:ok@example.com"}, false
+			},
+		},
+		{
+			name: "malformed entry before valid bytes",
+			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				malformedGN, err := asn1.Marshal(asn1.RawValue{
+					Class:      asn1.ClassContextSpecific,
+					Tag:        0,
+					IsCompound: true,
+					Bytes:      []byte{0x30, 0x00},
+				})
+				if err != nil {
+					t.Fatalf("marshal malformed OtherName: %v", err)
+				}
+				validGN := marshalOtherNameGeneralName(t, upnOID, "later@example.com")
+				sanBytes := buildSANWithGeneralNames(t, malformedGN, validGN)
+				return makeExts(sanBytes), []string{"UPN:later@example.com"}, false
+			},
+		},
+		{
+			name: "OtherName with IA5String",
+			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
 				otherNameGN := marshalOtherNameGeneralNameWithValue(t, upnOID, asn1.RawValue{
 					Class: asn1.ClassUniversal,
-					Tag:   tt.tag,
-					Bytes: tt.bytes,
+					Tag:   asn1.TagIA5String,
+					Bytes: []byte("ia5@example.com"),
 				})
 				sanBytes := buildSANWithGeneralNames(t, otherNameGN)
-				exts := []pkix.Extension{{
-					Id:    asn1.ObjectIdentifier{2, 5, 29, 17},
-					Value: sanBytes,
-				}}
-				got := ParseOtherNameSANs(exts)
-				want := []string{tt.want}
-				if !slices.Equal(got, want) {
-					t.Errorf("got %v, want %v", got, want)
+				return makeExts(sanBytes), []string{"UPN:ia5@example.com"}, false
+			},
+		},
+		{
+			name: "OtherName with PrintableString",
+			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				otherNameGN := marshalOtherNameGeneralNameWithValue(t, upnOID, asn1.RawValue{
+					Class: asn1.ClassUniversal,
+					Tag:   asn1.TagPrintableString,
+					Bytes: []byte("PRINTABLE"),
+				})
+				sanBytes := buildSANWithGeneralNames(t, otherNameGN)
+				return makeExts(sanBytes), []string{"UPN:PRINTABLE"}, false
+			},
+		},
+		{
+			name: "OtherName with BMPString",
+			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				otherNameGN := marshalOtherNameGeneralNameWithValue(t, upnOID, asn1.RawValue{
+					Class: asn1.ClassUniversal,
+					Tag:   asn1.TagBMPString,
+					Bytes: bmpStringBytes("BMP"),
+				})
+				sanBytes := buildSANWithGeneralNames(t, otherNameGN)
+				return makeExts(sanBytes), []string{"UPN:BMP"}, false
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// WHY: Confirms ParseOtherNameSANs handles this SAN mix correctly.
+			t.Parallel()
+			exts, want, wantNil := tt.build(t)
+			got := ParseOtherNameSANs(exts)
+			if wantNil {
+				if got != nil {
+					t.Errorf("expected nil, got %v", got)
 				}
-			})
-		}
-	})
+				return
+			}
+			if !slices.Equal(got, want) {
+				t.Errorf("got %v, want %v", got, want)
+			}
+		})
+	}
 }
 
 func TestParseOtherNameSANs_FromCertificate(t *testing.T) {
@@ -1325,6 +1270,24 @@ func TestFormatDNFromRaw(t *testing.T) {
 			want:     "CN=fallback.example.com",
 		},
 		{
+			name: "trailing bytes fall back",
+			raw: func() []byte {
+				rdns := pkix.RDNSequence{
+					pkix.RelativeDistinguishedNameSET{{
+						Type:  asn1.ObjectIdentifier{2, 5, 4, 3},
+						Value: "trail.example.com",
+					}},
+				}
+				raw, err := asn1.Marshal(rdns)
+				if err != nil {
+					t.Fatalf("marshal RDNSequence: %v", err)
+				}
+				return append(raw, 0x00)
+			}(),
+			fallback: pkix.Name{CommonName: "fallback.example.com"},
+			want:     "CN=fallback.example.com",
+		},
+		{
 			name:     "certificate raw subject preserves multi-valued RDN",
 			raw:      certificateRawSubject(t),
 			fallback: pkix.Name{CommonName: "multi.example.com"},
@@ -1530,6 +1493,10 @@ func TestMarshalSANExtension(t *testing.T) {
 		name           string
 		input          MarshalSANExtensionInput
 		wantOtherNames []string // expected ParseOtherNameSANs output
+		wantDNSNames   []string
+		wantEmails     []string
+		wantIPs        []string
+		wantURIs       []string
 	}{
 		{
 			name: "UPN only",
@@ -1558,6 +1525,7 @@ func TestMarshalSANExtension(t *testing.T) {
 				},
 			},
 			wantOtherNames: []string{"UPN:admin@example.com"},
+			wantDNSNames:   []string{"example.com", "www.example.com"},
 		},
 		{
 			name: "all types combined",
@@ -1571,6 +1539,10 @@ func TestMarshalSANExtension(t *testing.T) {
 				},
 			},
 			wantOtherNames: []string{"UPN:user@corp.example.com"},
+			wantDNSNames:   []string{"example.com"},
+			wantEmails:     []string{"admin@example.com"},
+			wantIPs:        []string{"10.0.0.1", "::1"},
+			wantURIs:       []string{"spiffe://example.com/workload"},
 		},
 		{
 			name: "multiple OtherNames",
@@ -1602,7 +1574,34 @@ func TestMarshalSANExtension(t *testing.T) {
 				DNSNames:    []string{"example.com"},
 				IPAddresses: []net.IP{net.ParseIP("192.168.1.1"), net.ParseIP("2001:db8::1")},
 			},
+			wantDNSNames: []string{"example.com"},
+			wantIPs:      []string{"192.168.1.1", "2001:db8::1"},
 		},
+	}
+
+	ipStrings := func(ips []net.IP) []string {
+		if len(ips) == 0 {
+			return nil
+		}
+		out := make([]string, 0, len(ips))
+		for _, ip := range ips {
+			out = append(out, ip.String())
+		}
+		return out
+	}
+	uriStrings := func(uris []*url.URL) []string {
+		if len(uris) == 0 {
+			return nil
+		}
+		out := make([]string, 0, len(uris))
+		for _, uri := range uris {
+			if uri == nil {
+				out = append(out, "")
+				continue
+			}
+			out = append(out, uri.String())
+		}
+		return out
 	}
 
 	for _, tt := range tests {
@@ -1643,6 +1642,18 @@ func TestMarshalSANExtension(t *testing.T) {
 			gotOther := ParseOtherNameSANs(cert.Extensions)
 			if !slices.Equal(gotOther, tt.wantOtherNames) {
 				t.Errorf("OtherNames = %v, want %v", gotOther, tt.wantOtherNames)
+			}
+			if !slices.Equal(cert.DNSNames, tt.wantDNSNames) {
+				t.Errorf("DNSNames = %v, want %v", cert.DNSNames, tt.wantDNSNames)
+			}
+			if !slices.Equal(cert.EmailAddresses, tt.wantEmails) {
+				t.Errorf("EmailAddresses = %v, want %v", cert.EmailAddresses, tt.wantEmails)
+			}
+			if !slices.Equal(ipStrings(cert.IPAddresses), tt.wantIPs) {
+				t.Errorf("IPAddresses = %v, want %v", ipStrings(cert.IPAddresses), tt.wantIPs)
+			}
+			if !slices.Equal(uriStrings(cert.URIs), tt.wantURIs) {
+				t.Errorf("URIs = %v, want %v", uriStrings(cert.URIs), tt.wantURIs)
 			}
 		})
 	}
@@ -1721,82 +1732,6 @@ func TestMarshalSANExtension_ValidationErrors(t *testing.T) {
 				t.Fatal("expected error, got nil")
 			}
 		})
-	}
-}
-
-func TestMarshalSANExtension_CertificateRoundTrip(t *testing.T) {
-	// WHY: End-to-end round-trip through x509.CreateCertificate → ParseCertificate
-	// proves the encoded SAN extension is valid DER and all GeneralName types
-	// survive the encode→decode cycle intact.
-	t.Parallel()
-
-	upnOID := asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3}
-
-	ext, err := MarshalSANExtension(MarshalSANExtensionInput{
-		DNSNames:       []string{"example.com", "www.example.com"},
-		EmailAddresses: []string{"admin@example.com"},
-		IPAddresses:    []net.IP{net.ParseIP("10.0.0.1"), net.ParseIP("::1")},
-		URIs:           []*url.URL{mustParseURL(t, "spiffe://example.com/ns/default")},
-		OtherNames: []OtherNameSAN{
-			{OID: upnOID, Value: "user@corp.example.com"},
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	template := &x509.Certificate{
-		SerialNumber:    randomSerial(t),
-		Subject:         pkix.Name{CommonName: "round-trip-test"},
-		NotBefore:       time.Now().Add(-time.Hour),
-		NotAfter:        time.Now().Add(24 * time.Hour),
-		ExtraExtensions: []pkix.Extension{ext},
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cert, err := x509.ParseCertificate(certDER)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Verify standard SAN types survived certkit's DER assembly (T-6 round-trip)
-	wantDNS := []string{"example.com", "www.example.com"}
-	if !slices.Equal(cert.DNSNames, wantDNS) {
-		t.Errorf("DNSNames = %v, want %v", cert.DNSNames, wantDNS)
-	}
-	wantEmails := []string{"admin@example.com"}
-	if !slices.Equal(cert.EmailAddresses, wantEmails) {
-		t.Errorf("EmailAddresses = %v, want %v", cert.EmailAddresses, wantEmails)
-	}
-	wantIPs := []net.IP{net.ParseIP("10.0.0.1").To4(), net.ParseIP("::1")}
-	if len(cert.IPAddresses) != len(wantIPs) {
-		t.Errorf("IPAddresses count = %d, want %d", len(cert.IPAddresses), len(wantIPs))
-	} else {
-		for i, ip := range cert.IPAddresses {
-			if !ip.Equal(wantIPs[i]) {
-				t.Errorf("IPAddresses[%d] = %v, want %v", i, ip, wantIPs[i])
-			}
-		}
-	}
-	wantURIs := []string{"spiffe://example.com/ns/default"}
-	var gotURIs []string
-	for _, u := range cert.URIs {
-		gotURIs = append(gotURIs, u.String())
-	}
-	if !slices.Equal(gotURIs, wantURIs) {
-		t.Errorf("URIs = %v, want %v", gotURIs, wantURIs)
-	}
-
-	// Verify OtherName via ParseOtherNameSANs (certkit logic)
-	otherNames := ParseOtherNameSANs(cert.Extensions)
-	if len(otherNames) != 1 || otherNames[0] != "UPN:user@corp.example.com" {
-		t.Errorf("OtherNames = %v, want [UPN:user@corp.example.com]", otherNames)
 	}
 }
 

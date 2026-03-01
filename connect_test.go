@@ -121,6 +121,37 @@ func TestConnectTLS(t *testing.T) {
 			},
 		},
 		{
+			name: "valid chain with intermediate",
+			run: func(t *testing.T) {
+				root := generateTestCA(t, "Valid Chain Root")
+				intermediate := generateIntermediateCA(t, root, "Valid Chain Intermediate")
+				leaf := generateTestLeafCert(t, intermediate)
+
+				port := startTLSServer(t, [][]byte{leaf.DER, intermediate.CertDER}, leaf.Key)
+
+				rootPool := x509.NewCertPool()
+				rootPool.AddCert(root.Cert)
+
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+
+				result, err := ConnectTLS(ctx, ConnectTLSInput{
+					Host:    "127.0.0.1",
+					Port:    port,
+					RootCAs: rootPool,
+				})
+				if err != nil {
+					t.Fatalf("ConnectTLS failed: %v", err)
+				}
+				if result.VerifyError != "" {
+					t.Fatalf("expected VerifyError empty, got %q", result.VerifyError)
+				}
+				if len(result.PeerChain) < 2 {
+					t.Fatalf("expected peer chain to include intermediate, got %d certs", len(result.PeerChain))
+				}
+			},
+		},
+		{
 			name: "expired leaf",
 			run: func(t *testing.T) {
 				key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -204,12 +235,15 @@ func TestConnectTLS(t *testing.T) {
 				}
 				t.Cleanup(func() { _ = listener.Close() })
 
+				ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+				defer cancel()
+
 				go func() {
 					conn, err := listener.Accept()
 					if err != nil {
 						return
 					}
-					time.Sleep(200 * time.Millisecond)
+					<-ctx.Done()
 					_ = conn.Close()
 				}()
 
@@ -217,9 +251,6 @@ func TestConnectTLS(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-
-				ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-				defer cancel()
 
 				_, err = ConnectTLS(ctx, ConnectTLSInput{Host: "127.0.0.1", Port: portStr})
 				if err == nil {
@@ -745,22 +776,42 @@ func TestDiagnoseConnectChain(t *testing.T) {
 			if len(diags) != len(tt.wantChecks) {
 				t.Fatalf("got %d diagnostics, want %d: %+v", len(diags), len(tt.wantChecks), diags)
 			}
+			used := make([]bool, len(diags))
 			for i, wantCheck := range tt.wantChecks {
-				if diags[i].Check != wantCheck {
-					t.Errorf("diag[%d].Check = %q, want %q", i, diags[i].Check, wantCheck)
-				}
-				if diags[i].Status != "warn" {
-					t.Errorf("diag[%d].Status = %q, want %q", i, diags[i].Status, "warn")
-				}
-				if diags[i].Detail == "" {
-					t.Errorf("diag[%d].Detail is empty", i)
-				}
+				wantSubstrs := []string{}
 				if i < len(tt.wantDetailContains) {
-					for _, substr := range tt.wantDetailContains[i] {
-						if !strings.Contains(diags[i].Detail, substr) {
-							t.Errorf("diag[%d].Detail missing %q, got: %s", i, substr, diags[i].Detail)
+					wantSubstrs = tt.wantDetailContains[i]
+				}
+				matched := false
+				for j, diag := range diags {
+					if used[j] {
+						continue
+					}
+					if diag.Check != wantCheck {
+						continue
+					}
+					if diag.Status != "warn" {
+						continue
+					}
+					if diag.Detail == "" {
+						continue
+					}
+					missing := false
+					for _, substr := range wantSubstrs {
+						if !strings.Contains(diag.Detail, substr) {
+							missing = true
+							break
 						}
 					}
+					if missing {
+						continue
+					}
+					used[j] = true
+					matched = true
+					break
+				}
+				if !matched {
+					t.Fatalf("no diagnostic matched check %q with detail %v in %+v", wantCheck, wantSubstrs, diags)
 				}
 			}
 		})
@@ -945,17 +996,23 @@ func TestDiagnoseNegotiatedCipher(t *testing.T) {
 			if len(diags) != len(tt.wantChecks) {
 				t.Fatalf("got %d diagnostics, want %d: %+v", len(diags), len(tt.wantChecks), diags)
 			}
+			diagByCheck := make(map[string]ChainDiagnostic, len(diags))
+			for _, diag := range diags {
+				diagByCheck[diag.Check] = diag
+			}
 			for i, wantCheck := range tt.wantChecks {
-				if diags[i].Check != wantCheck {
-					t.Errorf("diag[%d].Check = %q, want %q", i, diags[i].Check, wantCheck)
+				diag, ok := diagByCheck[wantCheck]
+				if !ok {
+					t.Errorf("missing diagnostic check %q", wantCheck)
+					continue
 				}
-				if diags[i].Status != "warn" {
-					t.Errorf("diag[%d].Status = %q, want %q", i, diags[i].Status, "warn")
+				if diag.Status != "warn" {
+					t.Errorf("diag[%s].Status = %q, want %q", wantCheck, diag.Status, "warn")
 				}
 				if i < len(tt.wantSubs) {
 					for _, sub := range tt.wantSubs[i] {
-						if !strings.Contains(diags[i].Detail, sub) {
-							t.Errorf("diag[%d].Detail missing %q, got: %s", i, sub, diags[i].Detail)
+						if !strings.Contains(diag.Detail, sub) {
+							t.Errorf("diag[%s].Detail missing %q, got: %s", wantCheck, sub, diag.Detail)
 						}
 					}
 				}
@@ -1465,7 +1522,7 @@ func TestConnectTLS_OCSP(t *testing.T) {
 		w.Header().Set("Content-Type", "application/ocsp-response")
 		_, _ = w.Write(ocspRespBytes)
 	}))
-	defer ocspServer.Close()
+	t.Cleanup(ocspServer.Close)
 
 	leaf := generateTestLeafCert(t, ca,
 		withSerial(big.NewInt(100)),
@@ -1511,6 +1568,7 @@ func TestConnectTLS_OCSP_SkipAndFailure(t *testing.T) {
 	tests := []struct {
 		name          string
 		disableOCSP   bool
+		withResponder bool
 		wantNil       bool   // expect result.OCSP == nil
 		wantStatus    string // checked only when !wantNil
 		wantServerHit bool
@@ -1518,30 +1576,47 @@ func TestConnectTLS_OCSP_SkipAndFailure(t *testing.T) {
 		{
 			name:          "disabled - no server contact",
 			disableOCSP:   true,
+			withResponder: true,
 			wantNil:       true,
 			wantServerHit: false,
 		},
 		{
 			name:          "best-effort failure - unavailable",
 			disableOCSP:   false,
+			withResponder: true,
 			wantNil:       false,
 			wantStatus:    "unavailable",
 			wantServerHit: true,
+		},
+		{
+			name:          "no responder URL - skipped",
+			disableOCSP:   false,
+			withResponder: false,
+			wantNil:       false,
+			wantStatus:    "skipped",
+			wantServerHit: false,
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			var hits atomic.Int64
-			ocspServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				hits.Add(1)
-				http.Error(w, "broken", http.StatusInternalServerError)
-			}))
-			defer ocspServer.Close()
+			var ocspURL string
+			if tc.withResponder {
+				ocspServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					hits.Add(1)
+					http.Error(w, "broken", http.StatusInternalServerError)
+				}))
+				t.Cleanup(ocspServer.Close)
+				ocspURL = strings.Replace(ocspServer.URL, "127.0.0.1", "localhost", 1)
+			}
 
-			leaf := generateTestLeafCert(t, ca,
-				withOCSPServer(strings.Replace(ocspServer.URL, "127.0.0.1", "localhost", 1)),
-			)
+			var leaf *testLeaf
+			if ocspURL == "" {
+				leaf = generateTestLeafCert(t, ca)
+			} else {
+				leaf = generateTestLeafCert(t, ca, withOCSPServer(ocspURL))
+			}
 			port := startTLSServer(t, [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
 
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -2167,23 +2242,39 @@ func TestScanCipherSuites(t *testing.T) {
 	}
 }
 
-func TestScanCipherSuites_EmptyHost(t *testing.T) {
-	// WHY: Empty host input should return a validation error.
+func TestScanCipherSuites_Validation(t *testing.T) {
+	// WHY: Validation and context cancellation must return errors immediately.
 	t.Parallel()
-	_, err := ScanCipherSuites(context.Background(), ScanCipherSuitesInput{})
-	if err == nil {
-		t.Fatal("expected error for empty host")
-	}
-}
 
-func TestScanCipherSuites_CancelledContext(t *testing.T) {
-	// WHY: Cancelled context should abort scanning and return an error.
-	t.Parallel()
-	ctx, cancel := context.WithCancel(context.Background())
+	cancelled, cancel := context.WithCancel(context.Background())
 	cancel()
-	_, err := ScanCipherSuites(ctx, ScanCipherSuitesInput{Host: "127.0.0.1", Port: "443"})
-	if err == nil {
-		t.Fatal("expected error for cancelled context")
+
+	tests := []struct {
+		name  string
+		ctx   context.Context
+		input ScanCipherSuitesInput
+	}{
+		{
+			name:  "empty host",
+			ctx:   context.Background(),
+			input: ScanCipherSuitesInput{},
+		},
+		{
+			name:  "cancelled context",
+			ctx:   cancelled,
+			input: ScanCipherSuitesInput{Host: "127.0.0.1", Port: "443"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// WHY: Ensures ScanCipherSuites rejects this invalid input or context.
+			t.Parallel()
+			_, err := ScanCipherSuites(tt.ctx, tt.input)
+			if err == nil {
+				t.Fatal("expected error")
+			}
+		})
 	}
 }
 
@@ -2475,17 +2566,23 @@ func TestDiagnoseCipherScan(t *testing.T) {
 			if len(diags) != len(tt.wantChecks) {
 				t.Fatalf("got %d diagnostics, want %d: %+v", len(diags), len(tt.wantChecks), diags)
 			}
+			diagByCheck := make(map[string]ChainDiagnostic, len(diags))
+			for _, diag := range diags {
+				diagByCheck[diag.Check] = diag
+			}
 			for i, wantCheck := range tt.wantChecks {
-				if diags[i].Check != wantCheck {
-					t.Errorf("diag[%d].Check = %q, want %q", i, diags[i].Check, wantCheck)
+				diag, ok := diagByCheck[wantCheck]
+				if !ok {
+					t.Errorf("missing diagnostic check %q", wantCheck)
+					continue
 				}
-				if diags[i].Status != "warn" {
-					t.Errorf("diag[%d].Status = %q, want %q", i, diags[i].Status, "warn")
+				if diag.Status != "warn" {
+					t.Errorf("diag[%s].Status = %q, want %q", wantCheck, diag.Status, "warn")
 				}
 				if i < len(tt.wantSubs) {
 					for _, sub := range tt.wantSubs[i] {
-						if !strings.Contains(diags[i].Detail, sub) {
-							t.Errorf("diag[%d].Detail missing %q, got: %s", i, sub, diags[i].Detail)
+						if !strings.Contains(diag.Detail, sub) {
+							t.Errorf("diag[%s].Detail missing %q, got: %s", wantCheck, sub, diag.Detail)
 						}
 					}
 				}

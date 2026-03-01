@@ -704,7 +704,7 @@ func formatDNAttribute(atv pkix.AttributeTypeAndValue) string {
 	if err != nil {
 		slog.Debug("failed to marshal DN attribute value",
 			"oid", oid,
-			"err", fmt.Errorf("marshal DN attribute value: %w", err),
+			"error", err,
 		)
 		if hasLabel {
 			return label + "=<unencodable>"

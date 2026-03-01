@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"crypto"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
@@ -10,6 +11,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -379,53 +381,81 @@ func TestVerifyCert_CustomRootsEmpty(t *testing.T) {
 	}
 }
 
-func TestVerifyCert_CheckKeyMatchNilKey(t *testing.T) {
-	// WHY: When CheckKeyMatch=true but Key=nil (e.g. PKCS#7 input), KeyMatch must remain nil (skipped), not false; this distinguishes "not checked" from "failed."
+func TestVerifyCert_KeyMatchInputs(t *testing.T) {
+	// WHY: Key match handling must distinguish skipped checks, unsupported key types, and disabled checks.
 	t.Parallel()
 	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "nilkey.example.com", []string{"nilkey.example.com"}, nil)
+	leaf := newRSALeaf(t, ca, "keymatch-inputs.example.com", []string{"keymatch-inputs.example.com"}, nil)
+	rsaKey, ok := leaf.key.(*rsa.PrivateKey)
+	if !ok {
+		t.Fatalf("expected RSA private key, got %T", leaf.key)
+	}
 
-	result, err := VerifyCert(context.Background(), &VerifyInput{
-		Cert:          leaf.cert,
-		Key:           nil,
-		CheckKeyMatch: true,
-		TrustStore:    "mozilla",
-	})
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name               string
+		key                crypto.PrivateKey
+		checkKeyMatch      bool
+		wantKeyMatchNil    bool
+		wantKeyMatchErrSub string
+		wantKeyInfoEmpty   bool
+	}{
+		{
+			name:             "check enabled with nil key",
+			key:              nil,
+			checkKeyMatch:    true,
+			wantKeyMatchNil:  true,
+			wantKeyInfoEmpty: true,
+		},
+		{
+			name:             "check disabled ignores key",
+			key:              leaf.key,
+			checkKeyMatch:    false,
+			wantKeyMatchNil:  true,
+			wantKeyInfoEmpty: true,
+		},
+		{
+			name:               "public key returns error",
+			key:                &rsaKey.PublicKey,
+			checkKeyMatch:      true,
+			wantKeyMatchNil:    true,
+			wantKeyMatchErrSub: "unsupported private key type",
+			wantKeyInfoEmpty:   true,
+		},
 	}
-	// When CheckKeyMatch=true but Key=nil, KeyMatch should remain nil (skipped)
-	if result.KeyMatch != nil {
-		t.Errorf("expected KeyMatch to remain nil when Key is nil, got %v", *result.KeyMatch)
-	}
-	if result.KeyMatchErr != "" {
-		t.Errorf("expected no KeyMatchErr, got %q", result.KeyMatchErr)
-	}
-}
 
-func TestVerifyCert_KeyMatchDisabled(t *testing.T) {
-	// WHY: When CheckKeyMatch=false, VerifyCert must ignore any provided key.
-	t.Parallel()
-	ca := newRSACA(t)
-	leaf := newRSALeaf(t, ca, "nokeymatch.example.com", []string{"nokeymatch.example.com"}, nil)
-
-	result, err := VerifyCert(context.Background(), &VerifyInput{
-		Cert:          leaf.cert,
-		Key:           leaf.key,
-		CheckKeyMatch: false,
-		TrustStore:    "mozilla",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.KeyMatch != nil {
-		t.Error("expected KeyMatch to be nil when CheckKeyMatch is false")
-	}
-	if result.KeyMatchErr != "" {
-		t.Errorf("expected no KeyMatchErr, got %q", result.KeyMatchErr)
-	}
-	if result.KeyInfo != "" {
-		t.Errorf("expected no KeyInfo, got %q", result.KeyInfo)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// WHY: Ensures VerifyCert handles this key input scenario correctly.
+			t.Parallel()
+			result, err := VerifyCert(context.Background(), &VerifyInput{
+				Cert:          leaf.cert,
+				Key:           tt.key,
+				CheckKeyMatch: tt.checkKeyMatch,
+				TrustStore:    "mozilla",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if tt.wantKeyMatchNil {
+				if result.KeyMatch != nil {
+					t.Errorf("expected KeyMatch nil, got %v", *result.KeyMatch)
+				}
+			}
+			if tt.wantKeyMatchErrSub != "" {
+				if !strings.Contains(result.KeyMatchErr, tt.wantKeyMatchErrSub) {
+					t.Errorf("expected KeyMatchErr containing %q, got %q", tt.wantKeyMatchErrSub, result.KeyMatchErr)
+				}
+				found := slices.Contains(result.Errors, result.KeyMatchErr)
+				if !found {
+					t.Errorf("expected Errors to include KeyMatchErr, got %v", result.Errors)
+				}
+			} else if result.KeyMatchErr != "" {
+				t.Errorf("expected no KeyMatchErr, got %q", result.KeyMatchErr)
+			}
+			if tt.wantKeyInfoEmpty && result.KeyInfo != "" {
+				t.Errorf("expected no KeyInfo, got %q", result.KeyInfo)
+			}
+		})
 	}
 }
 
@@ -542,52 +572,63 @@ func TestVerifyCert_ChainAndKeyMatchSuccess(t *testing.T) {
 	}
 }
 
-func TestVerifyCert_SelfSignedTrustedRoot(t *testing.T) {
-	// WHY: A self-signed leaf included in the custom root pool must verify as trusted.
+func TestVerifyCert_SelfSigned(t *testing.T) {
+	// WHY: Self-signed inputs should only validate when trusted explicitly.
 	t.Parallel()
 	ca := newRSACA(t)
 
-	result, err := VerifyCert(context.Background(), &VerifyInput{
-		Cert:        ca.cert,
-		CheckChain:  true,
-		TrustStore:  "custom",
-		CustomRoots: []*x509.Certificate{ca.cert},
-	})
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name        string
+		customRoots []*x509.Certificate
+		wantValid   bool
+		wantErr     bool
+	}{
+		{
+			name:        "trusted root",
+			customRoots: []*x509.Certificate{ca.cert},
+			wantValid:   true,
+		},
+		{
+			name:    "untrusted",
+			wantErr: true,
+		},
 	}
-	if result.ChainValid == nil || !*result.ChainValid {
-		t.Fatalf("expected ChainValid true, got %v", result.ChainValid)
-	}
-	if result.ChainErr != "" {
-		t.Errorf("expected no ChainErr, got %q", result.ChainErr)
-	}
-	if len(result.Chain) == 0 {
-		t.Fatal("expected chain display to be populated")
-	}
-	if len(result.Errors) != 0 {
-		t.Errorf("expected no errors, got %v", result.Errors)
-	}
-}
 
-func TestVerifyCert_SelfSignedUntrusted(t *testing.T) {
-	// WHY: A self-signed leaf not in the trust store must fail chain validation.
-	t.Parallel()
-	ca := newRSACA(t)
-
-	result, err := VerifyCert(context.Background(), &VerifyInput{
-		Cert:       ca.cert,
-		CheckChain: true,
-		TrustStore: "custom",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if result.ChainValid == nil || *result.ChainValid {
-		t.Fatalf("expected ChainValid false, got %v", result.ChainValid)
-	}
-	if result.ChainErr == "" {
-		t.Error("expected ChainErr to be populated")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// WHY: Ensures VerifyCert handles this self-signed trust scenario.
+			t.Parallel()
+			result, err := VerifyCert(context.Background(), &VerifyInput{
+				Cert:        ca.cert,
+				CheckChain:  true,
+				TrustStore:  "custom",
+				CustomRoots: tt.customRoots,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if result.ChainValid == nil {
+				t.Fatal("expected ChainValid to be set")
+			}
+			if *result.ChainValid != tt.wantValid {
+				t.Fatalf("expected ChainValid %v, got %v", tt.wantValid, result.ChainValid)
+			}
+			if tt.wantErr {
+				if result.ChainErr == "" {
+					t.Error("expected ChainErr to be populated")
+				}
+				return
+			}
+			if result.ChainErr != "" {
+				t.Errorf("expected no ChainErr, got %q", result.ChainErr)
+			}
+			if len(result.Chain) == 0 {
+				t.Fatal("expected chain display to be populated")
+			}
+			if len(result.Errors) != 0 {
+				t.Errorf("expected no errors, got %v", result.Errors)
+			}
+		})
 	}
 }
 
@@ -662,6 +703,69 @@ func TestVerifyCert_ExtraIntermediates(t *testing.T) {
 	}
 	if result.ChainValid == nil || !*result.ChainValid {
 		t.Fatalf("expected chain to be valid with intermediates, got %v", result.ChainValid)
+	}
+}
+
+func TestVerifyCert_ExpiredIntermediate(t *testing.T) {
+	// WHY: VerifyCert must surface an expired intermediate as a chain failure.
+	t.Parallel()
+	root := newRSACA(t)
+	rootKey, ok := root.key.(*rsa.PrivateKey)
+	if !ok {
+		t.Fatalf("expected RSA root key, got %T", root.key)
+	}
+
+	intKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intTmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "Expired Intermediate", Organization: []string{"TestOrg"}},
+		NotBefore:             time.Now().Add(-2 * 365 * 24 * time.Hour),
+		NotAfter:              time.Now().Add(-24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		SubjectKeyId:          []byte{0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19},
+		AuthorityKeyId:        root.cert.SubjectKeyId,
+	}
+	intDER, err := x509.CreateCertificate(rand.Reader, intTmpl, root.cert, &intKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intCert, err := x509.ParseCertificate(intDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	intermediate := testCA{cert: intCert, key: intKey}
+	leaf := newRSALeaf(t, intermediate, "expired-int.example.com", []string{"expired-int.example.com"}, nil)
+
+	result, err := VerifyCert(context.Background(), &VerifyInput{
+		Cert:        leaf.cert,
+		CheckChain:  true,
+		TrustStore:  "custom",
+		CustomRoots: []*x509.Certificate{root.cert},
+		ExtraCerts:  []*x509.Certificate{intCert},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ChainValid == nil || *result.ChainValid {
+		t.Fatalf("expected chain to be invalid with expired intermediate, got %v", result.ChainValid)
+	}
+	if !strings.Contains(result.ChainErr, "expired") {
+		t.Errorf("expected ChainErr to mention expired, got %q", result.ChainErr)
+	}
+	chainErrFound := false
+	for _, errMsg := range result.Errors {
+		if strings.Contains(errMsg, "chain validation") {
+			chainErrFound = true
+			break
+		}
+	}
+	if !chainErrFound {
+		t.Errorf("expected chain validation error, got %v", result.Errors)
 	}
 }
 
@@ -1183,6 +1287,14 @@ func TestFormatDiagnoses(t *testing.T) {
 	}
 	if !strings.Contains(output, "[OK]") {
 		t.Error("output missing [OK] marker")
+	}
+	for _, diag := range diags {
+		if !strings.Contains(output, diag.Check) {
+			t.Errorf("output missing check %q", diag.Check)
+		}
+		if !strings.Contains(output, diag.Detail) {
+			t.Errorf("output missing detail %q", diag.Detail)
+		}
 	}
 }
 
