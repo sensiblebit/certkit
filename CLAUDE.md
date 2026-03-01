@@ -20,6 +20,7 @@ Certificate management tool: ingest certs/keys in many formats, catalog in memor
 - **BP-2 (MUST)** Draft and confirm an approach (API shape, data flow, failure modes) before writing code.
 - **BP-3 (SHOULD)** When >2 approaches exist, list pros/cons and rationale.
 - **BP-4 (SHOULD)** Define testing strategy (unit/integration) and observability signals up front.
+- **BP-5 (MUST)** When the user declares YOLO mode, run required tools without asking for approval.
 
 ---
 
@@ -114,18 +115,14 @@ Target the latest stable Go release. Use modern stdlib features freely: `slices`
 
 ### Requirements
 
-- **T-1 (MUST)** All tests must pass before committing. Run `go test ./...`, `go vet ./...`, and `golangci-lint run`.
+- **T-1 (MUST)** All tests must pass before committing. Run `pre-commit run --all-files` (it covers `go test ./...`, `go vet ./...`, and `golangci-lint run`).
 - **T-2 (MUST)** Table-driven tests with descriptive subtest names as the default pattern.
 - **T-3 (MUST)** Run `-race` in CI; add `t.Cleanup` for teardown.
 - **T-4 (SHOULD)** Mark safe tests with `t.Parallel()`.
 - **T-5 (MUST)** Tests use stdlib `testing` only (no testify/gomock).
 
 ```sh
-go test ./...          # Run all tests
-go build ./...         # Verify compilation
-go fix ./...           # Apply modernizer fixes
-go vet ./...           # Static analysis
-golangci-lint run      # Lint (errcheck, unused, staticcheck, etc.)
+pre-commit run --all-files
 ```
 
 ### Test helpers
@@ -280,6 +277,7 @@ Update bottom links:
 Main branch is protected. All code reaches `main` via pull request only.
 
 - **GIT-1 (MUST)** No direct pushes to `main`. All changes go through PRs.
+- **GIT-1a (DEPRECATED)** The blanket "no pushes to remote branches" rule is deprecated. Push feature branches for PRs; only direct pushes to `main` are forbidden.
 - **GIT-2 (MUST)** The `CI` status check must pass before merging.
 - **GIT-3 (MUST)** PRs must be up-to-date with `main` before merging.
 - **GIT-4 (MUST)** Enforced on admins — no bypasses.
@@ -308,6 +306,7 @@ Examples: `feat: add PKCS#7 export`, `fix(jks): handle empty alias`, `ci: add go
 ### Verified commits
 
 - **GIT-12 (MUST)** All commits in a PR must be signed/verified. CI checks verification status of every commit. See [GitHub docs on commit signing](https://docs.github.com/en/authentication/managing-commit-signature-verification).
+- **GIT-13 (MUST)** When the user requests a commit and a PR already exists for the branch, pushing the branch is implied.
 
 ### CI checks
 
@@ -342,9 +341,13 @@ pre-commit install --hook-type commit-msg
 pre-commit run --all-files  # Manual run against all files
 ```
 
+- **PC-1 (MUST)** Use `pre-commit run --all-files` for required checks; do not run individual tools manually unless debugging.
+
 Configured hooks: `no-commit-to-branch`, `branch-name`, `commit-message` (commit-msg stage), `goimports`, `go-fix`, `go-vet`, `golangci-lint`, `wasm`, `go-build`, `go-test`, `gendocs`, `prettier`, `vitest`, `wrangler-build`, `markdownlint`.
 
 ### Tooling gates
+
+These are enforced by the pre-commit hooks; run `pre-commit run --all-files` instead of invoking each command manually.
 
 - **G-1 (MUST)** `go fix ./...` leaves no pending changes.
 - **G-2 (MUST)** `go vet ./...` passes.
