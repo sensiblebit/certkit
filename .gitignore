@@ -11,6 +11,7 @@ bundles/
 *.crt
 *.csr
 *.json
+!internal/ct/log_list.json
 !package.json
 !package-lock.json
 *.db
@@ -35,4 +36,3 @@ node_modules/
 /wasm
 *.wasm
 web/public/wasm_exec.js
-

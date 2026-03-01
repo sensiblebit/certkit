@@ -227,6 +227,8 @@ type ConnectResult struct {
 	ClientAuth *ClientAuthInfo `json:"client_auth,omitempty"`
 	// PeerChain is the certificate chain presented by the server.
 	PeerChain []*x509.Certificate `json:"-"`
+	// TLSSCTs contains serialized SCTs from the TLS handshake extension.
+	TLSSCTs [][]byte `json:"-"`
 	// VerifiedChains contains the verified certificate chains.
 	VerifiedChains [][]*x509.Certificate `json:"-"`
 	// VerifyError is non-empty if chain verification failed.
@@ -247,6 +249,8 @@ type ConnectResult struct {
 	// CipherScan contains the cipher suite enumeration results.
 	// Nil when cipher scanning is not requested.
 	CipherScan *CipherScanResult `json:"cipher_scan,omitempty"`
+	// CT contains Certificate Transparency verification results.
+	CT *CTResult `json:"ct,omitempty"`
 	// LegacyProbe is true when the certificate chain was obtained via a raw
 	// TLS handshake (legacy fallback) because Go's crypto/tls could not
 	// negotiate any cipher suite. The chain is still valid for inspection
@@ -373,6 +377,7 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 		ALPN:        state.NegotiatedProtocol,
 		ClientAuth:  clientAuth,
 		PeerChain:   state.PeerCertificates,
+		TLSSCTs:     state.SignedCertificateTimestamps,
 	}
 
 	result.populate(ctx, input)
@@ -438,6 +443,20 @@ func (result *ConnectResult) populate(ctx context.Context, input ConnectTLSInput
 		} else {
 			result.VerifiedChains = chains
 		}
+	}
+
+	// Certificate Transparency checks (best-effort, warn-only).
+	if len(result.PeerChain) > 0 || len(result.TLSSCTs) > 0 {
+		ctChain := result.PeerChain
+		if len(result.VerifiedChains) > 0 && len(result.VerifiedChains[0]) > 0 {
+			ctChain = result.VerifiedChains[0]
+		}
+		ctResult, ctDiags := CheckCT(CheckCTInput{
+			Chain:   ctChain,
+			TLSSCTs: result.TLSSCTs,
+		})
+		result.CT = ctResult
+		result.Diagnostics = append(result.Diagnostics, ctDiags...)
 	}
 
 	// No peer certificates means TLS completed without sending certs (unlikely
@@ -1560,6 +1579,8 @@ func FormatConnectResult(r *ConnectResult) string {
 	} else {
 		out.WriteString("Verify:       OK\n")
 	}
+
+	out.WriteString(FormatCTLine(r.CT))
 
 	if r.OCSP != nil {
 		out.WriteString(FormatOCSPLine(r.OCSP))

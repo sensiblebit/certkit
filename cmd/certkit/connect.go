@@ -72,6 +72,7 @@ type connectResultJSON struct {
 	OCSP        *certkit.OCSPResult       `json:"ocsp,omitempty"`
 	CRL         *certkit.CRLCheckResult   `json:"crl,omitempty"`
 	CipherScan  *certkit.CipherScanResult `json:"cipher_scan,omitempty"`
+	CT          *certkit.CTResult         `json:"ct,omitempty"`
 	LegacyProbe bool                      `json:"legacy_probe,omitempty"`
 	Chain       []connectCertJSON         `json:"chain"`
 }
@@ -223,6 +224,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 			OCSP:        result.OCSP,
 			CRL:         result.CRL,
 			CipherScan:  result.CipherScan,
+			CT:          result.CT,
 			LegacyProbe: result.LegacyProbe,
 		}
 		for _, cert := range result.PeerChain {
@@ -300,6 +302,8 @@ func formatConnectVerbose(r *certkit.ConnectResult, now time.Time) string {
 	} else {
 		out.WriteString("Verify:       OK\n")
 	}
+
+	out.WriteString(certkit.FormatCTLine(r.CT))
 
 	if r.OCSP != nil {
 		out.WriteString(certkit.FormatOCSPLine(r.OCSP))
