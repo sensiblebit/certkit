@@ -95,11 +95,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Fix inspect/convert/container parsing to continue past malformed PEM certificate blocks so valid certificates are still processed, and add DER private-key detection for key-only inputs ([#93])
-- Fix JKS container selection to keep private key entries paired with their own leaf certificate and chain instead of selecting unrelated trusted entries ([#94])
-- Fix certificate identity deduplication for certificates without AKI by falling back to issuer+serial identity, preventing false collisions across different issuers ([#92])
-- Fix CSR signing to reject CA certificate/key mismatches before issuing certificates ([#92])
-- Fix OCSP issuer auto-selection to choose a certificate that actually signs the leaf (with AKI/SKI preference) instead of defaulting to the first extra certificate ([#92])
+- Fix inspect/convert/container parsing to continue past malformed PEM certificate blocks so valid certificates are still processed, and add DER private-key detection for key-only inputs ([#107])
+- Fix JKS container selection to keep private key entries paired with their own leaf certificate and chain instead of selecting unrelated trusted entries ([#107])
+- Fix certificate identity deduplication for certificates without AKI by falling back to issuer+serial identity, preventing false collisions across different issuers ([#107])
+- Fix CSR signing to reject CA certificate/key mismatches before issuing certificates ([#107])
+- Fix OCSP issuer auto-selection to choose a certificate that actually signs the leaf (with AKI/SKI preference) instead of defaulting to the first extra certificate ([#107])
 - Fix verify JSON chain output to use `not_after` for consistency with other commands ([#87])
 - Fix Certificate Transparency availability handling to preserve parsed SCT candidates when the log list cannot be loaded and mark them as unavailable instead of dropping them ([#86])
 - Fix chain conversion failures in Certificate Transparency checks to report SCTs as `unavailable` instead of `invalid` and keep diagnostics as warnings ([#86])
@@ -215,7 +215,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Tests
 
-- Add behavior-focused edge-case coverage for malformed PEM + valid cert preservation, DER private-key parsing, JKS key-entry alias pairing, issuer selection, and CA cert/key mismatch validation; remove assertions that depended on old tautological error-path expectations ([#102])
+- Add behavior-focused edge-case coverage for malformed PEM + valid cert preservation, DER private-key parsing, JKS key-entry alias pairing, issuer selection, and CA cert/key mismatch validation; remove assertions that depended on old tautological error-path expectations ([#107])
 - Remove `TestBuildLegacyClientHelloMsg` — behavioral coverage exists through `TestLegacyFallbackConnect` per T-11 ([`6492fa5`])
 - Remove `TestParseCertificateMessage` — behavioral coverage exists through `TestReadServerCertificates` per T-11 ([#82])
 - Fix `_, _` error discards in `TestLegacyFallbackConnect` mock server goroutine — replaced with `slog.Debug` per ERR-5 ([#82])
@@ -943,10 +943,7 @@ Initial release.
 [#85]: https://github.com/sensiblebit/certkit/pull/85
 [#86]: https://github.com/sensiblebit/certkit/pull/86
 [#87]: https://github.com/sensiblebit/certkit/pull/87
-[#92]: https://github.com/sensiblebit/certkit/issues/92
-[#93]: https://github.com/sensiblebit/certkit/issues/93
-[#94]: https://github.com/sensiblebit/certkit/issues/94
-[#102]: https://github.com/sensiblebit/certkit/issues/102
+[#107]: https://github.com/sensiblebit/certkit/pull/107
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63
