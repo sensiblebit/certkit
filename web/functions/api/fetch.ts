@@ -350,7 +350,8 @@ async function safeFetch(url: string): Promise<Response> {
 }
 
 function isAbortError(err: unknown): boolean {
-  return err instanceof Error && err.name === "AbortError";
+  const anyErr = err as { name?: unknown } | null | undefined;
+  return anyErr?.name === "AbortError";
 }
 
 export const onRequestOptions: PagesFunction = async ({ request }) => {

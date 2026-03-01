@@ -440,6 +440,14 @@ describe("fetch behavior", () => {
     expect(await errorMsg(resp)).toMatch(/timed out/);
   });
 
+  it("returns 504 when upstream abort is a non-Error object", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue({ name: "AbortError" }));
+
+    const resp = await callGet("http://crl.disa.mil/cert.p7c");
+    expect(resp.status).toBe(504);
+    expect(await errorMsg(resp)).toMatch(/timed out/);
+  });
+
   it("falls back from HTTPS to HTTP when HTTPS fails", async () => {
     const mockFetch = vi
       .fn()

@@ -68,7 +68,11 @@ func inspectFiles(_ js.Value, args []js.Value) any {
 					name = fmt.Sprintf("file[%d]", i)
 				}
 
-				data, err := readWASMFileData(file.Get("data"), name, &totalBytes)
+				data, err := readWASMFileData(readWASMFileDataInput{
+					DataJS:     file.Get("data"),
+					Name:       name,
+					TotalBytes: &totalBytes,
+				})
 				if err != nil {
 					reject.Invoke(js.Global().Get("Error").New(err.Error()))
 					return

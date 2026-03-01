@@ -67,7 +67,7 @@ func runCRL(cmd *cobra.Command, args []string) error {
 	} else {
 		data, err = certkit.ReadCRLFile(source)
 		if err != nil {
-			return fmt.Errorf("reading CRL file: %w", err)
+			return fmt.Errorf("reading CRL file %q: %w", source, err)
 		}
 	}
 

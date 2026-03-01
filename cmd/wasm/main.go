@@ -99,7 +99,11 @@ func addFiles(_ js.Value, args []js.Value) any {
 					name = fmt.Sprintf("file[%d]", i)
 				}
 
-				data, err := readWASMFileData(file.Get("data"), name, &totalBytes)
+				data, err := readWASMFileData(readWASMFileDataInput{
+					DataJS:     file.Get("data"),
+					Name:       name,
+					TotalBytes: &totalBytes,
+				})
 				if err != nil {
 					results = append(results, map[string]any{
 						"name":   name,
@@ -341,7 +345,12 @@ func exportBundlesJS(_ js.Value, args []js.Value) any {
 
 			storeMu.RLock()
 			defer storeMu.RUnlock()
-			zipData, err := exportBundles(ctx, globalStore, filterSKIs, p12Password, allowUnverifiedExport)
+			zipData, err := exportBundles(ctx, exportBundlesInput{
+				Store:                 globalStore,
+				FilterSKIs:            filterSKIs,
+				P12Password:           p12Password,
+				AllowUnverifiedExport: allowUnverifiedExport,
+			})
 
 			if err != nil {
 				reject.Invoke(js.Global().Get("Error").New(err.Error()))
@@ -392,28 +401,37 @@ func jsError(msg string) any {
 	return p
 }
 
+type readWASMFileDataInput struct {
+	DataJS     js.Value
+	Name       string
+	TotalBytes *int64
+}
+
 // readWASMFileData copies a JS Uint8Array into Go memory with hard size caps.
-func readWASMFileData(dataJS js.Value, name string, totalBytes *int64) ([]byte, error) {
-	if dataJS.Type() != js.TypeObject {
-		return nil, fmt.Errorf("file %q has invalid data payload", name)
+func readWASMFileData(input readWASMFileDataInput) ([]byte, error) {
+	if input.DataJS.Type() != js.TypeObject {
+		return nil, fmt.Errorf("file %q has invalid data payload", input.Name)
 	}
 
-	size := dataJS.Length()
+	size := input.DataJS.Length()
 	if size < 0 {
-		return nil, fmt.Errorf("file %q has invalid size", name)
+		return nil, fmt.Errorf("file %q has invalid size", input.Name)
 	}
 
 	if size > wasmMaxInputFileBytes {
-		return nil, fmt.Errorf("file %q exceeds max size (%d bytes)", name, wasmMaxInputFileBytes)
+		return nil, fmt.Errorf("file %q exceeds max size (%d bytes)", input.Name, wasmMaxInputFileBytes)
 	}
 
-	nextTotal := *totalBytes + int64(size)
+	nextTotal := *input.TotalBytes + int64(size)
 	if nextTotal > wasmMaxInputTotalBytes {
 		return nil, fmt.Errorf("total upload exceeds max size (%d bytes)", wasmMaxInputTotalBytes)
 	}
 
 	data := make([]byte, size)
-	js.CopyBytesToGo(data, dataJS)
-	*totalBytes = nextTotal
+	copied := js.CopyBytesToGo(data, input.DataJS)
+	if copied != size {
+		return nil, fmt.Errorf("file %q read incomplete data: expected %d bytes, got %d", input.Name, size, copied)
+	}
+	*input.TotalBytes = nextTotal
 	return data, nil
 }

@@ -42,6 +42,10 @@ func resolveAIA(ctx context.Context, s *certstore.MemStore) []string {
 // direct fetch with automatic CORS proxy fallback. Blocks until the JS
 // Promise resolves or rejects, or the context is cancelled.
 func jsFetchURL(ctx context.Context, url string) ([]byte, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	fetchFn := js.Global().Get("certkitFetchURL")
 	if fetchFn.Type() != js.TypeFunction {
 		return nil, fmt.Errorf("certkitFetchURL not defined")
@@ -76,9 +80,10 @@ func jsFetchURL(ctx context.Context, url string) ([]byte, error) {
 	timeoutMillis := 10_000
 	if deadline, ok := ctx.Deadline(); ok {
 		remaining := time.Until(deadline).Milliseconds()
-		if remaining > 0 {
-			timeoutMillis = int(remaining)
+		if remaining <= 0 {
+			return nil, context.DeadlineExceeded
 		}
+		timeoutMillis = int(remaining)
 	}
 
 	promise := fetchFn.Invoke(url, timeoutMillis)
