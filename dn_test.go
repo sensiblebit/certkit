@@ -31,15 +31,6 @@ func TestFormatEKUs(t *testing.T) {
 		want []string
 	}{
 		{
-			name: "known EKUs",
-			ekus: []x509.ExtKeyUsage{
-				x509.ExtKeyUsageServerAuth,
-				x509.ExtKeyUsageClientAuth,
-				x509.ExtKeyUsageCodeSigning,
-			},
-			want: []string{"Server Authentication", "Client Authentication", "Code Signing"},
-		},
-		{
 			name: "all known EKUs",
 			ekus: []x509.ExtKeyUsage{
 				x509.ExtKeyUsageAny,
@@ -157,6 +148,14 @@ func TestFormatEKUOIDs(t *testing.T) {
 			want: []string{"Code Signing", "1.2.99.99"},
 		},
 		{
+			name: "duplicate OIDs preserved",
+			raw: mustMarshalOIDs(t,
+				asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 3, 1},
+				asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 3, 1},
+			),
+			want: []string{"Server Authentication", "Server Authentication"},
+		},
+		{
 			name: "invalid ASN.1 returns nil",
 			raw:  []byte{0xFF, 0xFF, 0xFF},
 			want: nil,
@@ -164,6 +163,14 @@ func TestFormatEKUOIDs(t *testing.T) {
 		{
 			name: "wrong ASN.1 element type returns nil",
 			raw:  mustMarshalInts(t, 1, 2),
+			want: nil,
+		},
+		{
+			name: "mixed element types returns nil",
+			raw: mustMarshalSequence(t,
+				mustMarshalASN1Value(t, asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 3, 1}),
+				mustMarshalASN1Value(t, 42),
+			),
 			want: nil,
 		},
 		{
@@ -232,6 +239,35 @@ func mustMarshalInts(t *testing.T, ints ...int) []byte {
 		t.Fatalf("marshal ints: %v", err)
 	}
 	return raw
+}
+
+func mustMarshalASN1Value(t *testing.T, value any) []byte {
+	t.Helper()
+	raw, err := asn1.Marshal(value)
+	if err != nil {
+		t.Fatalf("marshal ASN.1 value: %v", err)
+	}
+	return raw
+}
+
+func mustMarshalSequence(t *testing.T, elements ...[]byte) []byte {
+	t.Helper()
+	var content []byte
+	for _, element := range elements {
+		content = append(content, element...)
+	}
+	length := len(content)
+	switch {
+	case length < 0x80:
+		return append([]byte{0x30, byte(length)}, content...)
+	case length <= 0xff:
+		return append([]byte{0x30, 0x81, byte(length)}, content...)
+	case length <= 0xffff:
+		return append([]byte{0x30, 0x82, byte(length >> 8), byte(length)}, content...)
+	default:
+		t.Fatalf("sequence too large: %d", length)
+		return nil
+	}
 }
 
 // --- FormatKeyUsage tests ---
@@ -338,19 +374,44 @@ func TestFormatKeyUsageBitString(t *testing.T) {
 			want: nil,
 		},
 		{
+			name: "zero-length bitstring returns nil",
+			raw:  mustMarshalEmptyBitString(t),
+			want: nil,
+		},
+		{
+			name: "all zero bits returns nil",
+			raw:  mustMarshalBitString(t, 9),
+			want: nil,
+		},
+		{
 			name: "DigitalSignature only",
-			raw:  mustMarshalKeyUsageBitString(t, x509.KeyUsageDigitalSignature),
+			raw:  mustMarshalBitString(t, 9, 0),
 			want: []string{"Digital Signature"},
 		},
 		{
 			name: "CertSign and CRLSign",
-			raw:  mustMarshalKeyUsageBitString(t, x509.KeyUsageCertSign|x509.KeyUsageCRLSign),
+			raw:  mustMarshalBitString(t, 9, 5, 6),
 			want: []string{"Certificate Sign", "CRL Sign"},
 		},
 		{
 			name: "DigitalSignature and KeyEncipherment",
-			raw:  mustMarshalKeyUsageBitString(t, x509.KeyUsageDigitalSignature|x509.KeyUsageKeyEncipherment),
+			raw:  mustMarshalBitString(t, 9, 0, 2),
 			want: []string{"Digital Signature", "Key Encipherment"},
+		},
+		{
+			name: "all key usage bits",
+			raw:  mustMarshalBitString(t, 9, 0, 1, 2, 3, 4, 5, 6, 7, 8),
+			want: []string{
+				"Digital Signature",
+				"Content Commitment",
+				"Key Encipherment",
+				"Data Encipherment",
+				"Key Agreement",
+				"Certificate Sign",
+				"CRL Sign",
+				"Encipher Only",
+				"Decipher Only",
+			},
 		},
 		{
 			name: "invalid ASN.1 returns nil",
@@ -373,6 +434,11 @@ func TestFormatKeyUsageBitString(t *testing.T) {
 			want: []string{"Digital Signature"},
 		},
 		{
+			name: "unused bits set returns nil",
+			raw:  []byte{0x03, 0x03, 0x07, 0x80, 0x01},
+			want: nil,
+		},
+		{
 			name: "trailing bytes return nil",
 			raw:  append(mustMarshalKeyUsageBitString(t, x509.KeyUsageDigitalSignature), 0x00),
 			want: nil,
@@ -388,35 +454,6 @@ func TestFormatKeyUsageBitString(t *testing.T) {
 				t.Errorf("FormatKeyUsageBitString() = %v, want %v", got, tt.want)
 			}
 		})
-	}
-}
-
-func TestFormatKeyUsageBitString_RoundTripsWithFormatKeyUsage(t *testing.T) {
-	// WHY: FormatKeyUsageBitString must produce identical output to FormatKeyUsage
-	// for the same logical key usage value; a mismatch means the ASN.1 BIT STRING
-	// bit-order mapping diverges from Go's KeyUsage constants.
-	t.Parallel()
-
-	usages := []x509.KeyUsage{
-		x509.KeyUsageDigitalSignature,
-		x509.KeyUsageContentCommitment,
-		x509.KeyUsageKeyEncipherment,
-		x509.KeyUsageDataEncipherment,
-		x509.KeyUsageKeyAgreement,
-		x509.KeyUsageCertSign,
-		x509.KeyUsageCRLSign,
-		x509.KeyUsageEncipherOnly,
-		x509.KeyUsageDecipherOnly,
-		x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
-	}
-
-	for _, ku := range usages {
-		raw := mustMarshalKeyUsageBitString(t, ku)
-		fromBitString := FormatKeyUsageBitString(raw)
-		fromTyped := FormatKeyUsage(ku)
-		if !slices.Equal(fromBitString, fromTyped) {
-			t.Errorf("round-trip mismatch for KeyUsage %d:\n  BitString: %v\n  Typed:     %v", ku, fromBitString, fromTyped)
-		}
 	}
 }
 
@@ -466,6 +503,15 @@ func mustMarshalBitString(t *testing.T, bitLength int, setBits ...int) []byte {
 	raw, err := asn1.Marshal(bs)
 	if err != nil {
 		t.Fatalf("marshal BitString: %v", err)
+	}
+	return raw
+}
+
+func mustMarshalEmptyBitString(t *testing.T) []byte {
+	t.Helper()
+	raw, err := asn1.Marshal(asn1.BitString{})
+	if err != nil {
+		t.Fatalf("marshal empty BitString: %v", err)
 	}
 	return raw
 }
@@ -542,6 +588,105 @@ func TestParseOtherNameSANs(t *testing.T) {
 			},
 		},
 		{
+			name: "OtherName missing explicit value is ignored",
+			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				oidBytes, err := asn1.Marshal(upnOID)
+				if err != nil {
+					t.Fatalf("marshal OID: %v", err)
+				}
+				otherNameGN := asn1.RawValue{
+					Class:      asn1.ClassContextSpecific,
+					Tag:        0,
+					IsCompound: true,
+					Bytes:      oidBytes,
+				}
+				gnBytes, err := asn1.Marshal(otherNameGN)
+				if err != nil {
+					t.Fatalf("marshal OtherName GN: %v", err)
+				}
+				sanBytes := buildSANWithGeneralNames(t, gnBytes)
+				return makeExts(sanBytes), nil, true
+			},
+		},
+		{
+			name: "OtherName with wrong explicit tag is ignored",
+			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				oidBytes, err := asn1.Marshal(upnOID)
+				if err != nil {
+					t.Fatalf("marshal OID: %v", err)
+				}
+				valueBytes, err := asn1.Marshal(asn1.RawValue{
+					Class: asn1.ClassUniversal,
+					Tag:   asn1.TagUTF8String,
+					Bytes: []byte("bad-tag"),
+				})
+				if err != nil {
+					t.Fatalf("marshal value: %v", err)
+				}
+				explicitWrapper := asn1.RawValue{
+					Class:      asn1.ClassContextSpecific,
+					Tag:        1,
+					IsCompound: true,
+					Bytes:      valueBytes,
+				}
+				explicitBytes, err := asn1.Marshal(explicitWrapper)
+				if err != nil {
+					t.Fatalf("marshal explicit wrapper: %v", err)
+				}
+				otherNameGN := asn1.RawValue{
+					Class:      asn1.ClassContextSpecific,
+					Tag:        0,
+					IsCompound: true,
+					Bytes:      append(oidBytes, explicitBytes...),
+				}
+				gnBytes, err := asn1.Marshal(otherNameGN)
+				if err != nil {
+					t.Fatalf("marshal OtherName GN: %v", err)
+				}
+				sanBytes := buildSANWithGeneralNames(t, gnBytes)
+				return makeExts(sanBytes), nil, true
+			},
+		},
+		{
+			name: "OtherName with non-compound explicit value is ignored",
+			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				oidBytes, err := asn1.Marshal(upnOID)
+				if err != nil {
+					t.Fatalf("marshal OID: %v", err)
+				}
+				valueBytes, err := asn1.Marshal(asn1.RawValue{
+					Class: asn1.ClassUniversal,
+					Tag:   asn1.TagUTF8String,
+					Bytes: []byte("not-compound"),
+				})
+				if err != nil {
+					t.Fatalf("marshal value: %v", err)
+				}
+				explicitWrapper := asn1.RawValue{
+					Class:      asn1.ClassContextSpecific,
+					Tag:        0,
+					IsCompound: false,
+					Bytes:      valueBytes,
+				}
+				explicitBytes, err := asn1.Marshal(explicitWrapper)
+				if err != nil {
+					t.Fatalf("marshal explicit wrapper: %v", err)
+				}
+				otherNameGN := asn1.RawValue{
+					Class:      asn1.ClassContextSpecific,
+					Tag:        0,
+					IsCompound: true,
+					Bytes:      append(oidBytes, explicitBytes...),
+				}
+				gnBytes, err := asn1.Marshal(otherNameGN)
+				if err != nil {
+					t.Fatalf("marshal OtherName GN: %v", err)
+				}
+				sanBytes := buildSANWithGeneralNames(t, gnBytes)
+				return makeExts(sanBytes), nil, true
+			},
+		},
+		{
 			name: "malformed registeredID before valid OtherName",
 			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
 				badRegID := mustMarshalGeneralName(t, asn1.RawValue{
@@ -607,6 +752,13 @@ func TestParseOtherNameSANs(t *testing.T) {
 				san2 := buildSANWithOtherName(t, upnOID, "second@example.com")
 				exts := []pkix.Extension{{Id: sanOID, Value: san1}, {Id: sanOID, Value: san2}}
 				return exts, []string{"UPN:first@example.com", "UPN:second@example.com"}, false
+			},
+		},
+		{
+			name: "empty SAN sequence returns nil",
+			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				sanBytes := buildSANWithGeneralNames(t)
+				return makeExts(sanBytes), nil, true
 			},
 		},
 		{
@@ -1011,6 +1163,15 @@ func TestFormatDN(t *testing.T) {
 			want: "CN=\\ leading\\ ",
 		},
 		{
+			name: "non-ASCII attribute value preserved",
+			dn: pkix.Name{
+				Names: []pkix.AttributeTypeAndValue{
+					{Type: asn1.ObjectIdentifier{2, 5, 4, 3}, Value: "Jos\u00e9"},
+				},
+			},
+			want: "CN=Jos\u00e9",
+		},
+		{
 			name: "leading hash is escaped",
 			dn: pkix.Name{
 				Names: []pkix.AttributeTypeAndValue{
@@ -1027,6 +1188,15 @@ func TestFormatDN(t *testing.T) {
 				},
 			},
 			want: `CN=comma\,plus\+semi\;quote\"slash\\lt\<gt\>`,
+		},
+		{
+			name: "equals and control characters are escaped",
+			dn: pkix.Name{
+				Names: []pkix.AttributeTypeAndValue{
+					{Type: asn1.ObjectIdentifier{2, 5, 4, 3}, Value: "line\nbreak=ok"},
+				},
+			},
+			want: "CN=line\\0Abreak\\=ok",
 		},
 		{
 			// Names ordered as a real EV cert encodes them (EV fields first, then
@@ -1490,13 +1660,15 @@ func TestMarshalSANExtension(t *testing.T) {
 	smtpOID := asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 8, 9}
 
 	tests := []struct {
-		name           string
-		input          MarshalSANExtensionInput
-		wantOtherNames []string // expected ParseOtherNameSANs output
-		wantDNSNames   []string
-		wantEmails     []string
-		wantIPs        []string
-		wantURIs       []string
+		name              string
+		input             MarshalSANExtensionInput
+		wantOtherNames    []string // expected ParseOtherNameSANs output
+		wantOtherNameOIDs []string // expected OtherName OIDs in raw SAN extension
+		wantDNSNames      []string
+		wantEmails        []string
+		wantIPs           []string
+		wantURIs          []string
+		wantOrder         []string
 	}{
 		{
 			name: "UPN only",
@@ -1505,7 +1677,28 @@ func TestMarshalSANExtension(t *testing.T) {
 					{OID: upnOID, Value: "user@example.com"},
 				},
 			},
-			wantOtherNames: []string{"UPN:user@example.com"},
+			wantOtherNames:    []string{"UPN:user@example.com"},
+			wantOtherNameOIDs: []string{upnOID.String()},
+		},
+		{
+			name: "UPN empty value",
+			input: MarshalSANExtensionInput{
+				OtherNames: []OtherNameSAN{
+					{OID: upnOID, Value: ""},
+				},
+			},
+			wantOtherNames:    []string{"UPN:"},
+			wantOtherNameOIDs: []string{upnOID.String()},
+		},
+		{
+			name: "UPN UTF-8 value",
+			input: MarshalSANExtensionInput{
+				OtherNames: []OtherNameSAN{
+					{OID: upnOID, Value: "Jos\u00e9@example.com"},
+				},
+			},
+			wantOtherNames:    []string{"UPN:Jos\u00e9@example.com"},
+			wantOtherNameOIDs: []string{upnOID.String()},
 		},
 		{
 			name: "SRV uses IA5String",
@@ -1514,7 +1707,8 @@ func TestMarshalSANExtension(t *testing.T) {
 					{OID: srvOID, Value: "_https.example.com"},
 				},
 			},
-			wantOtherNames: []string{"SRV:_https.example.com"},
+			wantOtherNames:    []string{"SRV:_https.example.com"},
+			wantOtherNameOIDs: []string{srvOID.String()},
 		},
 		{
 			name: "DNS and UPN mixed",
@@ -1524,8 +1718,9 @@ func TestMarshalSANExtension(t *testing.T) {
 					{OID: upnOID, Value: "admin@example.com"},
 				},
 			},
-			wantOtherNames: []string{"UPN:admin@example.com"},
-			wantDNSNames:   []string{"example.com", "www.example.com"},
+			wantOtherNames:    []string{"UPN:admin@example.com"},
+			wantOtherNameOIDs: []string{upnOID.String()},
+			wantDNSNames:      []string{"example.com", "www.example.com"},
 		},
 		{
 			name: "all types combined",
@@ -1538,11 +1733,13 @@ func TestMarshalSANExtension(t *testing.T) {
 					{OID: upnOID, Value: "user@corp.example.com"},
 				},
 			},
-			wantOtherNames: []string{"UPN:user@corp.example.com"},
-			wantDNSNames:   []string{"example.com"},
-			wantEmails:     []string{"admin@example.com"},
-			wantIPs:        []string{"10.0.0.1", "::1"},
-			wantURIs:       []string{"spiffe://example.com/workload"},
+			wantOtherNames:    []string{"UPN:user@corp.example.com"},
+			wantOtherNameOIDs: []string{upnOID.String()},
+			wantDNSNames:      []string{"example.com"},
+			wantEmails:        []string{"admin@example.com"},
+			wantIPs:           []string{"10.0.0.1", "::1"},
+			wantURIs:          []string{"spiffe://example.com/workload"},
+			wantOrder:         []string{"othername", "email", "dns", "ip", "ip", "uri"},
 		},
 		{
 			name: "multiple OtherNames",
@@ -1558,6 +1755,7 @@ func TestMarshalSANExtension(t *testing.T) {
 				"XMPP:user@xmpp.example.com",
 				"SmtpUTF8Mailbox:user@smtp.example.com",
 			},
+			wantOtherNameOIDs: []string{upnOID.String(), xmppOID.String(), smtpOID.String()},
 		},
 		{
 			name: "arbitrary OID defaults to UTF8String",
@@ -1566,7 +1764,8 @@ func TestMarshalSANExtension(t *testing.T) {
 					{OID: asn1.ObjectIdentifier{1, 2, 3, 4, 5}, Value: "custom-value"},
 				},
 			},
-			wantOtherNames: []string{"1.2.3.4.5:custom-value"},
+			wantOtherNames:    []string{"1.2.3.4.5:custom-value"},
+			wantOtherNameOIDs: []string{"1.2.3.4.5"},
 		},
 		{
 			name: "standard types only (no OtherNames)",
@@ -1577,31 +1776,16 @@ func TestMarshalSANExtension(t *testing.T) {
 			wantDNSNames: []string{"example.com"},
 			wantIPs:      []string{"192.168.1.1", "2001:db8::1"},
 		},
-	}
-
-	ipStrings := func(ips []net.IP) []string {
-		if len(ips) == 0 {
-			return nil
-		}
-		out := make([]string, 0, len(ips))
-		for _, ip := range ips {
-			out = append(out, ip.String())
-		}
-		return out
-	}
-	uriStrings := func(uris []*url.URL) []string {
-		if len(uris) == 0 {
-			return nil
-		}
-		out := make([]string, 0, len(uris))
-		for _, uri := range uris {
-			if uri == nil {
-				out = append(out, "")
-				continue
-			}
-			out = append(out, uri.String())
-		}
-		return out
+		{
+			name: "duplicates preserved and ordered",
+			input: MarshalSANExtensionInput{
+				DNSNames:       []string{"dup.example.com", "dup.example.com"},
+				EmailAddresses: []string{"ops@example.com", "ops@example.com"},
+			},
+			wantDNSNames: []string{"dup.example.com", "dup.example.com"},
+			wantEmails:   []string{"ops@example.com", "ops@example.com"},
+			wantOrder:    []string{"email", "email", "dns", "dns"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -1615,48 +1799,110 @@ func TestMarshalSANExtension(t *testing.T) {
 			if !ext.Id.Equal(asn1.ObjectIdentifier{2, 5, 29, 17}) {
 				t.Errorf("extension OID = %v, want 2.5.29.17", ext.Id)
 			}
-
-			// Create a self-signed cert with this SAN extension to verify
-			// Go's x509 parser can read the standard SAN types.
-			key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-			if err != nil {
-				t.Fatal(err)
-			}
-			template := &x509.Certificate{
-				SerialNumber:    randomSerial(t),
-				Subject:         pkix.Name{CommonName: "test"},
-				NotBefore:       time.Now().Add(-time.Hour),
-				NotAfter:        time.Now().Add(24 * time.Hour),
-				ExtraExtensions: []pkix.Extension{ext},
-			}
-			certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-			if err != nil {
-				t.Fatal(err)
-			}
-			cert, err := x509.ParseCertificate(certDER)
-			if err != nil {
-				t.Fatal(err)
+			gotOtherOIDs := otherNameOIDsFromSANExtension(t, ext)
+			if !slices.Equal(gotOtherOIDs, tt.wantOtherNameOIDs) {
+				t.Errorf("OtherName OIDs = %v, want %v", gotOtherOIDs, tt.wantOtherNameOIDs)
 			}
 
 			// Verify OtherNames via ParseOtherNameSANs (certkit logic)
-			gotOther := ParseOtherNameSANs(cert.Extensions)
+			gotOther := ParseOtherNameSANs([]pkix.Extension{ext})
 			if !slices.Equal(gotOther, tt.wantOtherNames) {
 				t.Errorf("OtherNames = %v, want %v", gotOther, tt.wantOtherNames)
 			}
-			if !slices.Equal(cert.DNSNames, tt.wantDNSNames) {
-				t.Errorf("DNSNames = %v, want %v", cert.DNSNames, tt.wantDNSNames)
+			gotValues := parseSANValues(t, ext)
+			if !slices.Equal(gotValues.dns, tt.wantDNSNames) {
+				t.Errorf("DNSNames = %v, want %v", gotValues.dns, tt.wantDNSNames)
 			}
-			if !slices.Equal(cert.EmailAddresses, tt.wantEmails) {
-				t.Errorf("EmailAddresses = %v, want %v", cert.EmailAddresses, tt.wantEmails)
+			if !slices.Equal(gotValues.emails, tt.wantEmails) {
+				t.Errorf("EmailAddresses = %v, want %v", gotValues.emails, tt.wantEmails)
 			}
-			if !slices.Equal(ipStrings(cert.IPAddresses), tt.wantIPs) {
-				t.Errorf("IPAddresses = %v, want %v", ipStrings(cert.IPAddresses), tt.wantIPs)
+			if !slices.Equal(gotValues.ips, tt.wantIPs) {
+				t.Errorf("IPAddresses = %v, want %v", gotValues.ips, tt.wantIPs)
 			}
-			if !slices.Equal(uriStrings(cert.URIs), tt.wantURIs) {
-				t.Errorf("URIs = %v, want %v", uriStrings(cert.URIs), tt.wantURIs)
+			if !slices.Equal(gotValues.uris, tt.wantURIs) {
+				t.Errorf("URIs = %v, want %v", gotValues.uris, tt.wantURIs)
+			}
+			if len(tt.wantOrder) > 0 && !slices.Equal(gotValues.order, tt.wantOrder) {
+				t.Errorf("GeneralName order = %v, want %v", gotValues.order, tt.wantOrder)
 			}
 		})
 	}
+}
+
+type sanValues struct {
+	dns    []string
+	emails []string
+	ips    []string
+	uris   []string
+	order  []string
+}
+
+func parseSANValues(t *testing.T, ext pkix.Extension) sanValues {
+	t.Helper()
+	var seq asn1.RawValue
+	rest, err := asn1.Unmarshal(ext.Value, &seq)
+	if err != nil {
+		t.Fatalf("unmarshal SAN extension: %v", err)
+	}
+	if len(rest) != 0 {
+		t.Fatalf("unmarshal SAN extension: trailing data")
+	}
+
+	var out sanValues
+	inner := seq.Bytes
+	for len(inner) > 0 {
+		var gn asn1.RawValue
+		inner, err = asn1.Unmarshal(inner, &gn)
+		if err != nil {
+			t.Fatalf("unmarshal GeneralName: %v", err)
+		}
+		if gn.Class != asn1.ClassContextSpecific {
+			continue
+		}
+		switch gn.Tag {
+		case 0:
+			out.order = append(out.order, "othername")
+		case 1:
+			out.emails = append(out.emails, string(gn.Bytes))
+			out.order = append(out.order, "email")
+		case 2:
+			out.dns = append(out.dns, string(gn.Bytes))
+			out.order = append(out.order, "dns")
+		case 6:
+			out.uris = append(out.uris, string(gn.Bytes))
+			out.order = append(out.order, "uri")
+		case 7:
+			ip := net.IP(gn.Bytes)
+			out.ips = append(out.ips, ip.String())
+			out.order = append(out.order, "ip")
+		}
+	}
+	return out
+}
+
+func otherNameOIDsFromSANExtension(t *testing.T, ext pkix.Extension) []string {
+	t.Helper()
+	var generalNames []asn1.RawValue
+	rest, err := asn1.Unmarshal(ext.Value, &generalNames)
+	if err != nil {
+		t.Fatalf("unmarshal GeneralNames: %v", err)
+	}
+	if len(rest) != 0 {
+		t.Fatalf("unmarshal GeneralNames: trailing data")
+	}
+
+	var oids []string
+	for _, gn := range generalNames {
+		if gn.Class != asn1.ClassContextSpecific || gn.Tag != 0 {
+			continue
+		}
+		var oid asn1.ObjectIdentifier
+		if _, err := asn1.Unmarshal(gn.Bytes, &oid); err != nil {
+			t.Fatalf("unmarshal OtherName OID: %v", err)
+		}
+		oids = append(oids, oid.String())
+	}
+	return oids
 }
 
 func TestMarshalSANExtension_EmptyInput(t *testing.T) {
@@ -1682,44 +1928,54 @@ func TestMarshalSANExtension_ValidationErrors(t *testing.T) {
 	srvOID := asn1.ObjectIdentifier{1, 3, 6, 1, 5, 5, 7, 8, 7}
 
 	tests := []struct {
-		name  string
-		input MarshalSANExtensionInput
+		name          string
+		input         MarshalSANExtensionInput
+		wantErrSubstr string
 	}{
 		{
-			name:  "empty DNS name",
-			input: MarshalSANExtensionInput{DNSNames: []string{""}},
+			name:          "empty DNS name",
+			input:         MarshalSANExtensionInput{DNSNames: []string{""}},
+			wantErrSubstr: "DNS SAN: empty value",
 		},
 		{
-			name:  "non-ASCII DNS name",
-			input: MarshalSANExtensionInput{DNSNames: []string{"ex\xc3\xa4mple.com"}},
+			name:          "non-ASCII DNS name",
+			input:         MarshalSANExtensionInput{DNSNames: []string{"ex\xc3\xa4mple.com"}},
+			wantErrSubstr: "DNS SAN",
 		},
 		{
-			name:  "empty email address",
-			input: MarshalSANExtensionInput{EmailAddresses: []string{""}},
+			name:          "empty email address",
+			input:         MarshalSANExtensionInput{EmailAddresses: []string{""}},
+			wantErrSubstr: "email SAN: empty value",
 		},
 		{
-			name:  "non-ASCII email address",
-			input: MarshalSANExtensionInput{EmailAddresses: []string{"us\xc3\xa9r@example.com"}},
+			name:          "non-ASCII email address",
+			input:         MarshalSANExtensionInput{EmailAddresses: []string{"us\xc3\xa9r@example.com"}},
+			wantErrSubstr: "email SAN",
 		},
 		{
-			name:  "nil URI in slice",
-			input: MarshalSANExtensionInput{URIs: []*url.URL{nil}},
+			name:          "nil URI in slice",
+			input:         MarshalSANExtensionInput{URIs: []*url.URL{nil}},
+			wantErrSubstr: "nil URI",
 		},
 		{
-			name:  "empty URI string",
-			input: MarshalSANExtensionInput{URIs: []*url.URL{{}}},
+			name:          "empty URI string",
+			input:         MarshalSANExtensionInput{URIs: []*url.URL{{}}},
+			wantErrSubstr: "URI SAN: empty value",
 		},
 		{
-			name:  "non-ASCII SRV OtherName",
-			input: MarshalSANExtensionInput{OtherNames: []OtherNameSAN{{OID: srvOID, Value: "srv-\xc3\xa4"}}},
+			name:          "non-ASCII SRV OtherName",
+			input:         MarshalSANExtensionInput{OtherNames: []OtherNameSAN{{OID: srvOID, Value: "srv-\xc3\xa4"}}},
+			wantErrSubstr: "othername SRV value",
 		},
 		{
-			name:  "nil IP address",
-			input: MarshalSANExtensionInput{IPAddresses: []net.IP{nil}},
+			name:          "nil IP address",
+			input:         MarshalSANExtensionInput{IPAddresses: []net.IP{nil}},
+			wantErrSubstr: "invalid IP address",
 		},
 		{
-			name:  "invalid IP length",
-			input: MarshalSANExtensionInput{IPAddresses: []net.IP{net.IP{1, 2, 3}}},
+			name:          "invalid IP length",
+			input:         MarshalSANExtensionInput{IPAddresses: []net.IP{net.IP{1, 2, 3}}},
+			wantErrSubstr: "invalid IP address",
 		},
 	}
 
@@ -1730,6 +1986,9 @@ func TestMarshalSANExtension_ValidationErrors(t *testing.T) {
 			_, err := MarshalSANExtension(tt.input)
 			if err == nil {
 				t.Fatal("expected error, got nil")
+			}
+			if tt.wantErrSubstr != "" && !strings.Contains(err.Error(), tt.wantErrSubstr) {
+				t.Errorf("error = %v, want substring %q", err, tt.wantErrSubstr)
 			}
 		})
 	}

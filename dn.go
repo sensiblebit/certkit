@@ -465,6 +465,15 @@ func walkOtherNameSANs(raw []byte, fn func(oid asn1.ObjectIdentifier, valueBytes
 			slog.Debug("skipping OtherName entry: explicit tag parse failed", "oid", oid, "error", explErr)
 			continue
 		}
+		if explicit.Class != asn1.ClassContextSpecific || explicit.Tag != 0 || !explicit.IsCompound {
+			slog.Debug("skipping OtherName entry: explicit tag invalid",
+				"oid", oid,
+				"class", explicit.Class,
+				"tag", explicit.Tag,
+				"compound", explicit.IsCompound,
+			)
+			continue
+		}
 
 		fn(oid, explicit.Bytes)
 	}
@@ -752,7 +761,7 @@ func escapeDNValue(s string) string {
 	b.Grow(len(s))
 	for i, r := range s {
 		switch r {
-		case ',', '+', '"', '\\', '<', '>', ';':
+		case ',', '+', '"', '\\', '<', '>', ';', '=':
 			b.WriteByte('\\')
 			b.WriteRune(r)
 		case '#':
@@ -766,6 +775,10 @@ func escapeDNValue(s string) string {
 			}
 			b.WriteRune(r)
 		default:
+			if r < 0x20 || r == 0x7f {
+				fmt.Fprintf(&b, "\\%02X", r)
+				continue
+			}
 			b.WriteRune(r)
 		}
 	}

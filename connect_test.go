@@ -15,6 +15,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -389,15 +390,247 @@ func TestConnectTLS_ClientAuth(t *testing.T) {
 
 	// Server requests client cert — uses RequestClientCert so the
 	// handshake completes even without a valid client cert.
+	tests := []struct {
+		name              string
+		clientCAs         *x509.CertPool
+		wantAcceptableCAs int
+		wantCAName        string
+	}{
+		{
+			name:              "acceptable CA list",
+			clientCAs:         clientCAPool,
+			wantAcceptableCAs: 1,
+			wantCAName:        "Test Client CA",
+		},
+		{
+			name:              "empty acceptable CA list",
+			clientCAs:         nil,
+			wantAcceptableCAs: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// WHY: Ensures mTLS detection handles acceptable CA lists correctly.
+			t.Parallel()
+			listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+				Certificates: []tls.Certificate{tlsCert},
+				ClientAuth:   tls.RequestClientCert,
+				ClientCAs:    tt.clientCAs,
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = listener.Close() })
+
+			go func() {
+				for {
+					conn, err := listener.Accept()
+					if err != nil {
+						return
+					}
+					if tc, ok := conn.(*tls.Conn); ok {
+						_ = tc.Handshake()
+					}
+					_ = conn.Close()
+				}
+			}()
+
+			_, portStr, err := net.SplitHostPort(listener.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			result, err := ConnectTLS(ctx, ConnectTLSInput{
+				Host: "127.0.0.1",
+				Port: portStr,
+			})
+			if err != nil {
+				t.Fatalf("ConnectTLS failed: %v", err)
+			}
+
+			if result.ClientAuth == nil {
+				t.Fatal("ClientAuth is nil, expected mTLS info")
+			}
+			if !result.ClientAuth.Requested {
+				t.Error("ClientAuth.Requested = false, want true")
+			}
+			if len(result.ClientAuth.AcceptableCAs) != tt.wantAcceptableCAs {
+				t.Fatalf("AcceptableCAs count = %d, want %d", len(result.ClientAuth.AcceptableCAs), tt.wantAcceptableCAs)
+			}
+			if tt.wantCAName != "" && !strings.Contains(result.ClientAuth.AcceptableCAs[0], tt.wantCAName) {
+				t.Errorf("AcceptableCAs[0] = %q, want to contain %q", result.ClientAuth.AcceptableCAs[0], tt.wantCAName)
+			}
+			if len(result.ClientAuth.SignatureSchemes) == 0 {
+				t.Error("SignatureSchemes is empty")
+			}
+
+			// Chain should still be present and verifiable properties intact.
+			if len(result.PeerChain) == 0 {
+				t.Fatal("PeerChain is empty")
+			}
+			if result.PeerChain[0].Subject.CommonName != "localhost" {
+				t.Errorf("leaf CN = %q, want %q", result.PeerChain[0].Subject.CommonName, "localhost")
+			}
+		})
+	}
+
+}
+
+func TestConnectTLS_ClientAuth_Required(t *testing.T) {
+	// WHY: ClientAuth details should still be populated when client certs are required.
+	t.Parallel()
+
+	serverCA := generateTestCA(t, "mTLS Server CA")
+	clientCA := generateTestCA(t, "mTLS Client CA")
+	leaf := generateTestLeafCert(t, serverCA)
+
+	clientPool := x509.NewCertPool()
+	clientPool.AddCert(clientCA.Cert)
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(serverCA.Cert)
+
 	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
-		Certificates: []tls.Certificate{tlsCert},
-		ClientAuth:   tls.RequestClientCert,
-		ClientCAs:    clientCAPool,
+		Certificates: []tls.Certificate{{
+			Certificate: [][]byte{leaf.DER, serverCA.CertDER},
+			PrivateKey:  leaf.Key,
+		}},
+		ClientAuth: tls.RequireAndVerifyClientCert,
+		ClientCAs:  clientPool,
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer func() { _ = listener.Close() }()
+	t.Cleanup(func() { _ = listener.Close() })
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			if tlsConn, ok := conn.(*tls.Conn); ok {
+				_ = tlsConn.Handshake()
+			}
+			_ = conn.Close()
+		}
+	}()
+
+	_, portStr, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := ConnectTLS(ctx, ConnectTLSInput{
+		Host:    "127.0.0.1",
+		Port:    portStr,
+		RootCAs: rootPool,
+	})
+	if err != nil {
+		t.Fatalf("ConnectTLS failed: %v", err)
+	}
+	if result.ClientAuth == nil {
+		t.Fatal("ClientAuth is nil, expected mTLS info")
+	}
+	if !result.ClientAuth.Requested {
+		t.Error("ClientAuth.Requested = false, want true")
+	}
+	if len(result.ClientAuth.AcceptableCAs) == 0 {
+		t.Fatal("AcceptableCAs is empty")
+	}
+	if !strings.Contains(result.ClientAuth.AcceptableCAs[0], "mTLS Client CA") {
+		t.Errorf("AcceptableCAs[0] = %q, want to contain %q", result.ClientAuth.AcceptableCAs[0], "mTLS Client CA")
+	}
+	if result.VerifyError != "" {
+		t.Fatalf("expected chain verification to succeed, got %q", result.VerifyError)
+	}
+}
+
+func TestConnectTLS_EmptyHost(t *testing.T) {
+	// WHY: Input validation must reject missing or malformed host/port values.
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input ConnectTLSInput
+	}{
+		{name: "empty input", input: ConnectTLSInput{}},
+		{name: "empty host", input: ConnectTLSInput{Host: "", Port: "443"}},
+		{name: "non-numeric port", input: ConnectTLSInput{Host: "example.com", Port: "abc"}},
+		{name: "negative port", input: ConnectTLSInput{Host: "example.com", Port: "-1"}},
+		{name: "zero port", input: ConnectTLSInput{Host: "127.0.0.1", Port: "0"}},
+		{name: "out of range port", input: ConnectTLSInput{Host: "127.0.0.1", Port: "65536"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// WHY: Ensures invalid input is rejected before any network activity.
+			t.Parallel()
+			_, err := ConnectTLS(context.Background(), tt.input)
+			if err == nil {
+				t.Fatal("expected error for invalid input")
+			}
+		})
+	}
+}
+
+func TestConnectTLS_CancelledContext(t *testing.T) {
+	// WHY: A pre-cancelled context should abort ConnectTLS immediately.
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := ConnectTLS(ctx, ConnectTLSInput{Host: "127.0.0.1", Port: "443"})
+	if err == nil {
+		t.Fatal("expected error for cancelled context")
+	}
+}
+
+func TestConnectTLS_IPv6Loopback(t *testing.T) {
+	// WHY: ConnectTLS should accept IPv6 hosts (with ServerName override) when available.
+	t.Parallel()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "localhost"},
+		DNSNames:     []string{"localhost"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tlsCert := tls.Certificate{
+		Certificate: [][]byte{certDER},
+		PrivateKey:  key,
+	}
+
+	listener, err := tls.Listen("tcp", "[::1]:0", &tls.Config{
+		Certificates: []tls.Certificate{tlsCert},
+	})
+	if err != nil {
+		t.Skip("IPv6 loopback not available")
+	}
+	t.Cleanup(func() { _ = listener.Close() })
 
 	go func() {
 		for {
@@ -419,64 +652,23 @@ func TestConnectTLS_ClientAuth(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(cert)
 
 	result, err := ConnectTLS(ctx, ConnectTLSInput{
-		Host: "127.0.0.1",
-		Port: portStr,
+		Host:       "::1",
+		Port:       portStr,
+		ServerName: "localhost",
+		RootCAs:    rootPool,
 	})
 	if err != nil {
 		t.Fatalf("ConnectTLS failed: %v", err)
 	}
-
-	if result.ClientAuth == nil {
-		t.Fatal("ClientAuth is nil, expected mTLS info")
+	if result.Host != "::1" {
+		t.Errorf("Host = %q, want %q", result.Host, "::1")
 	}
-	if !result.ClientAuth.Requested {
-		t.Error("ClientAuth.Requested = false, want true")
-	}
-	if len(result.ClientAuth.AcceptableCAs) != 1 {
-		t.Fatalf("AcceptableCAs count = %d, want 1", len(result.ClientAuth.AcceptableCAs))
-	}
-	if !strings.Contains(result.ClientAuth.AcceptableCAs[0], "Test Client CA") {
-		t.Errorf("AcceptableCAs[0] = %q, want to contain %q", result.ClientAuth.AcceptableCAs[0], "Test Client CA")
-	}
-	if len(result.ClientAuth.SignatureSchemes) == 0 {
-		t.Error("SignatureSchemes is empty")
-	}
-
-	// Chain should still be present and verifiable properties intact.
-	if len(result.PeerChain) == 0 {
-		t.Fatal("PeerChain is empty")
-	}
-	if result.PeerChain[0].Subject.CommonName != "localhost" {
-		t.Errorf("leaf CN = %q, want %q", result.PeerChain[0].Subject.CommonName, "localhost")
-	}
-
-}
-
-func TestConnectTLS_EmptyHost(t *testing.T) {
-	// WHY: Input validation must reject missing or malformed host/port values.
-	t.Parallel()
-
-	tests := []struct {
-		name  string
-		input ConnectTLSInput
-	}{
-		{name: "empty input", input: ConnectTLSInput{}},
-		{name: "empty host", input: ConnectTLSInput{Host: "", Port: "443"}},
-		{name: "non-numeric port", input: ConnectTLSInput{Host: "example.com", Port: "abc"}},
-		{name: "negative port", input: ConnectTLSInput{Host: "example.com", Port: "-1"}},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			// WHY: Ensures invalid input is rejected before any network activity.
-			t.Parallel()
-			_, err := ConnectTLS(context.Background(), tt.input)
-			if err == nil {
-				t.Fatal("expected error for invalid input")
-			}
-		})
+	if result.VerifyError != "" {
+		t.Fatalf("expected verification to succeed, got %q", result.VerifyError)
 	}
 }
 
@@ -504,6 +696,13 @@ func TestConnectTLS_ConnectionRefused(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected error for connection refused")
+	}
+	var opErr *net.OpError
+	if !errors.As(err, &opErr) {
+		t.Fatalf("expected net.OpError, got %T", err)
+	}
+	if !errors.Is(opErr.Err, syscall.ECONNREFUSED) {
+		t.Errorf("expected ECONNREFUSED, got %v", opErr.Err)
 	}
 }
 
@@ -540,6 +739,8 @@ func TestFormatConnectResult(t *testing.T) {
 		clientAuth     *ClientAuthInfo
 		ocsp           *OCSPResult
 		crl            *CRLCheckResult
+		peerChain      []*x509.Certificate
+		usePeerChain   bool
 		wantStrings    []string
 		notWantStrings []string
 	}{
@@ -645,6 +846,16 @@ func TestFormatConnectResult(t *testing.T) {
 			},
 		},
 		{
+			name: "client auth requested (acceptable CAs)",
+			clientAuth: &ClientAuthInfo{
+				Requested:     true,
+				AcceptableCAs: []string{"CN=Test Client CA", "CN=Other CA"},
+			},
+			wantStrings: []string{
+				"Client Auth:  requested (2 acceptable CA(s))",
+			},
+		},
+		{
 			name: "CRL good",
 			crl:  &CRLCheckResult{Status: "good", URL: "http://crl.example.com/ca.crl"},
 			wantStrings: []string{
@@ -658,10 +869,17 @@ func TestFormatConnectResult(t *testing.T) {
 				"CRL:          unavailable (certificate has no CRL distribution points)",
 			},
 		},
+		{
+			name:         "empty peer chain",
+			peerChain:    nil,
+			usePeerChain: true,
+			wantStrings:  []string{"Certificate chain (0 certificate(s))"},
+		},
 	}
 
 	// LegacyProbe: Note shows key-possession caveat; Verify shows real chain result.
 	t.Run("LegacyProbe shows Note and real Verify result", func(t *testing.T) {
+		// WHY: Ensures legacy probe output includes the verification caveat.
 		t.Parallel()
 		result := &ConnectResult{
 			Host:        "test.example.com",
@@ -691,6 +909,7 @@ func TestFormatConnectResult(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// WHY: Ensures FormatConnectResult handles this result permutation.
 			t.Parallel()
 			result := &ConnectResult{
 				Host:        "test.example.com",
@@ -705,6 +924,9 @@ func TestFormatConnectResult(t *testing.T) {
 				ClientAuth:  tt.clientAuth,
 				OCSP:        tt.ocsp,
 				CRL:         tt.crl,
+			}
+			if tt.usePeerChain {
+				result.PeerChain = tt.peerChain
 			}
 			output := FormatConnectResult(result)
 			for _, want := range tt.wantStrings {
@@ -734,6 +956,16 @@ func TestDiagnoseConnectChain(t *testing.T) {
 		wantChecks         []string   // expected diagnostic check names
 		wantDetailContains [][]string // per-diagnostic substrings to check in Detail
 	}{
+		{
+			name:       "nil chain",
+			peerChain:  nil,
+			wantChecks: nil,
+		},
+		{
+			name:       "empty chain",
+			peerChain:  []*x509.Certificate{},
+			wantChecks: nil,
+		},
 		{
 			name:       "clean chain (leaf + intermediate)",
 			peerChain:  []*x509.Certificate{leaf, intermediates[0]},
@@ -770,6 +1002,7 @@ func TestDiagnoseConnectChain(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// WHY: Ensures DiagnoseConnectChain emits expected diagnostics for this chain shape.
 			t.Parallel()
 			diags := DiagnoseConnectChain(DiagnoseConnectChainInput{PeerChain: tt.peerChain})
 
@@ -916,6 +1149,7 @@ func TestDiagnoseVerifyError(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// WHY: Ensures DiagnoseVerifyError maps this error scenario correctly.
 			t.Parallel()
 			diags := DiagnoseVerifyError(tt.err)
 			if len(diags) != len(tt.wantChecks) {
@@ -991,6 +1225,7 @@ func TestDiagnoseNegotiatedCipher(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// WHY: Ensures DiagnoseNegotiatedCipher returns expected diagnostics.
 			t.Parallel()
 			diags := DiagnoseNegotiatedCipher(tt.protocol, tt.cipherSuite)
 			if len(diags) != len(tt.wantChecks) {
@@ -1185,6 +1420,147 @@ func TestConnectTLS_AIAFetch(t *testing.T) {
 	}
 }
 
+func TestConnectTLS_AIAFetch_LoopbackRejected(t *testing.T) {
+	// WHY: AIA fetch should be skipped for loopback URLs to enforce SSRF guards.
+	t.Parallel()
+
+	root := generateTestCA(t, "AIA Loopback Root CA")
+	intermediate := generateIntermediateCA(t, root, "AIA Loopback Intermediate CA")
+
+	var hits atomic.Int64
+	aiaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "application/pkix-cert")
+		if _, err := w.Write(intermediate.CertDER); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}))
+	t.Cleanup(aiaServer.Close)
+
+	leaf := generateTestLeafCert(t, intermediate, withAIA(aiaServer.URL))
+	port := startTLSServer(t, [][]byte{leaf.DER}, leaf.Key)
+
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(root.Cert)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := ConnectTLS(ctx, ConnectTLSInput{
+		Host:    "127.0.0.1",
+		Port:    port,
+		RootCAs: rootPool,
+	})
+	if err != nil {
+		t.Fatalf("ConnectTLS failed: %v", err)
+	}
+	if hits.Load() != 0 {
+		t.Fatalf("expected 0 AIA fetches, got %d", hits.Load())
+	}
+	if result.AIAFetched {
+		t.Fatal("expected AIAFetched=false when SSRF guard blocks URL")
+	}
+	if result.VerifyError == "" {
+		t.Fatal("expected verify error when AIA fetch is blocked")
+	}
+}
+
+func TestConnectTLS_RootInChainDiagnostic(t *testing.T) {
+	// WHY: ConnectTLS should flag root-in-chain when a server includes the root.
+	t.Parallel()
+
+	root := generateTestCA(t, "Root-in-Chain Root")
+	intermediate := generateIntermediateCA(t, root, "Root-in-Chain Intermediate")
+	leaf := generateTestLeafCert(t, intermediate)
+
+	port := startTLSServer(t, [][]byte{leaf.DER, intermediate.CertDER, root.CertDER}, leaf.Key)
+
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(root.Cert)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := ConnectTLS(ctx, ConnectTLSInput{
+		Host:    "127.0.0.1",
+		Port:    port,
+		RootCAs: rootPool,
+	})
+	if err != nil {
+		t.Fatalf("ConnectTLS failed: %v", err)
+	}
+	rootInChain := false
+	for _, diag := range result.Diagnostics {
+		if diag.Check == "root-in-chain" {
+			rootInChain = true
+			break
+		}
+	}
+	if !rootInChain {
+		t.Fatal("expected root-in-chain diagnostic")
+	}
+}
+
+func TestConnectTLS_AIAFetch_FallbackURL(t *testing.T) {
+	// WHY: ConnectTLS should continue AIA walking when earlier URLs fail.
+	t.Parallel()
+
+	root := generateTestCA(t, "AIA Fallback Root CA")
+	intermediate := generateIntermediateCA(t, root, "AIA Fallback Intermediate CA")
+
+	var badHits atomic.Int64
+	badServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		badHits.Add(1)
+		http.Error(w, "broken", http.StatusInternalServerError)
+	}))
+	t.Cleanup(badServer.Close)
+
+	var goodHits atomic.Int64
+	goodServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		goodHits.Add(1)
+		w.Header().Set("Content-Type", "application/pkix-cert")
+		if _, err := w.Write(intermediate.CertDER); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}))
+	t.Cleanup(goodServer.Close)
+
+	badURL := strings.Replace(badServer.URL, "127.0.0.1", "localhost", 1)
+	goodURL := strings.Replace(goodServer.URL, "127.0.0.1", "localhost", 1)
+
+	leaf := generateTestLeafCert(t, intermediate, withAIA(badURL, goodURL))
+	port := startTLSServer(t, [][]byte{leaf.DER}, leaf.Key)
+
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(root.Cert)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	result, err := ConnectTLS(ctx, ConnectTLSInput{
+		Host:    "127.0.0.1",
+		Port:    port,
+		RootCAs: rootPool,
+	})
+	if err != nil {
+		t.Fatalf("ConnectTLS failed: %v", err)
+	}
+	if badHits.Load() == 0 {
+		t.Fatal("expected fallback AIA URL to be attempted")
+	}
+	if goodHits.Load() == 0 {
+		t.Fatal("expected AIA fetch to reach the working URL")
+	}
+	if !result.AIAFetched {
+		t.Fatal("expected AIAFetched=true")
+	}
+	if result.VerifyError != "" {
+		t.Fatalf("expected AIA chain verification success, got %q", result.VerifyError)
+	}
+}
+
 func TestConnectTLS_AIAFetch_Failure(t *testing.T) {
 	// WHY: Failed AIA fetches should not mark AIAFetched or add missing-intermediate diagnostics.
 	t.Parallel()
@@ -1277,6 +1653,7 @@ func TestConnectTLS_AIAFetch_Failure(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			// WHY: Each AIA failure mode should skip AIAFetched and avoid missing-intermediate diagnostics.
+			t.Parallel()
 
 			var aiaRequests atomic.Int64
 			aiaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1366,6 +1743,100 @@ func TestConnectTLS_AIAFetch_Failure(t *testing.T) {
 				t.Error("unexpected missing-intermediate diagnostic on AIA failure")
 			}
 		})
+	}
+}
+
+func TestConnectTLS_AIAFetch_WrongIssuer(t *testing.T) {
+	// WHY: AIA fetch should not mark success when the fetched issuer does not chain.
+	t.Parallel()
+
+	root := generateTestCA(t, "AIA Wrong Issuer Root")
+	intermediate := generateIntermediateCA(t, root, "AIA Wrong Issuer Intermediate")
+
+	wrongRoot := generateTestCA(t, "AIA Wrong Root")
+	wrongIntermediate := generateIntermediateCA(t, wrongRoot, "AIA Wrong Intermediate")
+
+	var hits atomic.Int64
+	wrongServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.Header().Set("Content-Type", "application/pkix-cert")
+		if _, err := w.Write(wrongIntermediate.CertDER); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}))
+	t.Cleanup(wrongServer.Close)
+	wrongURL := strings.Replace(wrongServer.URL, "127.0.0.1", "localhost", 1)
+	leaf := generateTestLeafCert(t, intermediate, withAIA(wrongURL))
+
+	port := startTLSServer(t, [][]byte{leaf.DER}, leaf.Key)
+
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(root.Cert)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	result, err := ConnectTLS(ctx, ConnectTLSInput{
+		Host:    "127.0.0.1",
+		Port:    port,
+		RootCAs: rootPool,
+	})
+	if err != nil {
+		t.Fatalf("ConnectTLS failed: %v", err)
+	}
+	if hits.Load() == 0 {
+		t.Fatal("expected AIA fetch to attempt the wrong issuer URL")
+	}
+	if result.AIAFetched {
+		t.Fatal("expected AIAFetched=false when issuer does not chain")
+	}
+	if result.VerifyError == "" {
+		t.Fatal("expected verification error when issuer is wrong")
+	}
+	for _, diag := range result.Diagnostics {
+		if diag.Check == "missing-intermediate" {
+			t.Fatal("unexpected missing-intermediate diagnostic when AIA did not complete chain")
+		}
+	}
+}
+
+func TestConnectTLS_NoCertificates(t *testing.T) {
+	// WHY: ConnectTLS should return an error if the server presents no certificates.
+	t.Parallel()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	_, portStr, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			tlsConn := tls.Server(conn, &tls.Config{
+				GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
+					return nil, nil
+				},
+			})
+			_ = tlsConn.Handshake()
+			_ = tlsConn.Close()
+		}
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	_, err = ConnectTLS(ctx, ConnectTLSInput{Host: "127.0.0.1", Port: portStr})
+	if err == nil {
+		t.Fatal("expected error when server presents no certificates")
 	}
 }
 
@@ -1498,6 +1969,16 @@ func TestConnectTLS_AIAFetch_DisableAIA(t *testing.T) {
 	if result.VerifyError == "" {
 		t.Error("expected verify error when intermediate is missing and AIA is disabled")
 	}
+	missingIntermediate := false
+	for _, diag := range result.Diagnostics {
+		if diag.Check == "missing-intermediate" {
+			missingIntermediate = true
+			break
+		}
+	}
+	if missingIntermediate {
+		t.Error("unexpected missing-intermediate diagnostic when AIA is disabled")
+	}
 }
 
 func TestConnectTLS_OCSP(t *testing.T) {
@@ -1505,54 +1986,87 @@ func TestConnectTLS_OCSP(t *testing.T) {
 	t.Parallel()
 
 	// Integration test: verify ConnectTLS wires OCSP check into result.
-	// Detailed good/revoked mapping is tested in TestCheckOCSP_MockResponse (ocsp_test.go).
-	ca := generateTestCA(t, "OCSP Connect CA")
-
-	respTemplate := ocsp.Response{
-		Status:       ocsp.Good,
-		SerialNumber: big.NewInt(100),
-		ThisUpdate:   time.Now().Add(-time.Hour),
-		NextUpdate:   time.Now().Add(time.Hour),
-	}
-	ocspRespBytes, err := ocsp.CreateResponse(ca.Cert, ca.Cert, respTemplate, ca.Key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	ocspServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/ocsp-response")
-		_, _ = w.Write(ocspRespBytes)
-	}))
-	t.Cleanup(ocspServer.Close)
-
-	leaf := generateTestLeafCert(t, ca,
-		withSerial(big.NewInt(100)),
-		withOCSPServer(strings.Replace(ocspServer.URL, "127.0.0.1", "localhost", 1)),
-	)
-	port := startTLSServer(t, [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
-
-	rootPool := x509.NewCertPool()
-	rootPool.AddCert(ca.Cert)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	result, err := ConnectTLS(ctx, ConnectTLSInput{
-		Host:    "127.0.0.1",
-		Port:    port,
-		RootCAs: rootPool,
-	})
-	if err != nil {
-		t.Fatalf("ConnectTLS failed: %v", err)
+	// Detailed response parsing is tested in ocsp_test.go; this focuses on result propagation.
+	tests := []struct {
+		name        string
+		status      int
+		wantStatus  string
+		wantRevoked bool
+	}{
+		{name: "good", status: ocsp.Good, wantStatus: "good"},
+		{name: "unknown", status: ocsp.Unknown, wantStatus: "unknown"},
+		{name: "revoked", status: ocsp.Revoked, wantStatus: "revoked", wantRevoked: true},
 	}
 
-	if result.OCSP == nil {
-		t.Fatal("OCSP result is nil, expected a response")
-	}
-	if result.OCSP.Status != "good" {
-		t.Errorf("OCSP.Status = %q, want %q", result.OCSP.Status, "good")
-	}
-	if result.OCSP.SerialNumber != "64" { // 100 decimal = 64 hex
-		t.Errorf("OCSP.SerialNumber = %q, want %q", result.OCSP.SerialNumber, "64")
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// WHY: Ensures OCSP status is surfaced correctly in ConnectTLS results.
+			t.Parallel()
+			ca := generateTestCA(t, "OCSP Connect CA")
+			serial := big.NewInt(100)
+			respTemplate := ocsp.Response{
+				Status:       tt.status,
+				SerialNumber: serial,
+				ThisUpdate:   time.Now().Add(-time.Hour),
+				NextUpdate:   time.Now().Add(time.Hour),
+			}
+			if tt.status == ocsp.Revoked {
+				respTemplate.RevokedAt = time.Now().Add(-time.Hour)
+				respTemplate.RevocationReason = ocsp.KeyCompromise
+			}
+
+			ocspRespBytes, err := ocsp.CreateResponse(ca.Cert, ca.Cert, respTemplate, ca.Key)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ocspServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/ocsp-response")
+				if _, err := w.Write(ocspRespBytes); err != nil {
+					http.Error(w, err.Error(), http.StatusInternalServerError)
+					return
+				}
+			}))
+			t.Cleanup(ocspServer.Close)
+
+			leaf := generateTestLeafCert(t, ca,
+				withSerial(serial),
+				withOCSPServer(strings.Replace(ocspServer.URL, "127.0.0.1", "localhost", 1)),
+			)
+			port := startTLSServer(t, [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
+
+			rootPool := x509.NewCertPool()
+			rootPool.AddCert(ca.Cert)
+
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+
+			result, err := ConnectTLS(ctx, ConnectTLSInput{
+				Host:    "127.0.0.1",
+				Port:    port,
+				RootCAs: rootPool,
+			})
+			if err != nil {
+				t.Fatalf("ConnectTLS failed: %v", err)
+			}
+
+			if result.OCSP == nil {
+				t.Fatal("OCSP result is nil, expected a response")
+			}
+			if result.OCSP.Status != tt.wantStatus {
+				t.Errorf("OCSP.Status = %q, want %q", result.OCSP.Status, tt.wantStatus)
+			}
+			if result.OCSP.SerialNumber != "64" { // 100 decimal = 64 hex
+				t.Errorf("OCSP.SerialNumber = %q, want %q", result.OCSP.SerialNumber, "64")
+			}
+			if tt.wantRevoked {
+				if result.OCSP.RevokedAt == nil {
+					t.Error("expected OCSP.RevokedAt to be set")
+				}
+				if result.OCSP.RevocationReason == nil {
+					t.Error("expected OCSP.RevocationReason to be set")
+				}
+			}
+		})
 	}
 }
 
@@ -1600,6 +2114,8 @@ func TestConnectTLS_OCSP_SkipAndFailure(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			// WHY: Ensures OCSP skip/unavailable behavior matches this case.
+			t.Parallel()
 			var hits atomic.Int64
 			var ocspURL string
 			if tc.withResponder {
@@ -1695,6 +2211,7 @@ func TestConnectTLS_OCSP_InvalidResponses(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			// WHY: OCSP parsing/signature failures must surface in ConnectTLS results.
+			t.Parallel()
 
 			serial := big.NewInt(500)
 			respBytes, err := tc.makeResp(serial)
@@ -1856,6 +2373,7 @@ func TestConnectTLS_CRL(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			// WHY: Ensures CRL results match this status/detail scenario.
 			t.Parallel()
 
 			ca := generateTestCA(t, "CRL Connect CA")
@@ -1904,6 +2422,46 @@ func TestConnectTLS_CRL(t *testing.T) {
 	}
 }
 
+func TestConnectTLS_CRL_Disabled(t *testing.T) {
+	// WHY: When CheckCRL is false, ConnectTLS should not attempt CRL fetching.
+	t.Parallel()
+
+	ca := generateTestCA(t, "CRL Disabled CA")
+
+	var hits atomic.Int64
+	crlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		http.Error(w, "unexpected", http.StatusInternalServerError)
+	}))
+	t.Cleanup(crlServer.Close)
+
+	cdpURL := strings.Replace(crlServer.URL, "127.0.0.1", "localhost", 1)
+	leaf := generateTestLeafCert(t, ca, withCRLDistributionPoints(cdpURL))
+	port := startTLSServer(t, [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
+
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(ca.Cert)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := ConnectTLS(ctx, ConnectTLSInput{
+		Host:        "127.0.0.1",
+		Port:        port,
+		RootCAs:     rootPool,
+		DisableOCSP: true,
+	})
+	if err != nil {
+		t.Fatalf("ConnectTLS failed: %v", err)
+	}
+	if result.CRL != nil {
+		t.Fatalf("expected CRL to be nil when CheckCRL is false, got %+v", result.CRL)
+	}
+	if hits.Load() != 0 {
+		t.Fatalf("expected no CRL HTTP requests, got %d", hits.Load())
+	}
+}
+
 func TestConnectTLS_CRL_Unavailable(t *testing.T) {
 	// WHY: CRL checks should surface unavailable reasons for common missing issuer/CDP cases.
 	t.Parallel()
@@ -1939,6 +2497,7 @@ func TestConnectTLS_CRL_Unavailable(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
+			// WHY: Ensures CRL unavailable reasons map to correct status/detail.
 			t.Parallel()
 
 			ca := generateTestCA(t, "CRL Unavail CA")
@@ -2144,6 +2703,7 @@ func TestRateCipherSuite(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// WHY: Ensures RateCipherSuite returns the expected rating for this cipher.
 			t.Parallel()
 			got := RateCipherSuite(tt.cipherID, tt.tlsVersion)
 			if got != tt.want {
@@ -2239,6 +2799,38 @@ func TestScanCipherSuites(t *testing.T) {
 		} else if kx.PostQuantum {
 			t.Errorf("key exchange %s should not be PostQuantum", kx.Name)
 		}
+	}
+}
+
+func TestScanCipherSuites_ConnectionFailure(t *testing.T) {
+	// WHY: ScanCipherSuites should surface connection errors when no server is available.
+	t.Parallel()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		_ = listener.Close()
+		t.Fatal(err)
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := ScanCipherSuites(ctx, ScanCipherSuitesInput{Host: "127.0.0.1", Port: port})
+	if err != nil {
+		t.Fatalf("unexpected error for connection failure: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected non-nil result")
+	}
+	if len(result.Ciphers) != 0 || len(result.QUICCiphers) != 0 {
+		t.Fatalf("expected empty cipher results, got %+v", result)
 	}
 }
 
@@ -2370,6 +2962,7 @@ func TestFormatCipherScanResult(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// WHY: Ensures FormatCipherScanResult handles this scan output shape.
 			t.Parallel()
 			output := FormatCipherScanResult(tt.result)
 			if tt.wantStrings == nil {
@@ -2444,6 +3037,7 @@ func TestFormatCipherRatingLine(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// WHY: Ensures FormatCipherRatingLine summarizes ratings correctly.
 			t.Parallel()
 			got := FormatCipherRatingLine(tt.scan)
 			if got != tt.want {
@@ -2561,6 +3155,7 @@ func TestDiagnoseCipherScan(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// WHY: Ensures DiagnoseCipherScan emits the expected diagnostics.
 			t.Parallel()
 			diags := DiagnoseCipherScan(tt.result)
 			if len(diags) != len(tt.wantChecks) {
