@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/sensiblebit/certkit"
@@ -34,19 +35,21 @@ func ParseContainerData(data []byte, passwords []string) (*ContainerContents, er
 	}
 
 	// Try JKS
-	if certs, keys, err := certkit.DecodeJKS(data, passwords); err == nil {
-		var leaf *x509.Certificate
-		var extras []*x509.Certificate
-		if len(certs) > 0 {
-			leaf = certs[0]
-			extras = certs[1:]
+	if keyEntries, trustedCerts, err := certkit.DecodeJKSKeyEntries(data, passwords); err == nil {
+		if len(keyEntries) > 0 {
+			entry := keyEntries[0]
+			if len(entry.Chain) > 0 {
+				return &ContainerContents{Leaf: entry.Chain[0], Key: entry.Key, ExtraCerts: entry.Chain[1:]}, nil
+			}
+			if len(trustedCerts) > 0 {
+				return &ContainerContents{Leaf: trustedCerts[0], Key: entry.Key, ExtraCerts: trustedCerts[1:]}, nil
+			}
+			return &ContainerContents{Key: entry.Key}, nil
 		}
-		var key crypto.PrivateKey
-		if len(keys) > 0 {
-			key = keys[0]
-		}
+
+		leaf, extras := selectLeafAndExtras(trustedCerts, nil)
 		if leaf != nil {
-			return &ContainerContents{Leaf: leaf, Key: key, ExtraCerts: extras}, nil
+			return &ContainerContents{Leaf: leaf, ExtraCerts: extras}, nil
 		}
 	}
 
@@ -75,7 +78,43 @@ func ParseContainerData(data []byte, passwords []string) (*ContainerContents, er
 		return &ContainerContents{Leaf: cert}, nil
 	}
 
+	// Try DER private key (PKCS#8, PKCS#1, SEC1).
+	if key, keyErr := x509.ParsePKCS8PrivateKey(data); keyErr == nil {
+		return &ContainerContents{Key: key}, nil
+	}
+	if key, keyErr := x509.ParsePKCS1PrivateKey(data); keyErr == nil {
+		return &ContainerContents{Key: key}, nil
+	}
+	if key, keyErr := x509.ParseECPrivateKey(data); keyErr == nil {
+		return &ContainerContents{Key: key}, nil
+	}
+
 	return nil, fmt.Errorf("could not parse as PEM, DER, PKCS#12, JKS, or PKCS#7")
+}
+
+// selectLeafAndExtras picks a leaf certificate from certs and returns that leaf
+// plus remaining certificates as extras. When a key is present, it prefers a
+// certificate that matches the key to preserve JKS private-key entry pairing.
+func selectLeafAndExtras(certs []*x509.Certificate, key crypto.PrivateKey) (*x509.Certificate, []*x509.Certificate) {
+	if len(certs) == 0 {
+		return nil, nil
+	}
+
+	leafIdx := 0
+	if key != nil {
+		if idx := slices.IndexFunc(certs, func(cert *x509.Certificate) bool {
+			ok, err := certkit.KeyMatchesCert(key, cert)
+			return err == nil && ok
+		}); idx >= 0 {
+			leafIdx = idx
+		}
+	}
+
+	leaf := certs[leafIdx]
+	extras := make([]*x509.Certificate, 0, len(certs)-1)
+	extras = append(extras, certs[:leafIdx]...)
+	extras = append(extras, certs[leafIdx+1:]...)
+	return leaf, extras
 }
 
 // findPEMPrivateKey iterates over PEM blocks in data looking for a private key block.

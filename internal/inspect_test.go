@@ -345,9 +345,7 @@ func TestInspectFile_MultiplePEMObjects(t *testing.T) {
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "multi-pem.example.com", []string{"multi-pem.example.com"}, nil)
 
-	// Put the key PEM BEFORE the cert PEM so ParsePEMPrivateKey finds the key
-	// (it only parses the first PEM block). ParsePEMCertificates iterates all blocks
-	// and will find the cert block.
+	// Put the key PEM BEFORE the cert PEM to verify mixed ordering is handled.
 	combined := slices.Concat(leaf.keyPEM, leaf.certPEM)
 
 	dir := t.TempDir()
@@ -381,6 +379,74 @@ func TestInspectFile_MultiplePEMObjects(t *testing.T) {
 	}
 	if !foundKey {
 		t.Error("expected to find a private_key result in mixed PEM")
+	}
+}
+
+func TestInspectFile_PEMMalformedCertAndValidCert(t *testing.T) {
+	// WHY: Inspect should retain valid certificates even when the same PEM file
+	// also contains malformed CERTIFICATE blocks.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "inspect-malformed.example.com", []string{"inspect-malformed.example.com"}, nil)
+
+	combined := slices.Concat(
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("bad-der")}),
+		leaf.certPEM,
+	)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "mixed-malformed.pem")
+	if err := os.WriteFile(path, combined, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := InspectFile(path, nil)
+	if err != nil {
+		t.Fatalf("InspectFile: %v", err)
+	}
+	foundLeaf := false
+	for _, r := range results {
+		if r.Type == "certificate" && strings.Contains(r.Subject, "inspect-malformed.example.com") {
+			foundLeaf = true
+		}
+	}
+	if !foundLeaf {
+		t.Error("expected valid certificate to be present despite malformed CERTIFICATE block")
+	}
+}
+
+func TestInspectFile_DERRSAPrivateKey(t *testing.T) {
+	// WHY: Inspect DER parsing should recognize PKCS#1 RSA keys, not only PKCS#8.
+	t.Parallel()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	der := x509.MarshalPKCS1PrivateKey(key)
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "key.der")
+	if err := os.WriteFile(path, der, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	results, err := InspectFile(path, nil)
+	if err != nil {
+		t.Fatalf("InspectFile: %v", err)
+	}
+	foundKey := false
+	for _, r := range results {
+		if r.Type == "private_key" {
+			foundKey = true
+			if r.KeyType != "RSA" {
+				t.Errorf("KeyType = %q, want RSA", r.KeyType)
+			}
+		}
+	}
+	if !foundKey {
+		t.Fatal("expected private_key result for PKCS#1 DER input")
 	}
 }
 

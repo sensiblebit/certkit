@@ -94,8 +94,10 @@ func inspectPEMData(data []byte, passwords []string) []InspectResult {
 	}
 
 	// Try private key
-	if key, err := certkit.ParsePEMPrivateKeyWithPasswords(data, passwords); err == nil {
-		results = append(results, inspectKey(key))
+	if keys, err := certkit.ParsePEMPrivateKeys(data, passwords); err == nil {
+		for _, key := range keys {
+			results = append(results, inspectKey(key))
+		}
 	}
 
 	return results
@@ -118,6 +120,18 @@ func inspectDERData(data []byte, passwords []string) []InspectResult {
 
 	// Try PKCS#8
 	if key, err := x509.ParsePKCS8PrivateKey(data); err == nil {
+		results = append(results, inspectKey(key))
+		return results
+	}
+
+	// Try PKCS#1 RSA
+	if key, err := x509.ParsePKCS1PrivateKey(data); err == nil {
+		results = append(results, inspectKey(key))
+		return results
+	}
+
+	// Try SEC1 EC
+	if key, err := x509.ParseECPrivateKey(data); err == nil {
 		results = append(results, inspectKey(key))
 		return results
 	}

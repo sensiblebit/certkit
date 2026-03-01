@@ -194,19 +194,10 @@ func TestParseContainerData_PEMKeyOnly(t *testing.T) {
 
 func TestParseContainerData_UnparseableInputs(t *testing.T) {
 	// WHY: Data that doesn't match any container format (garbage bytes, DER
-	// private keys, empty JKS) must produce a clear "could not parse" error.
-	// DER keys are ProcessData's job, not ParseContainerData's. Empty JKS
-	// falls through all parsers after DecodeJKS returns no leaf.
+	// garbage, empty JKS) must produce a clear "could not parse" error.
+	// Empty JKS falls through all parsers after DecodeJKS returns no usable
+	// entries.
 	t.Parallel()
-
-	key, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		t.Fatal(err)
-	}
-	pkcs8DER, err := x509.MarshalPKCS8PrivateKey(key)
-	if err != nil {
-		t.Fatal(err)
-	}
 
 	ks := keystore.New()
 	var buf bytes.Buffer
@@ -220,9 +211,7 @@ func TestParseContainerData_UnparseableInputs(t *testing.T) {
 		data      []byte
 		passwords []string
 	}{
-		// "garbage data" removed — exercises the same "nothing matched" fallthrough
-		// as "DER private key" (T-14). DER key is a more realistic input.
-		{"DER private key", pkcs8DER, nil},
+		{"garbage data", []byte("not-a-container"), nil},
 		{"empty JKS", emptyJKSData, []string{"changeit"}},
 	}
 	for _, tt := range tests {
@@ -236,5 +225,88 @@ func TestParseContainerData_UnparseableInputs(t *testing.T) {
 				t.Errorf("error should mention 'could not parse', got: %v", err)
 			}
 		})
+	}
+}
+
+func TestParseContainerData_DERPrivateKey(t *testing.T) {
+	// WHY: Convert and inspect use ParseContainerData; DER private keys must be
+	// recognized as key-only input instead of being treated as unparseable.
+	t.Parallel()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pkcs8DER, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	contents, err := ParseContainerData(pkcs8DER, nil)
+	if err != nil {
+		t.Fatalf("ParseContainerData(DER private key): %v", err)
+	}
+	if contents.Key == nil {
+		t.Fatal("expected Key to be set")
+	}
+	if contents.Leaf != nil {
+		t.Errorf("expected nil Leaf for DER private key, got %q", contents.Leaf.Subject.CommonName)
+	}
+	if len(contents.ExtraCerts) != 0 {
+		t.Errorf("expected 0 extra certs, got %d", len(contents.ExtraCerts))
+	}
+}
+
+func TestParseContainerData_JKSPreservesKeyEntryChain(t *testing.T) {
+	// WHY: When JKS contains trusted cert entries plus private-key entries,
+	// ParseContainerData must select the leaf and chain from the key entry,
+	// not an unrelated trusted certificate.
+	t.Parallel()
+
+	ca1 := newRSACA(t)
+	leaf1 := newRSALeaf(t, ca1, "jks-primary.example.com", []string{"jks-primary.example.com"})
+	ca2 := newECDSACA(t)
+
+	keyEntries := []certkit.JKSEntry{{
+		PrivateKey: leaf1.key,
+		Leaf:       leaf1.cert,
+		CACerts:    []*x509.Certificate{ca1.cert},
+		Alias:      "primary",
+	}}
+	jksData, err := certkit.EncodeJKSEntries(keyEntries, "changeit")
+	if err != nil {
+		t.Fatalf("EncodeJKSEntries: %v", err)
+	}
+
+	ks := keystore.New()
+	if err := ks.Load(bytes.NewReader(jksData), []byte("changeit")); err != nil {
+		t.Fatalf("load JKS: %v", err)
+	}
+	if err := ks.SetTrustedCertificateEntry("trusted-unrelated", keystore.TrustedCertificateEntry{
+		CreationTime: time.Now(),
+		Certificate:  keystore.Certificate{Type: "X.509", Content: ca2.cert.Raw},
+	}); err != nil {
+		t.Fatalf("set trusted entry: %v", err)
+	}
+	var withTrusted bytes.Buffer
+	if err := ks.Store(&withTrusted, []byte("changeit")); err != nil {
+		t.Fatalf("store updated JKS: %v", err)
+	}
+
+	contents, err := ParseContainerData(withTrusted.Bytes(), []string{"changeit"})
+	if err != nil {
+		t.Fatalf("ParseContainerData(JKS): %v", err)
+	}
+	if contents.Key == nil || contents.Leaf == nil {
+		t.Fatal("expected key and leaf from JKS private key entry")
+	}
+	if contents.Leaf.Subject.CommonName != "jks-primary.example.com" {
+		t.Errorf("selected leaf CN = %q, want jks-primary.example.com", contents.Leaf.Subject.CommonName)
+	}
+	if len(contents.ExtraCerts) != 1 {
+		t.Fatalf("expected 1 extra cert from key-entry chain, got %d", len(contents.ExtraCerts))
+	}
+	if contents.ExtraCerts[0].Subject.CommonName != ca1.cert.Subject.CommonName {
+		t.Errorf("extra cert CN = %q, want %q", contents.ExtraCerts[0].Subject.CommonName, ca1.cert.Subject.CommonName)
 	}
 }

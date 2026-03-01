@@ -95,6 +95,13 @@ func SignCSR(input SignCSRInput) (*x509.Certificate, error) {
 	if input.CAKey == nil {
 		return nil, fmt.Errorf("signing CSR: CA key is required")
 	}
+	caKeyMatches, err := KeyMatchesCert(input.CAKey, input.CACert)
+	if err != nil {
+		return nil, fmt.Errorf("validating CA certificate and key: %w", err)
+	}
+	if !caKeyMatches {
+		return nil, fmt.Errorf("validating CA certificate and key: CA key does not match CA certificate")
+	}
 
 	if err := input.CSR.CheckSignature(); err != nil {
 		return nil, fmt.Errorf("verifying CSR signature: %w", err)
