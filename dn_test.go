@@ -136,6 +136,11 @@ func TestFormatEKUOIDs(t *testing.T) {
 			want: nil,
 		},
 		{
+			name: "wrong ASN.1 element type returns nil",
+			raw:  mustMarshalInts(t, 1, 2),
+			want: nil,
+		},
+		{
 			name: "empty sequence returns nil",
 			raw:  mustMarshalOIDs(t),
 			want: nil,
@@ -235,6 +240,15 @@ func mustMarshalOIDs(t *testing.T, oids ...asn1.ObjectIdentifier) []byte {
 	return raw
 }
 
+func mustMarshalInts(t *testing.T, ints ...int) []byte {
+	t.Helper()
+	raw, err := asn1.Marshal(ints)
+	if err != nil {
+		t.Fatalf("marshal ints: %v", err)
+	}
+	return raw
+}
+
 // --- FormatKeyUsage tests ---
 
 func TestFormatKeyUsage(t *testing.T) {
@@ -291,6 +305,11 @@ func TestFormatKeyUsage(t *testing.T) {
 			ku:   0,
 			want: nil,
 		},
+		{
+			name: "unknown bits ignored",
+			ku:   x509.KeyUsage(1 << 12),
+			want: nil,
+		},
 	}
 
 	for _, tt := range tests {
@@ -332,6 +351,11 @@ func TestFormatKeyUsageBitString(t *testing.T) {
 			name: "invalid ASN.1 returns nil",
 			raw:  []byte{0xFF, 0xFF},
 			want: nil,
+		},
+		{
+			name: "extra bits ignored",
+			raw:  mustMarshalBitString(t, 12, 0, 10),
+			want: []string{"Digital Signature"},
 		},
 	}
 
@@ -376,6 +400,49 @@ func TestFormatKeyUsageBitString_RoundTripsWithFormatKeyUsage(t *testing.T) {
 	}
 }
 
+func TestFormatKeyUsageBitString_FromCertificate(t *testing.T) {
+	// WHY: Ensures FormatKeyUsageBitString decodes real x509 KeyUsage extensions.
+	t.Parallel()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: randomSerial(t),
+		Subject:      pkix.Name{CommonName: "ku.example.com"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	keyUsageOID := asn1.ObjectIdentifier{2, 5, 29, 15}
+	var keyUsageExt *pkix.Extension
+	for i := range cert.Extensions {
+		if cert.Extensions[i].Id.Equal(keyUsageOID) {
+			keyUsageExt = &cert.Extensions[i]
+			break
+		}
+	}
+	if keyUsageExt == nil {
+		t.Fatal("expected key usage extension")
+	}
+
+	got := FormatKeyUsageBitString(keyUsageExt.Value)
+	want := []string{"Digital Signature", "Key Encipherment"}
+	if !slices.Equal(got, want) {
+		t.Errorf("FormatKeyUsageBitString() = %v, want %v", got, want)
+	}
+}
+
 // mustMarshalKeyUsageBitString builds a raw ASN.1 BIT STRING encoding for the
 // given x509.KeyUsage bitmask, matching the encoding that crypto/x509 produces
 // in the KeyUsage extension.
@@ -394,6 +461,30 @@ func mustMarshalKeyUsageBitString(t *testing.T, ku x509.KeyUsage) []byte {
 			bitIdx := 7 - (i % 8)
 			bs.Bytes[byteIdx] |= 1 << uint(bitIdx)
 		}
+	}
+	raw, err := asn1.Marshal(bs)
+	if err != nil {
+		t.Fatalf("marshal BitString: %v", err)
+	}
+	return raw
+}
+
+func mustMarshalBitString(t *testing.T, bitLength int, setBits ...int) []byte {
+	t.Helper()
+	if bitLength <= 0 {
+		t.Fatalf("bitLength must be positive, got %d", bitLength)
+	}
+	bs := asn1.BitString{
+		Bytes:     make([]byte, (bitLength+7)/8),
+		BitLength: bitLength,
+	}
+	for _, bit := range setBits {
+		if bit < 0 || bit >= bitLength {
+			t.Fatalf("bit %d out of range for length %d", bit, bitLength)
+		}
+		byteIdx := bit / 8
+		bitIdx := 7 - (bit % 8)
+		bs.Bytes[byteIdx] |= 1 << uint(bitIdx)
 	}
 	raw, err := asn1.Marshal(bs)
 	if err != nil {
@@ -558,6 +649,25 @@ func TestParseOtherNameSANs(t *testing.T) {
 		got := ParseOtherNameSANs(exts)
 		if got != nil {
 			t.Errorf("expected nil for invalid bytes, got %v", got)
+		}
+	})
+
+	t.Run("valid entry before malformed bytes", func(t *testing.T) {
+		// WHY: Ensures a malformed GeneralName after a valid OtherName doesn't drop earlier entries.
+		t.Parallel()
+		validGN := marshalOtherNameGeneralName(t,
+			asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3},
+			"ok@example.com",
+		)
+		sanBytes := buildSANWithGeneralNames(t, validGN, []byte{0xFF})
+		exts := []pkix.Extension{{
+			Id:    asn1.ObjectIdentifier{2, 5, 29, 17},
+			Value: sanBytes,
+		}}
+		got := ParseOtherNameSANs(exts)
+		want := []string{"UPN:ok@example.com"}
+		if !slices.Equal(got, want) {
+			t.Errorf("got %v, want %v", got, want)
 		}
 	})
 }

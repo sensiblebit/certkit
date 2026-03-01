@@ -636,9 +636,11 @@ func FormatDN(name pkix.Name) string {
 		}
 		// Unknown OID or non-string value: render as OID=#hex.
 		derBytes, err := asn1.Marshal(atv.Value)
-		if err == nil {
-			parts = append(parts, oid+"=#"+hex.EncodeToString(derBytes))
+		if err != nil {
+			slog.Debug("formatting DN: skipping attribute", "oid", oid, "error", err)
+			continue
 		}
+		parts = append(parts, oid+"=#"+hex.EncodeToString(derBytes))
 	}
 	return strings.Join(parts, ",")
 }

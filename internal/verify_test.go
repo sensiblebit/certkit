@@ -328,6 +328,41 @@ func TestVerifyCert_ChainAndKeyMatchSuccess(t *testing.T) {
 	}
 }
 
+func TestVerifyCert_ExtraIntermediates(t *testing.T) {
+	// WHY: ExtraCerts should allow chain validation to succeed when intermediates are missing.
+	t.Parallel()
+	root := newRSACA(t)
+	intermediate := newRSAIntermediate(t, root)
+	leaf := newRSALeaf(t, intermediate, "extra-intermediate.example.com", []string{"extra-intermediate.example.com"}, nil)
+
+	missingResult, err := VerifyCert(context.Background(), &VerifyInput{
+		Cert:        leaf.cert,
+		CheckChain:  true,
+		TrustStore:  "custom",
+		CustomRoots: []*x509.Certificate{root.cert},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if missingResult.ChainValid == nil || *missingResult.ChainValid {
+		t.Fatalf("expected chain to be invalid without intermediates, got %v", missingResult.ChainValid)
+	}
+
+	result, err := VerifyCert(context.Background(), &VerifyInput{
+		Cert:        leaf.cert,
+		CheckChain:  true,
+		TrustStore:  "custom",
+		CustomRoots: []*x509.Certificate{root.cert},
+		ExtraCerts:  []*x509.Certificate{intermediate.cert},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ChainValid == nil || !*result.ChainValid {
+		t.Fatalf("expected chain to be valid with intermediates, got %v", result.ChainValid)
+	}
+}
+
 func TestVerifyCert_NoChecksEnabled(t *testing.T) {
 	// WHY: When all checks are disabled (no key match, no chain, no expiry), VerifyCert must still return basic cert info (subject, SANs, NotAfter, SKI) without errors.
 	t.Parallel()
@@ -378,6 +413,7 @@ func TestFormatVerifyResult(t *testing.T) {
 	chainValid := true
 	chainInvalid := false
 	expiring := true
+	isCAFalse := false
 
 	tests := []struct {
 		name           string
@@ -471,6 +507,43 @@ func TestFormatVerifyResult(t *testing.T) {
 			mustContain:    []string{"Key Match: MISMATCH", "Verification FAILED", "1 error"},
 			mustNotContain: []string{"Verification OK"},
 		},
+		{
+			name: "verbose fields",
+			result: &VerifyResult{
+				Subject:    "CN=verbose.example.com",
+				NotAfter:   "2030-01-01T00:00:00Z",
+				SKI:        "aabbccdd",
+				Issuer:     "CN=Verbose CA",
+				Serial:     "1234",
+				NotBefore:  "2025-01-01T00:00:00Z",
+				CertType:   "leaf",
+				IsCA:       &isCAFalse,
+				KeyAlgo:    "RSA",
+				KeySize:    "2048",
+				SigAlg:     "SHA256-RSA",
+				KeyUsages:  []string{"Digital Signature"},
+				EKUs:       []string{"Server Authentication"},
+				SHA256:     "AA:BB",
+				SHA1:       "CC:DD",
+				AKI:        "EE:FF",
+				Errors:     nil,
+				ChainValid: &chainValid,
+			},
+			mustContain: []string{
+				"Issuer: CN=Verbose CA",
+				"Serial: 1234",
+				"Not Before: 2025-01-01T00:00:00Z",
+				"Type: leaf",
+				"CA: no",
+				"Key: RSA 2048",
+				"Signature: SHA256-RSA",
+				"Key Usage: Digital Signature",
+				"EKU: Server Authentication",
+				"SHA-256: AA:BB",
+				"SHA-1: CC:DD",
+				"AKI: EE:FF",
+			},
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -563,6 +636,53 @@ func TestDiagnoseChain(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	futureKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	futureTmpl := &x509.Certificate{
+		SerialNumber:   randomSerial(t),
+		Subject:        pkix.Name{CommonName: "Future Leaf", Organization: []string{"TestOrg"}},
+		NotBefore:      time.Now().Add(24 * time.Hour),
+		NotAfter:       time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:       x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:    []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		SubjectKeyId:   []byte{0xaa, 0xbb, 0xcc},
+		AuthorityKeyId: ca.cert.SubjectKeyId,
+	}
+	futureDER, err := x509.CreateCertificate(rand.Reader, futureTmpl, ca.cert, &futureKey.PublicKey, ca.key.(*rsa.PrivateKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	futureCert, err := x509.ParseCertificate(futureDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	weakKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	weakSigTmpl := &x509.Certificate{
+		SerialNumber:       randomSerial(t),
+		Subject:            pkix.Name{CommonName: "Weak Sig Leaf", Organization: []string{"TestOrg"}},
+		NotBefore:          time.Now().Add(-time.Hour),
+		NotAfter:           time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:           x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:        []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		SignatureAlgorithm: x509.SHA1WithRSA,
+		SubjectKeyId:       []byte{0xdd, 0xee, 0xff},
+		AuthorityKeyId:     ca.cert.SubjectKeyId,
+	}
+	weakDER, err := x509.CreateCertificate(rand.Reader, weakSigTmpl, ca.cert, &weakKey.PublicKey, ca.key.(*rsa.PrivateKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	weakSigCert, err := x509.ParseCertificate(weakDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
 	tests := []struct {
 		name             string
 		input            DiagnoseChainInput
@@ -587,6 +707,26 @@ func TestDiagnoseChain(t *testing.T) {
 			},
 			wantChecks: map[string]string{
 				"expired": "fail",
+			},
+		},
+		{
+			name: "not yet valid leaf",
+			input: DiagnoseChainInput{
+				Cert:       futureCert,
+				ExtraCerts: []*x509.Certificate{ca.cert},
+			},
+			wantChecks: map[string]string{
+				"not-yet-valid": "fail",
+			},
+		},
+		{
+			name: "weak signature leaf",
+			input: DiagnoseChainInput{
+				Cert:       weakSigCert,
+				ExtraCerts: []*x509.Certificate{ca.cert},
+			},
+			wantChecks: map[string]string{
+				"weak-signature": "warn",
 			},
 		},
 		{
@@ -804,6 +944,48 @@ func TestVerifyCert_RevocationBehavior(t *testing.T) {
 	}
 }
 
+func TestVerifyCert_RevocationWithoutChain(t *testing.T) {
+	// WHY: Revocation checks should be skipped when chain validation is disabled.
+	t.Parallel()
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "nochain.example.com", []string{"nochain.example.com"}, nil)
+
+	result, err := VerifyCert(context.Background(), &VerifyInput{
+		Cert:       leaf.cert,
+		CheckOCSP:  true,
+		CheckCRL:   true,
+		CheckChain: false,
+		TrustStore: "custom",
+		CustomRoots: []*x509.Certificate{
+			ca.cert,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.OCSP == nil {
+		t.Fatal("expected OCSP result")
+	}
+	if result.OCSP.Status != "skipped" {
+		t.Errorf("OCSP.Status = %q, want %q", result.OCSP.Status, "skipped")
+	}
+	if !strings.Contains(result.OCSP.Detail, "no issuer certificate found in chain") {
+		t.Errorf("OCSP.Detail = %q, want missing issuer message", result.OCSP.Detail)
+	}
+	if result.CRL == nil {
+		t.Fatal("expected CRL result")
+	}
+	if result.CRL.Status != "skipped" {
+		t.Errorf("CRL.Status = %q, want %q", result.CRL.Status, "skipped")
+	}
+	if !strings.Contains(result.CRL.Detail, "no issuer certificate found in chain") {
+		t.Errorf("CRL.Detail = %q, want missing issuer message", result.CRL.Detail)
+	}
+	if len(result.Errors) != 0 {
+		t.Errorf("expected no errors, got %v", result.Errors)
+	}
+}
+
 func TestVerifyCert_OCSPRevoked(t *testing.T) {
 	// WHY: VerifyCert should surface OCSP revoked results as verification errors.
 	t.Parallel()
@@ -940,4 +1122,35 @@ func TestFormatVerifyOCSPAndCRL(t *testing.T) {
 	if strings.Contains(output, "CRL:") {
 		t.Errorf("formatted output should not contain CRL when not requested\ngot:\n%s", output)
 	}
+}
+
+func newRSAIntermediate(t *testing.T, root testCA) testCA {
+	t.Helper()
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate RSA intermediate key: %v", err)
+	}
+
+	tmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "Test RSA Intermediate CA", Organization: []string{"TestOrg"}},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(5 * 365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		SubjectKeyId:          []byte{0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32, 0x33, 0x34},
+		AuthorityKeyId:        root.cert.SubjectKeyId,
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, root.cert, &key.PublicKey, root.key.(*rsa.PrivateKey))
+	if err != nil {
+		t.Fatalf("create RSA intermediate cert: %v", err)
+	}
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatalf("parse RSA intermediate cert: %v", err)
+	}
+
+	return testCA{cert: cert, certDER: certDER, key: key}
 }
