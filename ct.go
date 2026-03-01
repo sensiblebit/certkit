@@ -325,7 +325,7 @@ func ctChainFromCertificates(chain []*x509.Certificate) ([]*ctx509.Certificate, 
 	out := make([]*ctx509.Certificate, 0, len(chain))
 	for i, cert := range chain {
 		if cert == nil {
-			return nil, fmt.Errorf("CT chain contains nil certificate")
+			return nil, fmt.Errorf("CT chain contains nil certificate at index %d", i)
 		}
 		ctCert, err := ctx509.ParseCertificate(cert.Raw)
 		if err != nil && ctx509.IsFatal(err) {
