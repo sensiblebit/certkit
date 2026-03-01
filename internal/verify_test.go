@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
@@ -24,6 +25,28 @@ func TestVerifyCert_KeyMatch(t *testing.T) {
 	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "verify-rsa.example.com", []string{"verify-rsa.example.com"}, nil)
+	ecdsaCA := newECDSACA(t)
+	ecdsaLeaf := newECDSALeaf(t, ecdsaCA, "verify-ecdsa.example.com", []string{"verify-ecdsa.example.com"})
+	edPublic, edPrivate, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	edTemplate := &x509.Certificate{
+		SerialNumber: randomSerial(t),
+		Subject:      pkix.Name{CommonName: "verify-ed25519.example.com"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	edDER, err := x509.CreateCertificate(rand.Reader, edTemplate, ca.cert, edPublic, ca.key.(*rsa.PrivateKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	edCert, err := x509.ParseCertificate(edDER)
+	if err != nil {
+		t.Fatal(err)
+	}
 
 	wrongKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -34,6 +57,7 @@ func TestVerifyCert_KeyMatch(t *testing.T) {
 
 	tests := []struct {
 		name        string
+		cert        *x509.Certificate
 		key         any
 		wantMatch   *bool
 		wantKeyErr  bool
@@ -41,16 +65,19 @@ func TestVerifyCert_KeyMatch(t *testing.T) {
 		wantKeyInfo bool
 		wantErrSubs []string
 	}{
-		{"matching key", leaf.key, &matchTrue, false, false, true, nil},
-		{"mismatched key", wrongKey, &matchFalse, false, true, true, []string{"key does not match certificate"}},
-		{"unsupported key type", struct{}{}, nil, true, true, false, []string{"unsupported private key type"}},
+		{"matching RSA key", leaf.cert, leaf.key, &matchTrue, false, false, true, nil},
+		{"matching ECDSA key", ecdsaLeaf.cert, ecdsaLeaf.key, &matchTrue, false, false, true, nil},
+		{"matching Ed25519 key", edCert, edPrivate, &matchTrue, false, false, true, nil},
+		{"mismatched key", leaf.cert, wrongKey, &matchFalse, false, true, true, []string{"key does not match certificate"}},
+		{"cross-algorithm mismatch", leaf.cert, ecdsaLeaf.key, &matchFalse, false, true, true, []string{"key does not match certificate"}},
+		{"unsupported key type", leaf.cert, struct{}{}, nil, true, true, false, []string{"unsupported private key type"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// WHY: Ensures VerifyCert key matching handles this key input correctly.
 			t.Parallel()
 			result, err := VerifyCert(context.Background(), &VerifyInput{
-				Cert:          leaf.cert,
+				Cert:          tt.cert,
 				Key:           tt.key,
 				CheckKeyMatch: true,
 				TrustStore:    "custom",
@@ -1279,6 +1306,7 @@ func TestVerifyCert_RevocationBehavior(t *testing.T) {
 					w.Header().Set("Content-Type", "application/ocsp-response")
 					if _, err := w.Write(respBytes); err != nil {
 						http.Error(w, err.Error(), http.StatusInternalServerError)
+						return
 					}
 				}))
 				t.Cleanup(ocspServer.Close)
@@ -1302,6 +1330,7 @@ func TestVerifyCert_RevocationBehavior(t *testing.T) {
 					w.Header().Set("Content-Type", "application/pkix-crl")
 					if _, err := w.Write(crlDER); err != nil {
 						http.Error(w, err.Error(), http.StatusInternalServerError)
+						return
 					}
 				}))
 				t.Cleanup(crlServer.Close)
@@ -1318,6 +1347,14 @@ func TestVerifyCert_RevocationBehavior(t *testing.T) {
 			})
 			if err != nil {
 				t.Fatal(err)
+			}
+			if tc.useWrongCA {
+				if result.ChainValid == nil || *result.ChainValid {
+					t.Fatalf("expected chain to be invalid, got %v", result.ChainValid)
+				}
+				if result.ChainErr == "" {
+					t.Fatal("expected ChainErr to be populated for invalid chain")
+				}
 			}
 
 			// Check OCSP
@@ -1490,6 +1527,25 @@ func TestVerifyCert_OCSPStatus(t *testing.T) {
 			wantRevReason: true,
 		},
 		{
+			name: "serial mismatch",
+			makeResponse: func(ca testCA, leaf testLeaf) ([]byte, error) {
+				resp := ocsp.Response{
+					Status:       ocsp.Good,
+					SerialNumber: big.NewInt(9999),
+					ThisUpdate:   time.Now().Add(-time.Hour),
+					NextUpdate:   time.Now().Add(24 * time.Hour),
+				}
+				respBytes, err := ocsp.CreateResponse(ca.cert, ca.cert, resp, ca.key.(*rsa.PrivateKey))
+				if err != nil {
+					return nil, err
+				}
+				return respBytes, nil
+			},
+			wantStatus: "unavailable",
+			wantErrors: false,
+			wantDetail: true,
+		},
+		{
 			name: "unavailable",
 			makeResponse: func(ca testCA, leaf testLeaf) ([]byte, error) {
 				return []byte("not-ocsp"), nil
@@ -1624,6 +1680,25 @@ func TestVerifyCert_CRLStatus(t *testing.T) {
 			detailMatch: "CRL expired",
 		},
 		{
+			name: "wrong issuer",
+			makeCRL: func(ca testCA, leaf testLeaf) ([]byte, error) {
+				wrongCA := newRSACA(t)
+				now := time.Now()
+				crlDER, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+					Number:     big.NewInt(3),
+					ThisUpdate: now.Add(-time.Hour),
+					NextUpdate: now.Add(24 * time.Hour),
+				}, wrongCA.cert, wrongCA.key.(*rsa.PrivateKey))
+				if err != nil {
+					return nil, err
+				}
+				return crlDER, nil
+			},
+			wantStatus:  "unavailable",
+			wantDetail:  true,
+			detailMatch: "signature verification failed",
+		},
+		{
 			name: "unavailable",
 			makeCRL: func(ca testCA, leaf testLeaf) ([]byte, error) {
 				return []byte("not-crl"), nil
@@ -1684,6 +1759,94 @@ func TestVerifyCert_CRLStatus(t *testing.T) {
 				t.Errorf("expected no errors, got %v", result.Errors)
 			}
 		})
+	}
+}
+
+func TestVerifyCert_RevocationCombined(t *testing.T) {
+	// WHY: OCSP and CRL results should both surface and a revoked CRL should
+	// still produce an overall revocation error even when OCSP is good.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "revocation-combined.example.com", []string{"revocation-combined.example.com"}, nil)
+
+	resp := ocsp.Response{
+		Status:       ocsp.Good,
+		SerialNumber: leaf.cert.SerialNumber,
+		ThisUpdate:   time.Now().Add(-time.Hour),
+		NextUpdate:   time.Now().Add(24 * time.Hour),
+	}
+	respBytes, err := ocsp.CreateResponse(ca.cert, ca.cert, resp, ca.key.(*rsa.PrivateKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ocspServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/ocsp-response")
+		if _, err := w.Write(respBytes); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}))
+	t.Cleanup(ocspServer.Close)
+
+	now := time.Now()
+	crlDER, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
+		Number:     big.NewInt(1),
+		ThisUpdate: now.Add(-time.Hour),
+		NextUpdate: now.Add(24 * time.Hour),
+		RevokedCertificateEntries: []x509.RevocationListEntry{
+			{SerialNumber: leaf.cert.SerialNumber, RevocationTime: now.Add(-time.Hour)},
+		},
+	}, ca.cert, ca.key.(*rsa.PrivateKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	crlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/pkix-crl")
+		if _, err := w.Write(crlDER); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}))
+	t.Cleanup(crlServer.Close)
+
+	leaf.cert.OCSPServer = []string{strings.Replace(ocspServer.URL, "127.0.0.1", "localhost", 1)}
+	leaf.cert.CRLDistributionPoints = []string{strings.Replace(crlServer.URL, "127.0.0.1", "localhost", 1)}
+
+	result, err := VerifyCert(context.Background(), &VerifyInput{
+		Cert:        leaf.cert,
+		CheckChain:  true,
+		TrustStore:  "custom",
+		CustomRoots: []*x509.Certificate{ca.cert},
+		CheckOCSP:   true,
+		CheckCRL:    true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.OCSP == nil {
+		t.Fatal("expected OCSP result")
+	}
+	if result.OCSP.Status != "good" {
+		t.Errorf("OCSP.Status = %q, want %q", result.OCSP.Status, "good")
+	}
+	if result.CRL == nil {
+		t.Fatal("expected CRL result")
+	}
+	if result.CRL.Status != "revoked" {
+		t.Errorf("CRL.Status = %q, want %q", result.CRL.Status, "revoked")
+	}
+	revokedFound := false
+	for _, errMsg := range result.Errors {
+		if strings.Contains(errMsg, "revoked") {
+			revokedFound = true
+			break
+		}
+	}
+	if !revokedFound {
+		t.Errorf("expected revoked error in result.Errors, got %v", result.Errors)
 	}
 }
 

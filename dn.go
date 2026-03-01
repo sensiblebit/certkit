@@ -578,7 +578,7 @@ func parseOtherNamesFromSANBytes(raw []byte) []string {
 // oidLabel maps certificate subject OIDs to their standard human-readable
 // labels. It includes both the standard X.500 attributes that Go's
 // crypto/x509/pkix package handles natively and the additional OIDs that
-// Go renders as raw dotted-decimal OID=#hex.
+// Go renders as raw dotted-decimal 1.2.3.4=#hex values.
 //
 // When name.Names is populated (always the case for parsed certificates),
 // FormatDN iterates it in ASN.1 DER order and looks up each OID here,
@@ -625,7 +625,7 @@ var oidLabel = map[string]string{
 // order, matching the display order used by OpenSSL. When name.Names is
 // populated (always the case for certificates parsed from DER/PEM), attributes
 // are emitted in their original encoded order with human-readable labels.
-// Unknown OIDs are rendered as dotted-decimal OID=#hex. Multi-valued RDNs are
+// Unknown OIDs are rendered as dotted-decimal 1.2.3.4=#hex values. Multi-valued RDNs are
 // flattened because pkix.Name does not preserve SET boundaries; prefer
 // FormatDNFromRaw when raw DER is available. When name.Names is empty (e.g. a
 // pkix.Name constructed programmatically without setting Names), it falls back
@@ -699,12 +699,12 @@ func formatDNAttribute(atv pkix.AttributeTypeAndValue) string {
 			return label + "=" + escapeDNValue(value)
 		}
 	}
-	// Unknown OID or non-string value: render as dotted-decimal OID=#hex.
+	// Unknown OID or non-string value: render as dotted-decimal 1.2.3.4=#hex.
 	derBytes, err := marshalDNValue(atv.Value)
 	if err != nil {
 		slog.Debug("failed to marshal DN attribute value",
 			"oid", oid,
-			"error", fmt.Errorf("marshal DN attribute value: %w", err),
+			"err", fmt.Errorf("marshal DN attribute value: %w", err),
 		)
 		if hasLabel {
 			return label + "=<unencodable>"
