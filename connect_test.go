@@ -22,179 +22,279 @@ import (
 )
 
 func TestConnectTLS(t *testing.T) {
+	// WHY: Covers core ConnectTLS scenarios (self-signed, expired, timeout, hostname mismatch)
+	// to ensure diagnostics and verify fields are populated consistently.
 	t.Parallel()
 
-	// Create a self-signed cert for the test server
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "localhost"},
-		DNSNames:     []string{"localhost"},
-		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name string
+		run  func(t *testing.T)
+	}{
+		{
+			name: "basic self-signed",
+			run: func(t *testing.T) {
+				key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				template := &x509.Certificate{
+					SerialNumber: big.NewInt(1),
+					Subject:      pkix.Name{CommonName: "localhost"},
+					DNSNames:     []string{"localhost"},
+					IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+					NotBefore:    time.Now().Add(-time.Hour),
+					NotAfter:     time.Now().Add(24 * time.Hour),
+					KeyUsage:     x509.KeyUsageDigitalSignature,
+					ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+				}
+				certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				tlsCert := tls.Certificate{
+					Certificate: [][]byte{certDER},
+					PrivateKey:  key,
+				}
+
+				listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+					Certificates: []tls.Certificate{tlsCert},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = listener.Close() })
+
+				go func() {
+					for {
+						conn, err := listener.Accept()
+						if err != nil {
+							return
+						}
+						tlsConn, ok := conn.(*tls.Conn)
+						if ok {
+							_ = tlsConn.Handshake()
+						}
+						_ = conn.Close()
+					}
+				}()
+
+				_, portStr, err := net.SplitHostPort(listener.Addr().String())
+				if err != nil {
+					t.Fatalf("splitting host:port: %v", err)
+				}
+
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+
+				result, err := ConnectTLS(ctx, ConnectTLSInput{
+					Host: "127.0.0.1",
+					Port: portStr,
+				})
+				if err != nil {
+					t.Fatalf("ConnectTLS failed: %v", err)
+				}
+
+				if result.Host != "127.0.0.1" {
+					t.Errorf("Host = %q, want %q", result.Host, "127.0.0.1")
+				}
+				if result.Port != portStr {
+					t.Errorf("Port = %q, want %q", result.Port, portStr)
+				}
+				if result.Protocol == "" {
+					t.Error("Protocol is empty")
+				}
+				if result.CipherSuite == "" {
+					t.Error("CipherSuite is empty")
+				}
+				if len(result.PeerChain) == 0 {
+					t.Error("PeerChain is empty")
+				}
+				if result.PeerChain[0].Subject.CommonName != "localhost" {
+					t.Errorf("leaf CN = %q, want %q", result.PeerChain[0].Subject.CommonName, "localhost")
+				}
+				if result.VerifyError == "" {
+					t.Error("expected verify error for self-signed cert")
+				}
+			},
+		},
+		{
+			name: "expired leaf",
+			run: func(t *testing.T) {
+				key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				template := &x509.Certificate{
+					SerialNumber: big.NewInt(1),
+					Subject:      pkix.Name{CommonName: "localhost"},
+					DNSNames:     []string{"localhost"},
+					IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
+					NotBefore:    time.Now().Add(-48 * time.Hour),
+					NotAfter:     time.Now().Add(-24 * time.Hour),
+					KeyUsage:     x509.KeyUsageDigitalSignature,
+					ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+				}
+				certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				cert, err := x509.ParseCertificate(certDER)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				rootPool := x509.NewCertPool()
+				rootPool.AddCert(cert)
+
+				tlsCert := tls.Certificate{
+					Certificate: [][]byte{certDER},
+					PrivateKey:  key,
+				}
+				listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+					Certificates: []tls.Certificate{tlsCert},
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = listener.Close() })
+
+				go func() {
+					for {
+						conn, err := listener.Accept()
+						if err != nil {
+							return
+						}
+						if tc, ok := conn.(*tls.Conn); ok {
+							_ = tc.Handshake()
+						}
+						_ = conn.Close()
+					}
+				}()
+
+				_, portStr, err := net.SplitHostPort(listener.Addr().String())
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+
+				result, err := ConnectTLS(ctx, ConnectTLSInput{
+					Host:    "127.0.0.1",
+					Port:    portStr,
+					RootCAs: rootPool,
+				})
+				if err != nil {
+					t.Fatalf("ConnectTLS failed: %v", err)
+				}
+				if !strings.Contains(result.VerifyError, "expired") {
+					t.Errorf("expected expired verify error, got %q", result.VerifyError)
+				}
+			},
+		},
+		{
+			name: "context timeout",
+			run: func(t *testing.T) {
+				listener, err := net.Listen("tcp", "127.0.0.1:0")
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = listener.Close() })
+
+				go func() {
+					conn, err := listener.Accept()
+					if err != nil {
+						return
+					}
+					time.Sleep(200 * time.Millisecond)
+					_ = conn.Close()
+				}()
+
+				_, portStr, err := net.SplitHostPort(listener.Addr().String())
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+				defer cancel()
+
+				_, err = ConnectTLS(ctx, ConnectTLSInput{Host: "127.0.0.1", Port: portStr})
+				if err == nil {
+					t.Fatal("expected timeout error")
+				}
+				if !strings.Contains(err.Error(), "timeout") && !strings.Contains(err.Error(), "deadline") {
+					t.Errorf("expected timeout error, got %q", err.Error())
+				}
+			},
+		},
+		{
+			name: "hostname mismatch",
+			run: func(t *testing.T) {
+				ca := generateTestCA(t, "Mismatch CA")
+				leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+				if err != nil {
+					t.Fatal(err)
+				}
+				leafTemplate := &x509.Certificate{
+					SerialNumber: randomSerial(t),
+					Subject:      pkix.Name{CommonName: "example.com"},
+					DNSNames:     []string{"example.com"},
+					NotBefore:    time.Now().Add(-time.Hour),
+					NotAfter:     time.Now().Add(24 * time.Hour),
+					KeyUsage:     x509.KeyUsageDigitalSignature,
+					ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+				}
+				leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, ca.Cert, &leafKey.PublicKey, ca.Key)
+				if err != nil {
+					t.Fatal(err)
+				}
+				port := startTLSServer(t, [][]byte{leafDER, ca.CertDER}, leafKey)
+
+				rootPool := x509.NewCertPool()
+				rootPool.AddCert(ca.Cert)
+
+				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+
+				result, err := ConnectTLS(ctx, ConnectTLSInput{
+					Host:    "127.0.0.1",
+					Port:    port,
+					RootCAs: rootPool,
+				})
+				if err != nil {
+					t.Fatalf("ConnectTLS failed: %v", err)
+				}
+				if !strings.Contains(result.VerifyError, "127.0.0.1") {
+					t.Errorf("expected hostname mismatch error, got %q", result.VerifyError)
+				}
+				hostnameDiag := false
+				for _, diag := range result.Diagnostics {
+					if diag.Check == "hostname-mismatch" {
+						hostnameDiag = true
+						break
+					}
+				}
+				if !hostnameDiag {
+					t.Error("expected hostname-mismatch diagnostic")
+				}
+			},
+		},
 	}
 
-	tlsCert := tls.Certificate{
-		Certificate: [][]byte{certDER},
-		PrivateKey:  key,
-	}
-
-	// Start TLS listener
-	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
-		Certificates: []tls.Certificate{tlsCert},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = listener.Close() }()
-
-	// Accept connections in background — complete TLS handshake before closing
-	go func() {
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
-			tlsConn, ok := conn.(*tls.Conn)
-			if ok {
-				_ = tlsConn.Handshake()
-			}
-			_ = conn.Close()
-		}
-	}()
-
-	_, portStr, err := net.SplitHostPort(listener.Addr().String())
-	if err != nil {
-		t.Fatalf("splitting host:port: %v", err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	result, err := ConnectTLS(ctx, ConnectTLSInput{
-		Host: "127.0.0.1",
-		Port: portStr,
-	})
-	if err != nil {
-		t.Fatalf("ConnectTLS failed: %v", err)
-	}
-
-	if result.Host != "127.0.0.1" {
-		t.Errorf("Host = %q, want %q", result.Host, "127.0.0.1")
-	}
-	if result.Port != portStr {
-		t.Errorf("Port = %q, want %q", result.Port, portStr)
-	}
-	if result.Protocol == "" {
-		t.Error("Protocol is empty")
-	}
-	if result.CipherSuite == "" {
-		t.Error("CipherSuite is empty")
-	}
-	if len(result.PeerChain) == 0 {
-		t.Error("PeerChain is empty")
-	}
-	if result.PeerChain[0].Subject.CommonName != "localhost" {
-		t.Errorf("leaf CN = %q, want %q", result.PeerChain[0].Subject.CommonName, "localhost")
-	}
-	// Self-signed cert won't verify against system roots
-	if result.VerifyError == "" {
-		t.Error("expected verify error for self-signed cert")
-	}
-}
-
-func TestConnectTLS_ExpiredLeaf(t *testing.T) {
-	// WHY: ConnectTLS should surface expired certificates as verification errors.
-	t.Parallel()
-
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	template := &x509.Certificate{
-		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "localhost"},
-		DNSNames:     []string{"localhost"},
-		IPAddresses:  []net.IP{net.ParseIP("127.0.0.1")},
-		NotBefore:    time.Now().Add(-48 * time.Hour),
-		NotAfter:     time.Now().Add(-24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cert, err := x509.ParseCertificate(certDER)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	rootPool := x509.NewCertPool()
-	rootPool.AddCert(cert)
-
-	tlsCert := tls.Certificate{
-		Certificate: [][]byte{certDER},
-		PrivateKey:  key,
-	}
-	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
-		Certificates: []tls.Certificate{tlsCert},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = listener.Close() }()
-
-	go func() {
-		for {
-			conn, err := listener.Accept()
-			if err != nil {
-				return
-			}
-			if tc, ok := conn.(*tls.Conn); ok {
-				_ = tc.Handshake()
-			}
-			_ = conn.Close()
-		}
-	}()
-
-	_, portStr, err := net.SplitHostPort(listener.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	result, err := ConnectTLS(ctx, ConnectTLSInput{
-		Host:    "127.0.0.1",
-		Port:    portStr,
-		RootCAs: rootPool,
-	})
-	if err != nil {
-		t.Fatalf("ConnectTLS failed: %v", err)
-	}
-	if !strings.Contains(result.VerifyError, "expired") {
-		t.Errorf("expected expired verify error, got %q", result.VerifyError)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// WHY: Ensures ConnectTLS handles this connection scenario.
+			t.Parallel()
+			tt.run(t)
+		})
 	}
 }
 
 func TestConnectTLS_ClientAuth(t *testing.T) {
+	// WHY: Verifies mTLS detection captures acceptable CAs and signature schemes
+	// when the server requests a client certificate.
 	t.Parallel()
-
-	// WHY: Verify mTLS detection — the server requests a client cert,
-	// we send an empty one, and the result captures the acceptable CAs
-	// and signature schemes from the CertificateRequest.
 
 	// Create a CA cert used as the acceptable client CA.
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -315,6 +415,7 @@ func TestConnectTLS_ClientAuth(t *testing.T) {
 }
 
 func TestConnectTLS_EmptyHost(t *testing.T) {
+	// WHY: Empty host input should fail fast with a clear error.
 	t.Parallel()
 	_, err := ConnectTLS(context.Background(), ConnectTLSInput{})
 	if err == nil {
@@ -323,112 +424,35 @@ func TestConnectTLS_EmptyHost(t *testing.T) {
 }
 
 func TestConnectTLS_ConnectionRefused(t *testing.T) {
+	// WHY: ConnectTLS should return an error when no server is listening.
 	t.Parallel()
-	// TODO(ralph): Use a guaranteed-closed port instead of hard-coded "1".
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		_ = listener.Close()
+		t.Fatal(err)
+	}
+	if err := listener.Close(); err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	// Use a port that's very likely not listening
-	_, err := ConnectTLS(ctx, ConnectTLSInput{
+	_, err = ConnectTLS(ctx, ConnectTLSInput{
 		Host: "127.0.0.1",
-		Port: "1",
+		Port: port,
 	})
 	if err == nil {
 		t.Fatal("expected error for connection refused")
 	}
 }
 
-func TestConnectTLS_ContextTimeout(t *testing.T) {
-	// WHY: ConnectTLS should return a timeout error when the context deadline expires mid-handshake.
-	// TODO(ralph): Assert the deadline path (vs. EOF) by keeping the socket open past the timeout.
-	t.Parallel()
-
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() { _ = listener.Close() }()
-
-	go func() {
-		conn, err := listener.Accept()
-		if err != nil {
-			return
-		}
-		time.Sleep(200 * time.Millisecond)
-		_ = conn.Close()
-	}()
-
-	_, portStr, err := net.SplitHostPort(listener.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-
-	_, err = ConnectTLS(ctx, ConnectTLSInput{Host: "127.0.0.1", Port: portStr})
-	if err == nil {
-		t.Fatal("expected timeout error")
-	}
-	if !strings.Contains(err.Error(), "timeout") && !strings.Contains(err.Error(), "deadline") {
-		t.Errorf("expected timeout error, got %q", err.Error())
-	}
-}
-
-func TestConnectTLS_HostnameMismatch(t *testing.T) {
-	// WHY: Hostname mismatches should surface as verify errors with diagnostics.
-	t.Parallel()
-
-	ca := generateTestCA(t, "Mismatch CA")
-	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	leafTemplate := &x509.Certificate{
-		SerialNumber: randomSerial(t),
-		Subject:      pkix.Name{CommonName: "example.com"},
-		DNSNames:     []string{"example.com"},
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-		KeyUsage:     x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-	}
-	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, ca.Cert, &leafKey.PublicKey, ca.Key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := startTLSServer(t, [][]byte{leafDER, ca.CertDER}, leafKey)
-
-	rootPool := x509.NewCertPool()
-	rootPool.AddCert(ca.Cert)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	result, err := ConnectTLS(ctx, ConnectTLSInput{
-		Host:    "127.0.0.1",
-		Port:    port,
-		RootCAs: rootPool,
-	})
-	if err != nil {
-		t.Fatalf("ConnectTLS failed: %v", err)
-	}
-	if !strings.Contains(result.VerifyError, "127.0.0.1") {
-		t.Errorf("expected hostname mismatch error, got %q", result.VerifyError)
-	}
-	hostnameDiag := false
-	for _, diag := range result.Diagnostics {
-		if diag.Check == "hostname-mismatch" {
-			hostnameDiag = true
-			break
-		}
-	}
-	if !hostnameDiag {
-		t.Error("expected hostname-mismatch diagnostic")
-	}
-}
-
 func TestFormatConnectResult(t *testing.T) {
+	// WHY: FormatConnectResult must render diagnostics, OCSP/CRL, and verify
+	// status lines consistently across result permutations.
 	t.Parallel()
 
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -641,10 +665,9 @@ func TestFormatConnectResult(t *testing.T) {
 }
 
 func TestDiagnoseConnectChain(t *testing.T) {
+	// WHY: DiagnoseConnectChain should flag root-in-chain and duplicate certs
+	// without false positives for clean chains.
 	t.Parallel()
-
-	// WHY: Verify chain diagnostic detection for root-in-chain, duplicate-cert,
-	// and clean chains without false positives.
 
 	root, intermediates, leaf := buildChain(t, 3)
 
@@ -719,6 +742,7 @@ func TestDiagnoseConnectChain(t *testing.T) {
 }
 
 func TestSortDiagnostics(t *testing.T) {
+	// WHY: SortDiagnostics must order errors before warnings and sort checks lexicographically.
 	t.Parallel()
 
 	diags := []ChainDiagnostic{
@@ -752,6 +776,8 @@ func TestSortDiagnostics(t *testing.T) {
 }
 
 func TestDiagnoseVerifyError(t *testing.T) {
+	// WHY: DiagnoseVerifyError should map HostnameError to hostname-mismatch
+	// and ignore unrelated errors.
 	t.Parallel()
 
 	// Generate a self-signed CA cert for "localhost" and trust it, so that
@@ -831,6 +857,8 @@ func TestDiagnoseVerifyError(t *testing.T) {
 }
 
 func TestDiagnoseNegotiatedCipher(t *testing.T) {
+	// WHY: DiagnoseNegotiatedCipher must flag deprecated protocols, CBC, 3DES,
+	// and DHE key exchange based on negotiated cipher/protocol.
 	t.Parallel()
 
 	tests := []struct {
@@ -911,10 +939,9 @@ func TestDiagnoseNegotiatedCipher(t *testing.T) {
 }
 
 func TestConnectTLS_AIAFetch(t *testing.T) {
+	// WHY: ConnectTLS should fetch missing intermediates via AIA when the server
+	// sends only the leaf certificate.
 	t.Parallel()
-
-	// WHY: Verify that ConnectTLS fetches missing intermediates via AIA
-	// when the server only sends the leaf certificate.
 
 	// Build a 3-tier PKI: root -> intermediate -> leaf.
 	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -1217,10 +1244,15 @@ func TestConnectTLS_AIAFetch_Failure(t *testing.T) {
 }
 
 func TestConnectTLS_AIAFetch_DisableAIA(t *testing.T) {
+	// WHY: DisableAIA should prevent AIA fetches entirely.
 	t.Parallel()
 
-	// WHY: Verify that DisableAIA prevents AIA fetching.
-	// TODO(ralph): Assert no HTTP requests are made when DisableAIA is set.
+	var hits atomic.Int64
+	aiaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer aiaServer.Close()
 
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -1235,7 +1267,7 @@ func TestConnectTLS_AIAFetch_DisableAIA(t *testing.T) {
 		NotAfter:              time.Now().Add(24 * time.Hour),
 		KeyUsage:              x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		IssuingCertificateURL: []string{"http://should-not-be-contacted.example.com/cert"},
+		IssuingCertificateURL: []string{strings.Replace(aiaServer.URL, "127.0.0.1", "localhost", 1)},
 	}
 	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
 	if err != nil {
@@ -1274,11 +1306,13 @@ func TestConnectTLS_AIAFetch_DisableAIA(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	rootPool := x509.NewCertPool()
 
 	result, err := ConnectTLS(ctx, ConnectTLSInput{
 		Host:       "127.0.0.1",
 		Port:       portStr,
 		DisableAIA: true,
+		RootCAs:    rootPool,
 	})
 	if err != nil {
 		t.Fatalf("ConnectTLS failed: %v", err)
@@ -1287,9 +1321,13 @@ func TestConnectTLS_AIAFetch_DisableAIA(t *testing.T) {
 	if result.AIAFetched {
 		t.Error("AIAFetched = true, want false when DisableAIA is set")
 	}
+	if hits.Load() != 0 {
+		t.Errorf("expected 0 AIA HTTP requests when DisableAIA is set, got %d", hits.Load())
+	}
 }
 
 func TestConnectTLS_OCSP(t *testing.T) {
+	// WHY: ConnectTLS should surface OCSP status in the result when enabled.
 	t.Parallel()
 
 	// Integration test: verify ConnectTLS wires OCSP check into result.
@@ -1345,6 +1383,8 @@ func TestConnectTLS_OCSP(t *testing.T) {
 }
 
 func TestConnectTLS_OCSP_SkipAndFailure(t *testing.T) {
+	// WHY: DisableOCSP should skip checks; best-effort failures should return
+	// unavailable status and still record server contact.
 	t.Parallel()
 
 	// Table-driven test for DisableOCSP (nil result, no server hit) and
@@ -1427,6 +1467,7 @@ func TestConnectTLS_OCSP_SkipAndFailure(t *testing.T) {
 }
 
 func TestConnectTLS_CRL(t *testing.T) {
+	// WHY: ConnectTLS should surface CRL status and details in the result when enabled.
 	t.Parallel()
 
 	// Integration test: verify ConnectTLS wires CRL check into result.
@@ -1572,6 +1613,7 @@ func TestConnectTLS_CRL(t *testing.T) {
 }
 
 func TestConnectTLS_CRL_Unavailable(t *testing.T) {
+	// WHY: CRL checks should surface unavailable reasons for common missing issuer/CDP cases.
 	t.Parallel()
 
 	tests := []struct {
@@ -1656,12 +1698,9 @@ func TestConnectTLS_CRL_Unavailable(t *testing.T) {
 }
 
 func TestConnectTLS_CRL_AIAFetchedIssuer(t *testing.T) {
+	// WHY: CRL verification should use issuer from VerifiedChains when intermediates
+	// were fetched via AIA.
 	t.Parallel()
-
-	// WHY: When the server sends only a leaf cert (no intermediates), the issuer
-	// must be obtained from VerifiedChains (populated by AIA walking) for CRL
-	// signature verification. This test verifies issuer resolution from
-	// VerifiedChains[0][1].
 
 	// Build 3-tier PKI: root -> intermediate -> leaf.
 	root := generateTestCA(t, "AIA CRL Root CA")
@@ -1742,6 +1781,8 @@ func TestConnectTLS_CRL_AIAFetchedIssuer(t *testing.T) {
 }
 
 func TestRateCipherSuite(t *testing.T) {
+	// WHY: RateCipherSuite should conservatively rate weak/unknown suites and
+	// classify AEAD forward-secret suites as good.
 	t.Parallel()
 
 	// One entry per distinct code path in RateCipherSuite (T-12).
@@ -1822,6 +1863,8 @@ func TestRateCipherSuite(t *testing.T) {
 }
 
 func TestScanCipherSuites(t *testing.T) {
+	// WHY: ScanCipherSuites should detect negotiated suites, supported versions,
+	// and key exchange groups from a controlled TLS server.
 	t.Parallel()
 
 	// Create a TLS server that only accepts specific cipher suites.
@@ -1919,6 +1962,7 @@ func TestScanCipherSuites(t *testing.T) {
 }
 
 func TestScanCipherSuites_EmptyHost(t *testing.T) {
+	// WHY: Empty host input should return a validation error.
 	t.Parallel()
 	_, err := ScanCipherSuites(context.Background(), ScanCipherSuitesInput{})
 	if err == nil {
@@ -1927,6 +1971,7 @@ func TestScanCipherSuites_EmptyHost(t *testing.T) {
 }
 
 func TestScanCipherSuites_CancelledContext(t *testing.T) {
+	// WHY: Cancelled context should abort scanning and return an error.
 	t.Parallel()
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
@@ -1937,6 +1982,8 @@ func TestScanCipherSuites_CancelledContext(t *testing.T) {
 }
 
 func TestFormatCipherScanResult(t *testing.T) {
+	// WHY: FormatCipherScanResult must render suite groups, QUIC, and KEX details
+	// consistently across result permutations.
 	t.Parallel()
 
 	tests := []struct {
@@ -2044,6 +2091,8 @@ func TestFormatCipherScanResult(t *testing.T) {
 }
 
 func TestFormatCipherRatingLine(t *testing.T) {
+	// WHY: FormatCipherRatingLine should report aggregated good/weak counts for
+	// TLS and QUIC scans.
 	t.Parallel()
 
 	tests := []struct {
@@ -2108,6 +2157,8 @@ func TestFormatCipherRatingLine(t *testing.T) {
 }
 
 func TestDiagnoseCipherScan(t *testing.T) {
+	// WHY: DiagnoseCipherScan should flag deprecated protocols, CBC, 3DES,
+	// static RSA, and DHE usage based on scan results.
 	t.Parallel()
 
 	tests := []struct {
@@ -2238,13 +2289,9 @@ func TestDiagnoseCipherScan(t *testing.T) {
 }
 
 func TestConnectTLS_CRL_DuplicateLeafInChain(t *testing.T) {
+	// WHY: Issuer resolution should prefer VerifiedChains over PeerCertificates
+	// when the server sends a duplicate leaf.
 	t.Parallel()
-
-	// WHY: When a server sends [leaf, leaf, intermediate] (duplicate leaf at
-	// position 1), PeerCertificates[1] is the duplicate leaf — not the actual
-	// issuer. Issuer resolution must prefer VerifiedChains[0][1] (the
-	// cryptographically validated intermediate) so both OCSP and CRL signature
-	// verification succeed.
 
 	root := generateTestCA(t, "DupLeaf Root CA")
 	intermediate := generateIntermediateCA(t, root, "DupLeaf Intermediate CA")

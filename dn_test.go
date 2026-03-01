@@ -14,6 +14,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf16"
 )
 
 // --- FormatEKUs tests ---
@@ -415,8 +416,6 @@ func TestParseOtherNameSANs(t *testing.T) {
 	// WHY: ParseOtherNameSANs recovers SAN entries that Go silently drops
 	// (OtherName, DirName, RegisteredID); failure to parse means critical
 	// identity info (like UPN) is invisible in inspect output.
-	// TODO(ralph): Add malformed GeneralName-first cases to ensure later valid entries are retained.
-	// TODO(ralph): Add coverage for non-UTF8 OtherName value types (IA5/BMP/PrintableString).
 	t.Parallel()
 
 	t.Run("OtherName with UPN", func(t *testing.T) {
@@ -607,6 +606,87 @@ func TestParseOtherNameSANs(t *testing.T) {
 			t.Errorf("got %v, want %v", got, want)
 		}
 	})
+
+	t.Run("malformed entry before valid bytes", func(t *testing.T) {
+		// WHY: Ensures a malformed GeneralName before a valid OtherName doesn't drop later entries.
+		t.Parallel()
+		malformedGN, err := asn1.Marshal(asn1.RawValue{
+			Class:      asn1.ClassContextSpecific,
+			Tag:        0,
+			IsCompound: true,
+			Bytes:      []byte{0x30, 0x00},
+		})
+		if err != nil {
+			t.Fatalf("marshal malformed OtherName: %v", err)
+		}
+		validGN := marshalOtherNameGeneralName(t,
+			asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3},
+			"later@example.com",
+		)
+		sanBytes := buildSANWithGeneralNames(t, malformedGN, validGN)
+		exts := []pkix.Extension{{
+			Id:    asn1.ObjectIdentifier{2, 5, 29, 17},
+			Value: sanBytes,
+		}}
+		got := ParseOtherNameSANs(exts)
+		want := []string{"UPN:later@example.com"}
+		if !slices.Equal(got, want) {
+			t.Errorf("got %v, want %v", got, want)
+		}
+	})
+
+	t.Run("OtherName with non-UTF8 string types", func(t *testing.T) {
+		// WHY: Ensures IA5/Printable/BMP OtherName values are surfaced, not dropped.
+		t.Parallel()
+		upnOID := asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 311, 20, 2, 3}
+		tests := []struct {
+			name  string
+			tag   int
+			bytes []byte
+			want  string
+		}{
+			{
+				name:  "IA5String",
+				tag:   asn1.TagIA5String,
+				bytes: []byte("ia5@example.com"),
+				want:  "UPN:ia5@example.com",
+			},
+			{
+				name:  "PrintableString",
+				tag:   asn1.TagPrintableString,
+				bytes: []byte("PRINTABLE"),
+				want:  "UPN:PRINTABLE",
+			},
+			{
+				name:  "BMPString",
+				tag:   asn1.TagBMPString,
+				bytes: bmpStringBytes("BMP"),
+				want:  "UPN:BMP",
+			},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				// WHY: Confirms OtherName with this ASN.1 string type is decoded correctly.
+				t.Parallel()
+				otherNameGN := marshalOtherNameGeneralNameWithValue(t, upnOID, asn1.RawValue{
+					Class: asn1.ClassUniversal,
+					Tag:   tt.tag,
+					Bytes: tt.bytes,
+				})
+				sanBytes := buildSANWithGeneralNames(t, otherNameGN)
+				exts := []pkix.Extension{{
+					Id:    asn1.ObjectIdentifier{2, 5, 29, 17},
+					Value: sanBytes,
+				}}
+				got := ParseOtherNameSANs(exts)
+				want := []string{tt.want}
+				if !slices.Equal(got, want) {
+					t.Errorf("got %v, want %v", got, want)
+				}
+			})
+		}
+	})
 }
 
 func TestParseOtherNameSANs_FromCertificate(t *testing.T) {
@@ -697,22 +777,30 @@ func buildSANWithGeneralNames(t *testing.T, generalNames ...[]byte) []byte {
 
 func marshalOtherNameGeneralName(t *testing.T, oid asn1.ObjectIdentifier, value string) []byte {
 	t.Helper()
+	return marshalOtherNameGeneralNameWithValue(t, oid, asn1.RawValue{
+		Class: asn1.ClassUniversal,
+		Tag:   asn1.TagUTF8String,
+		Bytes: []byte(value),
+	})
+}
 
-	// OtherName ::= SEQUENCE { type-id OID, value [0] EXPLICIT ANY }
+func marshalOtherNameGeneralNameWithValue(t *testing.T, oid asn1.ObjectIdentifier, value asn1.RawValue) []byte {
+	t.Helper()
+
 	oidBytes, err := asn1.Marshal(oid)
 	if err != nil {
 		t.Fatalf("marshal OID: %v", err)
 	}
-	// The value is a UTF8String wrapped in [0] EXPLICIT.
-	utf8Bytes, err := asn1.Marshal(value)
+
+	valueBytes, err := asn1.Marshal(value)
 	if err != nil {
-		t.Fatalf("marshal UTF8String: %v", err)
+		t.Fatalf("marshal OtherName value: %v", err)
 	}
 	explicitWrapper := asn1.RawValue{
 		Class:      asn1.ClassContextSpecific,
 		Tag:        0,
 		IsCompound: true,
-		Bytes:      utf8Bytes,
+		Bytes:      valueBytes,
 	}
 	explicitBytes, err := asn1.Marshal(explicitWrapper)
 	if err != nil {
@@ -731,6 +819,16 @@ func marshalOtherNameGeneralName(t *testing.T, oid asn1.ObjectIdentifier, value 
 		t.Fatalf("marshal OtherName GN: %v", err)
 	}
 	return gnBytes
+}
+
+func bmpStringBytes(s string) []byte {
+	encoded := utf16.Encode([]rune(s))
+	bytes := make([]byte, len(encoded)*2)
+	for i, r := range encoded {
+		bytes[i*2] = byte(r >> 8)
+		bytes[i*2+1] = byte(r)
+	}
+	return bytes
 }
 
 func marshalDirectoryNameGeneralName(t *testing.T, name pkix.Name) []byte {
@@ -926,6 +1024,16 @@ func TestFormatDN(t *testing.T) {
 			want: "OU=Engineering,OU=Operations,CN=example.com",
 		},
 		{
+			name: "unencodable value renders placeholder",
+			dn: pkix.Name{
+				Names: []pkix.AttributeTypeAndValue{
+					{Type: asn1.ObjectIdentifier{2, 5, 4, 3}, Value: "example.com"},
+					{Type: asn1.ObjectIdentifier{1, 2, 3}, Value: make(chan int)},
+				},
+			},
+			want: "CN=example.com,1.2.3=<unencodable>",
+		},
+		{
 			name: "empty name",
 			dn:   pkix.Name{},
 			want: "",
@@ -994,144 +1102,128 @@ func TestFormatDN(t *testing.T) {
 			}
 		})
 	}
+
+	extraNameTests := []struct {
+		name        string
+		cn          string
+		orgID       string
+		wantSubstrs []string
+	}{
+		{
+			name:        "organizationIdentifier preserved via cert round-trip",
+			cn:          "org.example.com",
+			orgID:       "PSDDE-TEST-123",
+			wantSubstrs: []string{"organizationIdentifier=PSDDE-TEST-123", "CN=org.example.com"},
+		},
+	}
+	for _, tt := range extraNameTests {
+		t.Run(tt.name, func(t *testing.T) {
+			// WHY: Ensures parsed ExtraNames render with standard labels.
+			t.Parallel()
+			name := certSubjectWithExtraNames(t, tt.cn, tt.orgID)
+			got := FormatDN(name)
+			for _, want := range tt.wantSubstrs {
+				if !strings.Contains(got, want) {
+					t.Errorf("expected %q in %q", want, got)
+				}
+			}
+		})
+	}
 }
 
-func TestFormatDNFromRaw_MultiValuedRDN(t *testing.T) {
-	// WHY: Multi-valued RDNs must preserve '+' boundaries when formatting raw DER.
-	// TODO(ralph): Add multi-valued RDN cases that exercise special-character escaping.
+func TestFormatDNFromRaw(t *testing.T) {
+	// WHY: Multi-valued RDNs and invalid DER handling must be consistent with raw subjects.
 	t.Parallel()
 
 	emailOID := asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 1}
-	rdns := pkix.RDNSequence{
-		pkix.RelativeDistinguishedNameSET{
-			{Type: asn1.ObjectIdentifier{2, 5, 4, 3}, Value: "multi.example.com"},
-			{Type: emailOID, Value: "admin+tag@multi.example.com"},
-		},
-		pkix.RelativeDistinguishedNameSET{
-			{Type: asn1.ObjectIdentifier{2, 5, 4, 6}, Value: "US"},
-		},
-	}
-	raw, err := asn1.Marshal(rdns)
-	if err != nil {
-		t.Fatalf("marshal RDNSequence: %v", err)
-	}
-
-	got := FormatDNFromRaw(raw, pkix.Name{})
-	want := "CN=multi.example.com+emailAddress=admin\\+tag@multi.example.com,C=US"
-	if got != want {
-		t.Errorf("FormatDNFromRaw() = %q, want %q", got, want)
-	}
-}
-
-func TestFormatDNFromRaw_InvalidDER(t *testing.T) {
-	// WHY: Invalid raw DER should fall back to FormatDN output.
-	t.Parallel()
-
-	fallback := pkix.Name{CommonName: "fallback.example.com"}
-	got := FormatDNFromRaw([]byte{0x30, 0x01, 0xff}, fallback)
-	want := "CN=fallback.example.com"
-	if got != want {
-		t.Errorf("FormatDNFromRaw() = %q, want %q", got, want)
-	}
-}
-
-func TestFormatDNFromRaw_CertificateMultiValuedRDN(t *testing.T) {
-	// WHY: Parsed certificates must preserve multi-valued RDN boundaries in raw subjects.
-	t.Parallel()
 
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
-	emailOID := asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 9, 1}
-	rdns := pkix.RDNSequence{
-		pkix.RelativeDistinguishedNameSET{
-			{Type: asn1.ObjectIdentifier{2, 5, 4, 3}, Value: "multi.example.com"},
-			{Type: emailOID, Value: "admin+tag@multi.example.com"},
+	certificateRawSubject := func(t *testing.T) []byte {
+		t.Helper()
+		rdns := pkix.RDNSequence{
+			pkix.RelativeDistinguishedNameSET{
+				{Type: asn1.ObjectIdentifier{2, 5, 4, 3}, Value: "multi.example.com"},
+				{Type: emailOID, Value: "admin+tag@multi.example.com"},
+			},
+			pkix.RelativeDistinguishedNameSET{
+				{Type: asn1.ObjectIdentifier{2, 5, 4, 10}, Value: "Example Corp"},
+			},
+		}
+		rawSubject, err := asn1.Marshal(rdns)
+		if err != nil {
+			t.Fatalf("marshal RDNSequence: %v", err)
+		}
+		template := &x509.Certificate{
+			SerialNumber: randomSerial(t),
+			Subject:      pkix.Name{CommonName: "multi.example.com"},
+			RawSubject:   rawSubject,
+			NotBefore:    time.Now().Add(-time.Hour),
+			NotAfter:     time.Now().Add(24 * time.Hour),
+		}
+		certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cert, err := x509.ParseCertificate(certDER)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cert.RawSubject
+	}
+
+	tests := []struct {
+		name     string
+		raw      []byte
+		fallback pkix.Name
+		want     string
+	}{
+		{
+			name: "multi-valued RDN preserves plus separators",
+			raw: func() []byte {
+				rdns := pkix.RDNSequence{
+					pkix.RelativeDistinguishedNameSET{
+						{Type: asn1.ObjectIdentifier{2, 5, 4, 3}, Value: "multi.example.com"},
+						{Type: emailOID, Value: "admin+tag@multi.example.com"},
+					},
+					pkix.RelativeDistinguishedNameSET{
+						{Type: asn1.ObjectIdentifier{2, 5, 4, 6}, Value: "US"},
+					},
+				}
+				raw, err := asn1.Marshal(rdns)
+				if err != nil {
+					t.Fatalf("marshal RDNSequence: %v", err)
+				}
+				return raw
+			}(),
+			fallback: pkix.Name{},
+			want:     "CN=multi.example.com+emailAddress=admin\\+tag@multi.example.com,C=US",
 		},
-		pkix.RelativeDistinguishedNameSET{
-			{Type: asn1.ObjectIdentifier{2, 5, 4, 10}, Value: "Example Corp"},
+		{
+			name:     "invalid DER falls back",
+			raw:      []byte{0x30, 0x01, 0xff},
+			fallback: pkix.Name{CommonName: "fallback.example.com"},
+			want:     "CN=fallback.example.com",
 		},
-	}
-	rawSubject, err := asn1.Marshal(rdns)
-	if err != nil {
-		t.Fatalf("marshal RDNSequence: %v", err)
-	}
-
-	template := &x509.Certificate{
-		SerialNumber: randomSerial(t),
-		Subject:      pkix.Name{CommonName: "multi.example.com"},
-		RawSubject:   rawSubject,
-		NotBefore:    time.Now().Add(-time.Hour),
-		NotAfter:     time.Now().Add(24 * time.Hour),
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cert, err := x509.ParseCertificate(certDER)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	got := FormatDNFromRaw(cert.RawSubject, cert.Subject)
-	want := "CN=multi.example.com+emailAddress=admin\\+tag@multi.example.com,O=Example Corp"
-	if got != want {
-		t.Errorf("FormatDNFromRaw() = %q, want %q", got, want)
-	}
-}
-
-func TestFormatDN_UnencodableValue(t *testing.T) {
-	// WHY: FormatDN should not silently drop attributes when ASN.1 marshaling fails.
-	t.Parallel()
-
-	dn := pkix.Name{
-		Names: []pkix.AttributeTypeAndValue{
-			{Type: asn1.ObjectIdentifier{2, 5, 4, 3}, Value: "example.com"},
-			{Type: asn1.ObjectIdentifier{1, 2, 3}, Value: make(chan int)},
+		{
+			name:     "certificate raw subject preserves multi-valued RDN",
+			raw:      certificateRawSubject(t),
+			fallback: pkix.Name{CommonName: "multi.example.com"},
+			want:     "CN=multi.example.com+emailAddress=admin\\+tag@multi.example.com,O=Example Corp",
 		},
 	}
 
-	got := FormatDN(dn)
-	want := "CN=example.com,1.2.3=<unencodable>"
-	if got != want {
-		t.Errorf("FormatDN() = %q, want %q", got, want)
-	}
-}
-
-func TestFormatDN_RoundTripWithExtraNames(t *testing.T) {
-	// WHY: Ensures FormatDN renders custom subject OIDs after DER round-trip.
-	t.Parallel()
-
-	orgOID := asn1.ObjectIdentifier{2, 5, 4, 97}
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
-	}
-	template := &x509.Certificate{
-		SerialNumber: randomSerial(t),
-		Subject: pkix.Name{
-			CommonName: "org.example.com",
-			ExtraNames: []pkix.AttributeTypeAndValue{{Type: orgOID, Value: "PSDDE-TEST-123"}},
-		},
-		NotBefore: time.Now().Add(-time.Hour),
-		NotAfter:  time.Now().Add(24 * time.Hour),
-	}
-	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cert, err := x509.ParseCertificate(certDER)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	got := FormatDN(cert.Subject)
-	if !strings.Contains(got, "organizationIdentifier=PSDDE-TEST-123") {
-		t.Errorf("expected organizationIdentifier in %q", got)
-	}
-	if !strings.Contains(got, "CN=org.example.com") {
-		t.Errorf("expected CN in %q", got)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// WHY: Ensures FormatDNFromRaw handles this raw DN scenario.
+			t.Parallel()
+			got := FormatDNFromRaw(tt.raw, tt.fallback)
+			if got != tt.want {
+				t.Errorf("FormatDNFromRaw() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
@@ -1153,6 +1245,34 @@ func certSubjectWithEmail(t *testing.T, email, cn string) pkix.Name {
 			ExtraNames: []pkix.AttributeTypeAndValue{
 				{Type: emailOID, Value: email},
 			},
+		},
+		NotBefore: time.Now().Add(-time.Hour),
+		NotAfter:  time.Now().Add(24 * time.Hour),
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cert.Subject
+}
+
+func certSubjectWithExtraNames(t *testing.T, cn, orgID string) pkix.Name {
+	t.Helper()
+
+	orgOID := asn1.ObjectIdentifier{2, 5, 4, 97}
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: randomSerial(t),
+		Subject: pkix.Name{
+			CommonName: cn,
+			ExtraNames: []pkix.AttributeTypeAndValue{{Type: orgOID, Value: orgID}},
 		},
 		NotBefore: time.Now().Add(-time.Hour),
 		NotAfter:  time.Now().Add(24 * time.Hour),
