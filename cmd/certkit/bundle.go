@@ -129,11 +129,16 @@ func runBundle(cmd *cobra.Command, args []string) error {
 	if bundleFormat == "p12" || bundleFormat == "jks" {
 		exportPassword, err = bundlePassword(passwordSets.Export, insecureDefaultPassword)
 		if err != nil {
-			return err
+			return fmt.Errorf("determining export password for %s output: %w", bundleFormat, err)
 		}
 	}
 
-	output, err := formatBundleOutput(bundle, key, bundleFormat, exportPassword)
+	output, err := formatBundleOutput(formatBundleOutputInput{
+		bundle:         bundle,
+		key:            key,
+		format:         bundleFormat,
+		exportPassword: exportPassword,
+	})
 	if err != nil {
 		return fmt.Errorf("formatting bundle output: %w", err)
 	}
@@ -196,9 +201,13 @@ func loadBundleInput(path string, passwords []string) (*x509.Certificate, crypto
 func selectLeafByKey(key crypto.PrivateKey, currentLeaf *x509.Certificate, extras []*x509.Certificate) (*x509.Certificate, []*x509.Certificate, error) {
 	all := append([]*x509.Certificate{currentLeaf}, extras...)
 	for i, cert := range all {
+		if cert == nil {
+			slog.Debug("skipping nil certificate while matching key", "index", i)
+			continue
+		}
 		match, err := certkit.KeyMatchesCert(key, cert)
 		if err != nil {
-			continue
+			return nil, nil, fmt.Errorf("matching private key against certificate %d: %w", i, err)
 		}
 		if match {
 			rest := slices.Concat(all[:i:i], all[i+1:])
@@ -222,13 +231,21 @@ func bundlePassword(passwords []string, allowInsecureDefault bool) (string, erro
 	return "", fmt.Errorf("PKCS#12/JKS export requires an explicit password (use --passwords or --password-file, or --insecure-default-password to force 'changeit')")
 }
 
-func formatBundleOutput(bundle *certkit.BundleResult, key crypto.PrivateKey, format, exportPassword string) ([]byte, error) {
-	switch format {
+// formatBundleOutputInput holds parameters for formatting bundle output.
+type formatBundleOutputInput struct {
+	bundle         *certkit.BundleResult
+	key            crypto.PrivateKey
+	format         string
+	exportPassword string
+}
+
+func formatBundleOutput(input formatBundleOutputInput) ([]byte, error) {
+	switch input.format {
 	case "pem", "chain":
 		// leaf + intermediates
 		var out []byte
-		out = append(out, []byte(certkit.CertToPEM(bundle.Leaf))...)
-		for _, c := range bundle.Intermediates {
+		out = append(out, []byte(certkit.CertToPEM(input.bundle.Leaf))...)
+		for _, c := range input.bundle.Intermediates {
 			out = append(out, []byte(certkit.CertToPEM(c))...)
 		}
 		return out, nil
@@ -236,43 +253,43 @@ func formatBundleOutput(bundle *certkit.BundleResult, key crypto.PrivateKey, for
 	case "fullchain":
 		// leaf + intermediates + root
 		var out []byte
-		out = append(out, []byte(certkit.CertToPEM(bundle.Leaf))...)
-		for _, c := range bundle.Intermediates {
+		out = append(out, []byte(certkit.CertToPEM(input.bundle.Leaf))...)
+		for _, c := range input.bundle.Intermediates {
 			out = append(out, []byte(certkit.CertToPEM(c))...)
 		}
-		for _, r := range bundle.Roots {
+		for _, r := range input.bundle.Roots {
 			out = append(out, []byte(certkit.CertToPEM(r))...)
 		}
 		return out, nil
 
 	case "p12":
-		if key == nil {
+		if input.key == nil {
 			return nil, fmt.Errorf("p12 output requires a private key (use --key)")
 		}
-		if exportPassword == "" {
+		if input.exportPassword == "" {
 			return nil, errors.New("PKCS#12/JKS export requires an explicit password")
 		}
-		p12, err := certkit.EncodePKCS12(key, bundle.Leaf, bundle.Intermediates, exportPassword)
+		p12, err := certkit.EncodePKCS12(input.key, input.bundle.Leaf, input.bundle.Intermediates, input.exportPassword)
 		if err != nil {
 			return nil, fmt.Errorf("encoding PKCS#12: %w", err)
 		}
 		return p12, nil
 
 	case "jks":
-		if key == nil {
+		if input.key == nil {
 			return nil, fmt.Errorf("jks output requires a private key (use --key)")
 		}
-		if exportPassword == "" {
+		if input.exportPassword == "" {
 			return nil, errors.New("PKCS#12/JKS export requires an explicit password")
 		}
-		jks, err := certkit.EncodeJKS(key, bundle.Leaf, bundle.Intermediates, exportPassword)
+		jks, err := certkit.EncodeJKS(input.key, input.bundle.Leaf, input.bundle.Intermediates, input.exportPassword)
 		if err != nil {
 			return nil, fmt.Errorf("encoding JKS: %w", err)
 		}
 		return jks, nil
 
 	default:
-		return nil, fmt.Errorf("unsupported output format %q (use pem, chain, fullchain, p12, or jks)", format)
+		return nil, fmt.Errorf("unsupported output format %q (use pem, chain, fullchain, p12, or jks)", input.format)
 	}
 }
 

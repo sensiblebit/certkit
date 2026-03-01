@@ -247,7 +247,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 	if scanExport {
 		p12Password, err := bundlePassword(passwordSets.Export, insecureDefaultPassword)
 		if err != nil {
-			return err
+			return fmt.Errorf("determining export password for scan bundle export: %w", err)
 		}
 		// Full export workflow — MemStore handles chain resolution via raw ASN.1 matching
 		if err := os.MkdirAll(scanBundlePath, 0755); err != nil {

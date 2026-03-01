@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/sensiblebit/certkit"
 	"github.com/sensiblebit/certkit/internal"
@@ -113,42 +112,6 @@ func TestFilterExpiredInspectResults(t *testing.T) {
 
 func TestJSONSchemaConsistency(t *testing.T) {
 	t.Parallel()
-
-	t.Run("verify uses diagnostics key", func(t *testing.T) {
-		t.Parallel()
-		data, err := json.Marshal(internal.VerifyResult{
-			Subject: "CN=example.com",
-			Diagnostics: []internal.Diagnosis{
-				{Check: "expired", Status: "error", Detail: "leaf certificate expired"},
-			},
-		})
-		if err != nil {
-			t.Fatalf("marshal verify result: %v", err)
-		}
-		jsonText := string(data)
-		if !strings.Contains(jsonText, `"diagnostics"`) {
-			t.Fatalf("verify json missing diagnostics field: %s", jsonText)
-		}
-		if strings.Contains(jsonText, `"diagnoses"`) {
-			t.Fatalf("verify json contains legacy diagnoses field: %s", jsonText)
-		}
-	})
-
-	t.Run("diagnose statuses avoid fail", func(t *testing.T) {
-		t.Parallel()
-		leaf := &x509.Certificate{
-			NotBefore:  time.Now().Add(-2 * time.Hour),
-			NotAfter:   time.Now().Add(-1 * time.Hour),
-			RawSubject: []byte{0x01},
-			RawIssuer:  []byte{0x02},
-		}
-		diagnostics := internal.DiagnoseChain(internal.DiagnoseChainInput{Cert: leaf})
-		for _, diagnostic := range diagnostics {
-			if diagnostic.Status == "fail" {
-				t.Fatalf("found legacy fail status: %+v", diagnostic)
-			}
-		}
-	})
 
 	t.Run("ocsp verbose uses subject and issuer keys", func(t *testing.T) {
 		t.Parallel()

@@ -69,10 +69,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Require verified WASM bundle export by default; retrying export without verification is now an explicit user action surfaced in the web UI ([#105])
-- Normalize CLI diagnostics JSON schema: `verify` now emits `diagnostics` (not `diagnoses`) and uses `error` status values for failing checks ([#96])
-- Normalize payload JSON for `bundle`/`convert` to use shared `data` + `encoding` fields (replacing `bundle`-only `chain_pem`) ([#96])
-- Normalize verbose `ocsp --json` certificate context keys to `subject`/`issuer` for cross-command consistency ([#96])
-- Prefer user-provided passwords for PKCS#12/JKS outputs while keeping `changeit` as the default fallback for compatibility ([#87])
+- **Breaking:** Normalize CLI diagnostics JSON schema: `verify` now emits `diagnostics` (not `diagnoses`) and uses `error` status values for failing checks ([#96])
+- **Breaking:** Normalize payload JSON for `bundle`/`convert` to use shared `data` + `encoding` fields (replacing `bundle`-only `chain_pem`) ([#96])
+- **Breaking:** Normalize verbose `ocsp --json` certificate context keys to `subject`/`issuer` for cross-command consistency ([#96])
+- Require explicit user-provided passwords for PKCS#12/JKS outputs; retain `changeit` only when `--insecure-default-password` is specified ([#87])
 - **Breaking:** Standardize certificate serial number formatting to `0x`-prefixed hex across CLI/JSON output ([#87])
 - Move local pre-commit hook definitions from repo config into the shared `sensiblebit/.github` hook set, and pin this branch to the shared commit so all repositories can consume the same workflow checks and Node tool bootstrapping behavior from one source ([#85])
 

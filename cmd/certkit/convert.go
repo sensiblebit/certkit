@@ -140,7 +140,7 @@ func runConvert(cmd *cobra.Command, args []string) error {
 	if convertTo == "p12" || convertTo == "jks" {
 		exportPassword, err = bundlePassword(passwordSets.Export, insecureDefaultPassword)
 		if err != nil {
-			return err
+			return fmt.Errorf("determining export password for %s output: %w", convertTo, err)
 		}
 	}
 

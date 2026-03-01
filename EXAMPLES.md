@@ -250,7 +250,6 @@ certkit bundle cert.pem --key key.pem --format p12 -p "your-password" -o bundle.
 PKCS#12/JKS exports require an explicit password via `-p`/`--password-file`:
 
 ```sh
-certkit bundle cert.pem --key key.pem --format p12 -p "your-password" -o bundle.p12
 certkit bundle cert.pem --key key.pem --format jks -p "your-password" -o keystore.jks
 ```
 
