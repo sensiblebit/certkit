@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -31,12 +32,15 @@ var bundleCmd = &cobra.Command{
 	Long: `Build a verified certificate chain from a leaf certificate.
 
 Accepts PEM, DER, PKCS#12, JKS, or PKCS#7 input. Resolves intermediates via AIA
-and verifies against the system trust store. Outputs the chain in PEM format
+and verifies against the selected trust store (default: mozilla). Outputs the chain in PEM format
 (leaf + intermediates) by default.
 
 When a key is provided (via --key or embedded in a PKCS#12/JKS file), the
 matching certificate is automatically selected as the leaf. Remaining
-certificates are used as extra intermediates for chain building.`,
+certificates are used as extra intermediates for chain building.
+
+PKCS#12/JKS outputs require an explicit export password via --passwords or
+--password-file. Use --insecure-default-password to force legacy "changeit".`,
 	Example: `  certkit bundle cert.pem
   certkit bundle cert.pem --key key.pem --format p12 -o bundle.p12
   certkit bundle store.p12 --format fullchain
@@ -110,14 +114,26 @@ func runBundle(cmd *cobra.Command, args []string) error {
 		Options: opts,
 	})
 	if err != nil {
-		return fmt.Errorf("building chain: %w", err)
+		wrapped := fmt.Errorf("building chain: %w", err)
+		if isChainValidationError(err) {
+			return &ValidationError{Message: wrapped.Error()}
+		}
+		return wrapped
 	}
 
 	for _, w := range bundle.Warnings {
 		slog.Warn("bundle", "warning", w)
 	}
 
-	output, err := formatBundleOutput(bundle, key, bundleFormat, passwordSets.Export)
+	exportPassword := ""
+	if bundleFormat == "p12" || bundleFormat == "jks" {
+		exportPassword, err = bundlePassword(passwordSets.Export, insecureDefaultPassword)
+		if err != nil {
+			return err
+		}
+	}
+
+	output, err := formatBundleOutput(bundle, key, bundleFormat, exportPassword)
 	if err != nil {
 		return fmt.Errorf("formatting bundle output: %w", err)
 	}
@@ -134,7 +150,7 @@ func runBundle(cmd *cobra.Command, args []string) error {
 	}
 
 	if jsonOutput {
-		var out bundleJSON
+		var out payloadJSON
 		isBinary := bundleFormat == "p12" || bundleFormat == "jks"
 		if bundleOutFile != "" {
 			// File was written — emit metadata only
@@ -144,8 +160,11 @@ func runBundle(cmd *cobra.Command, args []string) error {
 		} else if isBinary {
 			out.Data = base64.StdEncoding.EncodeToString(output)
 			out.Format = bundleFormat
+			out.Encoding = "base64"
 		} else {
-			out.ChainPEM = string(output)
+			out.Data = string(output)
+			out.Format = bundleFormat
+			out.Encoding = "pem"
 		}
 		data, err := json.MarshalIndent(out, "", "  ")
 		if err != nil {
@@ -159,15 +178,6 @@ func runBundle(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
-}
-
-// bundleJSON is the JSON output structure for the bundle command.
-type bundleJSON struct {
-	ChainPEM string `json:"chain_pem,omitempty"`
-	Data     string `json:"data,omitempty"`
-	File     string `json:"file,omitempty"`
-	Format   string `json:"format,omitempty"`
-	Size     int    `json:"size,omitempty"`
 }
 
 // loadBundleInput reads the input file and extracts the leaf cert, optional key,
@@ -195,22 +205,24 @@ func selectLeafByKey(key crypto.PrivateKey, currentLeaf *x509.Certificate, extra
 			return cert, rest, nil
 		}
 	}
-	return nil, nil, fmt.Errorf("private key does not match any of the %d certificate(s) provided", len(all))
+	return nil, nil, &ValidationError{Message: fmt.Sprintf("private key does not match any of the %d certificate(s) provided", len(all))}
 }
 
 // bundlePassword returns the first non-empty user-provided password.
-// Falls back to "changeit" when no explicit password is provided.
-// This fallback is intentional for interoperability with common PKCS#12/JKS defaults.
-func bundlePassword(passwords []string) string {
+// If allowInsecureDefault is true, it falls back to "changeit".
+func bundlePassword(passwords []string, allowInsecureDefault bool) (string, error) {
 	for _, pw := range passwords {
 		if pw != "" {
-			return pw
+			return pw, nil
 		}
 	}
-	return "changeit"
+	if allowInsecureDefault {
+		return "changeit", nil
+	}
+	return "", fmt.Errorf("PKCS#12/JKS export requires an explicit password (use --passwords or --password-file, or --insecure-default-password to force 'changeit')")
 }
 
-func formatBundleOutput(bundle *certkit.BundleResult, key crypto.PrivateKey, format string, passwords []string) ([]byte, error) {
+func formatBundleOutput(bundle *certkit.BundleResult, key crypto.PrivateKey, format, exportPassword string) ([]byte, error) {
 	switch format {
 	case "pem", "chain":
 		// leaf + intermediates
@@ -237,8 +249,10 @@ func formatBundleOutput(bundle *certkit.BundleResult, key crypto.PrivateKey, for
 		if key == nil {
 			return nil, fmt.Errorf("p12 output requires a private key (use --key)")
 		}
-		pw := bundlePassword(passwords)
-		p12, err := certkit.EncodePKCS12(key, bundle.Leaf, bundle.Intermediates, pw)
+		if exportPassword == "" {
+			return nil, errors.New("PKCS#12/JKS export requires an explicit password")
+		}
+		p12, err := certkit.EncodePKCS12(key, bundle.Leaf, bundle.Intermediates, exportPassword)
 		if err != nil {
 			return nil, fmt.Errorf("encoding PKCS#12: %w", err)
 		}
@@ -248,8 +262,10 @@ func formatBundleOutput(bundle *certkit.BundleResult, key crypto.PrivateKey, for
 		if key == nil {
 			return nil, fmt.Errorf("jks output requires a private key (use --key)")
 		}
-		pw := bundlePassword(passwords)
-		jks, err := certkit.EncodeJKS(key, bundle.Leaf, bundle.Intermediates, pw)
+		if exportPassword == "" {
+			return nil, errors.New("PKCS#12/JKS export requires an explicit password")
+		}
+		jks, err := certkit.EncodeJKS(key, bundle.Leaf, bundle.Intermediates, exportPassword)
 		if err != nil {
 			return nil, fmt.Errorf("encoding JKS: %w", err)
 		}
@@ -258,4 +274,17 @@ func formatBundleOutput(bundle *certkit.BundleResult, key crypto.PrivateKey, for
 	default:
 		return nil, fmt.Errorf("unsupported output format %q (use pem, chain, fullchain, p12, or jks)", format)
 	}
+}
+
+func isChainValidationError(err error) bool {
+	var unknownAuthority x509.UnknownAuthorityError
+	if errors.As(err, &unknownAuthority) {
+		return true
+	}
+	var invalid x509.CertificateInvalidError
+	if errors.As(err, &invalid) {
+		return true
+	}
+	var hostname x509.HostnameError
+	return errors.As(err, &hostname)
 }

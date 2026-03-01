@@ -9,10 +9,12 @@ import (
 	"encoding/pem"
 	"errors"
 	"math/big"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/sensiblebit/certkit"
+	"github.com/sensiblebit/certkit/internal"
 )
 
 // generateKeyAndCert creates an ECDSA key and a self-signed leaf certificate.
@@ -257,6 +259,39 @@ func TestFindAllKeyLeafPairs(t *testing.T) {
 			t.Fatal("expected error for invalid key data")
 		}
 	})
+}
+
+func TestFormatConvertOutput_PKCS12MultiMatchIsGeneralError(t *testing.T) {
+	// WHY: Multiple key matches for PKCS#12 are a format limitation, not a
+	// certificate validation failure, so this path must not return ValidationError.
+	t.Parallel()
+
+	key1, cert1 := generateKeyAndCert(t, "one.example.com", false)
+	key2, cert2 := generateKeyAndCert(t, "two.example.com", false)
+
+	_, err := formatConvertOutput(formatConvertInput{
+		contents: &internal.ContainerContents{
+			Leaf: cert1,
+			Key:  key1,
+		},
+		allCerts: []*x509.Certificate{cert1, cert2},
+		pairs: []keyLeafPair{
+			{key: key1, leaf: cert1},
+			{key: key2, leaf: cert2},
+		},
+		format:         "p12",
+		outputPassword: "topsecret",
+	})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !strings.Contains(err.Error(), "PKCS#12 supports only one key entry") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var validationErr *ValidationError
+	if errors.As(err, &validationErr) {
+		t.Fatalf("expected general error, got ValidationError: %v", err)
+	}
 }
 
 func TestBuildChainFromPool(t *testing.T) {

@@ -58,7 +58,7 @@ func TestGenerateBundleFiles_AllFileTypes(t *testing.T) {
 		"example.com.p12":               true,
 		"example.com.k8s.yaml":          true,
 		"example.com.json":              false,
-		"example.com.yaml":              false,
+		"example.com.yaml":              true,
 		"example.com.csr":               false,
 		"example.com.csr.json":          false,
 	}
@@ -270,6 +270,33 @@ func TestGenerateBundleFiles_InvalidKeyPEM(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "parsing private key") {
 		t.Errorf("error should mention parsing private key, got: %v", err)
+	}
+}
+
+func TestGenerateBundleFiles_RequiresP12Password(t *testing.T) {
+	// WHY: PKCS#12 exports must require an explicit password unless the caller
+	// explicitly opts into insecure defaults at the CLI layer.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "nopass.example.com", []string{"nopass.example.com"})
+
+	_, err := GenerateBundleFiles(BundleExportInput{
+		Bundle: &certkit.BundleResult{
+			Leaf:          leaf.cert,
+			Intermediates: []*x509.Certificate{ca.cert},
+		},
+		KeyPEM:     leaf.keyPEM,
+		KeyType:    "RSA",
+		BitLength:  2048,
+		Prefix:     "nopass",
+		SecretName: "nopass",
+	})
+	if err == nil {
+		t.Fatal("expected error for missing P12 password")
+	}
+	if !strings.Contains(err.Error(), "PKCS#12 export password is required") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

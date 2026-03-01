@@ -1384,7 +1384,7 @@ func TestDiagnoseChain(t *testing.T) {
 				ExtraCerts: []*x509.Certificate{ca.cert},
 			},
 			wantChecks: map[string]string{
-				"expired": "fail",
+				"expired": "error",
 			},
 		},
 		{
@@ -1394,7 +1394,7 @@ func TestDiagnoseChain(t *testing.T) {
 				ExtraCerts: []*x509.Certificate{ca.cert},
 			},
 			wantChecks: map[string]string{
-				"not-yet-valid": "fail",
+				"not-yet-valid": "error",
 			},
 		},
 		{
@@ -1424,7 +1424,7 @@ func TestDiagnoseChain(t *testing.T) {
 				// No extra certs — intermediate is missing
 			},
 			wantChecks: map[string]string{
-				"missing-intermediate": "fail",
+				"missing-intermediate": "error",
 			},
 			wantDetailSubstr: map[string]string{
 				// Detail must use FormatDN (full DN), not bare CommonName
@@ -1439,7 +1439,7 @@ func TestDiagnoseChain(t *testing.T) {
 			},
 			wantChecks: map[string]string{
 				"expired":              "pass",
-				"intermediate-expired": "fail",
+				"intermediate-expired": "error",
 			},
 			wantDetailSubstr: map[string]string{
 				// Detail must use FormatDN (full DN), not bare CommonName
@@ -1500,7 +1500,7 @@ func TestFormatDiagnoses(t *testing.T) {
 	// WHY: FormatDiagnoses should include headers and status markers for each diagnosis.
 	t.Parallel()
 	diags := []Diagnosis{
-		{Check: "expired", Status: "fail", Detail: "leaf certificate expired"},
+		{Check: "expired", Status: "error", Detail: "leaf certificate expired"},
 		{Check: "self-signed", Status: "warn", Detail: "self-signed leaf"},
 		{Check: "missing-intermediate", Status: "pass", Detail: "intermediate found"},
 	}

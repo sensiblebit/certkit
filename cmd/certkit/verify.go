@@ -150,10 +150,10 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("verifying certificate: %w", err)
 	}
 
-	// Compute diagnoses only when the chain itself is invalid — not for
+	// Compute diagnostics only when the chain itself is invalid — not for
 	// unrelated errors like key mismatch or expiry warnings.
 	if verifyDiagnose && result.ChainValid != nil && !*result.ChainValid {
-		result.Diagnoses = internal.DiagnoseChain(internal.DiagnoseChainInput{
+		result.Diagnostics = internal.DiagnoseChain(internal.DiagnoseChainInput{
 			Cert:       contents.Leaf,
 			ExtraCerts: contents.ExtraCerts,
 		})
@@ -168,8 +168,8 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		fmt.Println(string(data))
 	case "text":
 		fmt.Print(internal.FormatVerifyResult(result))
-		if len(result.Diagnoses) > 0 {
-			fmt.Print(internal.FormatDiagnoses(result.Diagnoses))
+		if len(result.Diagnostics) > 0 {
+			fmt.Print(internal.FormatDiagnoses(result.Diagnostics))
 		}
 	default:
 		return fmt.Errorf("unsupported output format %q (use text or json)", format)

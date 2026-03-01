@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -46,8 +47,7 @@ type BundleExportInput struct {
 	Prefix     string              // sanitized file name prefix
 	SecretName string              // Kubernetes secret metadata.name
 	CSRSubject *CSRSubjectOverride // optional; nil uses cert's own subject
-	// P12Password controls the .p12 output file password.
-	// When empty, "changeit" is used.
+	// P12Password controls the .p12 output file password and must be explicit.
 	P12Password string
 }
 
@@ -108,9 +108,7 @@ func GenerateBundleFiles(input BundleExportInput) ([]BundleFile, error) {
 	// PKCS#12
 	p12Password := input.P12Password
 	if p12Password == "" {
-		// Keep "changeit" as the default PKCS#12 password for interoperability.
-		// This mirrors widespread tooling expectations for .p12/.jks artifacts.
-		p12Password = "changeit"
+		return nil, errors.New("PKCS#12 export password is required")
 	}
 	privKey, err := certkit.ParsePEMPrivateKey(input.KeyPEM)
 	if err != nil {
@@ -153,7 +151,7 @@ func GenerateBundleFiles(input BundleExportInput) ([]BundleFile, error) {
 	if err != nil {
 		return nil, fmt.Errorf("generating YAML: %w", err)
 	}
-	files = append(files, BundleFile{Name: prefix + ".yaml", Data: yamlData})
+	files = append(files, BundleFile{Name: prefix + ".yaml", Data: yamlData, Sensitive: true})
 
 	// CSR
 	csrPEM, csrJSON, err := GenerateCSR(bundle.Leaf, input.KeyPEM, input.CSRSubject)
@@ -322,7 +320,7 @@ type ExportMatchedBundleInput struct {
 	Writer        BundleWriter
 	CSRSubject    *CSRSubjectOverride // optional; nil uses cert's own subject
 	RetryNoVerify bool                // retry bundle without verification on failure
-	P12Password   string              // optional; empty uses "changeit"
+	P12Password   string              // required for PKCS#12 output
 }
 
 // ExportMatchedBundles builds certificate chains and writes bundle files for
