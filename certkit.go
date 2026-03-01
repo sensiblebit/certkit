@@ -19,6 +19,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"strings"
 	"time"
@@ -45,6 +46,7 @@ func ParsePEMCertificates(pemData []byte) ([]*x509.Certificate, error) {
 			if firstErr == nil {
 				firstErr = fmt.Errorf("parsing certificate: %w", err)
 			}
+			slog.Debug("skipping malformed CERTIFICATE PEM block", "error", err)
 			continue
 		}
 		certs = append(certs, cert)
@@ -176,12 +178,18 @@ func ParsePEMPrivateKeyWithPasswords(pemData []byte, passwords []string) (crypto
 		if parseErr == nil {
 			return key, nil
 		}
-		if firstErr == nil {
-			firstErr = parseErr
-		}
 
 		// OpenSSH uses a proprietary encrypted format.
 		if block.Type == "OPENSSH PRIVATE KEY" {
+			if len(passwords) == 0 {
+				if firstErr == nil {
+					firstErr = parseErr
+				}
+				slog.Debug("skipping OpenSSH private key block with no passwords", "error", parseErr)
+				continue
+			}
+
+			var openSSHErr error
 			for _, password := range passwords {
 				if password == "" {
 					continue
@@ -190,25 +198,39 @@ func ParsePEMPrivateKeyWithPasswords(pemData []byte, passwords []string) (crypto
 				if err == nil {
 					return normalizeKey(key), nil
 				}
+				if openSSHErr == nil {
+					openSSHErr = fmt.Errorf("parsing OpenSSH private key with provided passwords: %w", err)
+				}
+				slog.Debug("failed OpenSSH private key passphrase", "error", err)
 			}
+			if openSSHErr == nil {
+				openSSHErr = parseErr
+			}
+			if firstErr == nil {
+				firstErr = openSSHErr
+			}
+			slog.Debug("skipping OpenSSH private key block after password attempts", "error", openSSHErr)
 			continue
 		}
 
 		//nolint:staticcheck // x509.IsEncryptedPEMBlock is deprecated but needed for legacy encrypted PEM support
 		if !x509.IsEncryptedPEMBlock(block) {
+			if firstErr == nil {
+				firstErr = parseErr
+			}
+			slog.Debug("skipping unparseable unencrypted private key PEM block", "block_type", block.Type, "error", parseErr)
 			continue
 		}
 
-		// For encrypted blocks, report decrypt failures instead of the raw parse
-		// error from encrypted DER bytes.
-		if firstErr != nil && firstErr.Error() == parseErr.Error() {
-			firstErr = nil
-		}
-
+		var encryptedErr error
 		for _, password := range passwords {
 			//nolint:staticcheck // x509.DecryptPEMBlock is deprecated but needed for legacy encrypted PEM support
 			decrypted, err := x509.DecryptPEMBlock(block, []byte(password))
 			if err != nil {
+				if encryptedErr == nil {
+					encryptedErr = fmt.Errorf("decrypting private key with provided passwords: %w", err)
+				}
+				slog.Debug("failed decrypting encrypted private key block", "block_type", block.Type, "error", err)
 				continue
 			}
 			clearPEM := pem.EncodeToMemory(&pem.Block{Type: block.Type, Bytes: decrypted})
@@ -216,13 +238,18 @@ func ParsePEMPrivateKeyWithPasswords(pemData []byte, passwords []string) (crypto
 			if err == nil {
 				return key, nil
 			}
-			if firstErr == nil {
-				firstErr = err
+			if encryptedErr == nil {
+				encryptedErr = fmt.Errorf("parsing decrypted private key: %w", err)
 			}
+			slog.Debug("failed parsing decrypted private key block", "block_type", block.Type, "error", err)
+		}
+		if encryptedErr != nil && firstErr == nil {
+			firstErr = encryptedErr
 		}
 		if firstErr == nil {
 			firstErr = errors.New("decrypting private key with any provided password")
 		}
+		slog.Debug("skipping encrypted private key block after password attempts", "block_type", block.Type, "error", firstErr)
 	}
 
 	if firstErr != nil {
@@ -274,6 +301,7 @@ func ParsePEMPrivateKeys(pemData []byte, passwords []string) ([]crypto.PrivateKe
 // ParsePEMCertificateRequest parses a single certificate request from PEM data.
 func ParsePEMCertificateRequest(pemData []byte) (*x509.CertificateRequest, error) {
 	rest := pemData
+	var firstErr error
 	for {
 		var block *pem.Block
 		block, rest = pem.Decode(rest)
@@ -285,9 +313,16 @@ func ParsePEMCertificateRequest(pemData []byte) (*x509.CertificateRequest, error
 		}
 		csr, err := x509.ParseCertificateRequest(block.Bytes)
 		if err != nil {
-			return nil, fmt.Errorf("parsing certificate request: %w", err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("parsing certificate request: %w", err)
+			}
+			slog.Debug("skipping malformed certificate request PEM block", "error", err)
+			continue
 		}
 		return csr, nil
+	}
+	if firstErr != nil {
+		return nil, firstErr
 	}
 	return nil, errors.New("no certificate request found in PEM data")
 }

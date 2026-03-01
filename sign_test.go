@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -374,7 +375,7 @@ func TestSignCSR_CACertKeyMismatch(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for CA cert/key mismatch")
 	}
-	if got := err.Error(); got != "validating CA certificate and key: CA key does not match CA certificate" {
+	if !errors.Is(err, ErrCAKeyMismatch) {
 		t.Errorf("unexpected error: %v", err)
 	}
 }

@@ -38,13 +38,30 @@ func ParseContainerData(data []byte, passwords []string) (*ContainerContents, er
 	if keyEntries, trustedCerts, err := certkit.DecodeJKSKeyEntries(data, passwords); err == nil {
 		if len(keyEntries) > 0 {
 			entry := keyEntries[0]
+			if idx := slices.IndexFunc(keyEntries, func(candidate certkit.DecodedJKSKeyEntry) bool {
+				return len(candidate.Chain) > 0
+			}); idx >= 0 {
+				entry = keyEntries[idx]
+			}
+
 			if len(entry.Chain) > 0 {
-				return &ContainerContents{Leaf: entry.Chain[0], Key: entry.Key, ExtraCerts: entry.Chain[1:]}, nil
+				leaf, chainExtras := selectLeafAndExtras(entry.Chain, entry.Key)
+				allExtras := slices.Concat(chainExtras, trustedCerts)
+				return &ContainerContents{Leaf: leaf, Key: entry.Key, ExtraCerts: allExtras}, nil
 			}
-			if len(trustedCerts) > 0 {
-				return &ContainerContents{Leaf: trustedCerts[0], Key: entry.Key, ExtraCerts: trustedCerts[1:]}, nil
+
+			if trustedMatchIdx := slices.IndexFunc(trustedCerts, func(cert *x509.Certificate) bool {
+				ok, matchErr := certkit.KeyMatchesCert(entry.Key, cert)
+				return matchErr == nil && ok
+			}); trustedMatchIdx >= 0 {
+				leaf := trustedCerts[trustedMatchIdx]
+				extras := make([]*x509.Certificate, 0, len(trustedCerts)-1)
+				extras = append(extras, trustedCerts[:trustedMatchIdx]...)
+				extras = append(extras, trustedCerts[trustedMatchIdx+1:]...)
+				return &ContainerContents{Leaf: leaf, Key: entry.Key, ExtraCerts: extras}, nil
 			}
-			return &ContainerContents{Key: entry.Key}, nil
+
+			return &ContainerContents{Key: entry.Key, ExtraCerts: trustedCerts}, nil
 		}
 
 		leaf, extras := selectLeafAndExtras(trustedCerts, nil)

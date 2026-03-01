@@ -303,10 +303,77 @@ func TestParseContainerData_JKSPreservesKeyEntryChain(t *testing.T) {
 	if contents.Leaf.Subject.CommonName != "jks-primary.example.com" {
 		t.Errorf("selected leaf CN = %q, want jks-primary.example.com", contents.Leaf.Subject.CommonName)
 	}
-	if len(contents.ExtraCerts) != 1 {
-		t.Fatalf("expected 1 extra cert from key-entry chain, got %d", len(contents.ExtraCerts))
+	if len(contents.ExtraCerts) != 2 {
+		t.Fatalf("expected 2 extra certs (key-entry chain + trusted), got %d", len(contents.ExtraCerts))
 	}
 	if contents.ExtraCerts[0].Subject.CommonName != ca1.cert.Subject.CommonName {
 		t.Errorf("extra cert CN = %q, want %q", contents.ExtraCerts[0].Subject.CommonName, ca1.cert.Subject.CommonName)
+	}
+	if contents.ExtraCerts[1].Subject.CommonName != ca2.cert.Subject.CommonName {
+		t.Errorf("extra cert CN = %q, want %q", contents.ExtraCerts[1].Subject.CommonName, ca2.cert.Subject.CommonName)
+	}
+}
+
+func TestParseContainerData_JKSPrefersLaterKeyEntryWithChain(t *testing.T) {
+	// WHY: A JKS may contain multiple key entries where early entries have no
+	// chain. ParseContainerData should keep scanning and use the first key entry
+	// that has a usable leaf+chain.
+	t.Parallel()
+
+	unusedKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unusedKeyPKCS8, err := x509.MarshalPKCS8PrivateKey(unusedKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "jks-chained.example.com", []string{"jks-chained.example.com"})
+	leafKeyPKCS8, err := x509.MarshalPKCS8PrivateKey(leaf.key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ks := keystore.New()
+	if err := ks.SetPrivateKeyEntry("a-no-chain", keystore.PrivateKeyEntry{
+		CreationTime:     time.Now(),
+		PrivateKey:       unusedKeyPKCS8,
+		CertificateChain: []keystore.Certificate{},
+	}, []byte("changeit")); err != nil {
+		t.Fatalf("set key entry without chain: %v", err)
+	}
+	if err := ks.SetPrivateKeyEntry("b-with-chain", keystore.PrivateKeyEntry{
+		CreationTime: time.Now(),
+		PrivateKey:   leafKeyPKCS8,
+		CertificateChain: []keystore.Certificate{
+			{Type: "X.509", Content: leaf.cert.Raw},
+			{Type: "X.509", Content: ca.cert.Raw},
+		},
+	}, []byte("changeit")); err != nil {
+		t.Fatalf("set key entry with chain: %v", err)
+	}
+
+	var buf bytes.Buffer
+	if err := ks.Store(&buf, []byte("changeit")); err != nil {
+		t.Fatalf("store JKS: %v", err)
+	}
+
+	contents, err := ParseContainerData(buf.Bytes(), []string{"changeit"})
+	if err != nil {
+		t.Fatalf("ParseContainerData(JKS): %v", err)
+	}
+	if contents.Key == nil || contents.Leaf == nil {
+		t.Fatal("expected key and leaf from chained JKS entry")
+	}
+	if contents.Leaf.Subject.CommonName != "jks-chained.example.com" {
+		t.Errorf("selected leaf CN = %q, want jks-chained.example.com", contents.Leaf.Subject.CommonName)
+	}
+	if len(contents.ExtraCerts) != 1 {
+		t.Fatalf("expected 1 extra cert from chosen chain, got %d", len(contents.ExtraCerts))
+	}
+	if contents.ExtraCerts[0].Subject.CommonName != ca.cert.Subject.CommonName {
+		t.Errorf("extra cert CN = %q, want %q", contents.ExtraCerts[0].Subject.CommonName, ca.cert.Subject.CommonName)
 	}
 }

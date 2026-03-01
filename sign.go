@@ -5,10 +5,14 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"errors"
 	"fmt"
 	"math/big"
 	"time"
 )
+
+// ErrCAKeyMismatch indicates the signing CA private key does not match the CA certificate.
+var ErrCAKeyMismatch = errors.New("CA key does not match CA certificate")
 
 // SelfSignedInput contains parameters for self-signed certificate generation.
 type SelfSignedInput struct {
@@ -100,7 +104,7 @@ func SignCSR(input SignCSRInput) (*x509.Certificate, error) {
 		return nil, fmt.Errorf("validating CA certificate and key: %w", err)
 	}
 	if !caKeyMatches {
-		return nil, fmt.Errorf("validating CA certificate and key: CA key does not match CA certificate")
+		return nil, fmt.Errorf("validating CA certificate and key: %w", ErrCAKeyMismatch)
 	}
 
 	if err := input.CSR.CheckSignature(); err != nil {

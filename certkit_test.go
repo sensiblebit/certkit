@@ -632,6 +632,35 @@ func TestParsePEMCertificateRequest_SkipsNonCSRBlocks(t *testing.T) {
 	}
 }
 
+func TestParsePEMCertificateRequest_SkipsMalformedCSRBeforeValidCSR(t *testing.T) {
+	// WHY: PEM bundles can contain broken CSR blocks before valid ones; parser
+	// must continue scanning to avoid dropping usable requests.
+	t.Parallel()
+
+	leaf, key := generateLeafWithSANs(t)
+	csrPEM, _, err := GenerateCSR(leaf, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrBlock, _ := pem.Decode([]byte(csrPEM))
+	if csrBlock == nil {
+		t.Fatal("failed to decode generated CSR")
+	}
+
+	pemData := slices.Concat(
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: []byte("bad-csr-der")}),
+		pem.EncodeToMemory(csrBlock),
+	)
+
+	csr, err := ParsePEMCertificateRequest(pemData)
+	if err != nil {
+		t.Fatalf("ParsePEMCertificateRequest: %v", err)
+	}
+	if csr.Subject.CommonName != "test.example.com" {
+		t.Errorf("CN=%q, want test.example.com", csr.Subject.CommonName)
+	}
+}
+
 func TestParsePEMCertificateRequest_LegacyBlockType(t *testing.T) {
 	// WHY: Older tools (Netscape, MSIE) emit "NEW CERTIFICATE REQUEST" instead of
 	// "CERTIFICATE REQUEST". The DER payload is identical; rejecting the legacy type
@@ -876,16 +905,40 @@ func TestSelectIssuerCertificate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	issuer := SelectIssuerCertificate(leaf, []*x509.Certificate{wrongCA, ca, intermediate})
-	if issuer == nil {
-		t.Fatal("expected issuer, got nil")
-	}
-	if !issuer.Equal(intermediate) {
-		t.Errorf("selected issuer CN = %q, want %q", issuer.Subject.CommonName, intermediate.Subject.CommonName)
+	tests := []struct {
+		name       string
+		candidates []*x509.Certificate
+		wantIssuer *x509.Certificate
+	}{
+		{
+			name:       "prefers AKI SKI matched valid signer",
+			candidates: []*x509.Certificate{wrongCA, ca, intermediate},
+			wantIssuer: intermediate,
+		},
+		{
+			name:       "returns nil when no candidate signs leaf",
+			candidates: []*x509.Certificate{wrongCA, ca},
+			wantIssuer: nil,
+		},
 	}
 
-	if got := SelectIssuerCertificate(leaf, []*x509.Certificate{wrongCA, ca}); got != nil {
-		t.Errorf("expected nil for non-signing candidates, got CN=%q", got.Subject.CommonName)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			issuer := SelectIssuerCertificate(leaf, tt.candidates)
+			if tt.wantIssuer == nil {
+				if issuer != nil {
+					t.Errorf("expected nil issuer, got CN=%q", issuer.Subject.CommonName)
+				}
+				return
+			}
+			if issuer == nil {
+				t.Fatal("expected issuer, got nil")
+			}
+			if !issuer.Equal(tt.wantIssuer) {
+				t.Errorf("selected issuer CN = %q, want %q", issuer.Subject.CommonName, tt.wantIssuer.Subject.CommonName)
+			}
+		})
 	}
 }
 

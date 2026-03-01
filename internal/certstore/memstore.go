@@ -70,9 +70,10 @@ func NewMemStore() *MemStore {
 }
 
 // HandleCertificate computes the SKI and stores the certificate. Certificates
-// are deduplicated by (serial, AKI) — the same composite key the SQLite schema
-// uses. Multiple certificates with the same SKI but different serials (key
-// reuse across renewals) are all retained.
+// are deduplicated by serial plus authority identity (AKI when present,
+// otherwise raw issuer), matching RFC 5280 identity for missing-AKI
+// certificates. Multiple certificates with the same SKI but different serials
+// (key reuse across renewals) are all retained.
 func (s *MemStore) HandleCertificate(cert *x509.Certificate, source string) error {
 	if cert == nil {
 		return errors.New("certificate is nil")
