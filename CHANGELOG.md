@@ -97,6 +97,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Fix `scan` directory traversal boundaries and resilience: symlinks that point outside the scan root are skipped, max-file-size checks now apply to symlink targets and archive reads, and transient walk errors no longer prune unrelated files during traversal ([#91])
 - Fix `scan --bundle-path` text/default output to print a useful post-export summary (certificate/key counts plus export path) while keeping JSON export output unchanged ([#95])
+- Fix `scan` to fail fast when per-file processing or size-check `stat` calls fail during directory traversal, instead of logging and silently continuing ([#106])
 - Fix verify JSON chain output to use `not_after` for consistency with other commands ([#87])
 - Fix Certificate Transparency availability handling to preserve parsed SCT candidates when the log list cannot be loaded and mark them as unavailable instead of dropping them ([#86])
 - Fix chain conversion failures in Certificate Transparency checks to report SCTs as `unavailable` instead of `invalid` and keep diagnostics as warnings ([#86])
@@ -941,6 +942,7 @@ Initial release.
 [#87]: https://github.com/sensiblebit/certkit/pull/87
 [#91]: https://github.com/sensiblebit/certkit/pull/91
 [#95]: https://github.com/sensiblebit/certkit/pull/95
+[#106]: https://github.com/sensiblebit/certkit/pull/106
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63

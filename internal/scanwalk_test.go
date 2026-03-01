@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -26,9 +27,7 @@ func TestWalkScanFiles_SkipsSymlinkOutsideRoot(t *testing.T) {
 	}
 
 	symlinkPath := filepath.Join(root, "outside-link.pem")
-	if err := os.Symlink(outsideFile, symlinkPath); err != nil {
-		t.Fatalf("create symlink: %v", err)
-	}
+	createSymlinkOrSkip(t, outsideFile, symlinkPath)
 
 	var visited []string
 	err := WalkScanFiles(WalkScanFilesInput{
@@ -68,9 +67,7 @@ func TestWalkScanFiles_UsesTargetSizeForSymlink(t *testing.T) {
 	}
 
 	largeLink := filepath.Join(root, "large-link.pem")
-	if err := os.Symlink(largeTarget, largeLink); err != nil {
-		t.Fatalf("create large symlink: %v", err)
-	}
+	createSymlinkOrSkip(t, largeTarget, largeLink)
 
 	var visited []string
 	err := WalkScanFiles(WalkScanFilesInput{
@@ -135,5 +132,33 @@ func TestWalkScanFiles_WalkErrorDoesNotPruneSiblings(t *testing.T) {
 	}
 	if !slices.Contains(visited, nested) {
 		t.Fatalf("nested file should still be visited: %v", visited)
+	}
+}
+
+func TestWalkScanFiles_PropagatesOnFileError(t *testing.T) {
+	// WHY: Scan must fail fast when processing a discovered file fails.
+	t.Parallel()
+
+	root := t.TempDir()
+	inputFile := filepath.Join(root, "input.pem")
+	if err := os.WriteFile(inputFile, []byte("x"), 0644); err != nil {
+		t.Fatalf("write input file: %v", err)
+	}
+
+	wantErr := errors.New("onfile failed")
+	err := WalkScanFiles(WalkScanFilesInput{
+		RootPath: root,
+		OnFile: func(path string) error {
+			if path == inputFile {
+				return wantErr
+			}
+			return nil
+		},
+	})
+	if err == nil {
+		t.Fatalf("expected WalkScanFiles to return an error")
+	}
+	if !errors.Is(err, wantErr) {
+		t.Fatalf("error = %v, want wrapped %v", err, wantErr)
 	}
 }

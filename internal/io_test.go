@@ -82,9 +82,7 @@ func TestReadFileLimited_SymlinkUsesTargetSize(t *testing.T) {
 	}
 
 	link := filepath.Join(dir, "target-link.bin")
-	if err := os.Symlink(target, link); err != nil {
-		t.Fatalf("create symlink: %v", err)
-	}
+	createSymlinkOrSkip(t, target, link)
 
 	if _, err := readFileLimited(link, 4); err == nil || !strings.Contains(err.Error(), "file exceeds max size") {
 		t.Fatalf("expected size error for symlink target, got %v", err)

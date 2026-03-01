@@ -30,7 +30,11 @@ func WalkScanFiles(input WalkScanFilesInput) error {
 		return fmt.Errorf("stat %s: %w", input.RootPath, err)
 	}
 	if !info.IsDir() {
-		if exceedsSizeLimit(input.RootPath, input.MaxFileSize) {
+		exceedsLimit, err := exceedsSizeLimit(input.RootPath, input.MaxFileSize)
+		if err != nil {
+			return fmt.Errorf("checking file size %s: %w", input.RootPath, err)
+		}
+		if exceedsLimit {
 			return nil
 		}
 		if err := input.OnFile(input.RootPath); err != nil {
@@ -81,12 +85,16 @@ func WalkScanFiles(input WalkScanFilesInput) error {
 			}
 		}
 
-		if exceedsSizeLimit(path, input.MaxFileSize) {
+		exceedsLimit, err := exceedsSizeLimit(path, input.MaxFileSize)
+		if err != nil {
+			return fmt.Errorf("checking file size %s: %w", path, err)
+		}
+		if exceedsLimit {
 			return nil
 		}
 
 		if err := input.OnFile(path); err != nil {
-			slog.Warn("processing file", "path", path, "error", err)
+			return fmt.Errorf("handling file %s: %w", path, err)
 		}
 		return nil
 	})
@@ -118,18 +126,17 @@ func pathWithinBoundary(path, rootBoundary string) bool {
 	return !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
 }
 
-func exceedsSizeLimit(path string, maxFileSize int64) bool {
+func exceedsSizeLimit(path string, maxFileSize int64) (bool, error) {
 	if maxFileSize <= 0 {
-		return false
+		return false, nil
 	}
 	info, err := os.Stat(path)
 	if err != nil {
-		slog.Warn("stat file", "path", path, "error", err)
-		return true
+		return false, fmt.Errorf("stat %s: %w", path, err)
 	}
 	if info.Size() <= maxFileSize {
-		return false
+		return false, nil
 	}
 	slog.Debug("skipping large file", "path", path, "size", info.Size(), "max", maxFileSize)
-	return true
+	return true, nil
 }
