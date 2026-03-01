@@ -73,7 +73,11 @@ func GenerateCSRFiles(opts CSROptions) (*CSRResult, error) {
 		}
 	} else {
 		var err error
-		signer, err = GenerateKey(opts.Algorithm, opts.Bits, opts.Curve)
+		signer, err = GenerateKey(GenerateKeyInput{
+			Algorithm: opts.Algorithm,
+			Bits:      opts.Bits,
+			Curve:     opts.Curve,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("generating key: %w", err)
 		}
@@ -92,7 +96,7 @@ func GenerateCSRFiles(opts CSROptions) (*CSRResult, error) {
 		}
 		tmpl, parseErr := certkit.ParseCSRTemplate(data)
 		if parseErr != nil {
-			return nil, parseErr
+			return nil, fmt.Errorf("parsing CSR template: %w", parseErr)
 		}
 		csrPEM, err = certkit.GenerateCSRFromTemplate(tmpl, signer)
 
@@ -119,7 +123,7 @@ func GenerateCSRFiles(opts CSROptions) (*CSRResult, error) {
 		}
 		srcCSR, parseErr := certkit.ParsePEMCertificateRequest(data)
 		if parseErr != nil {
-			return nil, parseErr
+			return nil, fmt.Errorf("parsing CSR: %w", parseErr)
 		}
 		csrPEM, err = certkit.GenerateCSRFromCSR(srcCSR, signer)
 	}

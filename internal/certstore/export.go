@@ -46,6 +46,9 @@ type BundleExportInput struct {
 	Prefix     string              // sanitized file name prefix
 	SecretName string              // Kubernetes secret metadata.name
 	CSRSubject *CSRSubjectOverride // optional; nil uses cert's own subject
+	// P12Password controls the .p12 output file password.
+	// When empty, "changeit" is used.
+	P12Password string
 }
 
 // K8sSecret represents a Kubernetes TLS secret.
@@ -103,12 +106,17 @@ func GenerateBundleFiles(input BundleExportInput) ([]BundleFile, error) {
 	files = append(files, BundleFile{Name: prefix + ".key", Data: input.KeyPEM, Sensitive: true})
 
 	// PKCS#12
+	p12Password := input.P12Password
+	if p12Password == "" {
+		// Keep "changeit" as the default PKCS#12 password for interoperability.
+		// This mirrors widespread tooling expectations for .p12/.jks artifacts.
+		p12Password = "changeit"
+	}
 	privKey, err := certkit.ParsePEMPrivateKey(input.KeyPEM)
 	if err != nil {
 		return nil, fmt.Errorf("parsing private key for P12: %w", err)
 	}
-
-	p12Data, err := certkit.EncodePKCS12Legacy(privKey, bundle.Leaf, bundle.Intermediates, "changeit")
+	p12Data, err := certkit.EncodePKCS12Legacy(privKey, bundle.Leaf, bundle.Intermediates, p12Password)
 	if err != nil {
 		return nil, fmt.Errorf("creating P12: %w", err)
 	}
@@ -217,7 +225,7 @@ func GenerateJSON(bundle *certkit.BundleResult) ([]byte, error) {
 		"not_before":       bundle.Leaf.NotBefore.Format(time.RFC3339),
 		"pem":              string(chainPEM),
 		"sans":             sans,
-		"serial_number":    bundle.Leaf.SerialNumber.String(),
+		"serial_number":    certkit.FormatSerialNumber(bundle.Leaf.SerialNumber),
 		"sigalg":           bundle.Leaf.SignatureAlgorithm.String(),
 		"subject": map[string]any{
 			"common_name": bundle.Leaf.Subject.CommonName,
@@ -314,6 +322,7 @@ type ExportMatchedBundleInput struct {
 	Writer        BundleWriter
 	CSRSubject    *CSRSubjectOverride // optional; nil uses cert's own subject
 	RetryNoVerify bool                // retry bundle without verification on failure
+	P12Password   string              // optional; empty uses "changeit"
 }
 
 // ExportMatchedBundles builds certificate chains and writes bundle files for
@@ -328,43 +337,71 @@ func ExportMatchedBundles(ctx context.Context, input ExportMatchedBundleInput) e
 		certRec := input.Store.GetCert(ski)
 		keyRec := input.Store.GetKey(ski)
 		if certRec == nil || keyRec == nil {
+			slog.Debug("skipping export entry without cert or key", "ski", ski)
 			continue
 		}
 
-		bundle, err := certkit.Bundle(ctx, certRec.Cert, opts)
+		bundle, err := certkit.Bundle(ctx, certkit.BundleInput{
+			Leaf:    certRec.Cert,
+			Options: opts,
+		})
 		if err != nil && input.RetryNoVerify && opts.Verify {
 			retryOpts := opts
 			retryOpts.Verify = false
-			bundle, err = certkit.Bundle(ctx, certRec.Cert, retryOpts)
+			bundle, err = certkit.Bundle(ctx, certkit.BundleInput{
+				Leaf:    certRec.Cert,
+				Options: retryOpts,
+			})
 		}
 		if err != nil {
-			slog.Warn("bundling cert", "cn", certRec.Cert.Subject.CommonName, "ski", ski, "error", err)
-			continue
+			wrapped := fmt.Errorf("bundling certificate %q: %w", certRec.Cert.Subject.CommonName, err)
+			slog.Warn("bundling cert", "cn", certRec.Cert.Subject.CommonName, "ski", ski, "error", wrapped)
+			return wrapped
 		}
 
 		prefix := SanitizeFileName(FormatCN(certRec.Cert))
-		folder := prefix
+		folderName := prefix
 		if certRec.BundleName != "" {
-			folder = certRec.BundleName
+			folderName = certRec.BundleName
+		}
+		folder, err := SanitizeBundleFolder(folderName)
+		if err != nil {
+			if certRec.BundleName != "" {
+				fallback, fallbackErr := SanitizeBundleFolder(prefix)
+				if fallbackErr != nil {
+					wrapped := fmt.Errorf("sanitizing fallback bundle folder %q: %w", prefix, fallbackErr)
+					slog.Warn("invalid bundle folder", "bundle", certRec.BundleName, "cn", certRec.Cert.Subject.CommonName, "error", wrapped)
+					return wrapped
+				}
+				slog.Warn("invalid bundle name; falling back to CN", "bundle", certRec.BundleName, "folder", fallback, "cn", certRec.Cert.Subject.CommonName, "error", err)
+				folder = fallback
+			} else {
+				wrapped := fmt.Errorf("sanitizing bundle folder %q: %w", folderName, err)
+				slog.Warn("invalid bundle folder", "cn", certRec.Cert.Subject.CommonName, "error", wrapped)
+				return wrapped
+			}
 		}
 
 		files, err := GenerateBundleFiles(BundleExportInput{
-			Bundle:     bundle,
-			KeyPEM:     keyRec.PEM,
-			KeyType:    keyRec.KeyType,
-			BitLength:  keyRec.BitLength,
-			Prefix:     prefix,
-			SecretName: strings.TrimPrefix(prefix, "_."),
-			CSRSubject: input.CSRSubject,
+			Bundle:      bundle,
+			KeyPEM:      keyRec.PEM,
+			KeyType:     keyRec.KeyType,
+			BitLength:   keyRec.BitLength,
+			Prefix:      prefix,
+			SecretName:  strings.TrimPrefix(prefix, "_."),
+			CSRSubject:  input.CSRSubject,
+			P12Password: input.P12Password,
 		})
 		if err != nil {
-			slog.Warn("generating bundle files", "cn", certRec.Cert.Subject.CommonName, "error", err)
-			continue
+			wrapped := fmt.Errorf("generating bundle files for %q: %w", certRec.Cert.Subject.CommonName, err)
+			slog.Warn("generating bundle files", "cn", certRec.Cert.Subject.CommonName, "error", wrapped)
+			return wrapped
 		}
 
 		if err := input.Writer.WriteBundleFiles(folder, files); err != nil {
-			slog.Warn("writing bundle files", "cn", certRec.Cert.Subject.CommonName, "error", err)
-			continue
+			wrapped := fmt.Errorf("writing bundle files for %q: %w", certRec.Cert.Subject.CommonName, err)
+			slog.Warn("writing bundle files", "cn", certRec.Cert.Subject.CommonName, "error", wrapped)
+			return wrapped
 		}
 		slog.Info("exported bundle", "cn", certRec.Cert.Subject.CommonName, "folder", folder)
 	}

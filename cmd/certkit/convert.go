@@ -45,7 +45,9 @@ func init() {
 	convertCmd.Flags().StringVarP(&convertOutFile, "out-file", "o", "", "Output file (required for binary formats)")
 	convertCmd.Flags().StringVar(&convertKeyPath, "key", "", "Private key file (PEM). Keys are matched to certificates automatically.")
 
-	_ = convertCmd.MarkFlagRequired("to")
+	if err := convertCmd.MarkFlagRequired("to"); err != nil {
+		panic(fmt.Errorf("marking --to required: %w", err))
+	}
 
 	convertCmd.Flags().Lookup("out-file").Annotations = map[string][]string{"readme_default": {"_(stdout for PEM)_"}}
 
@@ -64,18 +66,19 @@ type keyLeafPair struct {
 
 // formatConvertInput holds the parameters for formatConvertOutput.
 type formatConvertInput struct {
-	contents  *internal.ContainerContents
-	allCerts  []*x509.Certificate
-	pairs     []keyLeafPair
-	format    string
-	passwords []string
+	contents        *internal.ContainerContents
+	allCerts        []*x509.Certificate
+	pairs           []keyLeafPair
+	format          string
+	outputPasswords []string
 }
 
 func runConvert(cmd *cobra.Command, args []string) error {
-	passwords, err := internal.ProcessPasswords(passwordList, passwordFile)
+	passwordSets, err := internal.ProcessPasswordSets(passwordList, passwordFile)
 	if err != nil {
 		return fmt.Errorf("loading passwords: %w", err)
 	}
+	passwords := passwordSets.Decode
 
 	contents, err := internal.LoadContainerFile(args[0], passwords)
 	if err != nil {
@@ -131,11 +134,11 @@ func runConvert(cmd *cobra.Command, args []string) error {
 	}
 
 	output, err := formatConvertOutput(formatConvertInput{
-		contents:  contents,
-		allCerts:  allCerts,
-		pairs:     pairs,
-		format:    convertTo,
-		passwords: passwords,
+		contents:        contents,
+		allCerts:        allCerts,
+		pairs:           pairs,
+		format:          convertTo,
+		outputPasswords: passwordSets.Export,
 	})
 	if err != nil {
 		return fmt.Errorf("formatting output: %w", err)
@@ -204,7 +207,7 @@ func formatConvertOutput(input formatConvertInput) ([]byte, error) {
 		if len(input.pairs) > 1 {
 			return nil, &ValidationError{Message: fmt.Sprintf("PKCS#12 supports only one key entry; %d matches found (use JKS for multiple)", len(input.pairs))}
 		}
-		pw := bundlePassword(input.passwords)
+		pw := bundlePassword(input.outputPasswords)
 		data, err := certkit.EncodePKCS12(input.contents.Key, input.contents.Leaf, input.contents.ExtraCerts, pw)
 		if err != nil {
 			return nil, fmt.Errorf("encoding PKCS#12: %w", err)
@@ -262,7 +265,7 @@ func formatConvertPEM(input formatConvertInput) ([]byte, error) {
 }
 
 func formatConvertJKS(input formatConvertInput) ([]byte, error) {
-	pw := bundlePassword(input.passwords)
+	pw := bundlePassword(input.outputPasswords)
 
 	if len(input.pairs) > 1 {
 		entries := make([]certkit.JKSEntry, len(input.pairs))

@@ -75,10 +75,11 @@ func runScan(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	passwords, err := internal.ProcessPasswords(passwordList, passwordFile)
+	passwordSets, err := internal.ProcessPasswordSets(passwordList, passwordFile)
 	if err != nil {
 		return fmt.Errorf("loading passwords: %w", err)
 	}
+	passwords := passwordSets.Decode
 
 	// Only load bundle configs when exporting
 	var bundleConfigs []internal.BundleConfig
@@ -92,7 +93,12 @@ func runScan(cmd *cobra.Command, args []string) error {
 
 	// Ingest — always store all certs including expired; filtering is output-only.
 	if inputPath == "-" {
-		if err := internal.ProcessFile("-", store, passwords); err != nil {
+		if err := internal.ProcessFile(internal.ProcessFileInput{
+			Path:      "-",
+			Store:     store,
+			Passwords: passwords,
+			MaxBytes:  scanMaxFileSize,
+		}); err != nil {
 			return fmt.Errorf("processing stdin: %w", err)
 		}
 	} else {
@@ -153,7 +159,12 @@ func runScan(cmd *cobra.Command, args []string) error {
 				}
 				return nil
 			}
-			if err := internal.ProcessFile(path, store, passwords); err != nil {
+			if err := internal.ProcessFile(internal.ProcessFileInput{
+				Path:      path,
+				Store:     store,
+				Passwords: passwords,
+				MaxBytes:  scanMaxFileSize,
+			}); err != nil {
 				slog.Warn("processing file", "path", path, "error", err)
 			}
 			return nil
@@ -178,6 +189,11 @@ func runScan(cmd *cobra.Command, args []string) error {
 		for _, w := range aiaWarnings {
 			slog.Warn("AIA resolution", "warning", w)
 		}
+	}
+
+	format := scanFormat
+	if jsonOutput {
+		format = "json"
 	}
 
 	if scanDumpKeys != "" {
@@ -255,14 +271,40 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 
 	if scanExport {
+		p12Password := bundlePassword(passwordSets.Export)
 		// Full export workflow — MemStore handles chain resolution via raw ASN.1 matching
 		if err := os.MkdirAll(scanBundlePath, 0755); err != nil {
 			return fmt.Errorf("creating output directory %s: %w", scanBundlePath, err)
 		}
-		if err := internal.ExportBundles(cmd.Context(), bundleConfigs, scanBundlePath, store, scanForceExport, scanDuplicates); err != nil {
+		if err := internal.ExportBundles(cmd.Context(), internal.ExportBundlesInput{
+			Configs:     bundleConfigs,
+			OutDir:      scanBundlePath,
+			Store:       store,
+			ForceBundle: scanForceExport,
+			Duplicates:  scanDuplicates,
+			P12Password: p12Password,
+		}); err != nil {
 			return fmt.Errorf("exporting bundles: %w", err)
 		}
 		store.DumpDebug()
+		if format == "json" {
+			mozillaPool, err := certkit.MozillaRootPool()
+			if err != nil {
+				return fmt.Errorf("loading Mozilla root pool: %w", err)
+			}
+			summary := store.ScanSummary(certstore.ScanSummaryInput{
+				RootPool: mozillaPool,
+			})
+			output := scanExportJSON{
+				ScanSummary: summary,
+				BundlePath:  scanBundlePath,
+			}
+			data, err := json.MarshalIndent(output, "", "  ")
+			if err != nil {
+				return fmt.Errorf("marshaling JSON: %w", err)
+			}
+			fmt.Println(string(data))
+		}
 	} else {
 		// Print summary with trust and expiry annotations
 		mozillaPool, err := certkit.MozillaRootPool()
@@ -272,11 +314,6 @@ func runScan(cmd *cobra.Command, args []string) error {
 		summary := store.ScanSummary(certstore.ScanSummaryInput{
 			RootPool: mozillaPool,
 		})
-		format := scanFormat
-		if jsonOutput {
-			format = "json"
-		}
-
 		switch format {
 		case "json":
 			if verbose {
@@ -355,6 +392,11 @@ type scanVerboseJSON struct {
 	certstore.ScanSummary
 	Certificates []scanCertEntry `json:"certificates"`
 	Keys         []scanKeyEntry  `json:"keys"`
+}
+
+type scanExportJSON struct {
+	certstore.ScanSummary
+	BundlePath string `json:"bundle_path"`
 }
 
 func buildScanCertList(store *certstore.MemStore) []scanCertEntry {

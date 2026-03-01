@@ -207,6 +207,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	if jsonOutput {
 		format = "json"
 	}
+	quietValidation := format == "json"
 
 	switch format {
 	case "json":
@@ -273,7 +274,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	}
 
 	if hasValidationError {
-		return &ValidationError{Message: "validation failed", Quiet: true}
+		return &ValidationError{Message: "validation failed", Quiet: quietValidation}
 	}
 
 	return nil
@@ -396,12 +397,9 @@ func publicKeySize(pub crypto.PublicKey) string {
 	}
 }
 
-// formatSerial formats a certificate serial number as a decimal string.
+// formatSerial formats a certificate serial number as 0x-prefixed hex.
 func formatSerial(serial *big.Int) string {
-	if serial == nil {
-		return ""
-	}
-	return serial.String()
+	return certkit.FormatSerialNumber(serial)
 }
 
 // parseHostPort splits a host[:port] string, defaulting port to "443".

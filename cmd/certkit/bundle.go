@@ -59,10 +59,11 @@ func init() {
 }
 
 func runBundle(cmd *cobra.Command, args []string) error {
-	passwords, err := internal.ProcessPasswords(passwordList, passwordFile)
+	passwordSets, err := internal.ProcessPasswordSets(passwordList, passwordFile)
 	if err != nil {
 		return fmt.Errorf("loading passwords: %w", err)
 	}
+	passwords := passwordSets.Decode
 
 	leaf, key, extraCerts, err := loadBundleInput(args[0], passwords)
 	if err != nil {
@@ -101,7 +102,10 @@ func runBundle(cmd *cobra.Command, args []string) error {
 		opts.Verify = false
 	}
 
-	bundle, err := certkit.Bundle(cmd.Context(), leaf, opts)
+	bundle, err := certkit.Bundle(cmd.Context(), certkit.BundleInput{
+		Leaf:    leaf,
+		Options: opts,
+	})
 	if err != nil {
 		return fmt.Errorf("building chain: %w", err)
 	}
@@ -110,7 +114,7 @@ func runBundle(cmd *cobra.Command, args []string) error {
 		slog.Warn("bundle", "warning", w)
 	}
 
-	output, err := formatBundleOutput(bundle, key, bundleFormat, passwords)
+	output, err := formatBundleOutput(bundle, key, bundleFormat, passwordSets.Export)
 	if err != nil {
 		return fmt.Errorf("formatting bundle output: %w", err)
 	}
@@ -191,8 +195,9 @@ func selectLeafByKey(key crypto.PrivateKey, currentLeaf *x509.Certificate, extra
 	return nil, nil, fmt.Errorf("private key does not match any of the %d certificate(s) provided", len(all))
 }
 
-// bundlePassword returns the password to use for PKCS#12/JKS export.
-// Uses the first non-empty user-provided password, falling back to "changeit".
+// bundlePassword returns the first non-empty user-provided password.
+// Falls back to "changeit" when no explicit password is provided.
+// This fallback is intentional for interoperability with common PKCS#12/JKS defaults.
 func bundlePassword(passwords []string) string {
 	for _, pw := range passwords {
 		if pw != "" {

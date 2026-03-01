@@ -2068,8 +2068,8 @@ func TestConnectTLS_OCSP(t *testing.T) {
 			if result.OCSP.Status != tt.wantStatus {
 				t.Errorf("OCSP.Status = %q, want %q", result.OCSP.Status, tt.wantStatus)
 			}
-			if result.OCSP.SerialNumber != "64" { // 100 decimal = 64 hex
-				t.Errorf("OCSP.SerialNumber = %q, want %q", result.OCSP.SerialNumber, "64")
+			if result.OCSP.SerialNumber != "0x64" { // 100 decimal = 0x64 hex
+				t.Errorf("OCSP.SerialNumber = %q, want %q", result.OCSP.SerialNumber, "0x64")
 			}
 			if tt.wantRevoked {
 				if result.OCSP.RevokedAt == nil {
@@ -2314,7 +2314,7 @@ func TestConnectTLS_CRL(t *testing.T) {
 			},
 			leafSerial:   revokedSerial,
 			wantStatus:   "revoked",
-			wantContains: revokedSerial.Text(16),
+			wantContains: FormatSerialNumber(revokedSerial),
 		},
 		{
 			name: "good",
@@ -3305,7 +3305,7 @@ func TestConnectTLS_CRL_DuplicateLeafInChain(t *testing.T) {
 	if result.CRL.Status != "revoked" {
 		t.Errorf("CRL.Status = %q, want %q (detail: %s)", result.CRL.Status, "revoked", result.CRL.Detail)
 	}
-	if !strings.Contains(result.CRL.Detail, revokedSerial.Text(16)) {
-		t.Errorf("CRL.Detail = %q, want substring %q", result.CRL.Detail, revokedSerial.Text(16))
+	if !strings.Contains(result.CRL.Detail, FormatSerialNumber(revokedSerial)) {
+		t.Errorf("CRL.Detail = %q, want substring %q", result.CRL.Detail, FormatSerialNumber(revokedSerial))
 	}
 }

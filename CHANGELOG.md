@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add JSON summary output for `scan --bundle-path` when `--json` or `--format json` is selected, including `bundle_path` ([#87])
 - Add Certificate Transparency (SCT) verification warnings to `connect` output and JSON ([#86])
 - Add raw TLS 1.0–1.2 legacy prober for DHE/DHE-DSS cipher suites that Go's `crypto/tls` doesn't implement — probes individual suites via byte-level ClientHello construction ([`715cb81`])
 - Add legacy fallback to `connect` — when Go's TLS handshake fails, attempts a raw handshake to extract server certificates from DHE-only or static-RSA-only servers ([`715cb81`])
@@ -66,6 +67,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Prefer user-provided passwords for PKCS#12/JKS outputs while keeping `changeit` as the default fallback for compatibility ([#87])
+- **Breaking:** Standardize certificate serial number formatting to `0x`-prefixed hex across CLI/JSON output ([#87])
 - Move local pre-commit hook definitions from repo config into the shared `sensiblebit/.github` hook set, and pin this branch to the shared commit so all repositories can consume the same workflow checks and Node tool bootstrapping behavior from one source ([#85])
 
 - `connect` diagnostics now distinguish `[ERR]` (verification failures) from `[WARN]` (configuration issues) ([`910b977`])
@@ -84,12 +87,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Prevent bundle export path traversal by sanitizing bundle folder names and enforcing safe output paths ([#87])
+- Enforce size limits on input reads to avoid unbounded memory usage ([#87])
 - Add SSRF validation (`ValidateAIAURL`) to OCSP responder URLs and CRL distribution point URLs — previously only AIA certificate URLs were validated ([#78])
 - Add `CheckRedirect` handlers to OCSP and CRL HTTP clients — prevents redirect-based SSRF bypass to internal networks ([#78])
 - Fix `connect` OCSP/CRL checks using unverified issuer from `PeerCertificates` when chain verification fails — a malicious server could forge valid revocation responses; now only uses cryptographically verified issuer from `VerifiedChains` ([#78])
 
 ### Fixed
 
+- Fix verify JSON chain output to use `not_after` for consistency with other commands ([#87])
 - Fix Certificate Transparency availability handling to preserve parsed SCT candidates when the log list cannot be loaded and mark them as unavailable instead of dropping them ([#86])
 - Fix chain conversion failures in Certificate Transparency checks to report SCTs as `unavailable` instead of `invalid` and keep diagnostics as warnings ([#86])
 - Fix `FormatDN` to preserve ASN.1 DER attribute order and multi-valued RDN boundaries (OpenSSL-style), escape RFC 4514 special/control characters (including `=`), emit `<unencodable>` placeholders for attributes that cannot be marshaled, and render non-standard OIDs with standard labels instead of raw dotted-decimal `1.2.3.4=#hex` values: personal name attributes (`SN`, `GN`, `initials`, `generationQualifier`, `dnQualifier`, `pseudonym`), `businessCategory`, `organizationIdentifier` (eIDAS/QWAC), and EV jurisdiction fields (`jurisdictionL`, `jurisdictionST`, `jurisdictionC`) ([#85])
@@ -930,6 +936,7 @@ Initial release.
 [#82]: https://github.com/sensiblebit/certkit/pull/82
 [#85]: https://github.com/sensiblebit/certkit/pull/85
 [#86]: https://github.com/sensiblebit/certkit/pull/86
+[#87]: https://github.com/sensiblebit/certkit/pull/87
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63

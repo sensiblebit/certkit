@@ -170,7 +170,13 @@ func processZipArchive(input ProcessArchiveInput) (int, error) {
 		totalSize += int64(len(data))
 		virtualPath := input.ArchivePath + ":" + f.Name
 
-		if err := ProcessData(data, virtualPath, input.Store, input.Passwords); err != nil {
+		if err := ProcessData(ProcessDataInput{
+			Data:        data,
+			VirtualPath: virtualPath,
+			Store:       input.Store,
+			Passwords:   input.Passwords,
+			MaxBytes:    input.Limits.MaxEntrySize,
+		}); err != nil {
 			slog.Debug("processing archive entry", "path", virtualPath, "error", err)
 		}
 		processed++
@@ -272,7 +278,13 @@ func processTarArchive(input ProcessArchiveInput, gzipped bool) (int, error) {
 		totalSize += int64(len(data))
 		virtualPath := input.ArchivePath + ":" + header.Name
 
-		if err := ProcessData(data, virtualPath, input.Store, input.Passwords); err != nil {
+		if err := ProcessData(ProcessDataInput{
+			Data:        data,
+			VirtualPath: virtualPath,
+			Store:       input.Store,
+			Passwords:   input.Passwords,
+			MaxBytes:    input.Limits.MaxEntrySize,
+		}); err != nil {
 			slog.Debug("processing archive entry", "path", virtualPath, "error", err)
 		}
 		processed++

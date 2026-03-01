@@ -2,9 +2,11 @@ package internal
 
 import (
 	"context"
+	"crypto/x509"
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/sensiblebit/certkit"
@@ -47,7 +49,14 @@ func TestExportBundles_EndToEnd(t *testing.T) {
 	outDir := t.TempDir()
 
 	// Use force=true to allow untrusted certs
-	err = ExportBundles(context.Background(), bundleConfigs, outDir, store, true, false)
+	err = ExportBundles(context.Background(), ExportBundlesInput{
+		Configs:     bundleConfigs,
+		OutDir:      outDir,
+		Store:       store,
+		ForceBundle: true,
+		Duplicates:  false,
+		P12Password: "testpass",
+	})
 	if err != nil {
 		t.Fatalf("ExportBundles: %v", err)
 	}
@@ -149,7 +158,14 @@ func TestExportBundles_EmptyBundleNameSkipped(t *testing.T) {
 	}
 
 	outDir := t.TempDir()
-	err := ExportBundles(context.Background(), nil, outDir, store, true, false)
+	err := ExportBundles(context.Background(), ExportBundlesInput{
+		Configs:     nil,
+		OutDir:      outDir,
+		Store:       store,
+		ForceBundle: true,
+		Duplicates:  false,
+		P12Password: "testpass",
+	})
 	if err != nil {
 		t.Fatalf("ExportBundles should not error: %v", err)
 	}
@@ -161,6 +177,53 @@ func TestExportBundles_EmptyBundleNameSkipped(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Errorf("expected empty output dir (cert has no bundle name), got %d entries", len(entries))
+	}
+}
+
+func TestExportBundles_SanitizedFolderCollision(t *testing.T) {
+	// WHY: Two distinct bundle names can sanitize to the same folder; export must
+	// fail to prevent mixed outputs and accidental overwrites.
+	t.Parallel()
+
+	rsaCA := newRSACA(t)
+	ecCA := newECDSACA(t)
+	leaf1 := newRSALeaf(t, rsaCA, "collision-one.example.com", []string{"collision-one.example.com"}, nil)
+	leaf2 := newRSALeaf(t, ecCA, "collision-two.example.com", []string{"collision-two.example.com"}, nil)
+
+	store := certstore.NewMemStore()
+	for _, cert := range []*x509.Certificate{leaf1.cert, leaf2.cert, rsaCA.cert, ecCA.cert} {
+		if err := store.HandleCertificate(cert, "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.HandleKey(leaf1.key, leaf1.keyPEM, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HandleKey(leaf2.key, leaf2.keyPEM, "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	// These two names both sanitize to "prod_api".
+	for _, rec := range store.AllCertsFlat() {
+		switch rec.Cert.Subject.CommonName {
+		case "collision-one.example.com":
+			store.SetBundleName(rec.SKI, "prod/api")
+		case "collision-two.example.com":
+			store.SetBundleName(rec.SKI, "prod_api")
+		}
+	}
+
+	err := ExportBundles(context.Background(), ExportBundlesInput{
+		OutDir:      t.TempDir(),
+		Store:       store,
+		ForceBundle: true,
+		P12Password: "testpass",
+	})
+	if err == nil {
+		t.Fatal("expected collision error, got nil")
+	}
+	if !strings.Contains(err.Error(), "sanitized bundle folder collision") {
+		t.Fatalf("error = %q, want collision message", err.Error())
 	}
 }
 

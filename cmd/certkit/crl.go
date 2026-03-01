@@ -94,7 +94,7 @@ func runCRL(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("no certificate found in %s", crlCheckPath)
 		}
 		checkResult = &crlCheckResult{
-			Serial:  contents.Leaf.SerialNumber.Text(16),
+			Serial:  certkit.FormatSerialNumber(contents.Leaf.SerialNumber),
 			Revoked: certkit.CRLContainsCertificate(crl, contents.Leaf),
 		}
 	}
@@ -103,6 +103,7 @@ func runCRL(cmd *cobra.Command, args []string) error {
 	if jsonOutput {
 		format = "json"
 	}
+	quietValidation := format == "json"
 
 	switch format {
 	case "json":
@@ -126,7 +127,7 @@ func runCRL(cmd *cobra.Command, args []string) error {
 	}
 
 	if checkResult != nil && checkResult.Revoked {
-		return &ValidationError{Message: "certificate is revoked"}
+		return &ValidationError{Message: "certificate is revoked", Quiet: quietValidation}
 	}
 
 	return nil

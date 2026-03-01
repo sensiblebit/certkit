@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"fmt"
 	"os"
 
 	"gopkg.in/yaml.v3"
@@ -32,7 +33,7 @@ type BundlesYAML struct {
 func LoadBundleConfigs(path string) ([]BundleConfig, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading bundle config %s: %w", path, err)
 	}
 
 	// Try to unmarshal as new format with defaults
@@ -58,7 +59,7 @@ func LoadBundleConfigs(path string) ([]BundleConfig, error) {
 	// Fall back to old format (array of bundles)
 	var configs []BundleConfig
 	if err := yaml.Unmarshal(data, &configs); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parsing bundle config %s: %w", path, err)
 	}
 	return configs, nil
 }

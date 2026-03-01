@@ -368,7 +368,7 @@ if certkit.CertExpiresWithin(cert, 30*24*time.Hour) {
 // Build verified chains (library defaults to system trust store)
 opts := certkit.DefaultOptions()
 opts.TrustStore = "mozilla" // or "system" (the default)
-bundle, _ := certkit.Bundle(ctx, leaf, opts)
+bundle, _ := certkit.Bundle(ctx, certkit.BundleInput{Leaf: leaf, Options: opts})
 
 // Generate keys
 ecKey, _ := certkit.GenerateECKey(elliptic.P256())
