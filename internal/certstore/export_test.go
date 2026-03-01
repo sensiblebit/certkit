@@ -34,12 +34,13 @@ func TestGenerateBundleFiles_AllFileTypes(t *testing.T) {
 	}
 
 	input := BundleExportInput{
-		Bundle:     bundle,
-		KeyPEM:     leaf.keyPEM,
-		KeyType:    "RSA",
-		BitLength:  2048,
-		Prefix:     "example.com",
-		SecretName: "example-tls",
+		Bundle:      bundle,
+		KeyPEM:      leaf.keyPEM,
+		KeyType:     "RSA",
+		BitLength:   2048,
+		Prefix:      "example.com",
+		SecretName:  "example-tls",
+		P12Password: "testpass",
 	}
 
 	files, err := GenerateBundleFiles(input)
@@ -212,12 +213,13 @@ func TestGenerateBundleFiles_OptionalFilesOmitted(t *testing.T) {
 			bundle, leaf, prefix := tt.setup(t)
 
 			files, err := GenerateBundleFiles(BundleExportInput{
-				Bundle:     bundle,
-				KeyPEM:     leaf.keyPEM,
-				KeyType:    "RSA",
-				BitLength:  2048,
-				Prefix:     prefix,
-				SecretName: prefix + "-tls",
+				Bundle:      bundle,
+				KeyPEM:      leaf.keyPEM,
+				KeyType:     "RSA",
+				BitLength:   2048,
+				Prefix:      prefix,
+				SecretName:  prefix + "-tls",
+				P12Password: "testpass",
 			})
 			if err != nil {
 				t.Fatalf("GenerateBundleFiles: %v", err)
@@ -255,12 +257,13 @@ func TestGenerateBundleFiles_InvalidKeyPEM(t *testing.T) {
 	}
 
 	_, err := GenerateBundleFiles(BundleExportInput{
-		Bundle:     bundle,
-		KeyPEM:     []byte("not a real key"),
-		KeyType:    "RSA",
-		BitLength:  2048,
-		Prefix:     "badkey",
-		SecretName: "badkey-tls",
+		Bundle:      bundle,
+		KeyPEM:      []byte("not a real key"),
+		KeyType:     "RSA",
+		BitLength:   2048,
+		Prefix:      "badkey",
+		SecretName:  "badkey-tls",
+		P12Password: "testpass",
 	})
 	if err == nil {
 		t.Fatal("expected error for invalid key PEM, got nil")
@@ -286,12 +289,13 @@ func TestGenerateBundleFiles_PEMFilesAreParseable(t *testing.T) {
 	}
 
 	files, err := GenerateBundleFiles(BundleExportInput{
-		Bundle:     bundle,
-		KeyPEM:     leaf.keyPEM,
-		KeyType:    "RSA",
-		BitLength:  2048,
-		Prefix:     "valid",
-		SecretName: "valid-tls",
+		Bundle:      bundle,
+		KeyPEM:      leaf.keyPEM,
+		KeyType:     "RSA",
+		BitLength:   2048,
+		Prefix:      "valid",
+		SecretName:  "valid-tls",
+		P12Password: "testpass",
 	})
 	if err != nil {
 		t.Fatalf("GenerateBundleFiles: %v", err)
@@ -905,6 +909,7 @@ func TestExportMatchedBundles(t *testing.T) {
 			TrustStore:  "custom",
 			Verify:      true,
 		},
+		P12Password: "testpass",
 	})
 	if err != nil {
 		t.Fatalf("ExportMatchedBundles: %v", err)
@@ -969,9 +974,10 @@ func TestExportMatchedBundles_SkipsMissingSKI(t *testing.T) {
 	writer := &mockBundleWriter{calls: &written}
 
 	err := ExportMatchedBundles(t.Context(), ExportMatchedBundleInput{
-		Store:  store,
-		SKIs:   []string{"deadbeef"},
-		Writer: writer,
+		Store:       store,
+		SKIs:        []string{"deadbeef"},
+		Writer:      writer,
+		P12Password: "testpass",
 	})
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
@@ -1017,6 +1023,7 @@ func TestExportMatchedBundles_WildcardFolder(t *testing.T) {
 			TrustStore:  "custom",
 			Verify:      true,
 		},
+		P12Password: "testpass",
 	})
 	if err != nil {
 		t.Fatalf("ExportMatchedBundles: %v", err)
@@ -1072,6 +1079,7 @@ func TestExportMatchedBundles_RetryNoVerify(t *testing.T) {
 		},
 		Writer:        writer,
 		RetryNoVerify: true,
+		P12Password:   "testpass",
 	})
 	if err != nil {
 		t.Fatalf("ExportMatchedBundles: %v", err)
@@ -1136,9 +1144,10 @@ func TestExportMatchedBundles_WriterErrorContinues(t *testing.T) {
 			TrustStore:  "custom",
 			Verify:      true,
 		},
+		P12Password: "testpass",
 	})
-	if err != nil {
-		t.Fatalf("ExportMatchedBundles: %v", err)
+	if err == nil {
+		t.Fatal("expected error when writer fails")
 	}
 
 	// Writer must have been called for both bundles, proving no short-circuit.
@@ -1194,12 +1203,13 @@ func TestGenerateBundleFiles_PKCS12RoundTrip(t *testing.T) {
 	}
 
 	files, err := GenerateBundleFiles(BundleExportInput{
-		Bundle:     bundle,
-		KeyPEM:     leaf.keyPEM,
-		KeyType:    "RSA",
-		BitLength:  2048,
-		Prefix:     "p12rt",
-		SecretName: "p12rt-tls",
+		Bundle:      bundle,
+		KeyPEM:      leaf.keyPEM,
+		KeyType:     "RSA",
+		BitLength:   2048,
+		Prefix:      "p12rt",
+		SecretName:  "p12rt-tls",
+		P12Password: "testpass",
 	})
 	if err != nil {
 		t.Fatalf("GenerateBundleFiles: %v", err)
@@ -1209,7 +1219,7 @@ func TestGenerateBundleFiles_PKCS12RoundTrip(t *testing.T) {
 		if !strings.HasSuffix(f.Name, ".p12") {
 			continue
 		}
-		privKey, leafCert, caCerts, err := certkit.DecodePKCS12(f.Data, "changeit")
+		privKey, leafCert, caCerts, err := certkit.DecodePKCS12(f.Data, "testpass")
 		if err != nil {
 			t.Fatalf("DecodePKCS12: %v", err)
 		}

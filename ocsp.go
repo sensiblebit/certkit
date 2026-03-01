@@ -110,7 +110,7 @@ func CheckOCSP(ctx context.Context, input CheckOCSPInput) (*OCSPResult, error) {
 	}
 
 	result := &OCSPResult{
-		SerialNumber: input.Cert.SerialNumber.Text(16),
+		SerialNumber: FormatSerialNumber(input.Cert.SerialNumber),
 		URL:          responderURL,
 		ThisUpdate:   resp.ThisUpdate.UTC().Format(time.RFC3339),
 		NextUpdate:   resp.NextUpdate.UTC().Format(time.RFC3339),

@@ -1,0 +1,50 @@
+package internal
+
+import (
+	"fmt"
+	"io"
+	"log/slog"
+	"math"
+	"os"
+)
+
+const defaultMaxInputBytes int64 = 10 * 1024 * 1024
+
+func readAllLimited(r io.Reader, maxBytes int64) ([]byte, error) {
+	if maxBytes <= 0 || maxBytes == math.MaxInt64 {
+		return io.ReadAll(r)
+	}
+	limited := io.LimitReader(r, maxBytes+1)
+	data, err := io.ReadAll(limited)
+	if err != nil {
+		return nil, fmt.Errorf("reading input: %w", err)
+	}
+	if int64(len(data)) > maxBytes {
+		return nil, fmt.Errorf("input exceeds max size (%d bytes)", maxBytes)
+	}
+	return data, nil
+}
+
+func readFileLimited(path string, maxBytes int64) ([]byte, error) {
+	if maxBytes > 0 {
+		if info, err := os.Stat(path); err == nil && info.Size() > maxBytes {
+			return nil, fmt.Errorf("file exceeds max size (%d bytes)", maxBytes)
+		}
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("opening %s: %w", path, err)
+	}
+	defer func() {
+		if closeErr := file.Close(); closeErr != nil {
+			slog.Warn("closing file", "path", path, "error", closeErr)
+		}
+	}()
+
+	data, err := readAllLimited(file, maxBytes)
+	if err != nil {
+		return nil, fmt.Errorf("reading %s: %w", path, err)
+	}
+	return data, nil
+}

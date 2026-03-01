@@ -76,7 +76,9 @@ func init() {
 	signSelfSignedCmd.Flags().BoolVar(&selfSignedIsCA, "is-ca", true, "Set CA:TRUE basic constraint")
 	signSelfSignedCmd.Flags().StringVarP(&selfSignedOutFile, "out-file", "o", "", "Output file")
 
-	_ = signSelfSignedCmd.MarkFlagRequired("cn")
+	if err := signSelfSignedCmd.MarkFlagRequired("cn"); err != nil {
+		panic(fmt.Errorf("marking --cn required: %w", err))
+	}
 	signSelfSignedCmd.Flags().Lookup("out-file").Annotations = map[string][]string{"readme_default": {"_(stdout)_"}}
 	registerCompletion(signSelfSignedCmd, completionInput{"key", fileCompletion})
 	registerCompletion(signSelfSignedCmd, completionInput{"out-file", fileCompletion})
@@ -90,8 +92,12 @@ func init() {
 
 	signCSRCmd.Flags().Lookup("out-file").Annotations = map[string][]string{"readme_default": {"_(stdout)_"}}
 
-	_ = signCSRCmd.MarkFlagRequired("ca")
-	_ = signCSRCmd.MarkFlagRequired("ca-key")
+	if err := signCSRCmd.MarkFlagRequired("ca"); err != nil {
+		panic(fmt.Errorf("marking --ca required: %w", err))
+	}
+	if err := signCSRCmd.MarkFlagRequired("ca-key"); err != nil {
+		panic(fmt.Errorf("marking --ca-key required: %w", err))
+	}
 	registerCompletion(signCSRCmd, completionInput{"ca", fileCompletion})
 	registerCompletion(signCSRCmd, completionInput{"ca-key", fileCompletion})
 	registerCompletion(signCSRCmd, completionInput{"out-file", fileCompletion})

@@ -47,7 +47,10 @@ func TestBundle_ChainDepths(t *testing.T) {
 				opts.ExtraIntermediates = intermediates
 			}
 
-			result, err := Bundle(context.Background(), leaf, opts)
+			result, err := Bundle(context.Background(), BundleInput{
+				Leaf:    leaf,
+				Options: opts,
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -68,17 +71,23 @@ func TestBundle_ChainDepths(t *testing.T) {
 func TestBundle_mozillaRoots(t *testing.T) {
 	// WHY: Verifies the embedded Mozilla trust store works for real-world chains; catches root cert staleness or AIA resolution bugs.
 	t.Parallel()
-	leaf, err := FetchLeafFromURL(context.Background(), "https://google.com", 5*time.Second)
+	leaf, err := FetchLeafFromURL(context.Background(), FetchLeafFromURLInput{
+		URL:     "https://google.com",
+		Timeout: 5 * time.Second,
+	})
 	if err != nil {
 		t.Skipf("cannot connect to google.com: %v", err)
 	}
 
-	result, err := Bundle(context.Background(), leaf, BundleOptions{
-		FetchAIA:    true,
-		AIATimeout:  5 * time.Second,
-		AIAMaxDepth: 5,
-		TrustStore:  "mozilla",
-		Verify:      true,
+	result, err := Bundle(context.Background(), BundleInput{
+		Leaf: leaf,
+		Options: BundleOptions{
+			FetchAIA:    true,
+			AIATimeout:  5 * time.Second,
+			AIAMaxDepth: 5,
+			TrustStore:  "mozilla",
+			Verify:      true,
+		},
 	})
 	if err != nil {
 		t.Fatalf("Mozilla trust store verification failed: %v", err)
@@ -114,10 +123,13 @@ func TestBundle_unknownTrustStore(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = Bundle(context.Background(), cert, BundleOptions{
-		FetchAIA:   false,
-		TrustStore: "invalid",
-		Verify:     true,
+	_, err = Bundle(context.Background(), BundleInput{
+		Leaf: cert,
+		Options: BundleOptions{
+			FetchAIA:   false,
+			TrustStore: "invalid",
+			Verify:     true,
+		},
 	})
 	if err == nil {
 		t.Error("expected error for unknown trust_store")
@@ -172,11 +184,14 @@ func TestBundle_verifyFalsePassthrough(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := Bundle(context.Background(), leafCert, BundleOptions{
-		ExtraIntermediates: []*x509.Certificate{caCert},
-		FetchAIA:           false,
-		TrustStore:         "custom",
-		Verify:             false,
+	result, err := Bundle(context.Background(), BundleInput{
+		Leaf: leafCert,
+		Options: BundleOptions{
+			ExtraIntermediates: []*x509.Certificate{caCert},
+			FetchAIA:           false,
+			TrustStore:         "custom",
+			Verify:             false,
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -214,7 +229,10 @@ func TestFetchLeafFromURL(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			cert, err := FetchLeafFromURL(context.Background(), tt.url, 5*time.Second)
+			cert, err := FetchLeafFromURL(context.Background(), FetchLeafFromURLInput{
+				URL:     tt.url,
+				Timeout: 5 * time.Second,
+			})
 			if err != nil {
 				t.Skipf("cannot connect to %s: %v", tt.url, err)
 			}
@@ -238,12 +256,16 @@ func TestFetchLeafFromURL_Errors(t *testing.T) {
 		wantErr string
 	}{
 		{"non-existent host", "https://this-does-not-exist.invalid", "TLS dial to"},
+		{"non-https scheme", "http://example.com", "invalid URL scheme"},
 		{"malformed URL", "://bad", "parsing URL"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := FetchLeafFromURL(context.Background(), tt.url, 2*time.Second)
+			_, err := FetchLeafFromURL(context.Background(), FetchLeafFromURLInput{
+				URL:     tt.url,
+				Timeout: 2 * time.Second,
+			})
 			if err == nil {
 				t.Errorf("expected error for %s", tt.name)
 			}
@@ -277,7 +299,11 @@ func TestFetchAIACertificates_maxDepthZero(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fetched, warnings := FetchAIACertificates(context.Background(), cert, 1*time.Second, 0)
+	fetched, warnings := FetchAIACertificates(context.Background(), FetchAIACertificatesInput{
+		Cert:     cert,
+		Timeout:  1 * time.Second,
+		MaxDepth: 0,
+	})
 	if len(fetched) != 0 {
 		t.Errorf("expected 0 fetched certs with maxDepth=0, got %d", len(fetched))
 	}
@@ -335,12 +361,15 @@ func TestBundle_ReversedChainDetection(t *testing.T) {
 	}
 
 	// Pass CA as "leaf" and real leaf as extra — reversed order
-	result, err := Bundle(context.Background(), caCert, BundleOptions{
-		ExtraIntermediates: []*x509.Certificate{leafCert},
-		FetchAIA:           false,
-		TrustStore:         "custom",
-		CustomRoots:        []*x509.Certificate{caCert},
-		Verify:             true,
+	result, err := Bundle(context.Background(), BundleInput{
+		Leaf: caCert,
+		Options: BundleOptions{
+			ExtraIntermediates: []*x509.Certificate{leafCert},
+			FetchAIA:           false,
+			TrustStore:         "custom",
+			CustomRoots:        []*x509.Certificate{caCert},
+			Verify:             true,
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -414,11 +443,14 @@ func TestBundle_SHA1Warning(t *testing.T) {
 	// in modern Go, but SignatureAlgorithm is what checkSHA1Signatures reads)
 	leafCert.SignatureAlgorithm = x509.SHA1WithRSA
 
-	result, err := Bundle(context.Background(), leafCert, BundleOptions{
-		ExtraIntermediates: []*x509.Certificate{caCert},
-		FetchAIA:           false,
-		TrustStore:         "custom",
-		Verify:             false,
+	result, err := Bundle(context.Background(), BundleInput{
+		Leaf: leafCert,
+		Options: BundleOptions{
+			ExtraIntermediates: []*x509.Certificate{caCert},
+			FetchAIA:           false,
+			TrustStore:         "custom",
+			Verify:             false,
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -439,11 +471,14 @@ func TestBundle_SHA1Warning(t *testing.T) {
 
 	// Negative case: SHA-256 chain must produce zero SHA-1 warnings
 	leafCert.SignatureAlgorithm = x509.SHA256WithRSA
-	result2, err := Bundle(context.Background(), leafCert, BundleOptions{
-		ExtraIntermediates: []*x509.Certificate{caCert},
-		FetchAIA:           false,
-		TrustStore:         "custom",
-		Verify:             false,
+	result2, err := Bundle(context.Background(), BundleInput{
+		Leaf: leafCert,
+		Options: BundleOptions{
+			ExtraIntermediates: []*x509.Certificate{caCert},
+			FetchAIA:           false,
+			TrustStore:         "custom",
+			Verify:             false,
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -498,10 +533,13 @@ func TestBundle_ExpiryWarnings(t *testing.T) {
 			}
 
 			// Use Verify=false so expired certs don't fail chain verification
-			result, err := Bundle(context.Background(), cert, BundleOptions{
-				FetchAIA:   false,
-				TrustStore: "custom",
-				Verify:     false,
+			result, err := Bundle(context.Background(), BundleInput{
+				Leaf: cert,
+				Options: BundleOptions{
+					FetchAIA:   false,
+					TrustStore: "custom",
+					Verify:     false,
+				},
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -584,7 +622,11 @@ func TestFetchAIACertificates_duplicateURLs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fetched, _ := FetchAIACertificates(context.Background(), leafCert, 2*time.Second, 5)
+	fetched, _ := FetchAIACertificates(context.Background(), FetchAIACertificatesInput{
+		Cert:     leafCert,
+		Timeout:  2 * time.Second,
+		MaxDepth: 5,
+	})
 	if len(fetched) != 1 {
 		t.Errorf("expected 1 fetched cert (deduped), got %d", len(fetched))
 	}
@@ -640,12 +682,15 @@ func TestBundle_ExcludeRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := Bundle(context.Background(), leafCert, BundleOptions{
-		FetchAIA:    false,
-		TrustStore:  "custom",
-		CustomRoots: []*x509.Certificate{caCert},
-		Verify:      true,
-		ExcludeRoot: true,
+	result, err := Bundle(context.Background(), BundleInput{
+		Leaf: leafCert,
+		Options: BundleOptions{
+			FetchAIA:    false,
+			TrustStore:  "custom",
+			CustomRoots: []*x509.Certificate{caCert},
+			Verify:      true,
+			ExcludeRoot: true,
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -681,11 +726,14 @@ func TestBundle_SelfSignedRoot(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := Bundle(context.Background(), cert, BundleOptions{
-		FetchAIA:    false,
-		TrustStore:  "custom",
-		CustomRoots: []*x509.Certificate{cert},
-		Verify:      true,
+	result, err := Bundle(context.Background(), BundleInput{
+		Leaf: cert,
+		Options: BundleOptions{
+			FetchAIA:    false,
+			TrustStore:  "custom",
+			CustomRoots: []*x509.Certificate{cert},
+			Verify:      true,
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -722,11 +770,14 @@ func TestBundle_CustomTrustStoreNilRoots(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err = Bundle(context.Background(), cert, BundleOptions{
-		FetchAIA:    false,
-		TrustStore:  "custom",
-		CustomRoots: nil,
-		Verify:      true,
+	_, err = Bundle(context.Background(), BundleInput{
+		Leaf: cert,
+		Options: BundleOptions{
+			FetchAIA:    false,
+			TrustStore:  "custom",
+			CustomRoots: nil,
+			Verify:      true,
+		},
 	})
 	if err == nil {
 		t.Error("expected verification error with nil custom roots")

@@ -32,7 +32,11 @@ func TestGenerateKey_CurveAliases(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			signer, err := GenerateKey("ecdsa", 0, tt.curve)
+			signer, err := GenerateKey(GenerateKeyInput{
+				Algorithm: "ecdsa",
+				Bits:      0,
+				Curve:     tt.curve,
+			})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -52,7 +56,11 @@ func TestGenerateKey_Ed25519(t *testing.T) {
 	// algorithm path with zero test coverage. A bug swapping return values
 	// or wrapping the wrong type would go undetected.
 	t.Parallel()
-	signer, err := GenerateKey("ed25519", 0, "")
+	signer, err := GenerateKey(GenerateKeyInput{
+		Algorithm: "ed25519",
+		Bits:      0,
+		Curve:     "",
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +85,11 @@ func TestGenerateKey_ErrorPaths(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			_, err := GenerateKey(tt.algo, 0, tt.curve)
+			_, err := GenerateKey(GenerateKeyInput{
+				Algorithm: tt.algo,
+				Bits:      0,
+				Curve:     tt.curve,
+			})
 			if err == nil {
 				t.Fatal("expected error")
 			}

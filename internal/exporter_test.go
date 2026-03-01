@@ -47,7 +47,14 @@ func TestExportBundles_EndToEnd(t *testing.T) {
 	outDir := t.TempDir()
 
 	// Use force=true to allow untrusted certs
-	err = ExportBundles(context.Background(), bundleConfigs, outDir, store, true, false)
+	err = ExportBundles(context.Background(), ExportBundlesInput{
+		Configs:     bundleConfigs,
+		OutDir:      outDir,
+		Store:       store,
+		ForceBundle: true,
+		Duplicates:  false,
+		P12Password: "testpass",
+	})
 	if err != nil {
 		t.Fatalf("ExportBundles: %v", err)
 	}
@@ -149,7 +156,14 @@ func TestExportBundles_EmptyBundleNameSkipped(t *testing.T) {
 	}
 
 	outDir := t.TempDir()
-	err := ExportBundles(context.Background(), nil, outDir, store, true, false)
+	err := ExportBundles(context.Background(), ExportBundlesInput{
+		Configs:     nil,
+		OutDir:      outDir,
+		Store:       store,
+		ForceBundle: true,
+		Duplicates:  false,
+		P12Password: "testpass",
+	})
 	if err != nil {
 		t.Fatalf("ExportBundles should not error: %v", err)
 	}

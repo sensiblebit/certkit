@@ -744,12 +744,13 @@ func TestProcessData_EndToEnd_IngestExportRoundTrip(t *testing.T) {
 			}
 			bundle := &certkit.BundleResult{Leaf: cert}
 			files, err := GenerateBundleFiles(BundleExportInput{
-				Bundle:     bundle,
-				KeyPEM:     storedRec.PEM,
-				KeyType:    tt.keyType,
-				BitLength:  tt.bitLen,
-				Prefix:     "test",
-				SecretName: "test-secret",
+				Bundle:      bundle,
+				KeyPEM:      storedRec.PEM,
+				KeyType:     tt.keyType,
+				BitLength:   tt.bitLen,
+				Prefix:      "test",
+				SecretName:  "test-secret",
+				P12Password: "testpass",
 			})
 			if err != nil {
 				t.Fatalf("GenerateBundleFiles: %v", err)

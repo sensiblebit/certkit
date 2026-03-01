@@ -64,10 +64,19 @@ func addFiles(_ js.Value, args []js.Value) any {
 		resolve := promiseArgs[0]
 		reject := promiseArgs[1]
 		go func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
 			storeMu.Lock()
 			defer storeMu.Unlock()
 			var results []map[string]any
 			for i := range length {
+				select {
+				case <-ctx.Done():
+					reject.Invoke(js.Global().Get("Error").New("addFiles timed out: " + ctx.Err().Error()))
+					return
+				default:
+				}
 				file := filesArg.Index(i)
 				name := file.Get("name").String()
 				dataJS := file.Get("data")
@@ -217,7 +226,7 @@ func getState(_ js.Value, _ []js.Value) any {
 
 		serial := ""
 		if rec.Cert.SerialNumber != nil {
-			serial = strings.ToUpper(rec.Cert.SerialNumber.Text(16))
+			serial = certkit.FormatSerialNumber(rec.Cert.SerialNumber)
 		}
 
 		ekus := certkit.FormatEKUs(rec.Cert.ExtKeyUsage)

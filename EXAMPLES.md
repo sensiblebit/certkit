@@ -244,13 +244,13 @@ The key is embedded in the `.p12`, so certkit automatically extracts it and uses
 Going the other direction -- you have PEM files and need a `.p12` for a Java app or Windows server.
 
 ```sh
-certkit bundle cert.pem --key key.pem --format p12 -o bundle.p12
+certkit bundle cert.pem --key key.pem --format p12 -o bundle.p12 -p "your-password"
 ```
 
-The output `.p12` uses password `changeit` by default (the Java convention). Override with `-p "your-password"`. Same works for JKS:
+PKCS#12/JKS output requires an explicit password. Provide one with `-p` or `--password-file`. Same works for JKS:
 
 ```sh
-certkit bundle cert.pem --key key.pem --format jks -o keystore.jks
+certkit bundle cert.pem --key key.pem --format jks -o keystore.jks -p "your-password"
 ```
 
 ---
@@ -269,7 +269,7 @@ certkit convert cert.der --to pem
 certkit convert cert.pem --to der -o cert.der
 
 # PEM cert + key to PKCS#12
-certkit convert cert.pem --key key.pem --to p12 -o bundle.p12
+certkit convert cert.pem --key key.pem --to p12 -o bundle.p12 -p "your-password"
 
 # PKCS#12 to PEM
 certkit convert bundle.p12 --to pem
@@ -283,7 +283,7 @@ Input format is auto-detected. PEM output goes to stdout; binary formats (DER, P
 ### Convert PKCS#12 to JKS
 
 ```sh
-certkit convert bundle.p12 --to jks -o keystore.jks
+certkit convert bundle.p12 --to jks -o keystore.jks -p "your-password"
 ```
 
 Multiple key/cert pairs in the input produce multiple aliases in the JKS keystore.

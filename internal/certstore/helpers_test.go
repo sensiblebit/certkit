@@ -215,3 +215,41 @@ func TestSanitizeFileName(t *testing.T) {
 		})
 	}
 }
+
+func TestSanitizeBundleFolder(t *testing.T) {
+	// WHY: Bundle folder names must be safe path segments and reject dot paths
+	// to prevent path traversal and zip-slip issues.
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		input   string
+		want    string
+		wantErr bool
+	}{
+		{"simple name", "bundle", "bundle", false},
+		{"sanitizes separators", "path/traversal", "path_traversal", false},
+		{"empty", "", "", true},
+		{"dot", ".", "", true},
+		{"dotdot", "..", "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := SanitizeBundleFolder(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for input %q", tt.input)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("SanitizeBundleFolder(%q) error = %v", tt.input, err)
+			}
+			if got != tt.want {
+				t.Errorf("SanitizeBundleFolder(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}

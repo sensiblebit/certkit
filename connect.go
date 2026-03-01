@@ -418,7 +418,11 @@ func (result *ConnectResult) populate(ctx context.Context, input ConnectTLSInput
 			if aiaTimeout == 0 {
 				aiaTimeout = 5 * time.Second
 			}
-			aiaCerts, aiaWarnings := FetchAIACertificates(ctx, leaf, aiaTimeout, 5)
+			aiaCerts, aiaWarnings := FetchAIACertificates(ctx, FetchAIACertificatesInput{
+				Cert:     leaf,
+				Timeout:  aiaTimeout,
+				MaxDepth: 5,
+			})
 			for _, w := range aiaWarnings {
 				slog.Debug("AIA fetch warning", "warning", w)
 			}
@@ -632,7 +636,7 @@ func CheckLeafCRL(ctx context.Context, input CheckLeafCRLInput) *CRLCheckResult 
 		return &CRLCheckResult{
 			Status: "revoked",
 			URL:    cdpURL,
-			Detail: fmt.Sprintf("serial %s found in CRL", input.Leaf.SerialNumber.Text(16)),
+			Detail: fmt.Sprintf("serial %s found in CRL", FormatSerialNumber(input.Leaf.SerialNumber)),
 		}
 	}
 

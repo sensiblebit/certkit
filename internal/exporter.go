@@ -20,7 +20,10 @@ type filesystemWriter struct {
 
 // WriteBundleFiles creates the folder and writes each file with appropriate permissions.
 func (w *filesystemWriter) WriteBundleFiles(folder string, files []certstore.BundleFile) error {
-	folderPath := filepath.Join(w.outDir, folder)
+	folderPath, err := safeJoin(w.outDir, folder)
+	if err != nil {
+		return fmt.Errorf("resolving bundle directory %q: %w", folder, err)
+	}
 	if err := os.MkdirAll(folderPath, 0755); err != nil {
 		return fmt.Errorf("creating bundle directory %s: %w", folderPath, err)
 	}
@@ -37,36 +40,92 @@ func (w *filesystemWriter) WriteBundleFiles(folder string, files []certstore.Bun
 	return nil
 }
 
+func safeJoin(base, folder string) (string, error) {
+	if folder == "" {
+		return "", fmt.Errorf("bundle folder name is empty")
+	}
+	cleaned := filepath.Clean(folder)
+	if filepath.IsAbs(cleaned) {
+		return "", fmt.Errorf("bundle folder name %q must be relative", folder)
+	}
+	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("bundle folder name %q escapes output dir", folder)
+	}
+	baseClean := filepath.Clean(base)
+	full := filepath.Join(baseClean, cleaned)
+	rel, err := filepath.Rel(baseClean, full)
+	if err != nil {
+		return "", fmt.Errorf("resolving bundle path: %w", err)
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("bundle folder name %q escapes output dir", folder)
+	}
+	return full, nil
+}
+
+// ExportBundlesInput holds parameters for ExportBundles.
+type ExportBundlesInput struct {
+	Configs     []BundleConfig
+	OutDir      string
+	Store       *certstore.MemStore
+	ForceBundle bool
+	Duplicates  bool
+	P12Password string
+}
+
 // ExportBundles iterates over bundle names in the store, finds matching
 // certificates and keys, builds certificate bundles, and writes output files.
-func ExportBundles(ctx context.Context, cfgs []BundleConfig, outDir string, store *certstore.MemStore, forceBundle bool, duplicates bool) error {
-	bundleNames := store.BundleNames()
+func ExportBundles(ctx context.Context, input ExportBundlesInput) error {
+	bundleNames := input.Store.BundleNames()
+	var firstErr error
 
 	for _, bundleName := range bundleNames {
 		opts := certkit.DefaultOptions()
-		if forceBundle {
+		if input.ForceBundle {
 			opts.Verify = false
 		}
 
-		exportBundleCerts(ctx, store, opts, cfgs, outDir, bundleName, duplicates)
+		err := exportBundleCerts(ctx, exportBundleCertsInput{
+			Store:       input.Store,
+			Opts:        opts,
+			Configs:     input.Configs,
+			OutDir:      input.OutDir,
+			BundleName:  bundleName,
+			Duplicates:  input.Duplicates,
+			P12Password: input.P12Password,
+		})
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
 	}
-	return nil
+	return firstErr
+}
+
+type exportBundleCertsInput struct {
+	Store       *certstore.MemStore
+	Opts        certkit.BundleOptions
+	Configs     []BundleConfig
+	OutDir      string
+	BundleName  string
+	Duplicates  bool
+	P12Password string
 }
 
 // exportBundleCerts processes all certificates for a given bundle name, creating
 // output folders and writing bundle files for each one.
-func exportBundleCerts(ctx context.Context, store *certstore.MemStore, opts certkit.BundleOptions, cfgs []BundleConfig, outDir, bundleName string, duplicates bool) {
-	certs := store.CertsByBundleName(bundleName)
+func exportBundleCerts(ctx context.Context, input exportBundleCertsInput) error {
+	certs := input.Store.CertsByBundleName(input.BundleName)
+	var firstErr error
 
-	slog.Debug("found certificates for bundle", "count", len(certs), "bundle", bundleName)
+	slog.Debug("found certificates for bundle", "count", len(certs), "bundle", input.BundleName)
 	for _, cert := range certs {
 		slog.Debug("certificate in bundle", "cn", cert.Cert.Subject.CommonName, "serial", cert.Cert.SerialNumber, "expiry", cert.NotAfter.Format(time.RFC3339))
 	}
 
 	// Find the matching bundle configuration once (invariant across certs)
 	var matchingConfig *BundleConfig
-	for _, cfg := range cfgs {
-		if cfg.BundleName == bundleName {
+	for _, cfg := range input.Configs {
+		if cfg.BundleName == input.BundleName {
 			matchingConfig = &cfg
 			break
 		}
@@ -86,36 +145,51 @@ func exportBundleCerts(ctx context.Context, store *certstore.MemStore, opts cert
 	for i, certRec := range certs {
 		var bundleFolder string
 		if i == 0 {
-			bundleFolder = bundleName
-			slog.Debug("using base name for newest certificate", "bundle", bundleName, "cn", certRec.Cert.Subject.CommonName)
+			bundleFolder = input.BundleName
+			slog.Debug("using base name for newest certificate", "bundle", input.BundleName, "cn", certRec.Cert.Subject.CommonName)
 		} else {
-			if !duplicates {
-				slog.Debug("skipping older certificate (use --duplicates to export)", "bundle", bundleName, "serial", certRec.Cert.SerialNumber, "expiry", certRec.NotAfter.Format(time.RFC3339))
+			if !input.Duplicates {
+				slog.Debug("skipping older certificate (use --duplicates to export)", "bundle", input.BundleName, "serial", certRec.Cert.SerialNumber, "expiry", certRec.NotAfter.Format(time.RFC3339))
 				continue
 			}
 			expirationDate := certRec.NotAfter.Format(time.RFC3339)
-			bundleFolder = fmt.Sprintf("%s_%s_%s", bundleName, expirationDate, certRec.Cert.SerialNumber)
+			bundleFolder = fmt.Sprintf("%s_%s_%s", input.BundleName, expirationDate, certRec.Cert.SerialNumber)
 			slog.Debug("using folder for older certificate", "folder", bundleFolder, "newest_serial", certs[0].Cert.SerialNumber, "cn", certRec.Cert.Subject.CommonName)
+		}
+		folder, err := certstore.SanitizeBundleFolder(bundleFolder)
+		if err != nil {
+			wrapped := fmt.Errorf("sanitizing bundle folder %q: %w", bundleFolder, err)
+			slog.Warn("invalid bundle folder", "bundle", input.BundleName, "cn", certRec.Cert.Subject.CommonName, "error", wrapped)
+			if firstErr == nil {
+				firstErr = wrapped
+			}
+			continue
 		}
 
 		// Look up the matching key
-		keyRec := store.GetKey(certRec.SKI)
+		keyRec := input.Store.GetKey(certRec.SKI)
 		if keyRec == nil {
 			slog.Warn("no key found for certificate", "ski", certRec.SKI, "cn", certRec.Cert.Subject.CommonName)
 			continue
 		}
 
 		if err := certstore.ExportMatchedBundles(ctx, certstore.ExportMatchedBundleInput{
-			Store:         store,
+			Store:         input.Store,
 			SKIs:          []string{certRec.SKI},
-			BundleOpts:    opts,
-			Writer:        &folderOverrideWriter{outDir: outDir, folder: bundleFolder},
+			BundleOpts:    input.Opts,
+			Writer:        &folderOverrideWriter{outDir: input.OutDir, folder: folder},
 			CSRSubject:    csrSubject,
 			RetryNoVerify: false,
+			P12Password:   input.P12Password,
 		}); err != nil {
-			slog.Warn("exporting bundle", "cn", certRec.Cert.Subject.CommonName, "error", err)
+			wrapped := fmt.Errorf("exporting bundle for %q: %w", certRec.Cert.Subject.CommonName, err)
+			slog.Warn("exporting bundle", "cn", certRec.Cert.Subject.CommonName, "error", wrapped)
+			if firstErr == nil {
+				firstErr = wrapped
+			}
 		}
 	}
+	return firstErr
 }
 
 // folderOverrideWriter wraps filesystemWriter but forces a specific folder name

@@ -10,4 +10,5 @@ type ValidationError struct {
 	Quiet bool
 }
 
+// Error returns the validation error message.
 func (e *ValidationError) Error() string { return e.Message }

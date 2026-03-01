@@ -147,7 +147,7 @@ func TestFormatOCSPResult(t *testing.T) {
 	now := time.Now()
 	result := &OCSPResult{
 		Status:       "good",
-		SerialNumber: "64",
+		SerialNumber: "0x64",
 		URL:          "http://ocsp.example.com",
 		ThisUpdate:   now.UTC().Format(time.RFC3339),
 		NextUpdate:   now.Add(24 * time.Hour).UTC().Format(time.RFC3339),
@@ -158,7 +158,7 @@ func TestFormatOCSPResult(t *testing.T) {
 	}
 	// Check both labels and actual values appear in output.
 	for _, want := range []string{
-		"Serial:       64",
+		"Serial:       0x64",
 		"Status:       good",
 		"Responder:    http://ocsp.example.com",
 		"This Update:  " + result.ThisUpdate,

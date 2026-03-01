@@ -36,31 +36,50 @@ type KeygenResult struct {
 	CSRFile string // empty in stdout mode
 }
 
+// GenerateKeyInput holds parameters for GenerateKey.
+type GenerateKeyInput struct {
+	Algorithm string
+	Bits      int
+	Curve     string
+}
+
 // GenerateKey creates a new crypto.Signer based on algorithm, bits, and curve.
-func GenerateKey(algorithm string, bits int, curve string) (crypto.Signer, error) {
-	switch algorithm {
+func GenerateKey(input GenerateKeyInput) (crypto.Signer, error) {
+	switch input.Algorithm {
 	case "rsa":
-		return certkit.GenerateRSAKey(bits)
-	case "ecdsa":
-		c, err := parseCurve(curve)
+		key, err := certkit.GenerateRSAKey(input.Bits)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("generating RSA key: %w", err)
 		}
-		return certkit.GenerateECKey(c)
+		return key, nil
+	case "ecdsa":
+		c, err := parseCurve(input.Curve)
+		if err != nil {
+			return nil, fmt.Errorf("parsing curve %q: %w", input.Curve, err)
+		}
+		key, err := certkit.GenerateECKey(c)
+		if err != nil {
+			return nil, fmt.Errorf("generating ECDSA key: %w", err)
+		}
+		return key, nil
 	case "ed25519":
 		_, priv, err := certkit.GenerateEd25519Key()
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("generating Ed25519 key: %w", err)
 		}
 		return priv, nil
 	default:
-		return nil, fmt.Errorf("unsupported algorithm: %s (use rsa, ecdsa, or ed25519)", algorithm)
+		return nil, fmt.Errorf("unsupported algorithm: %s (use rsa, ecdsa, or ed25519)", input.Algorithm)
 	}
 }
 
 // GenerateKeyFiles generates a key pair and optionally a CSR, writing them to the output path.
 func GenerateKeyFiles(opts KeygenOptions) (*KeygenResult, error) {
-	signer, err := GenerateKey(opts.Algorithm, opts.Bits, opts.Curve)
+	signer, err := GenerateKey(GenerateKeyInput{
+		Algorithm: opts.Algorithm,
+		Bits:      opts.Bits,
+		Curve:     opts.Curve,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +103,11 @@ func GenerateKeyFiles(opts KeygenOptions) (*KeygenResult, error) {
 
 	// Generate CSR if CN or SANs provided
 	if opts.CN != "" || len(opts.SANs) > 0 {
-		csrPEM, err := generateCSRFromKey(signer, opts.CN, opts.SANs)
+		csrPEM, err := generateCSRFromKey(generateCSRFromKeyInput{
+			Signer: signer,
+			CN:     opts.CN,
+			SANs:   opts.SANs,
+		})
 		if err != nil {
 			return nil, fmt.Errorf("generating CSR: %w", err)
 		}
@@ -118,15 +141,21 @@ func GenerateKeyFiles(opts KeygenOptions) (*KeygenResult, error) {
 	return result, nil
 }
 
-func generateCSRFromKey(signer crypto.Signer, cn string, sans []string) (string, error) {
+type generateCSRFromKeyInput struct {
+	Signer crypto.Signer
+	CN     string
+	SANs   []string
+}
+
+func generateCSRFromKey(input generateCSRFromKeyInput) (string, error) {
 	template := &x509.CertificateRequest{
 		Subject: pkix.Name{
-			CommonName: cn,
+			CommonName: input.CN,
 		},
-		DNSNames: sans,
+		DNSNames: input.SANs,
 	}
 
-	csrDER, err := x509.CreateCertificateRequest(rand.Reader, template, signer)
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, template, input.Signer)
 	if err != nil {
 		return "", fmt.Errorf("creating CSR: %w", err)
 	}

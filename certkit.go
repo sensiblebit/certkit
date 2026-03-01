@@ -374,6 +374,15 @@ func ColonHex(b []byte) string {
 	return strings.Join(parts, ":")
 }
 
+// FormatSerialNumber formats a certificate serial number as 0x-prefixed hex.
+// Returns an empty string when the serial is nil.
+func FormatSerialNumber(serial *big.Int) string {
+	if serial == nil {
+		return ""
+	}
+	return "0x" + serial.Text(16)
+}
+
 // extractPublicKeyBitString parses a DER-encoded SubjectPublicKeyInfo and
 // returns the raw public key bytes (the BIT STRING value, excluding the
 // unused-bits octet).
@@ -403,7 +412,7 @@ func marshalPublicKeyDER(pub crypto.PublicKey) ([]byte, error) {
 		return marshalDSAPublicKeyDER(dsaKey)
 	}
 
-	return nil, err
+	return nil, fmt.Errorf("marshaling public key: %w", err)
 }
 
 // marshalDSAPublicKeyDER encodes a DSA public key as PKIX SubjectPublicKeyInfo
@@ -457,7 +466,7 @@ func ComputeSKI(pub crypto.PublicKey) ([]byte, error) {
 	}
 	bits, err := extractPublicKeyBitString(der)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("extracting public key bit string: %w", err)
 	}
 	sum := sha256.Sum256(bits)
 	return sum[:20], nil
@@ -473,7 +482,7 @@ func ComputeSKILegacy(pub crypto.PublicKey) ([]byte, error) {
 	}
 	bits, err := extractPublicKeyBitString(der)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("extracting public key bit string: %w", err)
 	}
 	sum := sha1.Sum(bits)
 	return sum[:], nil
@@ -507,7 +516,7 @@ func KeyMatchesCert(priv crypto.PrivateKey, cert *x509.Certificate) (bool, error
 	}
 	pub, err := GetPublicKey(priv)
 	if err != nil {
-		return false, err
+		return false, fmt.Errorf("getting public key: %w", err)
 	}
 	type equalKey interface {
 		Equal(crypto.PublicKey) bool

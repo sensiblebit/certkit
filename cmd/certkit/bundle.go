@@ -101,7 +101,10 @@ func runBundle(cmd *cobra.Command, args []string) error {
 		opts.Verify = false
 	}
 
-	bundle, err := certkit.Bundle(cmd.Context(), leaf, opts)
+	bundle, err := certkit.Bundle(cmd.Context(), certkit.BundleInput{
+		Leaf:    leaf,
+		Options: opts,
+	})
 	if err != nil {
 		return fmt.Errorf("building chain: %w", err)
 	}
@@ -191,15 +194,14 @@ func selectLeafByKey(key crypto.PrivateKey, currentLeaf *x509.Certificate, extra
 	return nil, nil, fmt.Errorf("private key does not match any of the %d certificate(s) provided", len(all))
 }
 
-// bundlePassword returns the password to use for PKCS#12/JKS export.
-// Uses the first non-empty user-provided password, falling back to "changeit".
-func bundlePassword(passwords []string) string {
+// bundlePassword returns the first non-empty password for PKCS#12/JKS export.
+func bundlePassword(passwords []string) (string, bool) {
 	for _, pw := range passwords {
 		if pw != "" {
-			return pw
+			return pw, true
 		}
 	}
-	return "changeit"
+	return "", false
 }
 
 func formatBundleOutput(bundle *certkit.BundleResult, key crypto.PrivateKey, format string, passwords []string) ([]byte, error) {
@@ -229,7 +231,10 @@ func formatBundleOutput(bundle *certkit.BundleResult, key crypto.PrivateKey, for
 		if key == nil {
 			return nil, fmt.Errorf("p12 output requires a private key (use --key)")
 		}
-		pw := bundlePassword(passwords)
+		pw, ok := bundlePassword(passwords)
+		if !ok {
+			return nil, fmt.Errorf("p12 output requires a password (use --passwords or --password-file)")
+		}
 		p12, err := certkit.EncodePKCS12(key, bundle.Leaf, bundle.Intermediates, pw)
 		if err != nil {
 			return nil, fmt.Errorf("encoding PKCS#12: %w", err)
@@ -240,7 +245,10 @@ func formatBundleOutput(bundle *certkit.BundleResult, key crypto.PrivateKey, for
 		if key == nil {
 			return nil, fmt.Errorf("jks output requires a private key (use --key)")
 		}
-		pw := bundlePassword(passwords)
+		pw, ok := bundlePassword(passwords)
+		if !ok {
+			return nil, fmt.Errorf("jks output requires a password (use --passwords or --password-file)")
+		}
 		jks, err := certkit.EncodeJKS(key, bundle.Leaf, bundle.Intermediates, pw)
 		if err != nil {
 			return nil, fmt.Errorf("encoding JKS: %w", err)

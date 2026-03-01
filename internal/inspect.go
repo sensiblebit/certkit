@@ -10,7 +10,7 @@ import (
 	"encoding/asn1"
 	"encoding/json"
 	"fmt"
-	"os"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -55,7 +55,7 @@ type InspectResult struct {
 
 // InspectFile reads a file and returns inspection results for all objects found.
 func InspectFile(path string, passwords []string) ([]InspectResult, error) {
-	data, err := os.ReadFile(path)
+	data, err := readFileLimited(path, defaultMaxInputBytes)
 	if err != nil {
 		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
@@ -179,7 +179,7 @@ func inspectCert(cert *x509.Certificate) InspectResult {
 		Type:      "certificate",
 		Subject:   certkit.FormatDNFromRaw(cert.RawSubject, cert.Subject),
 		Issuer:    certkit.FormatDNFromRaw(cert.RawIssuer, cert.Issuer),
-		Serial:    cert.SerialNumber.String(),
+		Serial:    certkit.FormatSerialNumber(cert.SerialNumber),
 		NotBefore: cert.NotBefore.UTC().Format(time.RFC3339),
 		NotAfter:  cert.NotAfter.UTC().Format(time.RFC3339),
 		CertType:  certkit.GetCertificateType(cert),
@@ -307,15 +307,25 @@ func privateKeySize(key any) string {
 	}
 }
 
+// ResolveInspectAIAInput holds parameters for ResolveInspectAIA.
+type ResolveInspectAIAInput struct {
+	Results []InspectResult
+	Fetch   certstore.AIAFetcher
+}
+
 // ResolveInspectAIA fetches missing intermediate certificates via AIA for the
 // given inspect results. It creates a temporary MemStore, adds all certificates
 // from the results, resolves AIA using the provided fetcher, inspects any newly
 // fetched certificates, and returns the extended results along with warnings.
-func ResolveInspectAIA(ctx context.Context, results []InspectResult, fetch certstore.AIAFetcher) ([]InspectResult, []string) {
+func ResolveInspectAIA(ctx context.Context, input ResolveInspectAIAInput) ([]InspectResult, []string) {
 	store := certstore.NewMemStore()
+	results := input.Results
 	for _, r := range results {
 		if r.cert != nil {
-			_ = store.HandleCertificate(r.cert, "inspect")
+			if err := store.HandleCertificate(r.cert, "inspect"); err != nil {
+				slog.Debug("skipping inspect certificate", "error", err)
+				continue
+			}
 		}
 	}
 
@@ -331,7 +341,7 @@ func ResolveInspectAIA(ctx context.Context, results []InspectResult, fetch certs
 
 	warnings := certstore.ResolveAIA(ctx, certstore.ResolveAIAInput{
 		Store: store,
-		Fetch: fetch,
+		Fetch: input.Fetch,
 	})
 
 	for _, rec := range store.AllCertsFlat() {

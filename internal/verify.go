@@ -31,10 +31,10 @@ type VerifyInput struct {
 
 // ChainCert holds display information for one certificate in the chain.
 type ChainCert struct {
-	Subject string `json:"subject"`
-	Expiry  string `json:"expiry"`
-	SKI     string `json:"subject_key_id,omitempty"`
-	IsRoot  bool   `json:"is_root,omitempty"`
+	Subject  string `json:"subject"`
+	NotAfter string `json:"not_after"`
+	SKI      string `json:"subject_key_id,omitempty"`
+	IsRoot   bool   `json:"is_root,omitempty"`
 
 	// Verbose-only fields (populated when VerifyInput.Verbose is true).
 	Issuer    string   `json:"issuer,omitempty"`
@@ -107,7 +107,7 @@ func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) 
 	if input.Verbose {
 		isCA := cert.IsCA
 		result.Issuer = certkit.FormatDNFromRaw(cert.RawIssuer, cert.Issuer)
-		result.Serial = cert.SerialNumber.String()
+		result.Serial = certkit.FormatSerialNumber(cert.SerialNumber)
 		result.NotBefore = cert.NotBefore.UTC().Format(time.RFC3339)
 		result.CertType = certkit.GetCertificateType(cert)
 		result.IsCA = &isCA
@@ -144,7 +144,10 @@ func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) 
 		opts.ExtraIntermediates = input.ExtraCerts
 		opts.CustomRoots = input.CustomRoots
 		var bundleErr error
-		bundle, bundleErr = certkit.Bundle(ctx, cert, opts)
+		bundle, bundleErr = certkit.Bundle(ctx, certkit.BundleInput{
+			Leaf:    cert,
+			Options: opts,
+		})
 		valid := bundleErr == nil
 		result.ChainValid = &valid
 		if bundleErr != nil {
@@ -251,14 +254,14 @@ func checkVerifyOCSP(ctx context.Context, input certkit.CheckOCSPInput) *certkit
 func buildChainDisplay(bundle *certkit.BundleResult, verbose bool) []ChainCert {
 	buildEntry := func(c *x509.Certificate, isRoot bool) ChainCert {
 		cc := ChainCert{
-			Subject: certkit.FormatDNFromRaw(c.RawSubject, c.Subject),
-			Expiry:  c.NotAfter.UTC().Format(time.RFC3339),
-			SKI:     certkit.CertSKIEmbedded(c),
-			IsRoot:  isRoot,
+			Subject:  certkit.FormatDNFromRaw(c.RawSubject, c.Subject),
+			NotAfter: c.NotAfter.UTC().Format(time.RFC3339),
+			SKI:      certkit.CertSKIEmbedded(c),
+			IsRoot:   isRoot,
 		}
 		if verbose {
 			cc.Issuer = certkit.FormatDNFromRaw(c.RawIssuer, c.Issuer)
-			cc.Serial = c.SerialNumber.String()
+			cc.Serial = certkit.FormatSerialNumber(c.SerialNumber)
 			cc.NotBefore = c.NotBefore.UTC().Format(time.RFC3339)
 			cc.CertType = certkit.GetCertificateType(c)
 			cc.KeyAlgo = certkit.PublicKeyAlgorithmName(c.PublicKey)
@@ -470,7 +473,9 @@ func FormatVerifyResult(r *VerifyResult) string {
 		fmt.Fprintf(&sb, "        EKU: %s\n", strings.Join(r.EKUs, ", "))
 	}
 
-	fmt.Fprintf(&sb, "        SKI: %s\n", r.SKI)
+	if r.SKI != "" {
+		fmt.Fprintf(&sb, "        SKI: %s\n", r.SKI)
+	}
 	if r.AKI != "" {
 		fmt.Fprintf(&sb, "        AKI: %s\n", r.AKI)
 	}
@@ -506,7 +511,7 @@ func FormatVerifyResult(r *VerifyResult) string {
 			if c.IsRoot {
 				tag = "  [root]"
 			}
-			fmt.Fprintf(&sb, "  %d: %s  (expires %s)%s\n", i, c.Subject, c.Expiry, tag)
+			fmt.Fprintf(&sb, "  %d: %s  (expires %s)%s\n", i, c.Subject, c.NotAfter, tag)
 			fmt.Fprintf(&sb, "     SKI: %s\n", c.SKI)
 			if c.Issuer != "" {
 				fmt.Fprintf(&sb, "     Issuer:    %s\n", c.Issuer)

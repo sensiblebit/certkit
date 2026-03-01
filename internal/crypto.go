@@ -2,7 +2,7 @@ package internal
 
 import (
 	"encoding/hex"
-	"io"
+	"fmt"
 	"log/slog"
 	"os"
 
@@ -49,45 +49,75 @@ func processPEMCSR(data []byte, path string) bool {
 	return true
 }
 
+// ProcessDataInput holds parameters for ProcessData.
+type ProcessDataInput struct {
+	Data        []byte
+	VirtualPath string
+	Store       *certstore.MemStore
+	Passwords   []string
+	MaxBytes    int64 // 0 means no limit
+}
+
 // ProcessData ingests certificates, keys, or CSRs from in-memory data.
 // The virtualPath identifies the data source for logging (may be a real path
 // or a synthetic path like "archive.zip:certs/server.pem"). All certificates
 // are ingested regardless of expiry — expired filtering is an output concern.
-func ProcessData(data []byte, virtualPath string, store *certstore.MemStore, passwords []string) error {
-	slog.Debug("processing data", "path", virtualPath)
+func ProcessData(input ProcessDataInput) error {
+	slog.Debug("processing data", "path", input.VirtualPath)
+	if input.MaxBytes > 0 && int64(len(input.Data)) > input.MaxBytes {
+		return fmt.Errorf("input %s exceeds max size (%d bytes)", input.VirtualPath, input.MaxBytes)
+	}
 
 	if err := certstore.ProcessData(certstore.ProcessInput{
-		Data:      data,
-		Path:      virtualPath,
-		Passwords: passwords,
-		Handler:   store,
+		Data:      input.Data,
+		Path:      input.VirtualPath,
+		Passwords: input.Passwords,
+		Handler:   input.Store,
 	}); err != nil {
-		return err
+		return fmt.Errorf("processing data %s: %w", input.VirtualPath, err)
 	}
 
 	// CLI-only: check for CSRs in PEM data
-	if certkit.IsPEM(data) {
-		processPEMCSR(data, virtualPath)
+	if certkit.IsPEM(input.Data) {
+		processPEMCSR(input.Data, input.VirtualPath)
 	}
 
 	return nil
 }
 
+// ProcessFileInput holds parameters for ProcessFile.
+type ProcessFileInput struct {
+	Path      string
+	Store     *certstore.MemStore
+	Passwords []string
+	MaxBytes  int64 // 0 means no limit
+}
+
 // ProcessFile reads a file (or stdin when path is "-") and ingests
 // any certificates, keys, or CSRs it contains into the store.
-func ProcessFile(path string, store *certstore.MemStore, passwords []string) error {
+func ProcessFile(input ProcessFileInput) error {
 	var data []byte
 	var err error
 
-	if path == "-" {
-		data, err = io.ReadAll(os.Stdin)
+	if input.Path == "-" {
+		data, err = readAllLimited(os.Stdin, input.MaxBytes)
 	} else {
-		data, err = os.ReadFile(path)
+		data, err = readFileLimited(input.Path, input.MaxBytes)
 	}
 
 	if err != nil {
-		return err
+		source := input.Path
+		if source == "-" {
+			source = "stdin"
+		}
+		return fmt.Errorf("reading %s: %w", source, err)
 	}
 
-	return ProcessData(data, path, store, passwords)
+	return ProcessData(ProcessDataInput{
+		Data:        data,
+		VirtualPath: input.Path,
+		Store:       input.Store,
+		Passwords:   input.Passwords,
+		MaxBytes:    input.MaxBytes,
+	})
 }

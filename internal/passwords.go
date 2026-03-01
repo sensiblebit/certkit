@@ -15,7 +15,7 @@ import (
 func LoadPasswordsFromFile(filename string) ([]string, error) {
 	file, err := os.Open(filename)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("opening password file %s: %w", filename, err)
 	}
 	defer func() {
 		if closeErr := file.Close(); closeErr != nil {
@@ -30,7 +30,10 @@ func LoadPasswordsFromFile(filename string) ([]string, error) {
 			passwords = append(passwords, pwd)
 		}
 	}
-	return passwords, scanner.Err()
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scanning password file %s: %w", filename, err)
+	}
+	return passwords, nil
 }
 
 // ProcessPasswords loads passwords from CLI flags and optional file, merges

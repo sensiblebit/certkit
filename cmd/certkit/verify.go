@@ -99,8 +99,17 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("no certificate found in %s", args[0])
 	}
 
+	format := verifyFormat
+	if jsonOutput {
+		format = "json"
+	}
+	quietValidation := format == "json"
+
 	if !allowExpired && time.Now().After(contents.Leaf.NotAfter) {
-		return &ValidationError{Message: fmt.Sprintf("certificate expired on %s (use --allow-expired to proceed)", contents.Leaf.NotAfter.UTC().Format(time.RFC3339))}
+		return &ValidationError{
+			Message: fmt.Sprintf("certificate expired on %s (use --allow-expired to proceed)", contents.Leaf.NotAfter.UTC().Format(time.RFC3339)),
+			Quiet:   quietValidation,
+		}
 	}
 
 	// Load explicit key from --key flag (overrides embedded key)
@@ -145,11 +154,6 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		})
 	}
 
-	format := verifyFormat
-	if jsonOutput {
-		format = "json"
-	}
-
 	switch format {
 	case "json":
 		data, err := json.MarshalIndent(result, "", "  ")
@@ -167,7 +171,7 @@ func runVerify(cmd *cobra.Command, args []string) error {
 	}
 
 	if len(result.Errors) > 0 {
-		return &ValidationError{Message: "verification failed"}
+		return &ValidationError{Message: "verification failed", Quiet: quietValidation}
 	}
 	return nil
 }

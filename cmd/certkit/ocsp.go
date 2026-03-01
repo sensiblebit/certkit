@@ -96,6 +96,7 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 	if jsonOutput {
 		format = "json"
 	}
+	quietValidation := format == "json"
 
 	switch format {
 	case "json":
@@ -128,7 +129,7 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 	}
 
 	if result.Status == "revoked" {
-		return &ValidationError{Message: "certificate is revoked"}
+		return &ValidationError{Message: "certificate is revoked", Quiet: quietValidation}
 	}
 
 	return nil

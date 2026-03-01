@@ -40,7 +40,10 @@ func runInspect(cmd *cobra.Command, args []string) error {
 	}
 
 	// Resolve missing intermediates via AIA before trust annotation.
-	results, aiaWarnings := internal.ResolveInspectAIA(cmd.Context(), results, httpAIAFetcher)
+	results, aiaWarnings := internal.ResolveInspectAIA(cmd.Context(), internal.ResolveInspectAIAInput{
+		Results: results,
+		Fetch:   httpAIAFetcher,
+	})
 	for _, w := range aiaWarnings {
 		slog.Warn("AIA resolution", "warning", w)
 	}

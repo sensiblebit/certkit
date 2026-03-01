@@ -563,7 +563,7 @@ func TestFormatInspectResults_JSON_ValidJSON(t *testing.T) {
 			Type:    "certificate",
 			Subject: "CN=json-test.example.com,O=TestOrg",
 			Issuer:  "CN=Test CA",
-			Serial:  "12345",
+			Serial:  "0x12345",
 			SHA256:  "AA:BB:CC:DD",
 			SHA1:    "11:22:33:44",
 			SANs:    []string{"json-test.example.com", "www.json-test.example.com"},
@@ -821,7 +821,10 @@ func TestResolveInspectAIA_NoFetchNeeded(t *testing.T) {
 				panic("fetcher must not be called when no AIA fetch is needed")
 			}
 
-			got, warnings := ResolveInspectAIA(context.Background(), tt.results, fetcher)
+			got, warnings := ResolveInspectAIA(context.Background(), ResolveInspectAIAInput{
+				Results: tt.results,
+				Fetch:   fetcher,
+			})
 
 			if len(warnings) != 0 {
 				t.Errorf("expected 0 warnings, got %v", warnings)
@@ -855,7 +858,10 @@ func TestResolveInspectAIA_FetchesIntermediate(t *testing.T) {
 		return nil, fmt.Errorf("unexpected URL: %s", url)
 	}
 
-	got, warnings := ResolveInspectAIA(context.Background(), results, fetcher)
+	got, warnings := ResolveInspectAIA(context.Background(), ResolveInspectAIAInput{
+		Results: results,
+		Fetch:   fetcher,
+	})
 
 	if len(warnings) != 0 {
 		t.Errorf("expected 0 warnings, got %v", warnings)
@@ -902,7 +908,10 @@ func TestResolveInspectAIA_FetcherError(t *testing.T) {
 		return nil, fmt.Errorf("connection refused")
 	}
 
-	got, warnings := ResolveInspectAIA(context.Background(), results, fetcher)
+	got, warnings := ResolveInspectAIA(context.Background(), ResolveInspectAIAInput{
+		Results: results,
+		Fetch:   fetcher,
+	})
 
 	if len(warnings) == 0 {
 		t.Error("expected at least one warning from fetcher error")
@@ -937,7 +946,10 @@ func TestResolveInspectAIA_DeduplicatesExisting(t *testing.T) {
 		return nil, fmt.Errorf("unexpected URL: %s", url)
 	}
 
-	got, warnings := ResolveInspectAIA(context.Background(), results, fetcher)
+	got, warnings := ResolveInspectAIA(context.Background(), ResolveInspectAIAInput{
+		Results: results,
+		Fetch:   fetcher,
+	})
 
 	if len(warnings) != 0 {
 		t.Errorf("expected 0 warnings, got %v", warnings)

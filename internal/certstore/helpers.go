@@ -129,3 +129,16 @@ var unsafeFileNameReplacer = strings.NewReplacer(
 func SanitizeFileName(name string) string {
 	return unsafeFileNameReplacer.Replace(name)
 }
+
+// SanitizeBundleFolder returns a safe folder name for bundle output.
+// Rejects empty or dot-path names after sanitization.
+func SanitizeBundleFolder(name string) (string, error) {
+	sanitized := SanitizeFileName(strings.TrimSpace(name))
+	if sanitized == "" {
+		return "", fmt.Errorf("bundle folder name is empty")
+	}
+	if sanitized == "." || sanitized == ".." {
+		return "", fmt.Errorf("bundle folder name %q is invalid", sanitized)
+	}
+	return sanitized, nil
+}

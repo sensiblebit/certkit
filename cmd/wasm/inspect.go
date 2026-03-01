@@ -47,8 +47,17 @@ func inspectFiles(_ js.Value, args []js.Value) any {
 				}
 			}()
 
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+
 			var allResults []internal.InspectResult
 			for i := range length {
+				select {
+				case <-ctx.Done():
+					reject.Invoke(js.Global().Get("Error").New("inspect timed out: " + ctx.Err().Error()))
+					return
+				default:
+				}
 				file := filesArg.Index(i)
 				dataJS := file.Get("data")
 				data := make([]byte, dataJS.Length())
@@ -64,9 +73,10 @@ func inspectFiles(_ js.Value, args []js.Value) any {
 			}
 
 			// Resolve missing intermediates via AIA before trust annotation.
-			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-			defer cancel()
-			allResults, aiaWarnings := internal.ResolveInspectAIA(ctx, allResults, jsFetchURL)
+			allResults, aiaWarnings := internal.ResolveInspectAIA(ctx, internal.ResolveInspectAIAInput{
+				Results: allResults,
+				Fetch:   jsFetchURL,
+			})
 			for _, w := range aiaWarnings {
 				slog.Warn("AIA resolution", "warning", w)
 			}
