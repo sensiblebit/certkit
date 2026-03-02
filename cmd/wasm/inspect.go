@@ -25,6 +25,9 @@ func inspectFiles(_ js.Value, args []js.Value) any {
 
 	filesArg := args[0]
 	length := filesArg.Length()
+	if length > wasmMaxInputFiles {
+		return jsError(fmt.Sprintf("too many files: %d (max %d)", length, wasmMaxInputFiles))
+	}
 
 	var passwords []string
 	if len(args) >= 2 && args[1].Type() == js.TypeString {
@@ -56,6 +59,7 @@ func inspectFiles(_ js.Value, args []js.Value) any {
 			defer cancel()
 
 			var allResults []internal.InspectResult
+			var totalBytes int64
 			for i := range length {
 				select {
 				case <-ctx.Done():
@@ -64,9 +68,20 @@ func inspectFiles(_ js.Value, args []js.Value) any {
 				default:
 				}
 				file := filesArg.Index(i)
-				dataJS := file.Get("data")
-				data := make([]byte, dataJS.Length())
-				js.CopyBytesToGo(data, dataJS)
+				name := file.Get("name").String()
+				if name == "" {
+					name = fmt.Sprintf("file[%d]", i)
+				}
+
+				data, err := readWASMFileData(readWASMFileDataInput{
+					DataJS:     file.Get("data"),
+					Name:       name,
+					TotalBytes: &totalBytes,
+				})
+				if err != nil {
+					reject.Invoke(js.Global().Get("Error").New(err.Error()))
+					return
+				}
 
 				results := internal.InspectData(data, passwords)
 				allResults = append(allResults, results...)

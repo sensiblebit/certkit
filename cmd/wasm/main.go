@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -17,6 +18,12 @@ import (
 
 	"github.com/sensiblebit/certkit"
 	"github.com/sensiblebit/certkit/internal/certstore"
+)
+
+const (
+	wasmMaxInputFiles      = 200
+	wasmMaxInputFileBytes  = 10 * 1024 * 1024
+	wasmMaxInputTotalBytes = 50 * 1024 * 1024
 )
 
 // version is set at build time via -ldflags "-X main.version=v0.6.1".
@@ -39,6 +46,41 @@ func main() {
 	select {}
 }
 
+type readWASMFileDataInput struct {
+	DataJS     js.Value
+	Name       string
+	TotalBytes *int64
+}
+
+// readWASMFileData copies a JS Uint8Array into Go memory with hard size caps.
+func readWASMFileData(input readWASMFileDataInput) ([]byte, error) {
+	if input.DataJS.Type() != js.TypeObject {
+		return nil, fmt.Errorf("file %q has invalid data payload", input.Name)
+	}
+
+	size := input.DataJS.Length()
+	if size < 0 {
+		return nil, fmt.Errorf("file %q has invalid size", input.Name)
+	}
+
+	if size > wasmMaxInputFileBytes {
+		return nil, fmt.Errorf("file %q exceeds max size (%d bytes)", input.Name, wasmMaxInputFileBytes)
+	}
+
+	nextTotal := *input.TotalBytes + int64(size)
+	if nextTotal > wasmMaxInputTotalBytes {
+		return nil, fmt.Errorf("total upload exceeds max size (%d bytes)", wasmMaxInputTotalBytes)
+	}
+
+	data := make([]byte, size)
+	copied := js.CopyBytesToGo(data, input.DataJS)
+	if copied != size {
+		return nil, fmt.Errorf("file %q read incomplete data: expected %d bytes, got %d", input.Name, size, copied)
+	}
+	*input.TotalBytes = nextTotal
+	return data, nil
+}
+
 // addFiles processes an array of {name, data} objects with optional passwords.
 // JS signature: certkitAddFiles(files: Array<{name: string, data: Uint8Array}>, passwords: string, allowPrivateNetwork?: boolean) → Promise<string>
 func addFiles(_ js.Value, args []js.Value) any {
@@ -48,6 +90,9 @@ func addFiles(_ js.Value, args []js.Value) any {
 
 	filesArg := args[0]
 	length := filesArg.Length()
+	if length > wasmMaxInputFiles {
+		return jsError(fmt.Sprintf("too many files: %d (max %d)", length, wasmMaxInputFiles))
+	}
 
 	var passwords []string
 	if len(args) >= 2 && args[1].Type() == js.TypeString {
@@ -69,12 +114,19 @@ func addFiles(_ js.Value, args []js.Value) any {
 		resolve := promiseArgs[0]
 		reject := promiseArgs[1]
 		go func() {
+			defer func() {
+				if r := recover(); r != nil {
+					reject.Invoke(js.Global().Get("Error").New(fmt.Sprintf("internal error: %v", r)))
+				}
+			}()
+
 			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 
 			storeMu.Lock()
 			defer storeMu.Unlock()
 			var results []map[string]any
+			var totalBytes int64
 			for i := range length {
 				select {
 				case <-ctx.Done():
@@ -84,11 +136,26 @@ func addFiles(_ js.Value, args []js.Value) any {
 				}
 				file := filesArg.Index(i)
 				name := file.Get("name").String()
-				dataJS := file.Get("data")
-				data := make([]byte, dataJS.Length())
-				js.CopyBytesToGo(data, dataJS)
+				if name == "" {
+					name = fmt.Sprintf("file[%d]", i)
+				}
 
-				err := certstore.ProcessData(certstore.ProcessInput{
+				data, err := readWASMFileData(readWASMFileDataInput{
+					DataJS:     file.Get("data"),
+					Name:       name,
+					TotalBytes: &totalBytes,
+				})
+				if err != nil {
+					slog.Debug("skipping file due to read error", "name", name, "error", err)
+					results = append(results, map[string]any{
+						"name":   name,
+						"status": "error",
+						"error":  err.Error(),
+					})
+					continue
+				}
+
+				err = certstore.ProcessData(certstore.ProcessInput{
 					Data:      data,
 					Path:      name,
 					Passwords: passwords,
@@ -286,7 +353,7 @@ func getState(_ js.Value, _ []js.Value) any {
 }
 
 // exportBundlesJS generates a ZIP and returns it as a Uint8Array.
-// JS signature: certkitExportBundles(skis: string[], p12Password?: string) → Promise<Uint8Array>
+// JS signature: certkitExportBundles(skis: string[], p12Password?: string, allowUnverifiedExport?: boolean) → Promise<Uint8Array>
 // Only bundles for the specified SKIs are included.
 func exportBundlesJS(_ js.Value, args []js.Value) any {
 	// Parse the SKI filter list from the JS array argument.
@@ -306,6 +373,11 @@ func exportBundlesJS(_ js.Value, args []js.Value) any {
 		}
 	}
 
+	allowUnverifiedExport := false
+	if len(args) >= 3 && args[2].Type() == js.TypeBoolean {
+		allowUnverifiedExport = args[2].Bool()
+	}
+
 	handler := js.FuncOf(func(_ js.Value, promiseArgs []js.Value) any {
 		resolve := promiseArgs[0]
 		reject := promiseArgs[1]
@@ -315,9 +387,21 @@ func exportBundlesJS(_ js.Value, args []js.Value) any {
 
 			storeMu.RLock()
 			defer storeMu.RUnlock()
-			zipData, err := exportBundles(ctx, globalStore, filterSKIs, p12Password)
+			zipData, err := exportBundles(ctx, exportBundlesInput{
+				Store:                 globalStore,
+				FilterSKIs:            filterSKIs,
+				P12Password:           p12Password,
+				AllowUnverifiedExport: allowUnverifiedExport,
+			})
 
 			if err != nil {
+				if errors.Is(err, errVerifiedExportFailed) {
+					errObj := js.Global().Get("Object").New()
+					errObj.Set("code", "VERIFY_FAILED")
+					errObj.Set("message", err.Error())
+					reject.Invoke(errObj)
+					return
+				}
 				reject.Invoke(js.Global().Get("Error").New(err.Error()))
 				return
 			}
