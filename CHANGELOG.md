@@ -87,7 +87,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
-- Harden AIA/OCSP/CRL SSRF checks by validating DNS-resolved hostnames against private/internal address ranges by default, and add explicit `--allow-private-network` opt-in flags for internal PKI endpoints in `connect`, `verify`, `ocsp`, `scan`, `inspect`, and `bundle` ([#98])
+- Harden AIA/OCSP/CRL SSRF checks by validating DNS-resolved hostnames against private/internal address ranges by default, and add explicit `--allow-private-network` opt-in flags for internal PKI endpoints in `connect`, `verify`, `ocsp`, `scan`, `inspect`, and `bundle` ([#108])
 - Prevent bundle export path traversal by sanitizing bundle folder names and enforcing safe output paths ([#87])
 - Enforce size limits on input reads to avoid unbounded memory usage ([#87])
 - Add SSRF validation (`ValidateAIAURL`) to OCSP responder URLs and CRL distribution point URLs — previously only AIA certificate URLs were validated ([#78])
@@ -96,8 +96,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Fix WASM `inspect` AIA resolution to expose an explicit private-network opt-in so internal PKI intermediates can still be fetched when needed ([#98])
-- Apply a default 10-second timeout in `ConnectTLS` when callers provide a context without a deadline, preventing indefinite hangs during TCP/TLS connect and handshake operations ([#99])
+- Fix WASM `inspect` AIA resolution to expose an explicit private-network opt-in so internal PKI intermediates can still be fetched when needed ([#108])
+- Apply a default 10-second timeout in `ConnectTLS` when callers provide a context without a deadline, preventing indefinite hangs during TCP/TLS connect and handshake operations ([#108])
 - Fix verify JSON chain output to use `not_after` for consistency with other commands ([#87])
 - Fix Certificate Transparency availability handling to preserve parsed SCT candidates when the log list cannot be loaded and mark them as unavailable instead of dropping them ([#86])
 - Fix chain conversion failures in Certificate Transparency checks to report SCTs as `unavailable` instead of `invalid` and keep diagnostics as warnings ([#86])
@@ -940,8 +940,7 @@ Initial release.
 [#85]: https://github.com/sensiblebit/certkit/pull/85
 [#86]: https://github.com/sensiblebit/certkit/pull/86
 [#87]: https://github.com/sensiblebit/certkit/pull/87
-[#98]: https://github.com/sensiblebit/certkit/pull/98
-[#99]: https://github.com/sensiblebit/certkit/pull/99
+[#108]: https://github.com/sensiblebit/certkit/pull/108
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63

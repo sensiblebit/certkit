@@ -24,6 +24,9 @@ const filterExpired = document.getElementById("filter-expired");
 const filterUnmatched = document.getElementById("filter-unmatched");
 const filterUntrusted = document.getElementById("filter-untrusted");
 const selectAll = document.getElementById("select-all");
+const scanAllowPrivateNetwork = document.getElementById(
+  "scan-allow-private-network",
+);
 
 // DOM references — Inspect page
 const inspectDropZone = document.getElementById("inspect-drop-zone");
@@ -294,6 +297,7 @@ async function addFileObjects(fileObjects, statusMessage) {
     const resultJSON = await certkitAddFiles(
       fileObjects,
       passwordsInput.value.trim(),
+      scanAllowPrivateNetwork.checked,
     );
     const results = JSON.parse(resultJSON);
 

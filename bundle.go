@@ -38,6 +38,7 @@ const aiaURLResolveTimeout = 2 * time.Second
 
 func init() {
 	for _, cidr := range []string{
+		"0.0.0.0/8",      // RFC 791 "this network"
 		"10.0.0.0/8",     // RFC 1918
 		"172.16.0.0/12",  // RFC 1918
 		"192.168.0.0/16", // RFC 1918
@@ -180,10 +181,6 @@ type ValidateAIAURLInput struct {
 
 type lookupIPAddressesFunc func(ctx context.Context, host string) ([]net.IP, error)
 
-func defaultLookupIPAddresses(ctx context.Context, host string) ([]net.IP, error) {
-	return net.DefaultResolver.LookupIP(ctx, "ip", host)
-}
-
 func ipBlockedForAIA(ip net.IP) error {
 	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
 		return fmt.Errorf("blocked address %s (loopback, link-local, or unspecified)", ip.String())
@@ -200,8 +197,10 @@ func ipBlockedForAIA(ip net.IP) error {
 // OCSP, and CRL HTTP requests.
 //
 // By default, it rejects non-HTTP(S) schemes plus literal and DNS-resolved
-// private/loopback/link-local/unspecified addresses to prevent SSRF and
-// DNS-rebind attacks. Set AllowPrivateNetworks to bypass IP restrictions.
+// private/loopback/link-local/unspecified addresses to reduce SSRF risk. Set
+// AllowPrivateNetworks to bypass IP restrictions. This check does not fully
+// prevent DNS-rebind TOCTOU attacks between validation-time DNS and dial-time
+// DNS.
 func ValidateAIAURLWithOptions(ctx context.Context, input ValidateAIAURLInput) error {
 	parsed, err := url.Parse(input.URL)
 	if err != nil {
@@ -232,6 +231,9 @@ func ValidateAIAURLWithOptions(ctx context.Context, input ValidateAIAURLInput) e
 
 	lookup := input.lookupIPAddresses
 	if lookup == nil {
+		if !aiaDNSResolutionAvailable() {
+			return nil
+		}
 		lookup = defaultLookupIPAddresses
 	}
 

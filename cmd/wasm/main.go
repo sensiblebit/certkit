@@ -40,7 +40,7 @@ func main() {
 }
 
 // addFiles processes an array of {name, data} objects with optional passwords.
-// JS signature: certkitAddFiles(files: Array<{name: string, data: Uint8Array}>, passwords: string) → Promise<string>
+// JS signature: certkitAddFiles(files: Array<{name: string, data: Uint8Array}>, passwords: string, allowPrivateNetwork?: boolean) → Promise<string>
 func addFiles(_ js.Value, args []js.Value) any {
 	if len(args) < 1 {
 		return jsError("certkitAddFiles requires at least 1 argument")
@@ -59,6 +59,11 @@ func addFiles(_ js.Value, args []js.Value) any {
 		}
 	}
 	passwords = certkit.DeduplicatePasswords(passwords)
+
+	allowPrivateNetworks := false
+	if len(args) >= 3 && args[2].Type() == js.TypeBoolean {
+		allowPrivateNetworks = args[2].Bool()
+	}
 
 	handler := js.FuncOf(func(_ js.Value, promiseArgs []js.Value) any {
 		resolve := promiseArgs[0]
@@ -120,7 +125,7 @@ func addFiles(_ js.Value, args []js.Value) any {
 
 				storeMu.Lock()
 				defer storeMu.Unlock()
-				warnings := resolveAIA(ctx, globalStore)
+				warnings := resolveAIA(ctx, globalStore, allowPrivateNetworks)
 
 				if warnings == nil {
 					warnings = []string{}

@@ -1795,6 +1795,7 @@ func TestValidateAIAURL(t *testing.T) {
 		{"localhost hostname", "http://localhost/ca.cer", false, true, "resolved"},
 		{"link-local IPv4", "http://169.254.1.1/ca.cer", false, true, "loopback, link-local, or unspecified"},
 		{"unspecified IPv4", "http://0.0.0.0/ca.cer", false, true, "loopback, link-local, or unspecified"},
+		{"this network IPv4 range", "http://0.1.2.3/ca.cer", false, true, "blocked private"},
 		{"unspecified IPv6", "http://[::]/ca.cer", false, true, "loopback, link-local, or unspecified"},
 		{"private IPv6 ULA", "http://[fd12::1]/ca.cer", false, true, "blocked private"},
 		{"private 10.x", "http://10.0.0.1/ca.cer", false, true, "blocked private"},
