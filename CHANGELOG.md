@@ -99,6 +99,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix `scan --bundle-path` text/default output to print a useful post-export summary (certificate/key counts plus export path) while keeping JSON export output unchanged ([#95])
 - Fix `scan` to fail fast when per-file processing or size-check `stat` calls fail during directory traversal, instead of logging and silently continuing ([#106])
 - Fix max-size read failures to return stable wrapped error causes instead of requiring string matching in internal scan/read paths ([#106])
+- Fix `scan --bundle-path` to reject unsupported `--format` values with the same validation used by non-export scans (for example, `--format yaml` now errors instead of silently falling back to text) ([#106])
 - Fix verify JSON chain output to use `not_after` for consistency with other commands ([#87])
 - Fix Certificate Transparency availability handling to preserve parsed SCT candidates when the log list cannot be loaded and mark them as unavailable instead of dropping them ([#86])
 - Fix chain conversion failures in Certificate Transparency checks to report SCTs as `unavailable` instead of `invalid` and keep diagnostics as warnings ([#86])

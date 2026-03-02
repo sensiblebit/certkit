@@ -14,6 +14,7 @@ import (
 	"encoding/pem"
 	"math/big"
 	"net"
+	"os"
 	"testing"
 	"time"
 
@@ -422,4 +423,12 @@ func createTestTarGz(t *testing.T, files map[string][]byte) []byte {
 		t.Fatalf("close gzip writer: %v", err)
 	}
 	return buf.Bytes()
+}
+
+// createSymlinkOrSkip creates a symlink for tests or skips when unsupported.
+func createSymlinkOrSkip(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("skipping symlink-dependent test: %v", err)
+	}
 }

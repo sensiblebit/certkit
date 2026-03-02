@@ -258,7 +258,8 @@ func runScan(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("exporting bundles: %w", err)
 		}
 		store.DumpDebug()
-		if format == "json" {
+		switch format {
+		case "json":
 			mozillaPool, err := certkit.MozillaRootPool()
 			if err != nil {
 				return fmt.Errorf("loading Mozilla root pool: %w", err)
@@ -275,7 +276,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 				return fmt.Errorf("marshaling JSON: %w", err)
 			}
 			fmt.Println(string(data))
-		} else {
+		case "text":
 			mozillaPool, err := certkit.MozillaRootPool()
 			if err != nil {
 				return fmt.Errorf("loading Mozilla root pool: %w", err)
@@ -297,6 +298,8 @@ func runScan(cmd *cobra.Command, args []string) error {
 				UntrustedLeaves:        summary.UntrustedLeaves,
 				BundlePath:             scanBundlePath,
 			}))
+		default:
+			return fmt.Errorf("unsupported output format %q (use text or json)", format)
 		}
 	} else {
 		// Print summary with trust and expiry annotations
