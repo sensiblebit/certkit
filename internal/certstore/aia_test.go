@@ -221,8 +221,9 @@ func TestResolveAIA_FetchesMissingIssuer(t *testing.T) {
 	}
 
 	warnings := ResolveAIA(context.Background(), ResolveAIAInput{
-		Store: store,
-		Fetch: fetcher,
+		Store:                store,
+		Fetch:                fetcher,
+		AllowPrivateNetworks: true,
 	})
 
 	if len(warnings) != 0 {
@@ -709,8 +710,9 @@ func TestResolveAIA_PKCS7Response(t *testing.T) {
 	}
 
 	warnings := ResolveAIA(context.Background(), ResolveAIAInput{
-		Store: store,
-		Fetch: fetcher,
+		Store:                store,
+		Fetch:                fetcher,
+		AllowPrivateNetworks: true,
 	})
 
 	if len(warnings) != 0 {

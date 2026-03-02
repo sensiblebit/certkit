@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"encoding/asn1"
 	"encoding/json"
+	"encoding/pem"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -94,11 +95,35 @@ func inspectPEMData(data []byte, passwords []string) []InspectResult {
 	}
 
 	// Try private key
-	if key, err := certkit.ParsePEMPrivateKeyWithPasswords(data, passwords); err == nil {
+	rest := data
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if !isPrivateKeyPEMBlockType(block.Type) {
+			continue
+		}
+
+		key, err := certkit.ParsePEMPrivateKeyWithPasswords(pem.EncodeToMemory(block), passwords)
+		if err != nil {
+			slog.Debug("skipping malformed private key PEM block during inspect", "block_type", block.Type, "error", err)
+			continue
+		}
 		results = append(results, inspectKey(key))
 	}
 
 	return results
+}
+
+func isPrivateKeyPEMBlockType(blockType string) bool {
+	switch blockType {
+	case "RSA PRIVATE KEY", "EC PRIVATE KEY", "PRIVATE KEY", "ENCRYPTED PRIVATE KEY", "OPENSSH PRIVATE KEY":
+		return true
+	default:
+		return false
+	}
 }
 
 func inspectDERData(data []byte, passwords []string) []InspectResult {
@@ -118,6 +143,18 @@ func inspectDERData(data []byte, passwords []string) []InspectResult {
 
 	// Try PKCS#8
 	if key, err := x509.ParsePKCS8PrivateKey(data); err == nil {
+		results = append(results, inspectKey(key))
+		return results
+	}
+
+	// Try PKCS#1 RSA
+	if key, err := x509.ParsePKCS1PrivateKey(data); err == nil {
+		results = append(results, inspectKey(key))
+		return results
+	}
+
+	// Try SEC1 EC
+	if key, err := x509.ParseECPrivateKey(data); err == nil {
 		results = append(results, inspectKey(key))
 		return results
 	}
@@ -309,8 +346,9 @@ func privateKeySize(key any) string {
 
 // ResolveInspectAIAInput holds parameters for ResolveInspectAIA.
 type ResolveInspectAIAInput struct {
-	Results []InspectResult
-	Fetch   certstore.AIAFetcher
+	Results              []InspectResult
+	Fetch                certstore.AIAFetcher
+	AllowPrivateNetworks bool
 }
 
 // ResolveInspectAIA fetches missing intermediate certificates via AIA for the
@@ -340,8 +378,9 @@ func ResolveInspectAIA(ctx context.Context, input ResolveInspectAIAInput) ([]Ins
 	}
 
 	warnings := certstore.ResolveAIA(ctx, certstore.ResolveAIAInput{
-		Store: store,
-		Fetch: input.Fetch,
+		Store:                store,
+		Fetch:                input.Fetch,
+		AllowPrivateNetworks: input.AllowPrivateNetworks,
 	})
 
 	for _, rec := range store.AllCertsFlat() {

@@ -89,8 +89,9 @@ func TestCheckOCSP_MockResponse(t *testing.T) {
 			defer cancel()
 
 			result, err := CheckOCSP(ctx, CheckOCSPInput{
-				Cert:   leafCert,
-				Issuer: ca.Cert,
+				Cert:                 leafCert,
+				Issuer:               ca.Cert,
+				AllowPrivateNetworks: true,
 			})
 			if err != nil {
 				t.Fatalf("CheckOCSP failed: %v", err)
@@ -167,5 +168,27 @@ func TestFormatOCSPResult(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Errorf("output missing %q\ngot:\n%s", want, output)
 		}
+	}
+}
+
+func TestCheckOCSP_PrivateEndpointBlockedByDefault(t *testing.T) {
+	t.Parallel()
+
+	ca := generateTestCA(t, "OCSP Private Endpoint CA")
+	leaf := generateTestLeafCert(t, ca, withOCSPServer("http://localhost/ocsp"))
+	leafCert, err := x509.ParseCertificate(leaf.DER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = CheckOCSP(context.Background(), CheckOCSPInput{
+		Cert:   leafCert,
+		Issuer: ca.Cert,
+	})
+	if err == nil {
+		t.Fatal("expected error for private OCSP endpoint")
+	}
+	if !strings.Contains(err.Error(), "validating OCSP responder URL") {
+		t.Fatalf("error = %q, want validating OCSP responder URL", err.Error())
 	}
 }

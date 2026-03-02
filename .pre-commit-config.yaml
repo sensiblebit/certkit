@@ -8,7 +8,7 @@ repos:
         args: [--branch, main]
 
   - repo: https://github.com/sensiblebit/.github
-    rev: "9bff7f460e6a6ac40de0798d7bc2f191d5143404"
+    rev: "fb8829a3bdb52f8263024528909088706009c1e1"
     hooks:
       - id: branch-name
       - id: commit-message

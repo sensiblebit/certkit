@@ -24,11 +24,17 @@ const filterExpired = document.getElementById("filter-expired");
 const filterUnmatched = document.getElementById("filter-unmatched");
 const filterUntrusted = document.getElementById("filter-untrusted");
 const selectAll = document.getElementById("select-all");
+const scanAllowPrivateNetwork = document.getElementById(
+  "scan-allow-private-network",
+);
 
 // DOM references — Inspect page
 const inspectDropZone = document.getElementById("inspect-drop-zone");
 const inspectFileInput = document.getElementById("inspect-file-input");
 const inspectPasswordsInput = document.getElementById("inspect-passwords");
+const inspectAllowPrivateNetwork = document.getElementById(
+  "inspect-allow-private-network",
+);
 const inspectStatusBar = document.getElementById("inspect-status");
 const inspectStatusText = document.getElementById("inspect-status-text");
 const inspectResultsSection = document.getElementById("inspect-results");
@@ -61,13 +67,25 @@ const STATUS_ICONS = {
 // certkitFetchURL is called from Go (WASM) to fetch AIA certificates.
 // Tries direct fetch first, then falls back to our own /api/fetch proxy
 // (same-origin, no CORS issues).
-window.certkitFetchURL = async function (url) {
+window.certkitFetchURL = async function (url, timeoutMs = 10000) {
+  const fetchBytesWithTimeout = async (targetURL) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+    try {
+      const resp = await fetch(targetURL, { signal: controller.signal });
+      const body = await resp.arrayBuffer();
+      return { resp, data: new Uint8Array(body) };
+    } finally {
+      clearTimeout(timer);
+    }
+  };
+
   // 1. Try direct fetch (works if CA serves CORS headers)
   try {
-    const resp = await fetch(url);
+    const { resp, data } = await fetchBytesWithTimeout(url);
     if (resp.ok) {
       console.log("certkit: AIA direct fetch succeeded:", url);
-      return new Uint8Array(await resp.arrayBuffer());
+      return data;
     }
   } catch (e) {
     console.log("certkit: AIA direct fetch failed:", url, e.message);
@@ -76,13 +94,13 @@ window.certkitFetchURL = async function (url) {
   // 2. Proxy through our own /api/fetch endpoint
   const proxiedURL = "/api/fetch?url=" + encodeURIComponent(url);
   console.log("certkit: AIA proxy fetch:", proxiedURL);
-  const resp = await fetch(proxiedURL);
+  const { resp, data } = await fetchBytesWithTimeout(proxiedURL);
   if (!resp.ok) {
-    const body = await resp.text();
+    const body = new TextDecoder().decode(data);
     throw new Error(`Proxy returned ${resp.status}: ${body}`);
   }
   console.log("certkit: AIA proxy fetch succeeded for", url);
-  return new Uint8Array(await resp.arrayBuffer());
+  return data;
 };
 
 // --- WASM Loading ---
@@ -291,6 +309,7 @@ async function addFileObjects(fileObjects, statusMessage) {
     const resultJSON = await certkitAddFiles(
       fileObjects,
       passwordsInput.value.trim(),
+      scanAllowPrivateNetwork.checked,
     );
     const results = JSON.parse(resultJSON);
 
@@ -424,6 +443,7 @@ async function inspectFileObjects(fileObjects) {
     const resultJSON = await certkitInspect(
       fileObjects,
       inspectPasswordsInput.value.trim(),
+      inspectAllowPrivateNetwork.checked,
     );
     const results = JSON.parse(resultJSON);
 
@@ -1184,7 +1204,25 @@ exportBtn.addEventListener("click", async () => {
     downloadBlob(zipData, "certkit-bundles.zip", "application/zip");
     hideStatus();
   } catch (err) {
-    showStatus(`Export error: ${err.message}`, true);
+    if (
+      err?.code === "VERIFY_FAILED" &&
+      window.confirm(
+        "Verified export failed. Retry without certificate chain verification?",
+      )
+    ) {
+      try {
+        const zipData = await certkitExportBundles(skis, undefined, true);
+        downloadBlob(zipData, "certkit-bundles.zip", "application/zip");
+        showStatus(
+          "Export completed without chain verification. Verify trust before use.",
+          false,
+        );
+      } catch (retryErr) {
+        showStatus(`Export error: ${retryErr.message}`, true);
+      }
+    } else {
+      showStatus(`Export error: ${err.message}`, true);
+    }
   } finally {
     exportBtn.disabled = false;
     updateExportBtn();

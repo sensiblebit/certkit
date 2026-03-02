@@ -6,6 +6,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -13,19 +14,29 @@ import (
 	"github.com/sensiblebit/certkit/internal/certstore"
 )
 
+var errVerifiedExportFailed = errors.New("verified export failed")
+
 // exportBundles generates a ZIP file containing organized certificate bundles.
 // If filterSKIs is non-empty, only pairs whose colon-hex SKI appears in the
 // list are included. Otherwise all matched pairs are exported.
-func exportBundles(ctx context.Context, s *certstore.MemStore, filterSKIs []string, p12Password string) ([]byte, error) {
-	matched := s.MatchedPairs()
+// When AllowUnverifiedExport is true, chain verification is disabled explicitly.
+type exportBundlesInput struct {
+	Store                 *certstore.MemStore
+	FilterSKIs            []string
+	P12Password           string
+	AllowUnverifiedExport bool
+}
+
+func exportBundles(ctx context.Context, input exportBundlesInput) ([]byte, error) {
+	matched := input.Store.MatchedPairs()
 	if len(matched) == 0 {
 		return nil, fmt.Errorf("no matched key-certificate pairs found")
 	}
 
 	// Build a lookup set from the colon-hex formatted filter list.
-	if len(filterSKIs) > 0 {
-		allowed := make(map[string]bool, len(filterSKIs))
-		for _, ski := range filterSKIs {
+	if len(input.FilterSKIs) > 0 {
+		allowed := make(map[string]bool, len(input.FilterSKIs))
+		for _, ski := range input.FilterSKIs {
 			allowed[ski] = true
 		}
 		var filtered []string
@@ -47,18 +58,21 @@ func exportBundles(ctx context.Context, s *certstore.MemStore, filterSKIs []stri
 	opts := certkit.BundleOptions{
 		FetchAIA:   false,
 		TrustStore: "mozilla",
-		Verify:     true,
+		Verify:     !input.AllowUnverifiedExport,
 	}
 
 	if err := certstore.ExportMatchedBundles(ctx, certstore.ExportMatchedBundleInput{
-		Store:         s,
+		Store:         input.Store,
 		SKIs:          matched,
 		BundleOpts:    opts,
 		Writer:        &zipBundleWriter{zw: zw},
-		RetryNoVerify: true,
-		P12Password:   p12Password,
+		RetryNoVerify: false,
+		P12Password:   input.P12Password,
 	}); err != nil {
-		return nil, err
+		if opts.Verify {
+			return nil, fmt.Errorf("%w: %w", errVerifiedExportFailed, err)
+		}
+		return nil, fmt.Errorf("unverified export failed: %w", err)
 	}
 
 	if err := zw.Close(); err != nil {

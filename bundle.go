@@ -34,8 +34,11 @@ var (
 // address space. Parsed once at init to avoid repeated net.ParseCIDR calls.
 var privateNetworks []*net.IPNet
 
+const aiaURLResolveTimeout = 2 * time.Second
+
 func init() {
 	for _, cidr := range []string{
+		"0.0.0.0/8",      // RFC 791 "this network"
 		"10.0.0.0/8",     // RFC 1918
 		"172.16.0.0/12",  // RFC 1918
 		"192.168.0.0/16", // RFC 1918
@@ -166,23 +169,40 @@ func IsIssuedByMozillaRoot(cert *x509.Certificate) bool {
 	return MozillaRootSubjects()[string(cert.RawIssuer)]
 }
 
-// ValidateAIAURL checks whether a URL is safe to fetch for AIA certificate
-// resolution. It rejects non-HTTP(S) schemes and literal private/loopback/
-// link-local IP addresses to prevent SSRF.
+// ValidateAIAURLInput holds parameters for ValidateAIAURLWithOptions.
+type ValidateAIAURLInput struct {
+	// URL is the candidate URL to validate.
+	URL string
+	// AllowPrivateNetworks bypasses private/internal IP checks.
+	AllowPrivateNetworks bool
+
+	lookupIPAddresses lookupIPAddressesFunc
+}
+
+type lookupIPAddressesFunc func(ctx context.Context, host string) ([]net.IP, error)
+
+func ipBlockedForAIA(ip net.IP) error {
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
+		return fmt.Errorf("blocked address %s (loopback, link-local, or unspecified)", ip.String())
+	}
+	for _, network := range privateNetworks {
+		if network.Contains(ip) {
+			return fmt.Errorf("blocked private address %s", ip.String())
+		}
+	}
+	return nil
+}
+
+// ValidateAIAURLWithOptions checks whether a URL is safe to fetch for AIA,
+// OCSP, and CRL HTTP requests.
 //
-// Known limitation: hostnames that resolve to private IPs are intentionally
-// allowed. This means DNS rebinding (a hostname resolving to a public IP at
-// validation time, then to a private IP at connection time) is theoretically
-// possible. We accept this because:
-//
-//  1. certkit is a short-lived CLI process — the window between ValidateAIAURL
-//     and the HTTP request is ~2ms, making rebinding impractical to exploit.
-//  2. Blocking hostnames that resolve to private IPs would break legitimate
-//     internal CAs whose AIA endpoints are on private networks.
-//  3. Adding net.Dialer.Control to check resolved IPs doesn't help: if we
-//     allow private IPs for internal CAs, the check is the same TOCTOU race.
-func ValidateAIAURL(rawURL string) error {
-	parsed, err := url.Parse(rawURL)
+// By default, it rejects non-HTTP(S) schemes plus literal and DNS-resolved
+// private/loopback/link-local/unspecified addresses to reduce SSRF risk. Set
+// AllowPrivateNetworks to bypass IP restrictions. This check does not fully
+// prevent DNS-rebind TOCTOU attacks between validation-time DNS and dial-time
+// DNS.
+func ValidateAIAURLWithOptions(ctx context.Context, input ValidateAIAURLInput) error {
+	parsed, err := url.Parse(input.URL)
 	if err != nil {
 		return fmt.Errorf("parsing URL: %w", err)
 	}
@@ -193,19 +213,54 @@ func ValidateAIAURL(rawURL string) error {
 		return fmt.Errorf("unsupported scheme %q (only http and https are allowed)", parsed.Scheme)
 	}
 	host := parsed.Hostname()
+	if host == "" {
+		return fmt.Errorf("missing hostname in URL")
+	}
+
+	if input.AllowPrivateNetworks {
+		return nil
+	}
+
 	ip := net.ParseIP(host)
-	if ip == nil {
-		return nil // hostname, not a literal IP — allow (see doc comment)
+	if ip != nil {
+		if blockedErr := ipBlockedForAIA(ip); blockedErr != nil {
+			return blockedErr
+		}
+		return nil
 	}
-	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
-		return fmt.Errorf("blocked address %s (loopback, link-local, or unspecified)", host)
+
+	lookup := input.lookupIPAddresses
+	if lookup == nil {
+		if !aiaDNSResolutionAvailable() {
+			return nil
+		}
+		lookup = defaultLookupIPAddresses
 	}
-	for _, network := range privateNetworks {
-		if network.Contains(ip) {
-			return fmt.Errorf("blocked private address %s", host)
+
+	resolveCtx, cancel := context.WithTimeout(ctx, aiaURLResolveTimeout)
+	defer cancel()
+
+	ips, err := lookup(resolveCtx, host)
+	if err != nil {
+		return fmt.Errorf("resolving host %q: %w", host, err)
+	}
+	if len(ips) == 0 {
+		return fmt.Errorf("resolving host %q: no IP addresses returned", host)
+	}
+	for _, resolvedIP := range ips {
+		if blockedErr := ipBlockedForAIA(resolvedIP); blockedErr != nil {
+			return fmt.Errorf("host %q resolved to %s: %w", host, resolvedIP.String(), blockedErr)
 		}
 	}
+
 	return nil
+}
+
+// ValidateAIAURL checks whether a URL is safe to fetch for AIA, OCSP, and CRL
+// requests. It rejects non-HTTP(S) schemes plus literal and DNS-resolved
+// private/loopback/link-local/unspecified addresses.
+func ValidateAIAURL(rawURL string) error {
+	return ValidateAIAURLWithOptions(context.Background(), ValidateAIAURLInput{URL: rawURL})
 }
 
 // VerifyChainTrustInput holds parameters for VerifyChainTrust.
@@ -277,6 +332,8 @@ type BundleOptions struct {
 	Verify bool
 	// ExcludeRoot omits the root certificate from the result.
 	ExcludeRoot bool
+	// AllowPrivateNetworks allows AIA fetches to private/internal endpoints.
+	AllowPrivateNetworks bool
 }
 
 // DefaultOptions returns sensible defaults.
@@ -352,6 +409,8 @@ type FetchAIACertificatesInput struct {
 	Timeout time.Duration
 	// MaxDepth is the maximum number of AIA hops to follow.
 	MaxDepth int
+	// AllowPrivateNetworks allows AIA fetches to private/internal endpoints.
+	AllowPrivateNetworks bool
 }
 
 // FetchAIACertificates follows AIA CA Issuers URLs to fetch intermediate certificates.
@@ -369,7 +428,7 @@ func FetchAIACertificates(ctx context.Context, input FetchAIACertificatesInput) 
 			if len(via) >= maxRedirects {
 				return fmt.Errorf("stopped after %d redirects", maxRedirects)
 			}
-			if err := ValidateAIAURL(req.URL.String()); err != nil {
+			if err := ValidateAIAURLWithOptions(req.Context(), ValidateAIAURLInput{URL: req.URL.String(), AllowPrivateNetworks: input.AllowPrivateNetworks}); err != nil {
 				return fmt.Errorf("redirect blocked: %w", err)
 			}
 			return nil
@@ -388,7 +447,7 @@ func FetchAIACertificates(ctx context.Context, input FetchAIACertificatesInput) 
 			}
 			seen[aiaURL] = true
 
-			if err := ValidateAIAURL(aiaURL); err != nil {
+			if err := ValidateAIAURLWithOptions(ctx, ValidateAIAURLInput{URL: aiaURL, AllowPrivateNetworks: input.AllowPrivateNetworks}); err != nil {
 				warnings = append(warnings, fmt.Sprintf("AIA URL rejected for %s: %v", aiaURL, err))
 				continue
 			}
@@ -532,9 +591,10 @@ func Bundle(ctx context.Context, input BundleInput) (*BundleResult, error) {
 
 	if opts.FetchAIA {
 		aiaCerts, warnings := FetchAIACertificates(ctx, FetchAIACertificatesInput{
-			Cert:     leaf,
-			Timeout:  opts.AIATimeout,
-			MaxDepth: opts.AIAMaxDepth,
+			Cert:                 leaf,
+			Timeout:              opts.AIATimeout,
+			MaxDepth:             opts.AIAMaxDepth,
+			AllowPrivateNetworks: opts.AllowPrivateNetworks,
 		})
 		result.Warnings = append(result.Warnings, warnings...)
 		for _, cert := range aiaCerts {

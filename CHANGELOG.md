@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `connect` automatically checks OCSP revocation status on the leaf certificate (best-effort; shows "skipped" or "unavailable" when check cannot complete) ([#78])
 - Add `--crl` flag to `connect` for opt-in CRL revocation checking via distribution points ([#78])
 - Add `FetchCRL` library function for downloading CRLs from HTTP URLs with SSRF validation ([#78])
+- Add `ReadCRLFile` library function for reading local CRL files with the same 10 MB size cap as `FetchCRL` ([#105])
 - `connect` exits with code 2 when OCSP or CRL reports a revoked certificate ([#78])
 - `connect --crl` verifies CRL signatures against the issuer certificate — rejects CRLs signed by a different CA ([#78])
 - `connect --crl` rejects expired CRLs (past `NextUpdate`) to prevent replay of stale revocation data ([#78])
@@ -67,7 +68,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Prefer user-provided passwords for PKCS#12/JKS outputs while keeping `changeit` as the default fallback for compatibility ([#87])
+- Require verified WASM bundle export by default; retrying export without verification is now an explicit user action surfaced in the web UI ([#105])
+- **Breaking:** Normalize CLI diagnostics JSON schema: `verify` now emits `diagnostics` (not `diagnoses`) and uses `error` status values for failing checks ([#96])
+- **Breaking:** Normalize payload JSON for `bundle`/`convert` to use shared `data` + `encoding` fields (replacing `bundle`-only `chain_pem`) ([#96])
+- **Breaking:** Normalize verbose `ocsp --json` certificate context keys to `subject`/`issuer` for cross-command consistency ([#96])
+- Require explicit user-provided passwords for PKCS#12/JKS outputs; retain `changeit` only when `--insecure-default-password` is specified ([#89])
 - **Breaking:** Standardize certificate serial number formatting to `0x`-prefixed hex across CLI/JSON output ([#87])
 - Move local pre-commit hook definitions from repo config into the shared `sensiblebit/.github` hook set, and pin this branch to the shared commit so all repositories can consume the same workflow checks and Node tool bootstrapping behavior from one source ([#85])
 
@@ -87,6 +92,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Add explicit `permissions: { contents: read }` to the Cloudflare Pages deploy workflow to restrict default `GITHUB_TOKEN` scope ([#110])
+- Enforce bounded per-file and total upload limits in WASM `addFiles` and `inspect` ingestion paths to prevent unbounded memory growth ([#105])
+- Enforce local CRL file size limits for `certkit crl` and shared CRL readers to reject oversized inputs early ([#105])
+- Harden AIA/OCSP/CRL SSRF checks by validating DNS-resolved hostnames against private/internal address ranges by default, and add explicit `--allow-private-network` opt-in flags for internal PKI endpoints in `connect`, `verify`, `ocsp`, `scan`, `inspect`, and `bundle` ([#108])
+- Require explicit PKCS#12/JKS export passwords in `bundle`, `convert`, and `scan --bundle-path`; add `--insecure-default-password` for explicit legacy `changeit` fallback ([#89])
+- Mark bundle `.yaml` outputs as sensitive and write them with restrictive permissions (0600) because they include private key material ([#89])
 - Prevent bundle export path traversal by sanitizing bundle folder names and enforcing safe output paths ([#87])
 - Enforce size limits on input reads to avoid unbounded memory usage ([#87])
 - Add SSRF validation (`ValidateAIAURL`) to OCSP responder URLs and CRL distribution point URLs — previously only AIA certificate URLs were validated ([#78])
@@ -95,6 +106,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Require a minimum RSA key size of 2048 bits in `GenerateRSAKey`, returning a typed error for smaller key requests ([#110])
+- Remove `InsecureSkipVerify` from TLS cipher and legacy key-exchange probe handshakes while preserving probe behavior through negotiated-state checks ([#110])
+- Fix WASM `inspect` AIA resolution to expose an explicit private-network opt-in so internal PKI intermediates can still be fetched when needed ([#108])
+- Apply a default 10-second timeout in `ConnectTLS` when callers provide a context without a deadline, preventing indefinite hangs during TCP/TLS connect and handshake operations ([#108])
+- Fix `scan` directory traversal boundaries and resilience: symlinks that point outside the scan root are skipped, max-file-size checks now apply to symlink targets and archive reads, and transient walk errors no longer prune unrelated files during traversal ([#91])
+- Fix `scan --bundle-path` text/default output to print a useful post-export summary (certificate/key counts plus export path) while keeping JSON export output unchanged ([#95])
+- Fix `scan` to fail fast when per-file processing or size-check `stat` calls fail during directory traversal, instead of logging and silently continuing ([#106])
+- Fix max-size read failures to return stable wrapped error causes instead of requiring string matching in internal scan/read paths ([#106])
+- Fix `scan --bundle-path` to reject unsupported `--format` values with the same validation used by non-export scans (for example, `--format yaml` now errors instead of silently falling back to text) ([#106])
+- Fix `scan --bundle-path` text output to keep scan summary on stdout while sending the export destination path to stderr per CLI output conventions ([#106])
+- Fix inspect/convert/container parsing to continue past malformed PEM certificate blocks so valid certificates are still processed, and add DER private-key detection for key-only inputs ([#107])
+- Fix inspect PEM key parsing to continue past malformed private-key blocks so valid keys in the same bundle are still reported ([#107])
+- Fix JKS container selection to keep private key entries paired with their own leaf certificate and chain instead of selecting unrelated trusted entries ([#107])
+- Fix `DecodeJKSKeyEntries` to emit debug logs when skipping non-private-key aliases and malformed PKCS#8 private-key payloads (ERR-5) ([#107])
+- Fix JKS/issuer parsing edge cases by adding debug logging for skipped JKS entry errors, requiring issuer DN match during OCSP issuer auto-selection, and consolidating duplicate CSR-scan tests into a single table-driven case ([#107])
+- Fix certificate identity deduplication for certificates without AKI by falling back to issuer+serial identity, and align SQLite persistence keys with the same identity to prevent dropped certs across different issuers ([#107])
+- Fix CSR signing to reject CA certificate/key mismatches before issuing certificates ([#107])
+- Fix OCSP issuer auto-selection to choose a certificate that actually signs the leaf (with AKI/SKI preference) instead of defaulting to the first extra certificate ([#107])
+- Fix CRL read errors to include `reading CRL data` context before caller wrapping, improving nested error diagnostics ([#105])
+- Fix WASM ingestion promises to recover from internal panics instead of crashing asynchronous file processing ([#105])
+- Fix WASM AIA fetch callback lifecycle to release JS callbacks on cancellation paths after promise completion ([#105])
+- Fix web AIA proxy upstream handling to enforce explicit fetch timeout/abort behavior and return 504 timeout errors ([#105])
+- Fix web AIA proxy timeout handling to keep abort timers active through response body reads, including stalled-after-headers upstream responses ([#105])
+- Fix `bundle` chain-verification failures returning exit code 1 — validation failures now return exit code 2 ([#88])
+- Fix `bundle --key` mismatch and `inspect` expired-only filtering returning exit code 1 — these validation failures now return exit code 2 ([#88])
+- Fix `convert --to p12` multi-key format-limit errors returning validation exit code 2 — format limitations now return exit code 1 ([#97])
+- Fix PKCS#12 export error identity so callers can reliably detect missing-password and multi-key format-limit failures with wrapped errors ([#109])
+- Fix README/EXAMPLES/help mismatches for trust-store defaults, binary-output requirements, expired-cert behavior, and supported convert formats ([#101])
 - Fix verify JSON chain output to use `not_after` for consistency with other commands ([#87])
 - Fix Certificate Transparency availability handling to preserve parsed SCT candidates when the log list cannot be loaded and mark them as unavailable instead of dropping them ([#86])
 - Fix chain conversion failures in Certificate Transparency checks to report SCTs as `unavailable` instead of `invalid` and keep diagnostics as warnings ([#86])
@@ -210,6 +249,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Tests
 
+- Add behavior-focused edge-case coverage for malformed PEM + valid cert preservation, DER private-key parsing, JKS key-entry alias pairing, issuer selection, and CA cert/key mismatch validation; remove assertions that depended on old tautological error-path expectations ([#107])
+- Consolidate CRL oversize-input coverage into one table-driven test for HTTP and local-file sources, asserting `ErrCRLTooLarge` behaviorally ([#105])
 - Remove `TestBuildLegacyClientHelloMsg` — behavioral coverage exists through `TestLegacyFallbackConnect` per T-11 ([`6492fa5`])
 - Remove `TestParseCertificateMessage` — behavioral coverage exists through `TestReadServerCertificates` per T-11 ([#82])
 - Fix `_, _` error discards in `TestLegacyFallbackConnect` mock server goroutine — replaced with `slog.Debug` per ERR-5 ([#82])
@@ -937,6 +978,19 @@ Initial release.
 [#85]: https://github.com/sensiblebit/certkit/pull/85
 [#86]: https://github.com/sensiblebit/certkit/pull/86
 [#87]: https://github.com/sensiblebit/certkit/pull/87
+[#108]: https://github.com/sensiblebit/certkit/pull/108
+[#91]: https://github.com/sensiblebit/certkit/pull/91
+[#95]: https://github.com/sensiblebit/certkit/pull/95
+[#106]: https://github.com/sensiblebit/certkit/pull/106
+[#107]: https://github.com/sensiblebit/certkit/pull/107
+[#105]: https://github.com/sensiblebit/certkit/pull/105
+[#88]: https://github.com/sensiblebit/certkit/pull/88
+[#89]: https://github.com/sensiblebit/certkit/pull/89
+[#96]: https://github.com/sensiblebit/certkit/pull/96
+[#97]: https://github.com/sensiblebit/certkit/pull/97
+[#101]: https://github.com/sensiblebit/certkit/pull/101
+[#109]: https://github.com/sensiblebit/certkit/pull/109
+[#110]: https://github.com/sensiblebit/certkit/pull/110
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63

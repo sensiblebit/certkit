@@ -9,6 +9,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -1384,7 +1385,7 @@ func TestDiagnoseChain(t *testing.T) {
 				ExtraCerts: []*x509.Certificate{ca.cert},
 			},
 			wantChecks: map[string]string{
-				"expired": "fail",
+				"expired": "error",
 			},
 		},
 		{
@@ -1394,7 +1395,7 @@ func TestDiagnoseChain(t *testing.T) {
 				ExtraCerts: []*x509.Certificate{ca.cert},
 			},
 			wantChecks: map[string]string{
-				"not-yet-valid": "fail",
+				"not-yet-valid": "error",
 			},
 		},
 		{
@@ -1424,7 +1425,7 @@ func TestDiagnoseChain(t *testing.T) {
 				// No extra certs — intermediate is missing
 			},
 			wantChecks: map[string]string{
-				"missing-intermediate": "fail",
+				"missing-intermediate": "error",
 			},
 			wantDetailSubstr: map[string]string{
 				// Detail must use FormatDN (full DN), not bare CommonName
@@ -1439,7 +1440,7 @@ func TestDiagnoseChain(t *testing.T) {
 			},
 			wantChecks: map[string]string{
 				"expired":              "pass",
-				"intermediate-expired": "fail",
+				"intermediate-expired": "error",
 			},
 			wantDetailSubstr: map[string]string{
 				// Detail must use FormatDN (full DN), not bare CommonName
@@ -1500,7 +1501,7 @@ func TestFormatDiagnoses(t *testing.T) {
 	// WHY: FormatDiagnoses should include headers and status markers for each diagnosis.
 	t.Parallel()
 	diags := []Diagnosis{
-		{Check: "expired", Status: "fail", Detail: "leaf certificate expired"},
+		{Check: "expired", Status: "error", Detail: "leaf certificate expired"},
 		{Check: "self-signed", Status: "warn", Detail: "self-signed leaf"},
 		{Check: "missing-intermediate", Status: "pass", Detail: "intermediate found"},
 	}
@@ -1525,6 +1526,31 @@ func TestFormatDiagnoses(t *testing.T) {
 		if !strings.Contains(output, diag.Detail) {
 			t.Errorf("output missing detail %q", diag.Detail)
 		}
+	}
+}
+
+func TestVerifyResultJSON_UsesDiagnosticsKey(t *testing.T) {
+	t.Parallel()
+
+	data, err := json.Marshal(VerifyResult{
+		Subject: "CN=example.com",
+		Diagnostics: []Diagnosis{
+			{Check: "expired", Status: "error", Detail: "leaf certificate expired"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal verify result: %v", err)
+	}
+
+	jsonText := string(data)
+	if !strings.Contains(jsonText, `"diagnostics"`) {
+		t.Fatalf("verify result json missing diagnostics field: %s", jsonText)
+	}
+	if strings.Contains(jsonText, `"diagnoses"`) {
+		t.Fatalf("verify result json contains legacy diagnoses field: %s", jsonText)
+	}
+	if !strings.Contains(jsonText, `"status":"error"`) {
+		t.Fatalf("verify result json missing error status: %s", jsonText)
 	}
 }
 
@@ -1680,12 +1706,13 @@ func TestVerifyCert_RevocationBehavior(t *testing.T) {
 			}
 
 			result, err := VerifyCert(context.Background(), &VerifyInput{
-				Cert:        leaf.cert,
-				CheckChain:  true,
-				TrustStore:  "custom",
-				CustomRoots: []*x509.Certificate{ca.cert},
-				CheckOCSP:   tc.checkOCSP,
-				CheckCRL:    tc.checkCRL,
+				Cert:                 leaf.cert,
+				CheckChain:           true,
+				TrustStore:           "custom",
+				CustomRoots:          []*x509.Certificate{ca.cert},
+				CheckOCSP:            tc.checkOCSP,
+				CheckCRL:             tc.checkCRL,
+				AllowPrivateNetworks: true,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -1816,13 +1843,14 @@ func TestVerifyCert_RevocationIssuerIntermediate(t *testing.T) {
 	leaf.cert.CRLDistributionPoints = []string{strings.Replace(crlServer.URL, "127.0.0.1", "localhost", 1)}
 
 	result, err := VerifyCert(context.Background(), &VerifyInput{
-		Cert:        leaf.cert,
-		CheckChain:  true,
-		TrustStore:  "custom",
-		CustomRoots: []*x509.Certificate{root.cert},
-		ExtraCerts:  []*x509.Certificate{intermediate.cert},
-		CheckOCSP:   true,
-		CheckCRL:    true,
+		Cert:                 leaf.cert,
+		CheckChain:           true,
+		TrustStore:           "custom",
+		CustomRoots:          []*x509.Certificate{root.cert},
+		ExtraCerts:           []*x509.Certificate{intermediate.cert},
+		CheckOCSP:            true,
+		CheckCRL:             true,
+		AllowPrivateNetworks: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1854,11 +1882,12 @@ func TestVerifyCert_RevocationWithoutChain(t *testing.T) {
 	leaf := newRSALeaf(t, ca, "nochain.example.com", []string{"nochain.example.com"}, nil)
 
 	result, err := VerifyCert(context.Background(), &VerifyInput{
-		Cert:       leaf.cert,
-		CheckOCSP:  true,
-		CheckCRL:   true,
-		CheckChain: false,
-		TrustStore: "custom",
+		Cert:                 leaf.cert,
+		CheckOCSP:            true,
+		CheckCRL:             true,
+		CheckChain:           false,
+		TrustStore:           "custom",
+		AllowPrivateNetworks: true,
 		CustomRoots: []*x509.Certificate{
 			ca.cert,
 		},
@@ -2076,11 +2105,12 @@ func TestVerifyCert_OCSPStatus(t *testing.T) {
 				defer cancel()
 			}
 			result, err := VerifyCert(ctx, &VerifyInput{
-				Cert:        leaf.cert,
-				CheckChain:  true,
-				TrustStore:  "custom",
-				CustomRoots: []*x509.Certificate{ca.cert},
-				CheckOCSP:   true,
+				Cert:                 leaf.cert,
+				CheckChain:           true,
+				TrustStore:           "custom",
+				CustomRoots:          []*x509.Certificate{ca.cert},
+				CheckOCSP:            true,
+				AllowPrivateNetworks: true,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -2140,11 +2170,12 @@ func TestVerifyCert_OCSPStatus_ECDSA(t *testing.T) {
 	leaf.cert.OCSPServer = []string{strings.Replace(server.URL, "127.0.0.1", "localhost", 1)}
 
 	result, err := VerifyCert(context.Background(), &VerifyInput{
-		Cert:        leaf.cert,
-		CheckChain:  true,
-		TrustStore:  "custom",
-		CustomRoots: []*x509.Certificate{ca.cert},
-		CheckOCSP:   true,
+		Cert:                 leaf.cert,
+		CheckChain:           true,
+		TrustStore:           "custom",
+		CustomRoots:          []*x509.Certificate{ca.cert},
+		CheckOCSP:            true,
+		AllowPrivateNetworks: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2326,11 +2357,12 @@ func TestVerifyCert_CRLStatus(t *testing.T) {
 				defer cancel()
 			}
 			result, err := VerifyCert(ctx, &VerifyInput{
-				Cert:        leaf.cert,
-				CheckChain:  true,
-				TrustStore:  "custom",
-				CustomRoots: []*x509.Certificate{ca.cert},
-				CheckCRL:    true,
+				Cert:                 leaf.cert,
+				CheckChain:           true,
+				TrustStore:           "custom",
+				CustomRoots:          []*x509.Certificate{ca.cert},
+				CheckCRL:             true,
+				AllowPrivateNetworks: true,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -2386,11 +2418,12 @@ func TestVerifyCert_CRLStatus_ECDSA(t *testing.T) {
 	leaf.cert.CRLDistributionPoints = []string{strings.Replace(server.URL, "127.0.0.1", "localhost", 1)}
 
 	result, err := VerifyCert(context.Background(), &VerifyInput{
-		Cert:        leaf.cert,
-		CheckChain:  true,
-		TrustStore:  "custom",
-		CustomRoots: []*x509.Certificate{ca.cert},
-		CheckCRL:    true,
+		Cert:                 leaf.cert,
+		CheckChain:           true,
+		TrustStore:           "custom",
+		CustomRoots:          []*x509.Certificate{ca.cert},
+		CheckCRL:             true,
+		AllowPrivateNetworks: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2493,12 +2526,13 @@ func TestVerifyCert_RevocationCombined(t *testing.T) {
 			leaf.cert.CRLDistributionPoints = []string{strings.Replace(crlServer.URL, "127.0.0.1", "localhost", 1)}
 
 			result, err := VerifyCert(context.Background(), &VerifyInput{
-				Cert:        leaf.cert,
-				CheckChain:  true,
-				TrustStore:  "custom",
-				CustomRoots: []*x509.Certificate{ca.cert},
-				CheckOCSP:   true,
-				CheckCRL:    true,
+				Cert:                 leaf.cert,
+				CheckChain:           true,
+				TrustStore:           "custom",
+				CustomRoots:          []*x509.Certificate{ca.cert},
+				CheckOCSP:            true,
+				CheckCRL:             true,
+				AllowPrivateNetworks: true,
 			})
 			if err != nil {
 				t.Fatal(err)

@@ -16,17 +16,18 @@ import (
 
 // VerifyInput holds the parsed certificate data and verification options.
 type VerifyInput struct {
-	Cert           *x509.Certificate
-	Key            crypto.PrivateKey
-	ExtraCerts     []*x509.Certificate
-	CustomRoots    []*x509.Certificate
-	CheckKeyMatch  bool
-	CheckChain     bool
-	ExpiryDuration time.Duration
-	TrustStore     string
-	Verbose        bool
-	CheckOCSP      bool
-	CheckCRL       bool
+	Cert                 *x509.Certificate
+	Key                  crypto.PrivateKey
+	ExtraCerts           []*x509.Certificate
+	CustomRoots          []*x509.Certificate
+	CheckKeyMatch        bool
+	CheckChain           bool
+	ExpiryDuration       time.Duration
+	TrustStore           string
+	Verbose              bool
+	CheckOCSP            bool
+	CheckCRL             bool
+	AllowPrivateNetworks bool
 }
 
 // ChainCert holds display information for one certificate in the chain.
@@ -68,7 +69,7 @@ type VerifyResult struct {
 	Expiry      *bool                   `json:"expires_within,omitempty"`
 	ExpiryInfo  string                  `json:"expiry_info,omitempty"`
 	Errors      []string                `json:"errors,omitempty"`
-	Diagnoses   []Diagnosis             `json:"diagnoses,omitempty"`
+	Diagnostics []Diagnosis             `json:"diagnostics,omitempty"`
 
 	// Verbose-only fields (populated when VerifyInput.Verbose is true).
 	Issuer    string   `json:"issuer,omitempty"`
@@ -143,6 +144,7 @@ func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) 
 		opts.TrustStore = input.TrustStore
 		opts.ExtraIntermediates = input.ExtraCerts
 		opts.CustomRoots = input.CustomRoots
+		opts.AllowPrivateNetworks = input.AllowPrivateNetworks
 		var bundleErr error
 		bundle, bundleErr = certkit.Bundle(ctx, certkit.BundleInput{
 			Leaf:    cert,
@@ -171,7 +173,7 @@ func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) 
 		}
 		if issuer != nil {
 			if input.CheckOCSP {
-				result.OCSP = checkVerifyOCSP(ctx, certkit.CheckOCSPInput{Cert: cert, Issuer: issuer})
+				result.OCSP = checkVerifyOCSP(ctx, certkit.CheckOCSPInput{Cert: cert, Issuer: issuer, AllowPrivateNetworks: input.AllowPrivateNetworks})
 				if result.OCSP.Status == "revoked" {
 					msg := "certificate is revoked (OCSP)"
 					if result.OCSP.RevokedAt != nil {
@@ -185,8 +187,9 @@ func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) 
 			}
 			if input.CheckCRL {
 				result.CRL = certkit.CheckLeafCRL(ctx, certkit.CheckLeafCRLInput{
-					Leaf:   cert,
-					Issuer: issuer,
+					Leaf:                 cert,
+					Issuer:               issuer,
+					AllowPrivateNetworks: input.AllowPrivateNetworks,
 				})
 				if result.CRL.Status == "revoked" {
 					result.Errors = append(result.Errors, fmt.Sprintf("certificate is revoked (CRL, %s)", result.CRL.Detail))
@@ -291,7 +294,7 @@ func buildChainDisplay(bundle *certkit.BundleResult, verbose bool) []ChainCert {
 type Diagnosis struct {
 	// Check is a short label for the diagnostic (e.g. "expired", "self-signed").
 	Check string `json:"check"`
-	// Status is "pass", "fail", or "warn".
+	// Status is "pass", "error", or "warn".
 	Status string `json:"status"`
 	// Detail is a human-readable explanation.
 	Detail string `json:"detail"`
@@ -320,7 +323,7 @@ func DiagnoseChain(input DiagnoseChainInput) []Diagnosis {
 	if now.After(input.Cert.NotAfter) {
 		diags = append(diags, Diagnosis{
 			Check:  "expired",
-			Status: "fail",
+			Status: "error",
 			Detail: fmt.Sprintf("leaf certificate expired on %s", input.Cert.NotAfter.UTC().Format(time.RFC3339)),
 		})
 	} else {
@@ -335,7 +338,7 @@ func DiagnoseChain(input DiagnoseChainInput) []Diagnosis {
 	if now.Before(input.Cert.NotBefore) {
 		diags = append(diags, Diagnosis{
 			Check:  "not-yet-valid",
-			Status: "fail",
+			Status: "error",
 			Detail: fmt.Sprintf("leaf certificate not valid until %s", input.Cert.NotBefore.UTC().Format(time.RFC3339)),
 		})
 	}
@@ -354,7 +357,7 @@ func DiagnoseChain(input DiagnoseChainInput) []Diagnosis {
 		if now.After(extra.NotAfter) {
 			diags = append(diags, Diagnosis{
 				Check:  "intermediate-expired",
-				Status: "fail",
+				Status: "error",
 				Detail: fmt.Sprintf("intermediate %q expired on %s", certkit.FormatDNFromRaw(extra.RawSubject, extra.Subject), extra.NotAfter.UTC().Format(time.RFC3339)),
 			})
 		}
@@ -372,7 +375,7 @@ func DiagnoseChain(input DiagnoseChainInput) []Diagnosis {
 		if !found {
 			diags = append(diags, Diagnosis{
 				Check:  "missing-intermediate",
-				Status: "fail",
+				Status: "error",
 				Detail: fmt.Sprintf("no intermediate certificate found for issuer %q", certkit.FormatDNFromRaw(input.Cert.RawIssuer, input.Cert.Issuer)),
 			})
 		}
@@ -410,7 +413,7 @@ func FormatDiagnoses(diags []Diagnosis) string {
 		switch d.Status {
 		case "pass":
 			icon = "OK"
-		case "fail":
+		case "fail", "error":
 			icon = "FAIL"
 		case "warn":
 			icon = "WARN"

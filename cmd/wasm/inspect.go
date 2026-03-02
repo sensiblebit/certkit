@@ -17,7 +17,7 @@ import (
 
 // inspectFiles performs stateless inspection of certificate, key, and CSR data.
 // Unlike addFiles, it does not accumulate into the global MemStore.
-// JS signature: certkitInspect(files: Array<{name: string, data: Uint8Array}>, passwords: string) → Promise<string>
+// JS signature: certkitInspect(files: Array<{name: string, data: Uint8Array}>, passwords: string, allowPrivateNetwork?: boolean) → Promise<string>
 func inspectFiles(_ js.Value, args []js.Value) any {
 	if len(args) < 1 {
 		return jsError("certkitInspect requires at least 1 argument")
@@ -25,6 +25,9 @@ func inspectFiles(_ js.Value, args []js.Value) any {
 
 	filesArg := args[0]
 	length := filesArg.Length()
+	if length > wasmMaxInputFiles {
+		return jsError(fmt.Sprintf("too many files: %d (max %d)", length, wasmMaxInputFiles))
+	}
 
 	var passwords []string
 	if len(args) >= 2 && args[1].Type() == js.TypeString {
@@ -36,6 +39,11 @@ func inspectFiles(_ js.Value, args []js.Value) any {
 		}
 	}
 	passwords = certkit.DeduplicatePasswords(passwords)
+
+	allowPrivateNetworks := false
+	if len(args) >= 3 && args[2].Type() == js.TypeBoolean {
+		allowPrivateNetworks = args[2].Bool()
+	}
 
 	handler := js.FuncOf(func(_ js.Value, promiseArgs []js.Value) any {
 		resolve := promiseArgs[0]
@@ -51,6 +59,7 @@ func inspectFiles(_ js.Value, args []js.Value) any {
 			defer cancel()
 
 			var allResults []internal.InspectResult
+			var totalBytes int64
 			for i := range length {
 				select {
 				case <-ctx.Done():
@@ -59,9 +68,20 @@ func inspectFiles(_ js.Value, args []js.Value) any {
 				default:
 				}
 				file := filesArg.Index(i)
-				dataJS := file.Get("data")
-				data := make([]byte, dataJS.Length())
-				js.CopyBytesToGo(data, dataJS)
+				name := file.Get("name").String()
+				if name == "" {
+					name = fmt.Sprintf("file[%d]", i)
+				}
+
+				data, err := readWASMFileData(readWASMFileDataInput{
+					DataJS:     file.Get("data"),
+					Name:       name,
+					TotalBytes: &totalBytes,
+				})
+				if err != nil {
+					reject.Invoke(js.Global().Get("Error").New(err.Error()))
+					return
+				}
 
 				results := internal.InspectData(data, passwords)
 				allResults = append(allResults, results...)
@@ -74,8 +94,9 @@ func inspectFiles(_ js.Value, args []js.Value) any {
 
 			// Resolve missing intermediates via AIA before trust annotation.
 			allResults, aiaWarnings := internal.ResolveInspectAIA(ctx, internal.ResolveInspectAIAInput{
-				Results: allResults,
-				Fetch:   jsFetchURL,
+				Results:              allResults,
+				Fetch:                jsFetchURL,
+				AllowPrivateNetworks: allowPrivateNetworks,
 			})
 			for _, w := range aiaWarnings {
 				slog.Warn("AIA resolution", "warning", w)

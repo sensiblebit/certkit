@@ -1,6 +1,7 @@
 package certkit
 
 import (
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -14,7 +15,9 @@ import (
 	"encoding/asn1"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
+	"net"
 	"slices"
 	"strings"
 	"testing"
@@ -113,6 +116,43 @@ func TestParsePEMCertificates_invalidDER(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "parsing certificate") {
 		t.Errorf("error should mention parsing certificate, got: %v", err)
+	}
+}
+
+func TestParsePEMCertificates_PreservesValidWhenMalformedPresent(t *testing.T) {
+	// WHY: Mixed-quality bundles are common in the wild. A malformed
+	// CERTIFICATE block must not discard other valid certificates.
+	t.Parallel()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certTemplate := &x509.Certificate{
+		SerialNumber: randomSerial(t),
+		Subject:      pkix.Name{CommonName: "valid-cert.example.com"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, certTemplate, certTemplate, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pemData := slices.Concat(
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("bad-der")}),
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}),
+	)
+
+	certs, err := ParsePEMCertificates(pemData)
+	if err != nil {
+		t.Fatalf("ParsePEMCertificates: %v", err)
+	}
+	if len(certs) != 1 {
+		t.Fatalf("expected 1 valid cert, got %d", len(certs))
+	}
+	if certs[0].Subject.CommonName != "valid-cert.example.com" {
+		t.Errorf("CN=%q, want valid-cert.example.com", certs[0].Subject.CommonName)
 	}
 }
 
@@ -336,6 +376,35 @@ func TestParsePEMPrivateKey_MislabeledBlockType(t *testing.T) {
 	}
 }
 
+func TestParsePEMPrivateKey_SkipsNonKeyBlocks(t *testing.T) {
+	// WHY: ParsePEMPrivateKey is used in key-only paths and must find the first
+	// key block even when certificate blocks appear first.
+	t.Parallel()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER := x509.MarshalPKCS1PrivateKey(key)
+
+	pemData := slices.Concat(
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("not-a-cert")}),
+		pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: keyDER}),
+	)
+
+	parsed, err := ParsePEMPrivateKey(pemData)
+	if err != nil {
+		t.Fatalf("ParsePEMPrivateKey: %v", err)
+	}
+	rsaParsed, ok := parsed.(*rsa.PrivateKey)
+	if !ok {
+		t.Fatalf("parsed key type = %T, want *rsa.PrivateKey", parsed)
+	}
+	if !key.Equal(rsaParsed) {
+		t.Error("parsed key does not Equal original")
+	}
+}
+
 func TestParsePEMPrivateKeyWithPasswords_Encrypted(t *testing.T) {
 	// WHY: Encrypted PEM keys must decrypt with the correct password, fail
 	// clearly with wrong passwords, iterate all candidates, and handle edge
@@ -510,12 +579,12 @@ func TestParsePEMCertificateRequest_errors(t *testing.T) {
 		{
 			name:    "invalid PEM",
 			input:   []byte("not valid PEM"),
-			wantErr: "no PEM block found",
+			wantErr: "no certificate request found",
 		},
 		{
 			name:    "wrong block type",
 			input:   pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("whatever")}),
-			wantErr: "expected CERTIFICATE REQUEST",
+			wantErr: "no certificate request found",
 		},
 		{
 			name:    "invalid DER",
@@ -532,6 +601,57 @@ func TestParsePEMCertificateRequest_errors(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tt.wantErr) {
 				t.Errorf("error = %v, want substring %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestParsePEMCertificateRequest_SkipsBadBlocksBeforeValidCSR(t *testing.T) {
+	// WHY: CSR parsing must continue scanning when earlier PEM blocks are either
+	// wrong block types or malformed CSR DER.
+	t.Parallel()
+
+	leaf, key := generateLeafWithSANs(t)
+	csrPEM, _, err := GenerateCSR(leaf, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrBlock, _ := pem.Decode([]byte(csrPEM))
+	if csrBlock == nil {
+		t.Fatal("failed to decode generated CSR")
+	}
+
+	tests := []struct {
+		name      string
+		blockType string
+		blockDER  []byte
+	}{
+		{
+			name:      "skips non-CSR block before valid CSR",
+			blockType: "CERTIFICATE",
+			blockDER:  []byte("not-a-csr"),
+		},
+		{
+			name:      "skips malformed CSR block before valid CSR",
+			blockType: "CERTIFICATE REQUEST",
+			blockDER:  []byte("bad-csr-der"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			pemData := slices.Concat(
+				pem.EncodeToMemory(&pem.Block{Type: tt.blockType, Bytes: tt.blockDER}),
+				pem.EncodeToMemory(csrBlock),
+			)
+
+			csr, err := ParsePEMCertificateRequest(pemData)
+			if err != nil {
+				t.Fatalf("ParsePEMCertificateRequest: %v", err)
+			}
+			if csr.Subject.CommonName != "test.example.com" {
+				t.Errorf("CN=%q, want test.example.com", csr.Subject.CommonName)
 			}
 		})
 	}
@@ -736,6 +856,83 @@ func TestKeyMatchesCert(t *testing.T) {
 			}
 			if match != tt.want {
 				t.Errorf("KeyMatchesCert = %v, want %v", match, tt.want)
+			}
+		})
+	}
+}
+
+func TestSelectIssuerCertificate(t *testing.T) {
+	// WHY: Issuer auto-selection must choose a candidate that actually signed
+	// the leaf and prefer AKI/SKI matches to avoid wrong-issuer OCSP checks.
+	t.Parallel()
+
+	caPEM, interPEM, leafPEM := generateTestPKI(t)
+	ca, err := ParsePEMCertificate([]byte(caPEM))
+	if err != nil {
+		t.Fatal(err)
+	}
+	intermediate, err := ParsePEMCertificate([]byte(interPEM))
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := ParsePEMCertificate([]byte(leafPEM))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wrongCAKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongCATmpl := &x509.Certificate{
+		SerialNumber: randomSerial(t),
+		Subject:      leaf.Issuer, // same issuer DN, different key
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		IsCA:         true,
+		KeyUsage:     x509.KeyUsageCertSign,
+	}
+	wrongCADER, err := x509.CreateCertificate(rand.Reader, wrongCATmpl, wrongCATmpl, &wrongCAKey.PublicKey, wrongCAKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongCA, err := x509.ParseCertificate(wrongCADER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name       string
+		candidates []*x509.Certificate
+		wantIssuer *x509.Certificate
+	}{
+		{
+			name:       "prefers AKI SKI matched valid signer",
+			candidates: []*x509.Certificate{wrongCA, ca, intermediate},
+			wantIssuer: intermediate,
+		},
+		{
+			name:       "returns nil when no candidate signs leaf",
+			candidates: []*x509.Certificate{wrongCA, ca},
+			wantIssuer: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			issuer := SelectIssuerCertificate(leaf, tt.candidates)
+			if tt.wantIssuer == nil {
+				if issuer != nil {
+					t.Errorf("expected nil issuer, got CN=%q", issuer.Subject.CommonName)
+				}
+				return
+			}
+			if issuer == nil {
+				t.Fatal("expected issuer, got nil")
+			}
+			if !issuer.Equal(tt.wantIssuer) {
+				t.Errorf("selected issuer CN = %q, want %q", issuer.Subject.CommonName, tt.wantIssuer.Subject.CommonName)
 			}
 		})
 	}
@@ -1082,10 +1279,10 @@ func TestParsePEMPrivateKey_ErrorPaths(t *testing.T) {
 		input     []byte
 		wantInErr string
 	}{
-		{"empty input", nil, "no PEM block"},
+		{"empty input", nil, "no private keys found"},
 		{"corrupt OpenSSH body", corruptOpenSSH, "OpenSSH"},
 		{"garbage PRIVATE KEY block", garbagePKCS8, "parsing PRIVATE KEY"},
-		{"unsupported block type (DSA)", dsaPEM, "unsupported PEM block type"},
+		{"unsupported block type (DSA)", dsaPEM, "no private keys found"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1116,6 +1313,18 @@ func TestGenerateECKey_NilCurve(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "curve cannot be nil") {
 		t.Errorf("unexpected error: %v", err)
+	}
+}
+
+func TestGenerateRSAKey_TooSmall(t *testing.T) {
+	t.Parallel()
+
+	_, err := GenerateRSAKey(1024)
+	if err == nil {
+		t.Fatal("expected error for RSA key size below minimum")
+	}
+	if !errors.Is(err, errRSAKeyTooSmall) {
+		t.Fatalf("error = %v, want wrapped errRSAKeyTooSmall", err)
 	}
 }
 
@@ -1771,39 +1980,46 @@ func TestVerifyChainTrust(t *testing.T) {
 
 func TestValidateAIAURL(t *testing.T) {
 	// WHY: ValidateAIAURL prevents SSRF by rejecting non-HTTP schemes and
-	// literal private/loopback/link-local IP addresses. Each case covers a
-	// distinct rejection rule or an allowed pattern.
+	// private/loopback/link-local/unspecified IPs.
 	t.Parallel()
 
 	tests := []struct {
-		name    string
-		url     string
-		wantErr bool
-		errSub  string
+		name         string
+		url          string
+		allowPrivate bool
+		wantErr      bool
+		errSub       string
 	}{
-		{"valid http", "http://ca.example.com/issuer.cer", false, ""},
-		{"valid https", "https://ca.example.com/issuer.cer", false, ""},
-		{"ftp rejected", "ftp://ca.example.com/issuer.cer", true, "unsupported scheme"},
-		{"file rejected", "file:///etc/passwd", true, "unsupported scheme"},
-		{"empty scheme rejected", "://foo", true, "parsing URL"},
-		{"loopback IPv4", "http://127.0.0.1/ca.cer", true, "loopback"},
-		{"loopback IPv6", "http://[::1]/ca.cer", true, "loopback"},
-		{"link-local IPv4", "http://169.254.1.1/ca.cer", true, "loopback, link-local, or unspecified"},
-		{"unspecified IPv4", "http://0.0.0.0/ca.cer", true, "loopback, link-local, or unspecified"},
-		{"unspecified IPv6", "http://[::]/ca.cer", true, "loopback, link-local, or unspecified"},
-		{"private IPv6 ULA", "http://[fd12::1]/ca.cer", true, "blocked private"},
-		{"private 10.x", "http://10.0.0.1/ca.cer", true, "blocked private"},
-		{"private 172.16.x", "http://172.16.0.1/ca.cer", true, "blocked private"},
-		{"private 192.168.x", "http://192.168.1.1/ca.cer", true, "blocked private"},
-		{"CGN 100.64.x", "http://100.64.0.1/ca.cer", true, "blocked private"},
-		{"public IP allowed", "http://8.8.8.8/ca.cer", false, ""},
-		{"hostname allowed even if resolves to private", "http://internal.company.com/ca.cer", false, ""},
+		{"valid public IPv4 http", "http://8.8.8.8/issuer.cer", false, false, ""},
+		{"valid public IPv4 https", "https://8.8.8.8/issuer.cer", false, false, ""},
+		{"ftp rejected", "ftp://ca.example.com/issuer.cer", false, true, "unsupported scheme"},
+		{"file rejected", "file:///etc/passwd", false, true, "unsupported scheme"},
+		{"empty scheme rejected", "://foo", false, true, "parsing URL"},
+		{"missing hostname rejected", "https:///issuer.cer", false, true, "missing hostname"},
+		{"loopback IPv4", "http://127.0.0.1/ca.cer", false, true, "loopback"},
+		{"loopback IPv6", "http://[::1]/ca.cer", false, true, "loopback"},
+		{"localhost hostname", "http://localhost/ca.cer", false, true, "resolved"},
+		{"link-local IPv4", "http://169.254.1.1/ca.cer", false, true, "loopback, link-local, or unspecified"},
+		{"unspecified IPv4", "http://0.0.0.0/ca.cer", false, true, "loopback, link-local, or unspecified"},
+		{"this network IPv4 range", "http://0.1.2.3/ca.cer", false, true, "blocked private"},
+		{"unspecified IPv6", "http://[::]/ca.cer", false, true, "loopback, link-local, or unspecified"},
+		{"private IPv6 ULA", "http://[fd12::1]/ca.cer", false, true, "blocked private"},
+		{"private 10.x", "http://10.0.0.1/ca.cer", false, true, "blocked private"},
+		{"private 172.16.x", "http://172.16.0.1/ca.cer", false, true, "blocked private"},
+		{"private 192.168.x", "http://192.168.1.1/ca.cer", false, true, "blocked private"},
+		{"CGN 100.64.x", "http://100.64.0.1/ca.cer", false, true, "blocked private"},
+		{"allow private network option", "http://127.0.0.1/ca.cer", true, false, ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			err := ValidateAIAURL(tt.url)
+			var err error
+			if tt.allowPrivate {
+				err = ValidateAIAURLWithOptions(context.Background(), ValidateAIAURLInput{URL: tt.url, AllowPrivateNetworks: true})
+			} else {
+				err = ValidateAIAURL(tt.url)
+			}
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("expected error for %q", tt.url)
@@ -1817,6 +2033,111 @@ func TestValidateAIAURL(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestValidateAIAURLWithOptions_HostnameResolution(t *testing.T) {
+	t.Parallel()
+
+	lookup := func(_ context.Context, host string) ([]net.IP, error) {
+		switch host {
+		case "public.example":
+			return []net.IP{net.ParseIP("93.184.216.34")}, nil
+		case "mixed.example":
+			return []net.IP{net.ParseIP("93.184.216.34"), net.ParseIP("10.0.0.10")}, nil
+		case "empty.example":
+			return nil, nil
+		default:
+			return nil, fmt.Errorf("lookup failed")
+		}
+	}
+
+	tests := []struct {
+		name    string
+		input   ValidateAIAURLInput
+		wantErr string
+	}{
+		{
+			name: "public resolution allowed",
+			input: ValidateAIAURLInput{
+				URL:               "https://public.example/issuer.cer",
+				lookupIPAddresses: lookup,
+			},
+		},
+		{
+			name: "mixed public and private blocked",
+			input: ValidateAIAURLInput{
+				URL:               "https://mixed.example/issuer.cer",
+				lookupIPAddresses: lookup,
+			},
+			wantErr: "blocked private address",
+		},
+		{
+			name: "empty DNS answer blocked",
+			input: ValidateAIAURLInput{
+				URL:               "https://empty.example/issuer.cer",
+				lookupIPAddresses: lookup,
+			},
+			wantErr: "no IP addresses returned",
+		},
+		{
+			name: "resolver error blocked",
+			input: ValidateAIAURLInput{
+				URL:               "https://error.example/issuer.cer",
+				lookupIPAddresses: lookup,
+			},
+			wantErr: "resolving host",
+		},
+		{
+			name: "allow private bypasses DNS checks",
+			input: ValidateAIAURLInput{
+				URL:                  "https://mixed.example/issuer.cer",
+				AllowPrivateNetworks: true,
+				lookupIPAddresses:    lookup,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateAIAURLWithOptions(context.Background(), tt.input)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error containing %q", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %q, want substring %q", err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateAIAURLWithOptions_ContextDeadline(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	lookup := func(ctx context.Context, _ string) ([]net.IP, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	err := ValidateAIAURLWithOptions(ctx, ValidateAIAURLInput{
+		URL:               "https://example.com/issuer.cer",
+		lookupIPAddresses: lookup,
+	})
+	if err == nil {
+		t.Fatal("expected context deadline error")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want context.DeadlineExceeded", err)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"crypto"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 
@@ -14,9 +15,10 @@ import (
 )
 
 var (
-	convertTo      string
-	convertOutFile string
-	convertKeyPath string
+	convertTo         string
+	convertOutFile    string
+	convertKeyPath    string
+	errPKCS12MultiKey = errors.New("PKCS#12 supports only one key entry")
 )
 
 var convertCmd = &cobra.Command{
@@ -25,11 +27,14 @@ var convertCmd = &cobra.Command{
 	Long: `Convert certificates and keys between PEM, DER, PKCS#12, JKS, and PKCS#7.
 
 Input format is auto-detected. Use --to to specify the output format.
-Binary formats (p12, jks) require -o to write to a file.
+Binary formats (der, p12, jks, p7b) require -o to write to a file.
 
 When --key is provided, convert matches keys to leaf certificates and builds
 chain bundles. If multiple keys match different certs, JKS output creates a
-multi-alias keystore. PKCS#12 supports only a single key entry.`,
+multi-alias keystore. PKCS#12 supports only a single key entry.
+
+PKCS#12/JKS outputs require an explicit export password via --passwords or
+--password-file. Use --insecure-default-password to force legacy "changeit".`,
 	Example: `  certkit convert cert.der --to pem
   certkit convert cert.pem --to der -o cert.der
   certkit convert cert.pem --key key.pem --to p12 -o bundle.p12
@@ -66,11 +71,11 @@ type keyLeafPair struct {
 
 // formatConvertInput holds the parameters for formatConvertOutput.
 type formatConvertInput struct {
-	contents        *internal.ContainerContents
-	allCerts        []*x509.Certificate
-	pairs           []keyLeafPair
-	format          string
-	outputPasswords []string
+	contents       *internal.ContainerContents
+	allCerts       []*x509.Certificate
+	pairs          []keyLeafPair
+	format         string
+	outputPassword string
 }
 
 func runConvert(cmd *cobra.Command, args []string) error {
@@ -133,12 +138,20 @@ func runConvert(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("output format %q is binary; use -o to write to a file", convertTo)
 	}
 
+	exportPassword := ""
+	if convertTo == "p12" || convertTo == "jks" {
+		exportPassword, err = bundlePassword(passwordSets.Export, insecureDefaultPassword)
+		if err != nil {
+			return fmt.Errorf("determining export password for %s output: %w", convertTo, err)
+		}
+	}
+
 	output, err := formatConvertOutput(formatConvertInput{
-		contents:        contents,
-		allCerts:        allCerts,
-		pairs:           pairs,
-		format:          convertTo,
-		outputPasswords: passwordSets.Export,
+		contents:       contents,
+		allCerts:       allCerts,
+		pairs:          pairs,
+		format:         convertTo,
+		outputPassword: exportPassword,
 	})
 	if err != nil {
 		return fmt.Errorf("formatting output: %w", err)
@@ -156,7 +169,7 @@ func runConvert(cmd *cobra.Command, args []string) error {
 	}
 
 	if jsonOutput {
-		var out convertJSON
+		var out payloadJSON
 		if convertOutFile != "" {
 			// Binary format written to file — report metadata
 			out.File = convertOutFile
@@ -166,6 +179,7 @@ func runConvert(cmd *cobra.Command, args []string) error {
 			// Text format — include the data directly
 			out.Data = string(output)
 			out.Format = convertTo
+			out.Encoding = "pem"
 		}
 		data, err := json.MarshalIndent(out, "", "  ")
 		if err != nil {
@@ -179,14 +193,6 @@ func runConvert(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
-}
-
-// convertJSON is the JSON output structure for the convert command.
-type convertJSON struct {
-	Data   string `json:"data,omitempty"`
-	File   string `json:"file,omitempty"`
-	Format string `json:"format,omitempty"`
-	Size   int    `json:"size,omitempty"`
 }
 
 func formatConvertOutput(input formatConvertInput) ([]byte, error) {
@@ -205,10 +211,12 @@ func formatConvertOutput(input formatConvertInput) ([]byte, error) {
 			return nil, fmt.Errorf("PKCS#12 output requires a private key (use --key)")
 		}
 		if len(input.pairs) > 1 {
-			return nil, &ValidationError{Message: fmt.Sprintf("PKCS#12 supports only one key entry; %d matches found (use JKS for multiple)", len(input.pairs))}
+			return nil, fmt.Errorf("%w; %d matches found (use JKS for multiple)", errPKCS12MultiKey, len(input.pairs))
 		}
-		pw := bundlePassword(input.outputPasswords)
-		data, err := certkit.EncodePKCS12(input.contents.Key, input.contents.Leaf, input.contents.ExtraCerts, pw)
+		if input.outputPassword == "" {
+			return nil, fmt.Errorf("PKCS#12/JKS export requires an explicit password")
+		}
+		data, err := certkit.EncodePKCS12(input.contents.Key, input.contents.Leaf, input.contents.ExtraCerts, input.outputPassword)
 		if err != nil {
 			return nil, fmt.Errorf("encoding PKCS#12: %w", err)
 		}
@@ -217,6 +225,9 @@ func formatConvertOutput(input formatConvertInput) ([]byte, error) {
 	case "jks":
 		if input.contents.Key == nil {
 			return nil, fmt.Errorf("JKS output requires a private key (use --key)")
+		}
+		if input.outputPassword == "" {
+			return nil, fmt.Errorf("PKCS#12/JKS export requires an explicit password")
 		}
 		return formatConvertJKS(input)
 
@@ -265,8 +276,6 @@ func formatConvertPEM(input formatConvertInput) ([]byte, error) {
 }
 
 func formatConvertJKS(input formatConvertInput) ([]byte, error) {
-	pw := bundlePassword(input.outputPasswords)
-
 	if len(input.pairs) > 1 {
 		entries := make([]certkit.JKSEntry, len(input.pairs))
 		for i, p := range input.pairs {
@@ -281,14 +290,14 @@ func formatConvertJKS(input formatConvertInput) ([]byte, error) {
 				Alias:      alias,
 			}
 		}
-		data, err := certkit.EncodeJKSEntries(entries, pw)
+		data, err := certkit.EncodeJKSEntries(entries, input.outputPassword)
 		if err != nil {
 			return nil, fmt.Errorf("encoding JKS: %w", err)
 		}
 		return data, nil
 	}
 
-	data, err := certkit.EncodeJKS(input.contents.Key, input.contents.Leaf, input.contents.ExtraCerts, pw)
+	data, err := certkit.EncodeJKS(input.contents.Key, input.contents.Leaf, input.contents.ExtraCerts, input.outputPassword)
 	if err != nil {
 		return nil, fmt.Errorf("encoding JKS: %w", err)
 	}

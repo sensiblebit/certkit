@@ -7,11 +7,9 @@ import (
 	"encoding/pem"
 	"fmt"
 	"io"
-	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
@@ -22,16 +20,17 @@ import (
 )
 
 var (
-	scanLoadDB      string
-	scanSaveDB      string
-	scanConfigPath  string
-	scanBundlePath  string
-	scanForceExport bool
-	scanDuplicates  bool
-	scanDumpKeys    string
-	scanDumpCerts   string
-	scanMaxFileSize int64
-	scanFormat      string
+	scanLoadDB              string
+	scanSaveDB              string
+	scanConfigPath          string
+	scanBundlePath          string
+	scanForceExport         bool
+	scanDuplicates          bool
+	scanDumpKeys            string
+	scanDumpCerts           string
+	scanMaxFileSize         int64
+	scanFormat              string
+	scanAllowPrivateNetwork bool
 )
 
 var scanCmd = &cobra.Command{
@@ -55,6 +54,7 @@ func init() {
 	scanCmd.Flags().StringVar(&scanDumpCerts, "dump-certs", "", "Dump all discovered certificates to a single PEM file")
 	scanCmd.Flags().Int64Var(&scanMaxFileSize, "max-file-size", 10*1024*1024, "Skip files larger than this size in bytes (0 to disable)")
 	scanCmd.Flags().StringVar(&scanFormat, "format", "text", "Output format: text, json")
+	scanCmd.Flags().BoolVar(&scanAllowPrivateNetwork, "allow-private-network", false, "Allow AIA fetches to private/internal endpoints")
 	scanCmd.Flags().StringVar(&scanSaveDB, "save-db", "", "Save the in-memory database to disk after scanning")
 	scanCmd.Flags().StringVar(&scanLoadDB, "load-db", "", "Load an existing database into memory before scanning")
 
@@ -106,68 +106,41 @@ func runScan(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("input path %s: %w", inputPath, err)
 		}
 
-		err := filepath.WalkDir(inputPath, func(path string, d fs.DirEntry, err error) error {
-			if err != nil {
-				slog.Warn("skipping inaccessible path", "path", path, "error", err)
-				return filepath.SkipDir
-			}
-			if d.IsDir() {
-				if internal.IsSkippableDir(d.Name()) {
-					slog.Debug("skipping directory", "path", path)
-					return filepath.SkipDir
+		err := internal.WalkScanFiles(internal.WalkScanFilesInput{
+			RootPath:    inputPath,
+			MaxFileSize: scanMaxFileSize,
+			OnFile: func(path string) error {
+				if archiveFormat := internal.ArchiveFormat(path); archiveFormat != "" {
+					data, readErr := internal.ReadFileLimited(path, scanMaxFileSize)
+					if readErr != nil {
+						return fmt.Errorf("reading archive %s: %w", path, readErr)
+					}
+					limits := internal.DefaultArchiveLimits()
+					if scanMaxFileSize > 0 {
+						limits.MaxEntrySize = scanMaxFileSize
+					}
+					if _, archiveErr := internal.ProcessArchive(internal.ProcessArchiveInput{
+						ArchivePath: path,
+						Data:        data,
+						Format:      archiveFormat,
+						Limits:      limits,
+						Store:       store,
+						Passwords:   passwords,
+					}); archiveErr != nil {
+						return fmt.Errorf("processing archive %s: %w", path, archiveErr)
+					}
+					return nil
+				}
+				if err := internal.ProcessFile(internal.ProcessFileInput{
+					Path:      path,
+					Store:     store,
+					Passwords: passwords,
+					MaxBytes:  scanMaxFileSize,
+				}); err != nil {
+					return fmt.Errorf("processing file %s: %w", path, err)
 				}
 				return nil
-			}
-			// Resolve symlinks: skip broken links and links to directories
-			if d.Type()&fs.ModeSymlink != 0 {
-				fi, err := os.Stat(path)
-				if err != nil {
-					slog.Debug("skipping broken symlink", "path", path)
-					return nil
-				}
-				if fi.IsDir() {
-					slog.Debug("skipping symlink to directory", "path", path)
-					return nil
-				}
-			}
-			if scanMaxFileSize > 0 {
-				if info, err := d.Info(); err == nil && info.Size() > scanMaxFileSize {
-					slog.Debug("skipping large file", "path", path, "size", info.Size(), "max", scanMaxFileSize)
-					return nil
-				}
-			}
-			// Check for archive formats before falling through to ProcessFile
-			if archiveFormat := internal.ArchiveFormat(path); archiveFormat != "" {
-				data, readErr := os.ReadFile(path)
-				if readErr != nil {
-					slog.Warn("reading archive", "path", path, "error", readErr)
-					return nil
-				}
-				limits := internal.DefaultArchiveLimits()
-				if scanMaxFileSize > 0 {
-					limits.MaxEntrySize = scanMaxFileSize
-				}
-				if _, archiveErr := internal.ProcessArchive(internal.ProcessArchiveInput{
-					ArchivePath: path,
-					Data:        data,
-					Format:      archiveFormat,
-					Limits:      limits,
-					Store:       store,
-					Passwords:   passwords,
-				}); archiveErr != nil {
-					slog.Warn("processing archive", "path", path, "error", archiveErr)
-				}
-				return nil
-			}
-			if err := internal.ProcessFile(internal.ProcessFileInput{
-				Path:      path,
-				Store:     store,
-				Passwords: passwords,
-				MaxBytes:  scanMaxFileSize,
-			}); err != nil {
-				slog.Warn("processing file", "path", path, "error", err)
-			}
-			return nil
+			},
 		})
 		if err != nil {
 			return fmt.Errorf("walking input path: %w", err)
@@ -183,8 +156,9 @@ func runScan(cmd *cobra.Command, args []string) error {
 	if certstore.HasUnresolvedIssuers(store) {
 		slog.Info("resolving certificate chains")
 		aiaWarnings := certstore.ResolveAIA(cmd.Context(), certstore.ResolveAIAInput{
-			Store: store,
-			Fetch: httpAIAFetcher,
+			Store:                store,
+			Fetch:                httpAIAFetcher,
+			AllowPrivateNetworks: scanAllowPrivateNetwork,
 		})
 		for _, w := range aiaWarnings {
 			slog.Warn("AIA resolution", "warning", w)
@@ -271,7 +245,10 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 
 	if scanExport {
-		p12Password := bundlePassword(passwordSets.Export)
+		p12Password, err := bundlePassword(passwordSets.Export, insecureDefaultPassword)
+		if err != nil {
+			return fmt.Errorf("determining export password for scan bundle export: %w", err)
+		}
 		// Full export workflow — MemStore handles chain resolution via raw ASN.1 matching
 		if err := os.MkdirAll(scanBundlePath, 0755); err != nil {
 			return fmt.Errorf("creating output directory %s: %w", scanBundlePath, err)
@@ -287,7 +264,8 @@ func runScan(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("exporting bundles: %w", err)
 		}
 		store.DumpDebug()
-		if format == "json" {
+		switch format {
+		case "json":
 			mozillaPool, err := certkit.MozillaRootPool()
 			if err != nil {
 				return fmt.Errorf("loading Mozilla root pool: %w", err)
@@ -304,6 +282,32 @@ func runScan(cmd *cobra.Command, args []string) error {
 				return fmt.Errorf("marshaling JSON: %w", err)
 			}
 			fmt.Println(string(data))
+		case "text":
+			mozillaPool, err := certkit.MozillaRootPool()
+			if err != nil {
+				return fmt.Errorf("loading Mozilla root pool: %w", err)
+			}
+			summary := store.ScanSummary(certstore.ScanSummaryInput{
+				RootPool: mozillaPool,
+			})
+			fmt.Print(internal.FormatScanTextSummary(internal.ScanTextSummaryInput{
+				Roots:                  summary.Roots,
+				Intermediates:          summary.Intermediates,
+				Leaves:                 summary.Leaves,
+				Keys:                   summary.Keys,
+				Matched:                summary.Matched,
+				ExpiredRoots:           summary.ExpiredRoots,
+				ExpiredIntermediates:   summary.ExpiredIntermediates,
+				ExpiredLeaves:          summary.ExpiredLeaves,
+				UntrustedRoots:         summary.UntrustedRoots,
+				UntrustedIntermediates: summary.UntrustedIntermediates,
+				UntrustedLeaves:        summary.UntrustedLeaves,
+			}))
+			if _, err := fmt.Fprintf(os.Stderr, "Exported bundles to %s\n", scanBundlePath); err != nil {
+				return fmt.Errorf("writing export status: %w", err)
+			}
+		default:
+			return fmt.Errorf("unsupported output format %q (use text or json)", format)
 		}
 	} else {
 		// Print summary with trust and expiry annotations
@@ -335,19 +339,19 @@ func runScan(cmd *cobra.Command, args []string) error {
 				fmt.Println(string(data))
 			}
 		case "text":
-			total := summary.Roots + summary.Intermediates + summary.Leaves
-			fmt.Printf("\nFound %d certificate(s) and %d key(s)\n", total, summary.Keys)
-			if total > 0 {
-				fmt.Printf("  Roots:          %d%s\n", summary.Roots,
-					internal.CertAnnotation(summary.ExpiredRoots, summary.UntrustedRoots))
-				fmt.Printf("  Intermediates:  %d%s\n", summary.Intermediates,
-					internal.CertAnnotation(summary.ExpiredIntermediates, summary.UntrustedIntermediates))
-				fmt.Printf("  Leaves:         %d%s\n", summary.Leaves,
-					internal.CertAnnotation(summary.ExpiredLeaves, summary.UntrustedLeaves))
-			}
-			if summary.Keys > 0 {
-				fmt.Printf("  Key-cert pairs: %d\n", summary.Matched)
-			}
+			fmt.Print(internal.FormatScanTextSummary(internal.ScanTextSummaryInput{
+				Roots:                  summary.Roots,
+				Intermediates:          summary.Intermediates,
+				Leaves:                 summary.Leaves,
+				Keys:                   summary.Keys,
+				Matched:                summary.Matched,
+				ExpiredRoots:           summary.ExpiredRoots,
+				ExpiredIntermediates:   summary.ExpiredIntermediates,
+				ExpiredLeaves:          summary.ExpiredLeaves,
+				UntrustedRoots:         summary.UntrustedRoots,
+				UntrustedIntermediates: summary.UntrustedIntermediates,
+				UntrustedLeaves:        summary.UntrustedLeaves,
+			}))
 			if verbose {
 				printScanVerboseText(store)
 			}
@@ -473,43 +477,66 @@ func printScanVerboseText(store *certstore.MemStore) {
 	}
 }
 
-// aiaHTTPClient is reused across AIA fetches to enable TCP connection reuse.
+// newAIAHTTPClient creates an HTTP client for AIA fetches.
 // Redirects are limited to 3 and validated against SSRF rules.
-var aiaHTTPClient = &http.Client{
-	Timeout: 2 * time.Second,
-	CheckRedirect: func(req *http.Request, via []*http.Request) error {
-		if len(via) >= 3 {
-			return fmt.Errorf("stopped after 3 redirects")
-		}
-		if err := certkit.ValidateAIAURL(req.URL.String()); err != nil {
-			return fmt.Errorf("redirect blocked: %w", err)
-		}
-		return nil
-	},
+func newAIAHTTPClient(allowPrivateNetworks bool) *http.Client {
+	return &http.Client{
+		Timeout: 2 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 3 {
+				return fmt.Errorf("stopped after 3 redirects")
+			}
+			if err := certkit.ValidateAIAURLWithOptions(req.Context(), certkit.ValidateAIAURLInput{URL: req.URL.String(), AllowPrivateNetworks: allowPrivateNetworks}); err != nil {
+				return fmt.Errorf("redirect blocked: %w", err)
+			}
+			return nil
+		},
+	}
+}
+
+var (
+	aiaHTTPClientPublic  = newAIAHTTPClient(false)
+	aiaHTTPClientPrivate = newAIAHTTPClient(true)
+)
+
+func getAIAHTTPClient(allowPrivateNetworks bool) *http.Client {
+	if allowPrivateNetworks {
+		return aiaHTTPClientPrivate
+	}
+	return aiaHTTPClientPublic
+}
+
+type fetchAIAURLInput struct {
+	rawURL               string
+	allowPrivateNetworks bool
+}
+
+func fetchAIAURL(ctx context.Context, input fetchAIAURLInput) ([]byte, error) {
+	if err := certkit.ValidateAIAURLWithOptions(ctx, certkit.ValidateAIAURLInput{URL: input.rawURL, AllowPrivateNetworks: input.allowPrivateNetworks}); err != nil {
+		return nil, fmt.Errorf("AIA URL rejected: %w", err)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, input.rawURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating AIA request: %w", err)
+	}
+	resp, err := getAIAHTTPClient(input.allowPrivateNetworks).Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetching AIA URL %s: %w", input.rawURL, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, input.rawURL)
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1MB limit
+	if err != nil {
+		return nil, fmt.Errorf("reading AIA response from %s: %w", input.rawURL, err)
+	}
+	return data, nil
 }
 
 // httpAIAFetcher fetches raw certificate bytes from a URL via HTTP.
 func httpAIAFetcher(ctx context.Context, rawURL string) ([]byte, error) {
-	if err := certkit.ValidateAIAURL(rawURL); err != nil {
-		return nil, fmt.Errorf("AIA URL rejected: %w", err)
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("creating AIA request: %w", err)
-	}
-	resp, err := aiaHTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("fetching AIA URL %s: %w", rawURL, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, rawURL)
-	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1MB limit
-	if err != nil {
-		return nil, fmt.Errorf("reading AIA response from %s: %w", rawURL, err)
-	}
-	return data, nil
+	return fetchAIAURL(ctx, fetchAIAURLInput{rawURL: rawURL, allowPrivateNetworks: scanAllowPrivateNetwork})
 }
 
 // formatDN formats a pkix.Name as a one-line distinguished name string

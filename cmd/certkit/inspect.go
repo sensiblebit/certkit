@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -10,6 +11,7 @@ import (
 )
 
 var inspectFormat string
+var inspectAllowPrivateNetwork bool
 
 var inspectCmd = &cobra.Command{
 	Use:   "inspect <file>",
@@ -24,6 +26,7 @@ var inspectCmd = &cobra.Command{
 
 func init() {
 	inspectCmd.Flags().StringVar(&inspectFormat, "format", "text", "Output format: text, json")
+	inspectCmd.Flags().BoolVar(&inspectAllowPrivateNetwork, "allow-private-network", false, "Allow AIA fetches to private/internal endpoints")
 
 	registerCompletion(inspectCmd, completionInput{"format", fixedCompletion("text", "json")})
 }
@@ -41,8 +44,11 @@ func runInspect(cmd *cobra.Command, args []string) error {
 
 	// Resolve missing intermediates via AIA before trust annotation.
 	results, aiaWarnings := internal.ResolveInspectAIA(cmd.Context(), internal.ResolveInspectAIAInput{
-		Results: results,
-		Fetch:   httpAIAFetcher,
+		Results:              results,
+		AllowPrivateNetworks: inspectAllowPrivateNetwork,
+		Fetch: func(ctx context.Context, rawURL string) ([]byte, error) {
+			return fetchAIAURL(ctx, fetchAIAURLInput{rawURL: rawURL, allowPrivateNetworks: inspectAllowPrivateNetwork})
+		},
 	})
 	for _, w := range aiaWarnings {
 		slog.Warn("AIA resolution", "warning", w)
@@ -53,11 +59,9 @@ func runInspect(cmd *cobra.Command, args []string) error {
 	}
 
 	if !allowExpired {
-		results = slices.DeleteFunc(results, func(r internal.InspectResult) bool {
-			return r.Expired != nil && *r.Expired
-		})
-		if len(results) == 0 {
-			return fmt.Errorf("no valid (non-expired) certificates, keys, or CSRs found in %s (use --allow-expired to include expired)", args[0])
+		results, err = filterExpiredInspectResults(results, args[0])
+		if err != nil {
+			return err
 		}
 	}
 
@@ -73,4 +77,14 @@ func runInspect(cmd *cobra.Command, args []string) error {
 
 	fmt.Print(output)
 	return nil
+}
+
+func filterExpiredInspectResults(results []internal.InspectResult, inputPath string) ([]internal.InspectResult, error) {
+	filtered := slices.DeleteFunc(results, func(result internal.InspectResult) bool {
+		return result.Expired != nil && *result.Expired
+	})
+	if len(filtered) == 0 {
+		return nil, &ValidationError{Message: fmt.Sprintf("no valid (non-expired) certificates, keys, or CSRs found in %s (use --allow-expired to include expired)", inputPath)}
+	}
+	return filtered, nil
 }

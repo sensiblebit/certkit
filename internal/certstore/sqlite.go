@@ -49,6 +49,13 @@ type sqliteKeyRow struct {
 	KeyData              []byte `db:"key_data"`
 }
 
+func certificateIdentityAuthorityKeyIdentifier(cert *x509.Certificate) string {
+	if len(cert.AuthorityKeyId) > 0 {
+		return hex.EncodeToString(cert.AuthorityKeyId)
+	}
+	return "issuer:" + hex.EncodeToString(cert.RawIssuer)
+}
+
 // openMemDB creates an in-memory SQLite database with the certkit schema.
 func openMemDB() (*sqlx.DB, error) {
 	dsn := "file::memory:?_pragma=temp_store(2)&_pragma=journal_mode(off)&_pragma=synchronous(off)"
@@ -216,7 +223,7 @@ func SaveToSQLite(store *MemStore, dbPath string) error {
 		row := sqliteCertRow{
 			SerialNumber:           rec.Cert.SerialNumber.String(),
 			SubjectKeyIdentifier:   rec.SKI,
-			AuthorityKeyIdentifier: hex.EncodeToString(rec.Cert.AuthorityKeyId),
+			AuthorityKeyIdentifier: certificateIdentityAuthorityKeyIdentifier(rec.Cert),
 			CertType:               rec.CertType,
 			KeyType:                rec.KeyType,
 			Expiry:                 rec.NotAfter,
