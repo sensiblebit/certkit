@@ -128,7 +128,7 @@ func readCRLData(r io.Reader) ([]byte, error) {
 	limited := io.LimitReader(r, maxCRLBytes+1)
 	data, err := io.ReadAll(limited)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading CRL data: %w", err)
 	}
 	if int64(len(data)) > maxCRLBytes {
 		return nil, fmt.Errorf("%w (%d bytes)", ErrCRLTooLarge, maxCRLBytes)

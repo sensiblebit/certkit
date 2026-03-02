@@ -99,6 +99,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fix CRL read errors to include `reading CRL data` context before caller wrapping, improving nested error diagnostics ([#105])
 - Fix WASM ingestion promises to recover from internal panics instead of crashing asynchronous file processing ([#105])
 - Fix WASM AIA fetch callback lifecycle to release JS callbacks on cancellation paths after promise completion ([#105])
 - Fix web AIA proxy upstream handling to enforce explicit fetch timeout/abort behavior and return 504 timeout errors ([#105])
@@ -218,6 +219,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Tests
 
+- Consolidate CRL oversize-input coverage into one table-driven test for HTTP and local-file sources, asserting `ErrCRLTooLarge` behaviorally ([#105])
 - Remove `TestBuildLegacyClientHelloMsg` — behavioral coverage exists through `TestLegacyFallbackConnect` per T-11 ([`6492fa5`])
 - Remove `TestParseCertificateMessage` — behavioral coverage exists through `TestReadServerCertificates` per T-11 ([#82])
 - Fix `_, _` error discards in `TestLegacyFallbackConnect` mock server goroutine — replaced with `slog.Debug` per ERR-5 ([#82])
