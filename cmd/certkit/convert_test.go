@@ -9,12 +9,12 @@ import (
 	"encoding/pem"
 	"errors"
 	"math/big"
-	"strings"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/sensiblebit/certkit"
-	"github.com/sensiblebit/certkit/internal"
 )
 
 // generateKeyAndCert creates an ECDSA key and a self-signed leaf certificate.
@@ -261,32 +261,58 @@ func TestFindAllKeyLeafPairs(t *testing.T) {
 	})
 }
 
-func TestFormatConvertOutput_PKCS12MultiMatchIsGeneralError(t *testing.T) {
+func TestRunConvert_PKCS12MultiMatchIsGeneralError(t *testing.T) {
 	// WHY: Multiple key matches for PKCS#12 are a format limitation, not a
-	// certificate validation failure, so this path must not return ValidationError.
-	t.Parallel()
-
+	// certificate validation failure, so convert should return a general error.
 	key1, cert1 := generateKeyAndCert(t, "one.example.com", false)
 	key2, cert2 := generateKeyAndCert(t, "two.example.com", false)
 
-	_, err := formatConvertOutput(formatConvertInput{
-		contents: &internal.ContainerContents{
-			Leaf: cert1,
-			Key:  key1,
-		},
-		allCerts: []*x509.Certificate{cert1, cert2},
-		pairs: []keyLeafPair{
-			{key: key1, leaf: cert1},
-			{key: key2, leaf: cert2},
-		},
-		format:         "p12",
-		outputPassword: "topsecret",
+	tempDir := t.TempDir()
+	certPath := filepath.Join(tempDir, "input.pem")
+	keyPath := filepath.Join(tempDir, "keys.pem")
+	outPath := filepath.Join(tempDir, "bundle.p12")
+
+	certData := append([]byte(certkit.CertToPEM(cert1)), []byte(certkit.CertToPEM(cert2))...)
+	if err := os.WriteFile(certPath, certData, 0644); err != nil {
+		t.Fatalf("write cert input: %v", err)
+	}
+
+	keyData := append(marshalKeyPEM(t, key1), marshalKeyPEM(t, key2)...)
+	if err := os.WriteFile(keyPath, keyData, 0600); err != nil {
+		t.Fatalf("write key input: %v", err)
+	}
+
+	oldConvertTo := convertTo
+	oldConvertOutFile := convertOutFile
+	oldConvertKeyPath := convertKeyPath
+	oldPasswordList := passwordList
+	oldPasswordFile := passwordFile
+	oldInsecureDefaultPassword := insecureDefaultPassword
+	oldJSONOutput := jsonOutput
+	t.Cleanup(func() {
+		convertTo = oldConvertTo
+		convertOutFile = oldConvertOutFile
+		convertKeyPath = oldConvertKeyPath
+		passwordList = oldPasswordList
+		passwordFile = oldPasswordFile
+		insecureDefaultPassword = oldInsecureDefaultPassword
+		jsonOutput = oldJSONOutput
 	})
+
+	convertTo = "p12"
+	convertOutFile = outPath
+	convertKeyPath = keyPath
+	passwordList = []string{"topsecret"}
+	passwordFile = ""
+	insecureDefaultPassword = false
+	jsonOutput = false
+
+	err := runConvert(nil, []string{certPath})
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "PKCS#12 supports only one key entry") {
-		t.Fatalf("unexpected error: %v", err)
+	if !errors.Is(err, errPKCS12MultiKey) {
+		t.Fatalf("expected PKCS#12 multi-key error, got: %v", err)
 	}
 	var validationErr *ValidationError
 	if errors.As(err, &validationErr) {

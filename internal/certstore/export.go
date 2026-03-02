@@ -20,6 +20,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+var errP12PasswordRequired = errors.New("PKCS#12 export password is required")
+
 // BundleFile represents a single output file in a bundle export.
 type BundleFile struct {
 	Name      string
@@ -108,7 +110,7 @@ func GenerateBundleFiles(input BundleExportInput) ([]BundleFile, error) {
 	// PKCS#12
 	p12Password := input.P12Password
 	if p12Password == "" {
-		return nil, errors.New("PKCS#12 export password is required")
+		return nil, errP12PasswordRequired
 	}
 	privKey, err := certkit.ParsePEMPrivateKey(input.KeyPEM)
 	if err != nil {

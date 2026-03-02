@@ -129,6 +129,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix `bundle` chain-verification failures returning exit code 1 — validation failures now return exit code 2 ([#88])
 - Fix `bundle --key` mismatch and `inspect` expired-only filtering returning exit code 1 — these validation failures now return exit code 2 ([#88])
 - Fix `convert --to p12` multi-key format-limit errors returning validation exit code 2 — format limitations now return exit code 1 ([#97])
+- Fix PKCS#12 export error identity so callers can reliably detect missing-password and multi-key format-limit failures with wrapped errors ([#109])
 - Fix README/EXAMPLES/help mismatches for trust-store defaults, binary-output requirements, expired-cert behavior, and supported convert formats ([#101])
 - Fix verify JSON chain output to use `not_after` for consistency with other commands ([#87])
 - Fix Certificate Transparency availability handling to preserve parsed SCT candidates when the log list cannot be loaded and mark them as unavailable instead of dropping them ([#86])
@@ -985,6 +986,7 @@ Initial release.
 [#96]: https://github.com/sensiblebit/certkit/pull/96
 [#97]: https://github.com/sensiblebit/certkit/pull/97
 [#101]: https://github.com/sensiblebit/certkit/pull/101
+[#109]: https://github.com/sensiblebit/certkit/pull/109
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63

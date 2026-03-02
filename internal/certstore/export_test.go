@@ -4,6 +4,7 @@ import (
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -295,7 +296,7 @@ func TestGenerateBundleFiles_RequiresP12Password(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for missing P12 password")
 	}
-	if !strings.Contains(err.Error(), "PKCS#12 export password is required") {
+	if !errors.Is(err, errP12PasswordRequired) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

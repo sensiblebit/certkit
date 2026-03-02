@@ -5,6 +5,7 @@ import (
 	"crypto"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 
@@ -14,9 +15,10 @@ import (
 )
 
 var (
-	convertTo      string
-	convertOutFile string
-	convertKeyPath string
+	convertTo         string
+	convertOutFile    string
+	convertKeyPath    string
+	errPKCS12MultiKey = errors.New("PKCS#12 supports only one key entry")
 )
 
 var convertCmd = &cobra.Command{
@@ -209,7 +211,7 @@ func formatConvertOutput(input formatConvertInput) ([]byte, error) {
 			return nil, fmt.Errorf("PKCS#12 output requires a private key (use --key)")
 		}
 		if len(input.pairs) > 1 {
-			return nil, fmt.Errorf("PKCS#12 supports only one key entry; %d matches found (use JKS for multiple)", len(input.pairs))
+			return nil, fmt.Errorf("%w; %d matches found (use JKS for multiple)", errPKCS12MultiKey, len(input.pairs))
 		}
 		if input.outputPassword == "" {
 			return nil, fmt.Errorf("PKCS#12/JKS export requires an explicit password")
