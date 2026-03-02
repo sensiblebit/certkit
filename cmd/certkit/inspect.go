@@ -47,7 +47,7 @@ func runInspect(cmd *cobra.Command, args []string) error {
 		Results:              results,
 		AllowPrivateNetworks: inspectAllowPrivateNetwork,
 		Fetch: func(ctx context.Context, rawURL string) ([]byte, error) {
-			return fetchAIAURL(ctx, rawURL, inspectAllowPrivateNetwork)
+			return fetchAIAURL(ctx, fetchAIAURLInput{rawURL: rawURL, allowPrivateNetworks: inspectAllowPrivateNetwork})
 		},
 	})
 	for _, w := range aiaWarnings {

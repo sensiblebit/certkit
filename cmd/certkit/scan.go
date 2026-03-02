@@ -493,32 +493,37 @@ func newAIAHTTPClient(allowPrivateNetworks bool) *http.Client {
 	}
 }
 
-func fetchAIAURL(ctx context.Context, rawURL string, allowPrivateNetworks bool) ([]byte, error) {
-	if err := certkit.ValidateAIAURLWithOptions(ctx, certkit.ValidateAIAURLInput{URL: rawURL, AllowPrivateNetworks: allowPrivateNetworks}); err != nil {
+type fetchAIAURLInput struct {
+	rawURL               string
+	allowPrivateNetworks bool
+}
+
+func fetchAIAURL(ctx context.Context, input fetchAIAURLInput) ([]byte, error) {
+	if err := certkit.ValidateAIAURLWithOptions(ctx, certkit.ValidateAIAURLInput{URL: input.rawURL, AllowPrivateNetworks: input.allowPrivateNetworks}); err != nil {
 		return nil, fmt.Errorf("AIA URL rejected: %w", err)
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, input.rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating AIA request: %w", err)
 	}
-	resp, err := newAIAHTTPClient(allowPrivateNetworks).Do(req)
+	resp, err := newAIAHTTPClient(input.allowPrivateNetworks).Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("fetching AIA URL %s: %w", rawURL, err)
+		return nil, fmt.Errorf("fetching AIA URL %s: %w", input.rawURL, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, rawURL)
+		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, input.rawURL)
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1MB limit
 	if err != nil {
-		return nil, fmt.Errorf("reading AIA response from %s: %w", rawURL, err)
+		return nil, fmt.Errorf("reading AIA response from %s: %w", input.rawURL, err)
 	}
 	return data, nil
 }
 
 // httpAIAFetcher fetches raw certificate bytes from a URL via HTTP.
 func httpAIAFetcher(ctx context.Context, rawURL string) ([]byte, error) {
-	return fetchAIAURL(ctx, rawURL, scanAllowPrivateNetwork)
+	return fetchAIAURL(ctx, fetchAIAURLInput{rawURL: rawURL, allowPrivateNetworks: scanAllowPrivateNetwork})
 }
 
 // formatDN formats a pkix.Name as a one-line distinguished name string

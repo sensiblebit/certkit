@@ -21,7 +21,7 @@ type ResolveAIAInput struct {
 	MaxDepth             int                        // 0 defaults to 5
 	Concurrency          int                        // 0 defaults to 20; max parallel fetches per round
 	OnProgress           func(completed, total int) // optional; called after each cert's AIA URLs are processed
-	AllowPrivateNetworks bool
+	AllowPrivateNetworks bool                       // AllowPrivateNetworks allows AIA fetches to private/internal endpoints.
 }
 
 // HasUnresolvedIssuers reports whether any non-root certificate in the store

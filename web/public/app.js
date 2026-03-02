@@ -29,6 +29,9 @@ const selectAll = document.getElementById("select-all");
 const inspectDropZone = document.getElementById("inspect-drop-zone");
 const inspectFileInput = document.getElementById("inspect-file-input");
 const inspectPasswordsInput = document.getElementById("inspect-passwords");
+const inspectAllowPrivateNetwork = document.getElementById(
+  "inspect-allow-private-network",
+);
 const inspectStatusBar = document.getElementById("inspect-status");
 const inspectStatusText = document.getElementById("inspect-status-text");
 const inspectResultsSection = document.getElementById("inspect-results");
@@ -424,6 +427,7 @@ async function inspectFileObjects(fileObjects) {
     const resultJSON = await certkitInspect(
       fileObjects,
       inspectPasswordsInput.value.trim(),
+      inspectAllowPrivateNetwork.checked,
     );
     const results = JSON.parse(resultJSON);
 

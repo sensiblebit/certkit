@@ -96,6 +96,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fix WASM `inspect` AIA resolution to expose an explicit private-network opt-in so internal PKI intermediates can still be fetched when needed ([#98])
 - Apply a default 10-second timeout in `ConnectTLS` when callers provide a context without a deadline, preventing indefinite hangs during TCP/TLS connect and handshake operations ([#99])
 - Fix verify JSON chain output to use `not_after` for consistency with other commands ([#87])
 - Fix Certificate Transparency availability handling to preserve parsed SCT candidates when the log list cannot be loaded and mark them as unavailable instead of dropping them ([#86])
