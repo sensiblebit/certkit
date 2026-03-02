@@ -82,6 +82,57 @@ func TestMemStore_HandleCertificate_DuplicateIgnored(t *testing.T) {
 	}
 }
 
+func TestMemStore_HandleCertificate_MissingAKIDUsesIssuerIdentity(t *testing.T) {
+	// WHY: Certificates without AKI should deduplicate by issuer+serial, not
+	// serial alone. Different issuers may legitimately issue the same serial.
+	t.Parallel()
+
+	store := NewMemStore()
+
+	ca1 := newRSACA(t)
+	ca2 := newECDSACA(t)
+
+	newLeafNoAKI := func(t *testing.T, parent *x509.Certificate, signer any) *x509.Certificate {
+		t.Helper()
+		leafKey, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tmpl := &x509.Certificate{
+			SerialNumber: big.NewInt(9001), // same serial in both leaves
+			Subject:      pkix.Name{CommonName: "same-serial.example.com"},
+			DNSNames:     []string{"same-serial.example.com"},
+			NotBefore:    time.Now().Add(-time.Hour),
+			NotAfter:     time.Now().Add(24 * time.Hour),
+			KeyUsage:     x509.KeyUsageDigitalSignature,
+			// Intentionally omit AuthorityKeyId to exercise missing-AKI identity logic.
+		}
+		leafDER, err := x509.CreateCertificate(rand.Reader, tmpl, parent, &leafKey.PublicKey, signer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		leafCert, err := x509.ParseCertificate(leafDER)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return leafCert
+	}
+
+	leafFromCA1 := newLeafNoAKI(t, ca1.cert, ca1.key)
+	leafFromCA2 := newLeafNoAKI(t, ca2.cert, ca2.key)
+
+	if err := store.HandleCertificate(leafFromCA1, "ca1-leaf.pem"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HandleCertificate(leafFromCA2, "ca2-leaf.pem"); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(store.AllCertsFlat()) != 2 {
+		t.Fatalf("expected 2 distinct cert identities, got %d", len(store.AllCertsFlat()))
+	}
+}
+
 func TestMemStore_MatchedPairs(t *testing.T) {
 	// WHY: MatchedPairs must only return SKIs with both a leaf cert and a key;
 	// non-leaf certs must be excluded even if they have keys. Uses an

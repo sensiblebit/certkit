@@ -19,6 +19,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"log/slog"
 	"math/big"
 	"strings"
 	"time"
@@ -29,6 +30,7 @@ import (
 // ParsePEMCertificates parses all certificates from a PEM bundle.
 func ParsePEMCertificates(pemData []byte) ([]*x509.Certificate, error) {
 	var certs []*x509.Certificate
+	var firstErr error
 	rest := pemData
 	for {
 		var block *pem.Block
@@ -41,11 +43,18 @@ func ParsePEMCertificates(pemData []byte) ([]*x509.Certificate, error) {
 		}
 		cert, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {
-			return nil, fmt.Errorf("parsing certificate: %w", err)
+			if firstErr == nil {
+				firstErr = fmt.Errorf("parsing certificate: %w", err)
+			}
+			slog.Debug("skipping malformed CERTIFICATE PEM block", "error", err)
+			continue
 		}
 		certs = append(certs, cert)
 	}
 	if len(certs) == 0 {
+		if firstErr != nil {
+			return nil, firstErr
+		}
 		return nil, errors.New("no certificates found in PEM data")
 	}
 	return certs, nil
@@ -95,38 +104,32 @@ func normalizeKey(key crypto.PrivateKey) crypto.PrivateKey {
 // For "PRIVATE KEY" blocks it tries PKCS#8 first, then falls back to PKCS#1
 // and EC parsers to handle mislabeled keys (e.g., from pkcs12.ToPEM).
 func ParsePEMPrivateKey(pemData []byte) (crypto.PrivateKey, error) {
-	block, _ := pem.Decode(pemData)
-	if block == nil {
-		return nil, errors.New("no PEM block found in private key data")
+	rest := pemData
+	var firstErr error
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if !keyBlockTypes[block.Type] {
+			continue
+		}
+
+		singlePEM := pem.EncodeToMemory(block)
+		key, err := parsePEMPrivateKeyBlock(singlePEM, block)
+		if err == nil {
+			return key, nil
+		}
+		if firstErr == nil {
+			firstErr = err
+		}
 	}
 
-	switch block.Type {
-	case "RSA PRIVATE KEY":
-		return x509.ParsePKCS1PrivateKey(block.Bytes)
-	case "EC PRIVATE KEY":
-		return x509.ParseECPrivateKey(block.Bytes)
-	case "PRIVATE KEY":
-		if key, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
-			return normalizeKey(key), nil
-		}
-		// Fall back: some tools (e.g., pkcs12.ToPEM) label PKCS#1 keys as "PRIVATE KEY"
-		if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
-			return key, nil
-		}
-		if key, err := x509.ParseECPrivateKey(block.Bytes); err == nil {
-			return key, nil
-		}
-		return nil, errors.New("parsing PRIVATE KEY block with any known format")
-	case "OPENSSH PRIVATE KEY":
-		// OpenSSH format uses a proprietary encoding; delegate to x/crypto/ssh
-		key, err := ssh.ParseRawPrivateKey(pemData)
-		if err != nil {
-			return nil, fmt.Errorf("parsing OpenSSH private key: %w", err)
-		}
-		return normalizeKey(key), nil
-	default:
-		return nil, fmt.Errorf("unsupported PEM block type %q", block.Type)
+	if firstErr != nil {
+		return nil, firstErr
 	}
+	return nil, errors.New("no private keys found in PEM data")
 }
 
 // DefaultPasswords returns the list of passwords tried by default when decrypting
@@ -157,54 +160,102 @@ func DeduplicatePasswords(extra []string) []string {
 // order. Returns the first successfully decrypted key, or an error if all
 // passwords fail.
 func ParsePEMPrivateKeyWithPasswords(pemData []byte, passwords []string) (crypto.PrivateKey, error) {
-	// Try unencrypted first
-	if key, err := ParsePEMPrivateKey(pemData); err == nil {
-		return key, nil
-	}
-
-	block, _ := pem.Decode(pemData)
-	if block == nil {
-		return nil, errors.New("no PEM block found in private key data")
-	}
-
-	// OpenSSH keys use their own encryption format, not legacy RFC 1423
-	if block.Type == "OPENSSH PRIVATE KEY" {
-		for _, password := range passwords {
-			if password == "" {
-				continue // already tried unencrypted above
-			}
-			key, err := ssh.ParseRawPrivateKeyWithPassphrase(pemData, []byte(password))
-			if err == nil {
-				return normalizeKey(key), nil
-			}
+	rest := pemData
+	var firstErr error
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
 		}
-		return nil, errors.New("parsing OpenSSH private key with any provided password")
-	}
-
-	//nolint:staticcheck // x509.IsEncryptedPEMBlock is deprecated but needed for legacy encrypted PEM support
-	if !x509.IsEncryptedPEMBlock(block) {
-		// Not encrypted and unencrypted parse failed — return the original error
-		_, err := ParsePEMPrivateKey(pemData)
-		return nil, err
-	}
-
-	for _, password := range passwords {
-		//nolint:staticcheck // x509.DecryptPEMBlock is deprecated but needed for legacy encrypted PEM support
-		decrypted, err := x509.DecryptPEMBlock(block, []byte(password))
-		if err != nil {
+		if !keyBlockTypes[block.Type] {
 			continue
 		}
 
-		clearPEM := pem.EncodeToMemory(&pem.Block{
-			Type:  block.Type,
-			Bytes: decrypted,
-		})
-		if key, err := ParsePEMPrivateKey(clearPEM); err == nil {
+		singlePEM := pem.EncodeToMemory(block)
+
+		key, parseErr := parsePEMPrivateKeyBlock(singlePEM, block)
+		if parseErr == nil {
 			return key, nil
 		}
+
+		// OpenSSH uses a proprietary encrypted format.
+		if block.Type == "OPENSSH PRIVATE KEY" {
+			if len(passwords) == 0 {
+				if firstErr == nil {
+					firstErr = parseErr
+				}
+				slog.Debug("skipping OpenSSH private key block with no passwords", "error", parseErr)
+				continue
+			}
+
+			var openSSHErr error
+			for _, password := range passwords {
+				if password == "" {
+					continue
+				}
+				key, err := ssh.ParseRawPrivateKeyWithPassphrase(singlePEM, []byte(password))
+				if err == nil {
+					return normalizeKey(key), nil
+				}
+				if openSSHErr == nil {
+					openSSHErr = fmt.Errorf("parsing OpenSSH private key with provided passwords: %w", err)
+				}
+				slog.Debug("failed OpenSSH private key passphrase", "error", err)
+			}
+			if openSSHErr == nil {
+				openSSHErr = parseErr
+			}
+			if firstErr == nil {
+				firstErr = openSSHErr
+			}
+			slog.Debug("skipping OpenSSH private key block after password attempts", "error", openSSHErr)
+			continue
+		}
+
+		//nolint:staticcheck // x509.IsEncryptedPEMBlock is deprecated but needed for legacy encrypted PEM support
+		if !x509.IsEncryptedPEMBlock(block) {
+			if firstErr == nil {
+				firstErr = parseErr
+			}
+			slog.Debug("skipping unparseable unencrypted private key PEM block", "block_type", block.Type, "error", parseErr)
+			continue
+		}
+
+		var encryptedErr error
+		for _, password := range passwords {
+			//nolint:staticcheck // x509.DecryptPEMBlock is deprecated but needed for legacy encrypted PEM support
+			decrypted, err := x509.DecryptPEMBlock(block, []byte(password))
+			if err != nil {
+				if encryptedErr == nil {
+					encryptedErr = fmt.Errorf("decrypting private key with provided passwords: %w", err)
+				}
+				slog.Debug("failed decrypting encrypted private key block", "block_type", block.Type, "error", err)
+				continue
+			}
+			clearPEM := pem.EncodeToMemory(&pem.Block{Type: block.Type, Bytes: decrypted})
+			key, err := ParsePEMPrivateKey(clearPEM)
+			if err == nil {
+				return key, nil
+			}
+			if encryptedErr == nil {
+				encryptedErr = fmt.Errorf("parsing decrypted private key: %w", err)
+			}
+			slog.Debug("failed parsing decrypted private key block", "block_type", block.Type, "error", err)
+		}
+		if encryptedErr != nil && firstErr == nil {
+			firstErr = encryptedErr
+		}
+		if firstErr == nil {
+			firstErr = errors.New("decrypting private key with any provided password")
+		}
+		slog.Debug("skipping encrypted private key block after password attempts", "block_type", block.Type, "error", firstErr)
 	}
 
-	return nil, errors.New("decrypting private key with any provided password")
+	if firstErr != nil {
+		return nil, firstErr
+	}
+	return nil, errors.New("no private keys found in PEM data")
 }
 
 // keyBlockTypes is the set of PEM block types that represent private keys.
@@ -249,18 +300,60 @@ func ParsePEMPrivateKeys(pemData []byte, passwords []string) ([]crypto.PrivateKe
 
 // ParsePEMCertificateRequest parses a single certificate request from PEM data.
 func ParsePEMCertificateRequest(pemData []byte) (*x509.CertificateRequest, error) {
-	block, _ := pem.Decode(pemData)
-	if block == nil {
-		return nil, errors.New("no PEM block found in certificate request data")
+	rest := pemData
+	var firstErr error
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE REQUEST" && block.Type != "NEW CERTIFICATE REQUEST" {
+			continue
+		}
+		csr, err := x509.ParseCertificateRequest(block.Bytes)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = fmt.Errorf("parsing certificate request: %w", err)
+			}
+			slog.Debug("skipping malformed certificate request PEM block", "error", err)
+			continue
+		}
+		return csr, nil
 	}
-	if block.Type != "CERTIFICATE REQUEST" && block.Type != "NEW CERTIFICATE REQUEST" {
-		return nil, fmt.Errorf("expected CERTIFICATE REQUEST PEM block, got %q", block.Type)
+	if firstErr != nil {
+		return nil, firstErr
 	}
-	csr, err := x509.ParseCertificateRequest(block.Bytes)
-	if err != nil {
-		return nil, fmt.Errorf("parsing certificate request: %w", err)
+	return nil, errors.New("no certificate request found in PEM data")
+}
+
+func parsePEMPrivateKeyBlock(singlePEM []byte, block *pem.Block) (crypto.PrivateKey, error) {
+	switch block.Type {
+	case "RSA PRIVATE KEY":
+		return x509.ParsePKCS1PrivateKey(block.Bytes)
+	case "EC PRIVATE KEY":
+		return x509.ParseECPrivateKey(block.Bytes)
+	case "PRIVATE KEY":
+		if key, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
+			return normalizeKey(key), nil
+		}
+		// Fall back: some tools (e.g., pkcs12.ToPEM) label PKCS#1 keys as "PRIVATE KEY"
+		if key, err := x509.ParsePKCS1PrivateKey(block.Bytes); err == nil {
+			return key, nil
+		}
+		if key, err := x509.ParseECPrivateKey(block.Bytes); err == nil {
+			return key, nil
+		}
+		return nil, errors.New("parsing PRIVATE KEY block with any known format")
+	case "OPENSSH PRIVATE KEY":
+		key, err := ssh.ParseRawPrivateKey(singlePEM)
+		if err != nil {
+			return nil, fmt.Errorf("parsing OpenSSH private key: %w", err)
+		}
+		return normalizeKey(key), nil
+	default:
+		return nil, fmt.Errorf("unsupported PEM block type %q", block.Type)
 	}
-	return csr, nil
 }
 
 // CertToPEM encodes a certificate as PEM.
@@ -526,6 +619,38 @@ func KeyMatchesCert(priv crypto.PrivateKey, cert *x509.Certificate) (bool, error
 		return false, fmt.Errorf("unsupported public key type: %T", pub)
 	}
 	return eq.Equal(cert.PublicKey), nil
+}
+
+// SelectIssuerCertificate chooses the best issuer for cert from candidates.
+// It requires both issuer DN match and a valid signature relationship, and
+// prefers AKI/SKI matches when available. Returns nil when no candidate meets
+// those criteria.
+func SelectIssuerCertificate(cert *x509.Certificate, candidates []*x509.Certificate) *x509.Certificate {
+	if cert == nil {
+		return nil
+	}
+
+	var fallback *x509.Certificate
+	for _, candidate := range candidates {
+		if candidate == nil {
+			continue
+		}
+		if !bytes.Equal(cert.RawIssuer, candidate.RawSubject) {
+			continue
+		}
+		if err := cert.CheckSignatureFrom(candidate); err != nil {
+			slog.Debug("skipping candidate with invalid issuer signature", "error", err)
+			continue
+		}
+		if len(cert.AuthorityKeyId) > 0 && len(candidate.SubjectKeyId) > 0 && bytes.Equal(cert.AuthorityKeyId, candidate.SubjectKeyId) {
+			return candidate
+		}
+		if fallback == nil {
+			fallback = candidate
+		}
+	}
+
+	return fallback
 }
 
 // IsPEM returns true if the data appears to contain PEM-encoded content.
