@@ -1,6 +1,7 @@
 package internal
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -9,6 +10,11 @@ import (
 )
 
 const defaultMaxInputBytes int64 = 10 * 1024 * 1024
+
+var (
+	errInputExceedsMaxSize = errors.New("input exceeds max size")
+	errFileExceedsMaxSize  = errors.New("file exceeds max size")
+)
 
 // readAllLimited reads from r with an optional hard byte limit.
 // When maxBytes <= 0, no limit is applied.
@@ -27,7 +33,7 @@ func readAllLimited(r io.Reader, maxBytes int64) ([]byte, error) {
 		return nil, fmt.Errorf("reading input: %w", err)
 	}
 	if int64(len(data)) > maxBytes {
-		return nil, fmt.Errorf("input exceeds max size (%d bytes)", maxBytes)
+		return nil, fmt.Errorf("%w (%d bytes)", errInputExceedsMaxSize, maxBytes)
 	}
 	return data, nil
 }
@@ -41,7 +47,7 @@ func readFileLimited(path string, maxBytes int64) ([]byte, error) {
 			return nil, fmt.Errorf("stat %s: %w", path, err)
 		}
 		if info.Size() > maxBytes {
-			return nil, fmt.Errorf("file exceeds max size (%d bytes)", maxBytes)
+			return nil, fmt.Errorf("%w (%d bytes)", errFileExceedsMaxSize, maxBytes)
 		}
 	}
 
@@ -60,4 +66,9 @@ func readFileLimited(path string, maxBytes int64) ([]byte, error) {
 		return nil, fmt.Errorf("reading %s: %w", path, err)
 	}
 	return data, nil
+}
+
+// ReadFileLimited reads a file with an optional hard byte limit.
+func ReadFileLimited(path string, maxBytes int64) ([]byte, error) {
+	return readFileLimited(path, maxBytes)
 }

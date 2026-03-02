@@ -102,6 +102,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Fix WASM `inspect` AIA resolution to expose an explicit private-network opt-in so internal PKI intermediates can still be fetched when needed ([#108])
 - Apply a default 10-second timeout in `ConnectTLS` when callers provide a context without a deadline, preventing indefinite hangs during TCP/TLS connect and handshake operations ([#108])
+- Fix `scan` directory traversal boundaries and resilience: symlinks that point outside the scan root are skipped, max-file-size checks now apply to symlink targets and archive reads, and transient walk errors no longer prune unrelated files during traversal ([#91])
+- Fix `scan --bundle-path` text/default output to print a useful post-export summary (certificate/key counts plus export path) while keeping JSON export output unchanged ([#95])
+- Fix `scan` to fail fast when per-file processing or size-check `stat` calls fail during directory traversal, instead of logging and silently continuing ([#106])
+- Fix max-size read failures to return stable wrapped error causes instead of requiring string matching in internal scan/read paths ([#106])
+- Fix `scan --bundle-path` to reject unsupported `--format` values with the same validation used by non-export scans (for example, `--format yaml` now errors instead of silently falling back to text) ([#106])
+- Fix `scan --bundle-path` text output to keep scan summary on stdout while sending the export destination path to stderr per CLI output conventions ([#106])
 - Fix inspect/convert/container parsing to continue past malformed PEM certificate blocks so valid certificates are still processed, and add DER private-key detection for key-only inputs ([#107])
 - Fix inspect PEM key parsing to continue past malformed private-key blocks so valid keys in the same bundle are still reported ([#107])
 - Fix JKS container selection to keep private key entries paired with their own leaf certificate and chain instead of selecting unrelated trusted entries ([#107])
@@ -960,6 +966,9 @@ Initial release.
 [#86]: https://github.com/sensiblebit/certkit/pull/86
 [#87]: https://github.com/sensiblebit/certkit/pull/87
 [#108]: https://github.com/sensiblebit/certkit/pull/108
+[#91]: https://github.com/sensiblebit/certkit/pull/91
+[#95]: https://github.com/sensiblebit/certkit/pull/95
+[#106]: https://github.com/sensiblebit/certkit/pull/106
 [#107]: https://github.com/sensiblebit/certkit/pull/107
 [#105]: https://github.com/sensiblebit/certkit/pull/105
 [#73]: https://github.com/sensiblebit/certkit/pull/73
