@@ -603,9 +603,9 @@ func TestParsePEMCertificateRequest_errors(t *testing.T) {
 	}
 }
 
-func TestParsePEMCertificateRequest_SkipsNonCSRBlocks(t *testing.T) {
-	// WHY: CSR parsing must scan PEM bundles and locate the request block even
-	// when other block types appear first.
+func TestParsePEMCertificateRequest_SkipsBadBlocksBeforeValidCSR(t *testing.T) {
+	// WHY: CSR parsing must continue scanning when earlier PEM blocks are either
+	// wrong block types or malformed CSR DER.
 	t.Parallel()
 
 	leaf, key := generateLeafWithSANs(t)
@@ -618,46 +618,39 @@ func TestParsePEMCertificateRequest_SkipsNonCSRBlocks(t *testing.T) {
 		t.Fatal("failed to decode generated CSR")
 	}
 
-	pemData := slices.Concat(
-		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("not-a-csr")}),
-		pem.EncodeToMemory(csrBlock),
-	)
-
-	csr, err := ParsePEMCertificateRequest(pemData)
-	if err != nil {
-		t.Fatalf("ParsePEMCertificateRequest: %v", err)
-	}
-	if csr.Subject.CommonName != "test.example.com" {
-		t.Errorf("CN=%q, want test.example.com", csr.Subject.CommonName)
-	}
-}
-
-func TestParsePEMCertificateRequest_SkipsMalformedCSRBeforeValidCSR(t *testing.T) {
-	// WHY: PEM bundles can contain broken CSR blocks before valid ones; parser
-	// must continue scanning to avoid dropping usable requests.
-	t.Parallel()
-
-	leaf, key := generateLeafWithSANs(t)
-	csrPEM, _, err := GenerateCSR(leaf, key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	csrBlock, _ := pem.Decode([]byte(csrPEM))
-	if csrBlock == nil {
-		t.Fatal("failed to decode generated CSR")
+	tests := []struct {
+		name      string
+		blockType string
+		blockDER  []byte
+	}{
+		{
+			name:      "skips non-CSR block before valid CSR",
+			blockType: "CERTIFICATE",
+			blockDER:  []byte("not-a-csr"),
+		},
+		{
+			name:      "skips malformed CSR block before valid CSR",
+			blockType: "CERTIFICATE REQUEST",
+			blockDER:  []byte("bad-csr-der"),
+		},
 	}
 
-	pemData := slices.Concat(
-		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: []byte("bad-csr-der")}),
-		pem.EncodeToMemory(csrBlock),
-	)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			pemData := slices.Concat(
+				pem.EncodeToMemory(&pem.Block{Type: tt.blockType, Bytes: tt.blockDER}),
+				pem.EncodeToMemory(csrBlock),
+			)
 
-	csr, err := ParsePEMCertificateRequest(pemData)
-	if err != nil {
-		t.Fatalf("ParsePEMCertificateRequest: %v", err)
-	}
-	if csr.Subject.CommonName != "test.example.com" {
-		t.Errorf("CN=%q, want test.example.com", csr.Subject.CommonName)
+			csr, err := ParsePEMCertificateRequest(pemData)
+			if err != nil {
+				t.Fatalf("ParsePEMCertificateRequest: %v", err)
+			}
+			if csr.Subject.CommonName != "test.example.com" {
+				t.Errorf("CN=%q, want test.example.com", csr.Subject.CommonName)
+			}
+		})
 	}
 }
 

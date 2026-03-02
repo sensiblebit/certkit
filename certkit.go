@@ -622,8 +622,9 @@ func KeyMatchesCert(priv crypto.PrivateKey, cert *x509.Certificate) (bool, error
 }
 
 // SelectIssuerCertificate chooses the best issuer for cert from candidates.
-// It requires a valid signature relationship and prefers AKI/SKI matches when
-// available. Returns nil if no candidate can verify cert's signature.
+// It requires both issuer DN match and a valid signature relationship, and
+// prefers AKI/SKI matches when available. Returns nil when no candidate meets
+// those criteria.
 func SelectIssuerCertificate(cert *x509.Certificate, candidates []*x509.Certificate) *x509.Certificate {
 	if cert == nil {
 		return nil
@@ -638,6 +639,7 @@ func SelectIssuerCertificate(cert *x509.Certificate, candidates []*x509.Certific
 			continue
 		}
 		if err := cert.CheckSignatureFrom(candidate); err != nil {
+			slog.Debug("skipping candidate with invalid issuer signature", "error", err)
 			continue
 		}
 		if len(cert.AuthorityKeyId) > 0 && len(candidate.SubjectKeyId) > 0 && bytes.Equal(cert.AuthorityKeyId, candidate.SubjectKeyId) {
@@ -648,20 +650,7 @@ func SelectIssuerCertificate(cert *x509.Certificate, candidates []*x509.Certific
 		}
 	}
 
-	if fallback != nil {
-		return fallback
-	}
-
-	for _, candidate := range candidates {
-		if candidate == nil {
-			continue
-		}
-		if err := cert.CheckSignatureFrom(candidate); err == nil {
-			return candidate
-		}
-	}
-
-	return nil
+	return fallback
 }
 
 // IsPEM returns true if the data appears to contain PEM-encoded content.

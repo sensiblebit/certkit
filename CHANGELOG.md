@@ -98,6 +98,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix inspect/convert/container parsing to continue past malformed PEM certificate blocks so valid certificates are still processed, and add DER private-key detection for key-only inputs ([#107])
 - Fix inspect PEM key parsing to continue past malformed private-key blocks so valid keys in the same bundle are still reported ([#107])
 - Fix JKS container selection to keep private key entries paired with their own leaf certificate and chain instead of selecting unrelated trusted entries ([#107])
+- Fix JKS/issuer parsing edge cases by adding debug logging for skipped JKS entry errors, requiring issuer DN match during OCSP issuer auto-selection, and consolidating duplicate CSR-scan tests into a single table-driven case ([#107])
 - Fix certificate identity deduplication for certificates without AKI by falling back to issuer+serial identity, and align SQLite persistence keys with the same identity to prevent dropped certs across different issuers ([#107])
 - Fix CSR signing to reject CA certificate/key mismatches before issuing certificates ([#107])
 - Fix OCSP issuer auto-selection to choose a certificate that actually signs the leaf (with AKI/SKI preference) instead of defaulting to the first extra certificate ([#107])

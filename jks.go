@@ -6,6 +6,7 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -46,10 +47,12 @@ func DecodeJKSKeyEntries(data []byte, passwords []string) ([]DecodedJKSKeyEntry,
 		if ks.IsTrustedCertificateEntry(alias) {
 			entry, err := ks.GetTrustedCertificateEntry(alias)
 			if err != nil {
+				slog.Debug("skipping unreadable JKS trusted certificate entry", "alias", alias, "error", err)
 				continue
 			}
 			cert, err := x509.ParseCertificate(entry.Certificate.Content)
 			if err != nil {
+				slog.Debug("skipping malformed JKS trusted certificate entry", "alias", alias, "error", err)
 				continue
 			}
 			trustedCerts = append(trustedCerts, cert)
@@ -62,6 +65,7 @@ func DecodeJKSKeyEntries(data []byte, passwords []string) ([]DecodedJKSKeyEntry,
 		for _, pw := range passwords {
 			entry, err := ks.GetPrivateKeyEntry(alias, []byte(pw))
 			if err != nil {
+				slog.Debug("skipping JKS private key entry password attempt", "alias", alias, "error", err)
 				continue
 			}
 
@@ -74,6 +78,7 @@ func DecodeJKSKeyEntries(data []byte, passwords []string) ([]DecodedJKSKeyEntry,
 			for _, certEntry := range entry.CertificateChain {
 				cert, err := x509.ParseCertificate(certEntry.Content)
 				if err != nil {
+					slog.Debug("skipping malformed certificate in JKS private key chain", "alias", alias, "error", err)
 					continue
 				}
 				chain = append(chain, cert)
