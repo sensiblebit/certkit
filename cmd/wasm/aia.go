@@ -18,11 +18,12 @@ import (
 //
 // Progress is dispatched to JS via setTimeout so the browser event loop can
 // update the progress bar without blocking the AIA goroutine.
-func resolveAIA(ctx context.Context, s *certstore.MemStore) []string {
+func resolveAIA(ctx context.Context, s *certstore.MemStore, allowPrivateNetworks bool) []string {
 	return certstore.ResolveAIA(ctx, certstore.ResolveAIAInput{
-		Store:       s,
-		Fetch:       jsFetchURL,
-		Concurrency: 50,
+		Store:                s,
+		Fetch:                jsFetchURL,
+		Concurrency:          50,
+		AllowPrivateNetworks: allowPrivateNetworks,
 		OnProgress: func(completed, total int) {
 			var cb js.Func
 			cb = js.FuncOf(func(_ js.Value, _ []js.Value) any {

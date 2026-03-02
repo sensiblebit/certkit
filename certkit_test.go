@@ -1,6 +1,7 @@
 package certkit
 
 import (
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -14,7 +15,9 @@ import (
 	"encoding/asn1"
 	"encoding/hex"
 	"encoding/pem"
+	"errors"
 	"fmt"
+	"net"
 	"slices"
 	"strings"
 	"testing"
@@ -1965,39 +1968,46 @@ func TestVerifyChainTrust(t *testing.T) {
 
 func TestValidateAIAURL(t *testing.T) {
 	// WHY: ValidateAIAURL prevents SSRF by rejecting non-HTTP schemes and
-	// literal private/loopback/link-local IP addresses. Each case covers a
-	// distinct rejection rule or an allowed pattern.
+	// private/loopback/link-local/unspecified IPs.
 	t.Parallel()
 
 	tests := []struct {
-		name    string
-		url     string
-		wantErr bool
-		errSub  string
+		name         string
+		url          string
+		allowPrivate bool
+		wantErr      bool
+		errSub       string
 	}{
-		{"valid http", "http://ca.example.com/issuer.cer", false, ""},
-		{"valid https", "https://ca.example.com/issuer.cer", false, ""},
-		{"ftp rejected", "ftp://ca.example.com/issuer.cer", true, "unsupported scheme"},
-		{"file rejected", "file:///etc/passwd", true, "unsupported scheme"},
-		{"empty scheme rejected", "://foo", true, "parsing URL"},
-		{"loopback IPv4", "http://127.0.0.1/ca.cer", true, "loopback"},
-		{"loopback IPv6", "http://[::1]/ca.cer", true, "loopback"},
-		{"link-local IPv4", "http://169.254.1.1/ca.cer", true, "loopback, link-local, or unspecified"},
-		{"unspecified IPv4", "http://0.0.0.0/ca.cer", true, "loopback, link-local, or unspecified"},
-		{"unspecified IPv6", "http://[::]/ca.cer", true, "loopback, link-local, or unspecified"},
-		{"private IPv6 ULA", "http://[fd12::1]/ca.cer", true, "blocked private"},
-		{"private 10.x", "http://10.0.0.1/ca.cer", true, "blocked private"},
-		{"private 172.16.x", "http://172.16.0.1/ca.cer", true, "blocked private"},
-		{"private 192.168.x", "http://192.168.1.1/ca.cer", true, "blocked private"},
-		{"CGN 100.64.x", "http://100.64.0.1/ca.cer", true, "blocked private"},
-		{"public IP allowed", "http://8.8.8.8/ca.cer", false, ""},
-		{"hostname allowed even if resolves to private", "http://internal.company.com/ca.cer", false, ""},
+		{"valid public IPv4 http", "http://8.8.8.8/issuer.cer", false, false, ""},
+		{"valid public IPv4 https", "https://8.8.8.8/issuer.cer", false, false, ""},
+		{"ftp rejected", "ftp://ca.example.com/issuer.cer", false, true, "unsupported scheme"},
+		{"file rejected", "file:///etc/passwd", false, true, "unsupported scheme"},
+		{"empty scheme rejected", "://foo", false, true, "parsing URL"},
+		{"missing hostname rejected", "https:///issuer.cer", false, true, "missing hostname"},
+		{"loopback IPv4", "http://127.0.0.1/ca.cer", false, true, "loopback"},
+		{"loopback IPv6", "http://[::1]/ca.cer", false, true, "loopback"},
+		{"localhost hostname", "http://localhost/ca.cer", false, true, "resolved"},
+		{"link-local IPv4", "http://169.254.1.1/ca.cer", false, true, "loopback, link-local, or unspecified"},
+		{"unspecified IPv4", "http://0.0.0.0/ca.cer", false, true, "loopback, link-local, or unspecified"},
+		{"this network IPv4 range", "http://0.1.2.3/ca.cer", false, true, "blocked private"},
+		{"unspecified IPv6", "http://[::]/ca.cer", false, true, "loopback, link-local, or unspecified"},
+		{"private IPv6 ULA", "http://[fd12::1]/ca.cer", false, true, "blocked private"},
+		{"private 10.x", "http://10.0.0.1/ca.cer", false, true, "blocked private"},
+		{"private 172.16.x", "http://172.16.0.1/ca.cer", false, true, "blocked private"},
+		{"private 192.168.x", "http://192.168.1.1/ca.cer", false, true, "blocked private"},
+		{"CGN 100.64.x", "http://100.64.0.1/ca.cer", false, true, "blocked private"},
+		{"allow private network option", "http://127.0.0.1/ca.cer", true, false, ""},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			err := ValidateAIAURL(tt.url)
+			var err error
+			if tt.allowPrivate {
+				err = ValidateAIAURLWithOptions(context.Background(), ValidateAIAURLInput{URL: tt.url, AllowPrivateNetworks: true})
+			} else {
+				err = ValidateAIAURL(tt.url)
+			}
 			if tt.wantErr {
 				if err == nil {
 					t.Fatalf("expected error for %q", tt.url)
@@ -2011,6 +2021,111 @@ func TestValidateAIAURL(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestValidateAIAURLWithOptions_HostnameResolution(t *testing.T) {
+	t.Parallel()
+
+	lookup := func(_ context.Context, host string) ([]net.IP, error) {
+		switch host {
+		case "public.example":
+			return []net.IP{net.ParseIP("93.184.216.34")}, nil
+		case "mixed.example":
+			return []net.IP{net.ParseIP("93.184.216.34"), net.ParseIP("10.0.0.10")}, nil
+		case "empty.example":
+			return nil, nil
+		default:
+			return nil, fmt.Errorf("lookup failed")
+		}
+	}
+
+	tests := []struct {
+		name    string
+		input   ValidateAIAURLInput
+		wantErr string
+	}{
+		{
+			name: "public resolution allowed",
+			input: ValidateAIAURLInput{
+				URL:               "https://public.example/issuer.cer",
+				lookupIPAddresses: lookup,
+			},
+		},
+		{
+			name: "mixed public and private blocked",
+			input: ValidateAIAURLInput{
+				URL:               "https://mixed.example/issuer.cer",
+				lookupIPAddresses: lookup,
+			},
+			wantErr: "blocked private address",
+		},
+		{
+			name: "empty DNS answer blocked",
+			input: ValidateAIAURLInput{
+				URL:               "https://empty.example/issuer.cer",
+				lookupIPAddresses: lookup,
+			},
+			wantErr: "no IP addresses returned",
+		},
+		{
+			name: "resolver error blocked",
+			input: ValidateAIAURLInput{
+				URL:               "https://error.example/issuer.cer",
+				lookupIPAddresses: lookup,
+			},
+			wantErr: "resolving host",
+		},
+		{
+			name: "allow private bypasses DNS checks",
+			input: ValidateAIAURLInput{
+				URL:                  "https://mixed.example/issuer.cer",
+				AllowPrivateNetworks: true,
+				lookupIPAddresses:    lookup,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateAIAURLWithOptions(context.Background(), tt.input)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error containing %q", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %q, want substring %q", err.Error(), tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestValidateAIAURLWithOptions_ContextDeadline(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	defer cancel()
+
+	lookup := func(ctx context.Context, _ string) ([]net.IP, error) {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+
+	err := ValidateAIAURLWithOptions(ctx, ValidateAIAURLInput{
+		URL:               "https://example.com/issuer.cer",
+		lookupIPAddresses: lookup,
+	})
+	if err == nil {
+		t.Fatal("expected context deadline error")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("error = %v, want context.DeadlineExceeded", err)
 	}
 }
 

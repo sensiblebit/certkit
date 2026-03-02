@@ -12,8 +12,9 @@ import (
 )
 
 var (
-	ocspIssuerPath string
-	ocspFormat     string
+	ocspIssuerPath          string
+	ocspFormat              string
+	ocspAllowPrivateNetwork bool
 )
 
 var ocspCmd = &cobra.Command{
@@ -23,7 +24,8 @@ var ocspCmd = &cobra.Command{
 
 The OCSP responder URL is read from the certificate's AIA extension.
 Use --issuer to provide the issuer certificate if it is not embedded
-in the input file.
+in the input file. Private/internal OCSP endpoints are blocked by default;
+use --allow-private-network to opt in.
 
 Exits with code 2 if the certificate is revoked.`,
 	Example: `  certkit ocsp cert.pem --issuer issuer.pem
@@ -36,6 +38,7 @@ Exits with code 2 if the certificate is revoked.`,
 func init() {
 	ocspCmd.Flags().StringVar(&ocspIssuerPath, "issuer", "", "Issuer certificate file (PEM); auto-resolved from input if omitted")
 	ocspCmd.Flags().StringVar(&ocspFormat, "format", "text", "Output format: text, json")
+	ocspCmd.Flags().BoolVar(&ocspAllowPrivateNetwork, "allow-private-network", false, "Allow OCSP fetches to private/internal endpoints")
 
 	registerCompletion(ocspCmd, completionInput{"issuer", fileCompletion})
 	registerCompletion(ocspCmd, completionInput{"format", fixedCompletion("text", "json")})
@@ -75,8 +78,9 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("parsing issuer certificate: %w", err)
 		}
 		ocspInput = &certkit.CheckOCSPInput{
-			Cert:   contents.Leaf,
-			Issuer: issuerCert,
+			Cert:                 contents.Leaf,
+			Issuer:               issuerCert,
+			AllowPrivateNetworks: ocspAllowPrivateNetwork,
 		}
 	} else if len(contents.ExtraCerts) > 0 {
 		issuerCert := certkit.SelectIssuerCertificate(contents.Leaf, contents.ExtraCerts)
@@ -84,8 +88,9 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("no matching issuer certificate found in input; use --issuer to provide one")
 		}
 		ocspInput = &certkit.CheckOCSPInput{
-			Cert:   contents.Leaf,
-			Issuer: issuerCert,
+			Cert:                 contents.Leaf,
+			Issuer:               issuerCert,
+			AllowPrivateNetworks: ocspAllowPrivateNetwork,
 		}
 	} else {
 		return fmt.Errorf("no issuer certificate found; use --issuer to provide one")

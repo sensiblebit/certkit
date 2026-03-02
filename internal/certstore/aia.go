@@ -16,11 +16,12 @@ type AIAFetcher func(ctx context.Context, url string) ([]byte, error)
 
 // ResolveAIAInput holds parameters for ResolveAIA.
 type ResolveAIAInput struct {
-	Store       *MemStore
-	Fetch       AIAFetcher
-	MaxDepth    int                        // 0 defaults to 5
-	Concurrency int                        // 0 defaults to 20; max parallel fetches per round
-	OnProgress  func(completed, total int) // optional; called after each cert's AIA URLs are processed
+	Store                *MemStore
+	Fetch                AIAFetcher
+	MaxDepth             int                        // 0 defaults to 5
+	Concurrency          int                        // 0 defaults to 20; max parallel fetches per round
+	OnProgress           func(completed, total int) // optional; called after each cert's AIA URLs are processed
+	AllowPrivateNetworks bool                       // AllowPrivateNetworks allows AIA fetches to private/internal endpoints.
 }
 
 // HasUnresolvedIssuers reports whether any non-root certificate in the store
@@ -134,7 +135,7 @@ func ResolveAIA(ctx context.Context, input ResolveAIAInput) []string {
 				}
 				seen[aiaURL] = true
 
-				if err := certkit.ValidateAIAURL(aiaURL); err != nil {
+				if err := certkit.ValidateAIAURLWithOptions(ctx, certkit.ValidateAIAURLInput{URL: aiaURL, AllowPrivateNetworks: input.AllowPrivateNetworks}); err != nil {
 					warnings = append(warnings, fmt.Sprintf(
 						"AIA URL rejected for %q: %v",
 						rec.Cert.Subject.CommonName, err,

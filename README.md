@@ -131,23 +131,25 @@ Common passwords (`""`, `"password"`, `"changeit"`, `"keypassword"`) are always 
 ### Inspect Flags
 
 <!-- certkit:flags:inspect -->
-| Flag       | Default | Description               |
-| ---------- | ------- | ------------------------- |
-| `--format` | `text`  | Output format: text, json |
+| Flag                      | Default | Description                                     |
+| ------------------------- | ------- | ----------------------------------------------- |
+| `--allow-private-network` | `false` | Allow AIA fetches to private/internal endpoints |
+| `--format`                | `text`  | Output format: text, json                       |
 <!-- /certkit:flags -->
 
 ### Verify Flags
 
 <!-- certkit:flags:verify -->
-| Flag             | Default   | Description                                             |
-| ---------------- | --------- | ------------------------------------------------------- |
-| `--crl`          | `false`   | Check CRL distribution points for revocation            |
-| `--diagnose`     | `false`   | Show diagnostics when chain verification fails          |
-| `--expiry`, `-e` |           | Check if cert expires within duration (e.g., 30d, 720h) |
-| `--format`       | `text`    | Output format: text, json                               |
-| `--key`          |           | Private key file to check against the certificate       |
-| `--ocsp`         | `false`   | Check OCSP revocation status                            |
-| `--trust-store`  | `mozilla` | Trust store: system, mozilla                            |
+| Flag                      | Default   | Description                                              |
+| ------------------------- | --------- | -------------------------------------------------------- |
+| `--allow-private-network` | `false`   | Allow AIA/OCSP/CRL fetches to private/internal endpoints |
+| `--crl`                   | `false`   | Check CRL distribution points for revocation             |
+| `--diagnose`              | `false`   | Show diagnostics when chain verification fails           |
+| `--expiry`, `-e`          |           | Check if cert expires within duration (e.g., 30d, 720h)  |
+| `--format`                | `text`    | Output format: text, json                                |
+| `--key`                   |           | Private key file to check against the certificate        |
+| `--ocsp`                  | `false`   | Check OCSP revocation status                             |
+| `--trust-store`           | `mozilla` | Trust store: system, mozilla                             |
 <!-- /certkit:flags -->
 
 Chain verification is always performed. When the input contains an embedded private key (PKCS#12, JKS), key match is checked automatically. Use `--ocsp` and/or `--crl` to check revocation status (requires network access and a valid chain).
@@ -155,13 +157,14 @@ Chain verification is always performed. When the input contains an embedded priv
 ### Connect Flags
 
 <!-- certkit:flags:connect -->
-| Flag           | Default | Description                                                 |
-| -------------- | ------- | ----------------------------------------------------------- |
-| `--ciphers`    | `false` | Enumerate all supported cipher suites with security ratings |
-| `--crl`        | `false` | Check CRL distribution points for revocation                |
-| `--format`     | `text`  | Output format: text, json                                   |
-| `--no-ocsp`    | `false` | Disable automatic OCSP revocation check                     |
-| `--servername` |         | Override SNI hostname (defaults to host)                    |
+| Flag                      | Default | Description                                                 |
+| ------------------------- | ------- | ----------------------------------------------------------- |
+| `--allow-private-network` | `false` | Allow AIA/OCSP/CRL fetches to private/internal endpoints    |
+| `--ciphers`               | `false` | Enumerate all supported cipher suites with security ratings |
+| `--crl`                   | `false` | Check CRL distribution points for revocation                |
+| `--format`                | `text`  | Output format: text, json                                   |
+| `--no-ocsp`               | `false` | Disable automatic OCSP revocation check                     |
+| `--servername`            |         | Override SNI hostname (defaults to host)                    |
 <!-- /certkit:flags -->
 
 Port defaults to 443 if not specified. OCSP revocation status is checked automatically (best-effort); use `--no-ocsp` to disable. Use `--verbose` for extended details (serial, key info, signature algorithm, key usage, EKU).
@@ -169,13 +172,14 @@ Port defaults to 443 if not specified. OCSP revocation status is checked automat
 ### Bundle Flags
 
 <!-- certkit:flags:bundle -->
-| Flag               | Default    | Description                                    |
-| ------------------ | ---------- | ---------------------------------------------- |
-| `--force`, `-f`    | `false`    | Skip chain verification                        |
-| `--format`         | `pem`      | Output format: pem, chain, fullchain, p12, jks |
-| `--key`            |            | Private key file (PEM)                         |
-| `--out-file`, `-o` | _(stdout)_ | Output file                                    |
-| `--trust-store`    | `mozilla`  | Trust store: system, mozilla                   |
+| Flag                      | Default    | Description                                     |
+| ------------------------- | ---------- | ----------------------------------------------- |
+| `--allow-private-network` | `false`    | Allow AIA fetches to private/internal endpoints |
+| `--force`, `-f`           | `false`    | Skip chain verification                         |
+| `--format`                | `pem`      | Output format: pem, chain, fullchain, p12, jks  |
+| `--key`                   |            | Private key file (PEM)                          |
+| `--out-file`, `-o`        | _(stdout)_ | Output file                                     |
+| `--trust-store`           | `mozilla`  | Trust store: system, mozilla                    |
 <!-- /certkit:flags -->
 
 ### Convert Flags
@@ -217,18 +221,19 @@ Input format is auto-detected.
 ### Scan Flags
 
 <!-- certkit:flags:scan -->
-| Flag              | Default          | Description                                              |
-| ----------------- | ---------------- | -------------------------------------------------------- |
-| `--bundle-path`   |                  | Export bundles to this directory                         |
-| `--config`, `-c`  | `./bundles.yaml` | Path to bundle config YAML                               |
-| `--dump-certs`    |                  | Dump all discovered certificates to a single PEM file    |
-| `--dump-keys`     |                  | Dump all discovered keys to a single PEM file            |
-| `--duplicates`    | `false`          | Export all certificates per bundle, not just the newest  |
-| `--force`, `-f`   | `false`          | Allow export of untrusted certificate bundles            |
-| `--format`        | `text`           | Output format: text, json                                |
-| `--load-db`       |                  | Load an existing database into memory before scanning    |
-| `--max-file-size` | `10485760`       | Skip files larger than this size in bytes (0 to disable) |
-| `--save-db`       |                  | Save the in-memory database to disk after scanning       |
+| Flag                      | Default          | Description                                              |
+| ------------------------- | ---------------- | -------------------------------------------------------- |
+| `--allow-private-network` | `false`          | Allow AIA fetches to private/internal endpoints          |
+| `--bundle-path`           |                  | Export bundles to this directory                         |
+| `--config`, `-c`          | `./bundles.yaml` | Path to bundle config YAML                               |
+| `--dump-certs`            |                  | Dump all discovered certificates to a single PEM file    |
+| `--dump-keys`             |                  | Dump all discovered keys to a single PEM file            |
+| `--duplicates`            | `false`          | Export all certificates per bundle, not just the newest  |
+| `--force`, `-f`           | `false`          | Allow export of untrusted certificate bundles            |
+| `--format`                | `text`           | Output format: text, json                                |
+| `--load-db`               |                  | Load an existing database into memory before scanning    |
+| `--max-file-size`         | `10485760`       | Skip files larger than this size in bytes (0 to disable) |
+| `--save-db`               |                  | Save the in-memory database to disk after scanning       |
 <!-- /certkit:flags -->
 
 ### Keygen Flags
@@ -264,10 +269,11 @@ Exactly one of `--template`, `--from-cert`, or `--from-csr` is required.
 ### OCSP Flags
 
 <!-- certkit:flags:ocsp -->
-| Flag       | Default | Description                                                        |
-| ---------- | ------- | ------------------------------------------------------------------ |
-| `--format` | `text`  | Output format: text, json                                          |
-| `--issuer` |         | Issuer certificate file (PEM); auto-resolved from input if omitted |
+| Flag                      | Default | Description                                                        |
+| ------------------------- | ------- | ------------------------------------------------------------------ |
+| `--allow-private-network` | `false` | Allow OCSP fetches to private/internal endpoints                   |
+| `--format`                | `text`  | Output format: text, json                                          |
+| `--issuer`                |         | Issuer certificate file (PEM); auto-resolved from input if omitted |
 <!-- /certkit:flags -->
 
 The OCSP responder URL is read from the certificate's AIA extension.

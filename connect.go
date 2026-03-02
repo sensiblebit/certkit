@@ -17,6 +17,8 @@ import (
 	"time"
 )
 
+const defaultConnectTimeout = 10 * time.Second
+
 // ChainDiagnostic describes a single chain configuration issue found during connection probing.
 type ChainDiagnostic struct {
 	// Check is the diagnostic identifier (e.g. "root-in-chain", "duplicate-cert", "missing-intermediate").
@@ -167,6 +169,8 @@ type ConnectTLSInput struct {
 	Host string
 	// Port is the TCP port (default: "443").
 	Port string
+	// ConnectTimeout is used when ctx has no deadline (default: 10s).
+	ConnectTimeout time.Duration
 	// ServerName overrides the SNI hostname (defaults to Host).
 	ServerName string
 	// DisableAIA disables automatic AIA certificate fetching when chain verification fails.
@@ -184,6 +188,8 @@ type ConnectTLSInput struct {
 	// RootCAs overrides system roots for chain verification. When nil,
 	// the system root pool is used. Useful for testing against private CAs.
 	RootCAs *x509.CertPool
+	// AllowPrivateNetworks allows AIA/OCSP/CRL fetches to private/internal endpoints.
+	AllowPrivateNetworks bool
 }
 
 // ClientAuthInfo describes the server's client certificate request (mTLS).
@@ -275,8 +281,19 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 
 	addr := net.JoinHostPort(input.Host, port)
 
+	connectCtx := ctx
+	connectCancel := func() {}
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		connectTimeout := input.ConnectTimeout
+		if connectTimeout == 0 {
+			connectTimeout = defaultConnectTimeout
+		}
+		connectCtx, connectCancel = context.WithTimeout(ctx, connectTimeout)
+	}
+	defer connectCancel()
+
 	dialer := &net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	conn, err := dialer.DialContext(connectCtx, "tcp", addr)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to %s: %w", addr, err)
 	}
@@ -312,13 +329,13 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 	tlsConn := tls.Client(conn, tlsConf)
 	defer func() { _ = tlsConn.Close() }()
 
-	if deadline, ok := ctx.Deadline(); ok {
+	if deadline, ok := connectCtx.Deadline(); ok {
 		if err := tlsConn.SetDeadline(deadline); err != nil {
 			return nil, fmt.Errorf("setting deadline: %w", err)
 		}
 	}
 
-	handshakeErr := tlsConn.HandshakeContext(ctx)
+	handshakeErr := tlsConn.HandshakeContext(connectCtx)
 	var tlsAlert tls.AlertError
 	if handshakeErr != nil && clientAuth == nil && errors.As(handshakeErr, &tlsAlert) {
 		// Close the failed TLS connection before opening a new one.
@@ -330,7 +347,7 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 		// negotiation failure), not for network errors or certificate errors.
 		// Use a dedicated timeout so a stalling server can't hold the
 		// fallback connection open indefinitely.
-		fallbackCtx, fallbackCancel := context.WithTimeout(ctx, 5*time.Second)
+		fallbackCtx, fallbackCancel := context.WithTimeout(connectCtx, 5*time.Second)
 		defer fallbackCancel()
 		legacyResult, legacyErr := legacyFallbackConnect(fallbackCtx, legacyFallbackInput{
 			addr:       addr,
@@ -419,9 +436,10 @@ func (result *ConnectResult) populate(ctx context.Context, input ConnectTLSInput
 				aiaTimeout = 5 * time.Second
 			}
 			aiaCerts, aiaWarnings := FetchAIACertificates(ctx, FetchAIACertificatesInput{
-				Cert:     leaf,
-				Timeout:  aiaTimeout,
-				MaxDepth: 5,
+				Cert:                 leaf,
+				Timeout:              aiaTimeout,
+				MaxDepth:             5,
+				AllowPrivateNetworks: input.AllowPrivateNetworks,
 			})
 			for _, w := range aiaWarnings {
 				slog.Debug("AIA fetch warning", "warning", w)
@@ -508,8 +526,9 @@ func (result *ConnectResult) populate(ctx context.Context, input ConnectTLSInput
 		}
 		ocspCtx, ocspCancel := context.WithTimeout(ctx, ocspTimeout)
 		ocspResult, ocspErr := CheckOCSP(ocspCtx, CheckOCSPInput{
-			Cert:   leaf,
-			Issuer: issuer,
+			Cert:                 leaf,
+			Issuer:               issuer,
+			AllowPrivateNetworks: input.AllowPrivateNetworks,
 		})
 		ocspCancel()
 		if ocspErr != nil {
@@ -527,9 +546,10 @@ func (result *ConnectResult) populate(ctx context.Context, input ConnectTLSInput
 	// Opt-in CRL check on the leaf certificate.
 	if input.CheckCRL && issuer != nil {
 		result.CRL = CheckLeafCRL(ctx, CheckLeafCRLInput{
-			Leaf:    leaf,
-			Issuer:  issuer,
-			Timeout: input.CRLTimeout,
+			Leaf:                 leaf,
+			Issuer:               issuer,
+			Timeout:              input.CRLTimeout,
+			AllowPrivateNetworks: input.AllowPrivateNetworks,
 		})
 	} else if input.CheckCRL {
 		result.CRL = &CRLCheckResult{
@@ -547,6 +567,8 @@ type CheckLeafCRLInput struct {
 	Issuer *x509.Certificate
 	// Timeout is the timeout for fetching the CRL (default: 5s).
 	Timeout time.Duration
+	// AllowPrivateNetworks allows CRL fetches to private/internal endpoints.
+	AllowPrivateNetworks bool
 }
 
 // CheckLeafCRL fetches the first HTTP CRL distribution point and checks whether
@@ -589,7 +611,7 @@ func CheckLeafCRL(ctx context.Context, input CheckLeafCRLInput) *CRLCheckResult 
 	crlCtx, crlCancel := context.WithTimeout(ctx, timeout)
 	defer crlCancel()
 
-	data, err := FetchCRL(crlCtx, FetchCRLInput{URL: cdpURL})
+	data, err := FetchCRL(crlCtx, FetchCRLInput{URL: cdpURL, AllowPrivateNetworks: input.AllowPrivateNetworks})
 	if err != nil {
 		slog.Debug("CRL fetch failed", "url", cdpURL, "error", err)
 		return &CRLCheckResult{

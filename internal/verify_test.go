@@ -1680,12 +1680,13 @@ func TestVerifyCert_RevocationBehavior(t *testing.T) {
 			}
 
 			result, err := VerifyCert(context.Background(), &VerifyInput{
-				Cert:        leaf.cert,
-				CheckChain:  true,
-				TrustStore:  "custom",
-				CustomRoots: []*x509.Certificate{ca.cert},
-				CheckOCSP:   tc.checkOCSP,
-				CheckCRL:    tc.checkCRL,
+				Cert:                 leaf.cert,
+				CheckChain:           true,
+				TrustStore:           "custom",
+				CustomRoots:          []*x509.Certificate{ca.cert},
+				CheckOCSP:            tc.checkOCSP,
+				CheckCRL:             tc.checkCRL,
+				AllowPrivateNetworks: true,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -1816,13 +1817,14 @@ func TestVerifyCert_RevocationIssuerIntermediate(t *testing.T) {
 	leaf.cert.CRLDistributionPoints = []string{strings.Replace(crlServer.URL, "127.0.0.1", "localhost", 1)}
 
 	result, err := VerifyCert(context.Background(), &VerifyInput{
-		Cert:        leaf.cert,
-		CheckChain:  true,
-		TrustStore:  "custom",
-		CustomRoots: []*x509.Certificate{root.cert},
-		ExtraCerts:  []*x509.Certificate{intermediate.cert},
-		CheckOCSP:   true,
-		CheckCRL:    true,
+		Cert:                 leaf.cert,
+		CheckChain:           true,
+		TrustStore:           "custom",
+		CustomRoots:          []*x509.Certificate{root.cert},
+		ExtraCerts:           []*x509.Certificate{intermediate.cert},
+		CheckOCSP:            true,
+		CheckCRL:             true,
+		AllowPrivateNetworks: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1854,11 +1856,12 @@ func TestVerifyCert_RevocationWithoutChain(t *testing.T) {
 	leaf := newRSALeaf(t, ca, "nochain.example.com", []string{"nochain.example.com"}, nil)
 
 	result, err := VerifyCert(context.Background(), &VerifyInput{
-		Cert:       leaf.cert,
-		CheckOCSP:  true,
-		CheckCRL:   true,
-		CheckChain: false,
-		TrustStore: "custom",
+		Cert:                 leaf.cert,
+		CheckOCSP:            true,
+		CheckCRL:             true,
+		CheckChain:           false,
+		TrustStore:           "custom",
+		AllowPrivateNetworks: true,
 		CustomRoots: []*x509.Certificate{
 			ca.cert,
 		},
@@ -2076,11 +2079,12 @@ func TestVerifyCert_OCSPStatus(t *testing.T) {
 				defer cancel()
 			}
 			result, err := VerifyCert(ctx, &VerifyInput{
-				Cert:        leaf.cert,
-				CheckChain:  true,
-				TrustStore:  "custom",
-				CustomRoots: []*x509.Certificate{ca.cert},
-				CheckOCSP:   true,
+				Cert:                 leaf.cert,
+				CheckChain:           true,
+				TrustStore:           "custom",
+				CustomRoots:          []*x509.Certificate{ca.cert},
+				CheckOCSP:            true,
+				AllowPrivateNetworks: true,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -2140,11 +2144,12 @@ func TestVerifyCert_OCSPStatus_ECDSA(t *testing.T) {
 	leaf.cert.OCSPServer = []string{strings.Replace(server.URL, "127.0.0.1", "localhost", 1)}
 
 	result, err := VerifyCert(context.Background(), &VerifyInput{
-		Cert:        leaf.cert,
-		CheckChain:  true,
-		TrustStore:  "custom",
-		CustomRoots: []*x509.Certificate{ca.cert},
-		CheckOCSP:   true,
+		Cert:                 leaf.cert,
+		CheckChain:           true,
+		TrustStore:           "custom",
+		CustomRoots:          []*x509.Certificate{ca.cert},
+		CheckOCSP:            true,
+		AllowPrivateNetworks: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2326,11 +2331,12 @@ func TestVerifyCert_CRLStatus(t *testing.T) {
 				defer cancel()
 			}
 			result, err := VerifyCert(ctx, &VerifyInput{
-				Cert:        leaf.cert,
-				CheckChain:  true,
-				TrustStore:  "custom",
-				CustomRoots: []*x509.Certificate{ca.cert},
-				CheckCRL:    true,
+				Cert:                 leaf.cert,
+				CheckChain:           true,
+				TrustStore:           "custom",
+				CustomRoots:          []*x509.Certificate{ca.cert},
+				CheckCRL:             true,
+				AllowPrivateNetworks: true,
 			})
 			if err != nil {
 				t.Fatal(err)
@@ -2386,11 +2392,12 @@ func TestVerifyCert_CRLStatus_ECDSA(t *testing.T) {
 	leaf.cert.CRLDistributionPoints = []string{strings.Replace(server.URL, "127.0.0.1", "localhost", 1)}
 
 	result, err := VerifyCert(context.Background(), &VerifyInput{
-		Cert:        leaf.cert,
-		CheckChain:  true,
-		TrustStore:  "custom",
-		CustomRoots: []*x509.Certificate{ca.cert},
-		CheckCRL:    true,
+		Cert:                 leaf.cert,
+		CheckChain:           true,
+		TrustStore:           "custom",
+		CustomRoots:          []*x509.Certificate{ca.cert},
+		CheckCRL:             true,
+		AllowPrivateNetworks: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -2493,12 +2500,13 @@ func TestVerifyCert_RevocationCombined(t *testing.T) {
 			leaf.cert.CRLDistributionPoints = []string{strings.Replace(crlServer.URL, "127.0.0.1", "localhost", 1)}
 
 			result, err := VerifyCert(context.Background(), &VerifyInput{
-				Cert:        leaf.cert,
-				CheckChain:  true,
-				TrustStore:  "custom",
-				CustomRoots: []*x509.Certificate{ca.cert},
-				CheckOCSP:   true,
-				CheckCRL:    true,
+				Cert:                 leaf.cert,
+				CheckChain:           true,
+				TrustStore:           "custom",
+				CustomRoots:          []*x509.Certificate{ca.cert},
+				CheckOCSP:            true,
+				CheckCRL:             true,
+				AllowPrivateNetworks: true,
 			})
 			if err != nil {
 				t.Fatal(err)

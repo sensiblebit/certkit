@@ -91,6 +91,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Enforce bounded per-file and total upload limits in WASM `addFiles` and `inspect` ingestion paths to prevent unbounded memory growth ([#105])
 - Enforce local CRL file size limits for `certkit crl` and shared CRL readers to reject oversized inputs early ([#105])
+- Harden AIA/OCSP/CRL SSRF checks by validating DNS-resolved hostnames against private/internal address ranges by default, and add explicit `--allow-private-network` opt-in flags for internal PKI endpoints in `connect`, `verify`, `ocsp`, `scan`, `inspect`, and `bundle` ([#108])
 - Prevent bundle export path traversal by sanitizing bundle folder names and enforcing safe output paths ([#87])
 - Enforce size limits on input reads to avoid unbounded memory usage ([#87])
 - Add SSRF validation (`ValidateAIAURL`) to OCSP responder URLs and CRL distribution point URLs — previously only AIA certificate URLs were validated ([#78])
@@ -99,6 +100,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fix WASM `inspect` AIA resolution to expose an explicit private-network opt-in so internal PKI intermediates can still be fetched when needed ([#108])
+- Apply a default 10-second timeout in `ConnectTLS` when callers provide a context without a deadline, preventing indefinite hangs during TCP/TLS connect and handshake operations ([#108])
 - Fix `scan` directory traversal boundaries and resilience: symlinks that point outside the scan root are skipped, max-file-size checks now apply to symlink targets and archive reads, and transient walk errors no longer prune unrelated files during traversal ([#91])
 - Fix `scan --bundle-path` text/default output to print a useful post-export summary (certificate/key counts plus export path) while keeping JSON export output unchanged ([#95])
 - Fix `scan` to fail fast when per-file processing or size-check `stat` calls fail during directory traversal, instead of logging and silently continuing ([#106])
@@ -962,6 +965,7 @@ Initial release.
 [#85]: https://github.com/sensiblebit/certkit/pull/85
 [#86]: https://github.com/sensiblebit/certkit/pull/86
 [#87]: https://github.com/sensiblebit/certkit/pull/87
+[#108]: https://github.com/sensiblebit/certkit/pull/108
 [#91]: https://github.com/sensiblebit/certkit/pull/91
 [#95]: https://github.com/sensiblebit/certkit/pull/95
 [#106]: https://github.com/sensiblebit/certkit/pull/106

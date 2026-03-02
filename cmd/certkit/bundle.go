@@ -17,11 +17,12 @@ import (
 )
 
 var (
-	bundleKeyPath    string
-	bundleOutFile    string
-	bundleFormat     string
-	bundleForce      bool
-	bundleTrustStore string
+	bundleKeyPath             string
+	bundleOutFile             string
+	bundleFormat              string
+	bundleForce               bool
+	bundleAllowPrivateNetwork bool
+	bundleTrustStore          string
 )
 
 var bundleCmd = &cobra.Command{
@@ -49,6 +50,7 @@ func init() {
 	bundleCmd.Flags().StringVarP(&bundleOutFile, "out-file", "o", "", "Output file")
 	bundleCmd.Flags().StringVar(&bundleFormat, "format", "pem", "Output format: pem, chain, fullchain, p12, jks")
 	bundleCmd.Flags().BoolVarP(&bundleForce, "force", "f", false, "Skip chain verification")
+	bundleCmd.Flags().BoolVar(&bundleAllowPrivateNetwork, "allow-private-network", false, "Allow AIA fetches to private/internal endpoints")
 	bundleCmd.Flags().StringVar(&bundleTrustStore, "trust-store", "mozilla", "Trust store: system, mozilla")
 
 	bundleCmd.Flags().Lookup("out-file").Annotations = map[string][]string{"readme_default": {"_(stdout)_"}}
@@ -98,6 +100,7 @@ func runBundle(cmd *cobra.Command, args []string) error {
 	opts := certkit.DefaultOptions()
 	opts.TrustStore = bundleTrustStore
 	opts.ExtraIntermediates = extraCerts
+	opts.AllowPrivateNetworks = bundleAllowPrivateNetwork
 	if bundleForce {
 		opts.Verify = false
 	}

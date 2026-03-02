@@ -346,8 +346,9 @@ func privateKeySize(key any) string {
 
 // ResolveInspectAIAInput holds parameters for ResolveInspectAIA.
 type ResolveInspectAIAInput struct {
-	Results []InspectResult
-	Fetch   certstore.AIAFetcher
+	Results              []InspectResult
+	Fetch                certstore.AIAFetcher
+	AllowPrivateNetworks bool
 }
 
 // ResolveInspectAIA fetches missing intermediate certificates via AIA for the
@@ -377,8 +378,9 @@ func ResolveInspectAIA(ctx context.Context, input ResolveInspectAIAInput) ([]Ins
 	}
 
 	warnings := certstore.ResolveAIA(ctx, certstore.ResolveAIAInput{
-		Store: store,
-		Fetch: input.Fetch,
+		Store:                store,
+		Fetch:                input.Fetch,
+		AllowPrivateNetworks: input.AllowPrivateNetworks,
 	})
 
 	for _, rec := range store.AllCertsFlat() {

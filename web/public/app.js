@@ -24,11 +24,17 @@ const filterExpired = document.getElementById("filter-expired");
 const filterUnmatched = document.getElementById("filter-unmatched");
 const filterUntrusted = document.getElementById("filter-untrusted");
 const selectAll = document.getElementById("select-all");
+const scanAllowPrivateNetwork = document.getElementById(
+  "scan-allow-private-network",
+);
 
 // DOM references — Inspect page
 const inspectDropZone = document.getElementById("inspect-drop-zone");
 const inspectFileInput = document.getElementById("inspect-file-input");
 const inspectPasswordsInput = document.getElementById("inspect-passwords");
+const inspectAllowPrivateNetwork = document.getElementById(
+  "inspect-allow-private-network",
+);
 const inspectStatusBar = document.getElementById("inspect-status");
 const inspectStatusText = document.getElementById("inspect-status-text");
 const inspectResultsSection = document.getElementById("inspect-results");
@@ -303,6 +309,7 @@ async function addFileObjects(fileObjects, statusMessage) {
     const resultJSON = await certkitAddFiles(
       fileObjects,
       passwordsInput.value.trim(),
+      scanAllowPrivateNetwork.checked,
     );
     const results = JSON.parse(resultJSON);
 
@@ -436,6 +443,7 @@ async function inspectFileObjects(fileObjects) {
     const resultJSON = await certkitInspect(
       fileObjects,
       inspectPasswordsInput.value.trim(),
+      inspectAllowPrivateNetwork.checked,
     );
     const results = JSON.parse(resultJSON);
 

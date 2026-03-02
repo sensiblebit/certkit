@@ -199,32 +199,28 @@ func TestFetchCRL(t *testing.T) {
 	}
 
 	tests := []struct {
-		name        string
-		handler     http.HandlerFunc // nil = no server needed (use overrideURL)
-		overrideURL string           // direct URL (bypasses test server)
-		wantErr     string
-		wantLength  int
+		name         string
+		handler      http.HandlerFunc // nil = no server needed (use overrideURL)
+		overrideURL  string           // direct URL (bypasses test server)
+		allowPrivate bool
+		wantErr      string
+		wantLength   int
 	}{
 		{
 			name: "success",
 			handler: func(w http.ResponseWriter, r *http.Request) {
 				_, _ = w.Write(crlDER)
 			},
-			wantLength: len(crlDER),
+			allowPrivate: true,
+			wantLength:   len(crlDER),
 		},
 		{
 			name: "non-200 status",
 			handler: func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusNotFound)
 			},
-			wantErr: "HTTP 404",
-		},
-		{
-			name: "redirect to private IP blocked",
-			handler: func(w http.ResponseWriter, r *http.Request) {
-				http.Redirect(w, r, "http://127.0.0.1/crl", http.StatusFound)
-			},
-			wantErr: "redirect blocked",
+			allowPrivate: true,
+			wantErr:      "HTTP 404",
 		},
 		{
 			name: "too many redirects",
@@ -232,11 +228,17 @@ func TestFetchCRL(t *testing.T) {
 				// Redirect back to self — after 3 hops the client stops.
 				http.Redirect(w, r, r.URL.String(), http.StatusFound)
 			},
-			wantErr: "stopped after 3 redirects",
+			allowPrivate: true,
+			wantErr:      "stopped after 3 redirects",
 		},
 		{
 			name:        "SSRF blocked loopback IP",
 			overrideURL: "http://127.0.0.1/crl",
+			wantErr:     "validating CRL URL",
+		},
+		{
+			name:        "SSRF blocked localhost hostname",
+			overrideURL: "http://localhost/crl",
 			wantErr:     "validating CRL URL",
 		},
 		{
@@ -254,11 +256,11 @@ func TestFetchCRL(t *testing.T) {
 			if tc.handler != nil {
 				srv := httptest.NewServer(tc.handler)
 				t.Cleanup(srv.Close)
-				// Replace 127.0.0.1 with localhost to pass SSRF validation.
+				// Use localhost for deterministic loopback testing.
 				fetchURL = strings.Replace(srv.URL, "127.0.0.1", "localhost", 1)
 			}
 
-			data, err := FetchCRL(context.Background(), FetchCRLInput{URL: fetchURL})
+			data, err := FetchCRL(context.Background(), FetchCRLInput{URL: fetchURL, AllowPrivateNetworks: tc.allowPrivate})
 			if tc.wantErr != "" {
 				if err == nil {
 					t.Fatalf("expected error containing %q, got nil", tc.wantErr)
@@ -335,7 +337,7 @@ func TestCRLSizeLimit(t *testing.T) {
 				t.Cleanup(srv.Close)
 
 				url := strings.Replace(srv.URL, "127.0.0.1", "localhost", 1)
-				_, err := FetchCRL(context.Background(), FetchCRLInput{URL: url})
+				_, err := FetchCRL(context.Background(), FetchCRLInput{URL: url, AllowPrivateNetworks: true})
 				return err
 			},
 		},
@@ -501,8 +503,9 @@ func TestCheckLeafCRL(t *testing.T) {
 			}
 
 			result := CheckLeafCRL(context.Background(), CheckLeafCRLInput{
-				Leaf:   leaf,
-				Issuer: ca.Cert,
+				Leaf:                 leaf,
+				Issuer:               ca.Cert,
+				AllowPrivateNetworks: true,
 			})
 			if result.Status != tc.wantStatus {
 				t.Errorf("Status = %q, want %q", result.Status, tc.wantStatus)
