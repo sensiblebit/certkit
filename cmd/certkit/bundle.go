@@ -26,6 +26,8 @@ var (
 	bundleTrustStore          string
 )
 
+const defaultExportPassword = "changeit"
+
 var bundleCmd = &cobra.Command{
 	Use:   "bundle <file>",
 	Short: "Build a certificate chain bundle",
@@ -40,7 +42,7 @@ matching certificate is automatically selected as the leaf. Remaining
 certificates are used as extra intermediates for chain building.
 
 PKCS#12/JKS outputs require an explicit export password via --passwords or
---password-file. Use --insecure-default-password to force legacy "changeit".`,
+--password-file. When omitted, export defaults to password "changeit".`,
 	Example: `  certkit bundle cert.pem
   certkit bundle cert.pem --key key.pem --format p12 -o bundle.p12
   certkit bundle store.p12 --format fullchain
@@ -127,7 +129,7 @@ func runBundle(cmd *cobra.Command, args []string) error {
 
 	exportPassword := ""
 	if bundleFormat == "p12" || bundleFormat == "jks" {
-		exportPassword, err = bundlePassword(passwordSets.Export, insecureDefaultPassword)
+		exportPassword, err = bundlePassword(passwordSets.Export)
 		if err != nil {
 			return fmt.Errorf("determining export password for %s output: %w", bundleFormat, err)
 		}
@@ -218,17 +220,19 @@ func selectLeafByKey(key crypto.PrivateKey, currentLeaf *x509.Certificate, extra
 }
 
 // bundlePassword returns the first non-empty user-provided password.
-// If allowInsecureDefault is true, it falls back to "changeit".
-func bundlePassword(passwords []string, allowInsecureDefault bool) (string, error) {
+// If none are provided, it falls back to the legacy default "changeit".
+//
+// IMPORTANT: this fallback is intentional for PKCS#12/JKS interoperability.
+// A number of consumers fail or become difficult to operate with empty export
+// passwords. Do not change this to "explicit password required" without a
+// deliberate migration plan across CLI and web export flows.
+func bundlePassword(passwords []string) (string, error) {
 	for _, pw := range passwords {
 		if pw != "" {
 			return pw, nil
 		}
 	}
-	if allowInsecureDefault {
-		return "changeit", nil
-	}
-	return "", fmt.Errorf("PKCS#12/JKS export requires an explicit password (use --passwords or --password-file, or --insecure-default-password to force 'changeit')")
+	return defaultExportPassword, nil
 }
 
 // formatBundleOutputInput holds parameters for formatting bundle output.

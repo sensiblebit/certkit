@@ -181,6 +181,53 @@ func TestExportBundles_EmptyBundleNameSkipped(t *testing.T) {
 	}
 }
 
+func TestExportBundles_UntrustedBundleSkippedWithoutForce(t *testing.T) {
+	// WHY: scan --bundle-path should continue exporting other bundles when a
+	// candidate fails trust verification; untrusted entries are skipped unless
+	// --force is requested.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "privateca.example.com", []string{"privateca.example.com"}, nil)
+
+	store := certstore.NewMemStore()
+	if err := store.HandleCertificate(leaf.cert, "test"); err != nil {
+		t.Fatalf("store cert: %v", err)
+	}
+	if err := store.HandleCertificate(ca.cert, "test"); err != nil {
+		t.Fatalf("store CA cert: %v", err)
+	}
+	if err := store.HandleKey(leaf.key, leaf.keyPEM, "test"); err != nil {
+		t.Fatalf("store key: %v", err)
+	}
+
+	rawSKI, err := certkit.ComputeSKI(leaf.cert.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.SetBundleName(hex.EncodeToString(rawSKI), "privateca-bundle")
+
+	outDir := t.TempDir()
+	err = ExportBundles(context.Background(), ExportBundlesInput{
+		OutDir:      outDir,
+		Store:       store,
+		ForceBundle: false,
+		Duplicates:  false,
+		P12Password: "testpass",
+	})
+	if err != nil {
+		t.Fatalf("ExportBundles should skip untrusted bundle without failing: %v", err)
+	}
+
+	entries, err := os.ReadDir(outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected no exported bundles, got %d entries", len(entries))
+	}
+}
+
 func TestExportBundles_SanitizedFolderCollision(t *testing.T) {
 	// WHY: Two distinct bundle names can sanitize to the same folder; export must
 	// fail to prevent mixed outputs and accidental overwrites.

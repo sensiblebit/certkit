@@ -7,6 +7,7 @@ import (
 
 // ScanTextSummaryInput holds fields needed for text scan summaries.
 type ScanTextSummaryInput struct {
+	Files                  int
 	Roots                  int
 	Intermediates          int
 	Leaves                 int
@@ -40,7 +41,7 @@ func CertAnnotation(expired, untrusted int) string {
 func FormatScanTextSummary(input ScanTextSummaryInput) string {
 	total := input.Roots + input.Intermediates + input.Leaves
 	var out strings.Builder
-	_, _ = fmt.Fprintf(&out, "\nFound %d certificate(s) and %d key(s)\n", total, input.Keys)
+	_, _ = fmt.Fprintf(&out, "Found %d certificate(s) and %d key(s) in %d file(s)\n", total, input.Keys, input.Files)
 	if total > 0 {
 		_, _ = fmt.Fprintf(&out, "  Roots:          %d%s\n", input.Roots,
 			CertAnnotation(input.ExpiredRoots, input.UntrustedRoots))

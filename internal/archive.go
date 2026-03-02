@@ -82,6 +82,21 @@ func IsArchive(path string) bool {
 	return ArchiveFormat(path) != ""
 }
 
+// ArchiveHasMagic reports whether data starts with the expected magic bytes for
+// the given archive format.
+func ArchiveHasMagic(format string, data []byte) bool {
+	switch format {
+	case "zip":
+		return hasZIPMagic(data)
+	case "tar.gz":
+		return len(data) >= 2 && data[0] == 0x1f && data[1] == 0x8b
+	case "tar":
+		return true
+	default:
+		return false
+	}
+}
+
 // ProcessArchive extracts entries from an archive and processes each one for
 // certificates, keys, and CSRs. Returns the number of entries processed and
 // any error. Archives inside archives are not recursed into (depth 1 only).
@@ -139,7 +154,7 @@ func processZipArchive(input ProcessArchiveInput) (int, error) {
 		if f.CompressedSize64 > 0 {
 			ratio := int64(f.UncompressedSize64) / int64(f.CompressedSize64)
 			if ratio > input.Limits.MaxDecompressionRatio {
-				slog.Warn("skipping suspicious ZIP entry: decompression ratio too high",
+				slog.Debug("skipping suspicious ZIP entry: decompression ratio too high",
 					"archive", input.ArchivePath, "entry", f.Name,
 					"ratio", ratio, "limit", input.Limits.MaxDecompressionRatio)
 				continue
@@ -182,7 +197,7 @@ func processZipArchive(input ProcessArchiveInput) (int, error) {
 		processed++
 	}
 
-	slog.Info("processed archive", "archive", input.ArchivePath, "format", "zip", "entries", processed)
+	slog.Debug("processed archive", "archive", input.ArchivePath, "format", "zip", "entries", processed)
 	return processed, nil
 }
 
@@ -290,7 +305,7 @@ func processTarArchive(input ProcessArchiveInput, gzipped bool) (int, error) {
 		processed++
 	}
 
-	slog.Info("processed archive", "archive", input.ArchivePath, "format", formatLabel(gzipped), "entries", processed)
+	slog.Debug("processed archive", "archive", input.ArchivePath, "format", formatLabel(gzipped), "entries", processed)
 	return processed, nil
 }
 
@@ -303,7 +318,7 @@ func readZipEntry(f *zip.File, maxSize int64) ([]byte, error) {
 	}
 	defer func() {
 		if closeErr := rc.Close(); closeErr != nil {
-			slog.Warn("closing ZIP entry", "entry", f.Name, "error", closeErr)
+			slog.Debug("closing ZIP entry", "entry", f.Name, "error", closeErr)
 		}
 	}()
 
@@ -337,4 +352,13 @@ func formatLabel(gzipped bool) string {
 		return "tar.gz"
 	}
 	return "tar"
+}
+
+func hasZIPMagic(data []byte) bool {
+	if len(data) < 4 {
+		return false
+	}
+	return bytes.Equal(data[:4], []byte("PK\x03\x04")) ||
+		bytes.Equal(data[:4], []byte("PK\x05\x06")) ||
+		bytes.Equal(data[:4], []byte("PK\x07\x08"))
 }

@@ -45,6 +45,7 @@ func TestFormatScanTextSummary(t *testing.T) {
 		{
 			name: "summary without export",
 			input: ScanTextSummaryInput{
+				Files:                  7,
 				Roots:                  1,
 				Intermediates:          2,
 				Leaves:                 3,
@@ -54,7 +55,7 @@ func TestFormatScanTextSummary(t *testing.T) {
 				UntrustedIntermediates: 2,
 			},
 			contains: []string{
-				"Found 6 certificate(s) and 4 key(s)",
+				"Found 6 certificate(s) and 4 key(s) in 7 file(s)",
 				"Roots:          1 (1 expired)",
 				"Intermediates:  2 (2 untrusted)",
 				"Leaves:         3",
@@ -65,7 +66,7 @@ func TestFormatScanTextSummary(t *testing.T) {
 			name:  "summary with zero counts",
 			input: ScanTextSummaryInput{},
 			contains: []string{
-				"Found 0 certificate(s) and 0 key(s)",
+				"Found 0 certificate(s) and 0 key(s) in 0 file(s)",
 			},
 		},
 	}

@@ -1,6 +1,7 @@
 package certstore
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -10,6 +11,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"math/big"
 	"slices"
 	"testing"
 	"time"
@@ -631,6 +633,63 @@ func TestProcessData_MalformedPEMCert(t *testing.T) {
 
 	if len(store.AllCerts()) != 1 {
 		t.Errorf("expected 1 cert (valid one ingested, malformed skipped), got %d", len(store.AllCerts()))
+	}
+}
+
+func TestProcessData_PEMCert_CompatRFC822NameConstraint(t *testing.T) {
+	// WHY: Some real-world certificates encode an RFC822 name-constraint as
+	// "@domain". Go's stdlib parser rejects these, but certkit should still ingest
+	// such certificates for scan/catalog use via the compatibility parser.
+	t.Parallel()
+
+	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "compat-name-constraint-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		PermittedEmailAddresses: []string{
+			".zimperium.com",
+		},
+	}
+
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+
+	needle := []byte(".zimperium.com")
+	idx := bytes.Index(der, needle)
+	if idx == -1 {
+		t.Fatal("did not find expected name-constraint bytes in DER")
+	}
+
+	mutated := bytes.Clone(der)
+	mutated[idx] = '@'
+
+	if _, err := x509.ParseCertificate(mutated); err == nil {
+		t.Fatal("expected stdlib parse to fail for @domain rfc822Name constraint")
+	}
+
+	pemData := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: mutated})
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{Data: pemData, Path: "compat.pem", Handler: store}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	allCerts := store.AllCertsFlat()
+	if len(allCerts) != 1 {
+		t.Fatalf("expected 1 cert from compatibility parse, got %d", len(allCerts))
+	}
+	if allCerts[0].Cert.Subject.CommonName != "compat-name-constraint-ca" {
+		t.Fatalf("subject CN = %q, want %q", allCerts[0].Cert.Subject.CommonName, "compat-name-constraint-ca")
 	}
 }
 

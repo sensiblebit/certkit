@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"crypto/x509"
+	stdpkix "crypto/x509/pkix"
 	"encoding/pem"
 	"log/slog"
 	"strings"
 
+	ctx509 "github.com/google/certificate-transparency-go/x509"
+	ctpkix "github.com/google/certificate-transparency-go/x509/pkix"
 	"github.com/sensiblebit/certkit"
 )
 
@@ -64,12 +67,133 @@ func processPEMCertificates(data []byte, source string, handler CertHandler) {
 		}
 		cert, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {
-			slog.Warn("skipping malformed certificate", "path", source, "error", err)
-			continue
+			var fallbackErr error
+			cert, fallbackErr = parseCertificateCompat(block.Bytes)
+			if fallbackErr != nil {
+				slog.Debug("skipping malformed certificate", "path", source, "error", err)
+				continue
+			}
+			slog.Debug("parsed certificate with compatibility parser", "path", source, "error", err)
 		}
 		if err := handler.HandleCertificate(cert, source); err != nil {
 			slog.Debug("handler rejected certificate", "path", source, "error", err)
 		}
+	}
+}
+
+func parseCertificateCompat(der []byte) (*x509.Certificate, error) {
+	ctCert, err := ctx509.ParseCertificate(der)
+	if err != nil && ctx509.IsFatal(err) {
+		return nil, err
+	}
+	if ctCert == nil {
+		return nil, err
+	}
+
+	cert := &x509.Certificate{
+		Raw:                     ctCert.Raw,
+		RawTBSCertificate:       ctCert.RawTBSCertificate,
+		RawSubjectPublicKeyInfo: ctCert.RawSubjectPublicKeyInfo,
+		RawSubject:              ctCert.RawSubject,
+		RawIssuer:               ctCert.RawIssuer,
+		Signature:               ctCert.Signature,
+		PublicKey:               ctCert.PublicKey,
+		Version:                 ctCert.Version,
+		SerialNumber:            ctCert.SerialNumber,
+		Issuer:                  convertPKIXName(ctCert.Issuer),
+		Subject:                 convertPKIXName(ctCert.Subject),
+		NotBefore:               ctCert.NotBefore,
+		NotAfter:                ctCert.NotAfter,
+		IsCA:                    ctCert.IsCA,
+		BasicConstraintsValid:   ctCert.BasicConstraintsValid,
+		MaxPathLen:              ctCert.MaxPathLen,
+		MaxPathLenZero:          ctCert.MaxPathLenZero,
+		SubjectKeyId:            ctCert.SubjectKeyId,
+		AuthorityKeyId:          ctCert.AuthorityKeyId,
+		DNSNames:                ctCert.DNSNames,
+		EmailAddresses:          ctCert.EmailAddresses,
+		IPAddresses:             ctCert.IPAddresses,
+		URIs:                    ctCert.URIs,
+		OCSPServer:              ctCert.OCSPServer,
+		IssuingCertificateURL:   ctCert.IssuingCertificateURL,
+		CRLDistributionPoints:   ctCert.CRLDistributionPoints,
+	}
+
+	if algo, ok := convertPublicKeyAlgorithm(ctCert.PublicKeyAlgorithm); ok {
+		cert.PublicKeyAlgorithm = algo
+	}
+	if algo, ok := convertSignatureAlgorithm(ctCert.SignatureAlgorithm); ok {
+		cert.SignatureAlgorithm = algo
+	}
+
+	return cert, nil
+}
+
+func convertPKIXName(name ctpkix.Name) stdpkix.Name {
+	return stdpkix.Name{
+		Country:            append([]string(nil), name.Country...),
+		Organization:       append([]string(nil), name.Organization...),
+		OrganizationalUnit: append([]string(nil), name.OrganizationalUnit...),
+		Locality:           append([]string(nil), name.Locality...),
+		Province:           append([]string(nil), name.Province...),
+		StreetAddress:      append([]string(nil), name.StreetAddress...),
+		PostalCode:         append([]string(nil), name.PostalCode...),
+		SerialNumber:       name.SerialNumber,
+		CommonName:         name.CommonName,
+	}
+}
+
+func convertPublicKeyAlgorithm(algo ctx509.PublicKeyAlgorithm) (x509.PublicKeyAlgorithm, bool) {
+	switch algo.String() {
+	case "RSA":
+		return x509.RSA, true
+	case "DSA":
+		return x509.DSA, true
+	case "ECDSA":
+		return x509.ECDSA, true
+	case "Ed25519":
+		return x509.Ed25519, true
+	default:
+		return x509.UnknownPublicKeyAlgorithm, false
+	}
+}
+
+func convertSignatureAlgorithm(algo ctx509.SignatureAlgorithm) (x509.SignatureAlgorithm, bool) {
+	switch algo.String() {
+	case "MD2-RSA":
+		return x509.UnknownSignatureAlgorithm, false
+	case "MD5-RSA":
+		return x509.MD5WithRSA, true
+	case "SHA1-RSA":
+		return x509.SHA1WithRSA, true
+	case "SHA256-RSA":
+		return x509.SHA256WithRSA, true
+	case "SHA384-RSA":
+		return x509.SHA384WithRSA, true
+	case "SHA512-RSA":
+		return x509.SHA512WithRSA, true
+	case "DSA-SHA1":
+		return x509.DSAWithSHA1, true
+	case "DSA-SHA256":
+		return x509.DSAWithSHA256, true
+	case "ECDSA-SHA1":
+		return x509.ECDSAWithSHA1, true
+	case "ECDSA-SHA256":
+		return x509.ECDSAWithSHA256, true
+	case "ECDSA-SHA384":
+		return x509.ECDSAWithSHA384, true
+	case "ECDSA-SHA512":
+		return x509.ECDSAWithSHA512, true
+	case "SHA256-RSAPSS":
+		return x509.SHA256WithRSAPSS, true
+	case "SHA384-RSAPSS":
+		return x509.SHA384WithRSAPSS, true
+	case "SHA512-RSAPSS":
+		return x509.SHA512WithRSAPSS, true
+	case "Ed25519":
+		return x509.PureEd25519, true
+	default:
+		return x509.UnknownSignatureAlgorithm, false
 	}
 }
 

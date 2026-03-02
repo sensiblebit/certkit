@@ -247,13 +247,13 @@ Going the other direction -- you have PEM files and need a `.p12` for a Java app
 certkit bundle cert.pem --key key.pem --format p12 -p "your-password" -o bundle.p12
 ```
 
-PKCS#12/JKS exports require an explicit password via `-p`/`--password-file`:
+PKCS#12/JKS exports use the first non-empty password from `-p`/`--password-file`:
 
 ```sh
 certkit bundle cert.pem --key key.pem --format jks -p "your-password" -o keystore.jks
 ```
 
-If you must keep the legacy Java default, add `--insecure-default-password` to force `changeit` explicitly.
+If no non-empty export password is provided, certkit defaults to `changeit` for compatibility.
 
 ---
 

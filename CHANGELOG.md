@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Reduce `scan` runtime verbosity by moving ingestion/archive/export progress logs to debug level while keeping final summaries on stdout.
+- Default PKCS#12/JKS export passwords to `changeit` when no explicit export password is provided, and remove the `--insecure-default-password` toggle.
+
+### Fixed
+
+- Make `scan --bundle-path` skip untrusted/verification-failing bundle candidates instead of aborting the full export run.
+- Improve scan summaries by adding `in <files> file(s)` and live TTY progress updates for certificates/keys/files.
+- Add compatibility parsing fallback for PEM certificates rejected by Go stdlib on specific name-constraint encodings (e.g. `@domain` rfc822Name constraints).
+- Improve TLS client-auth signature-scheme naming in `connect` by mapping additional schemes (including RSA-PSS-PSS and legacy hash/signature pairs) instead of raw hex values.
+
 ## [0.8.2] - 2026-03-02
 
 ### Added

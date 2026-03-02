@@ -2,6 +2,8 @@ package internal
 
 import (
 	"context"
+	"crypto/x509"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -183,10 +185,48 @@ func exportBundleCerts(ctx context.Context, input exportBundleCertsInput) error 
 			RetryNoVerify: false,
 			P12Password:   input.P12Password,
 		}); err != nil {
+			if input.Opts.Verify && isBundleVerificationError(err) {
+				slog.Debug("skipping untrusted bundle candidate", "cn", certRec.Cert.Subject.CommonName, "error", err)
+				continue
+			}
 			return fmt.Errorf("exporting bundle for %q: %w", certRec.Cert.Subject.CommonName, err)
 		}
 	}
 	return nil
+}
+
+func isBundleVerificationError(err error) bool {
+	if errors.Is(err, certkit.ErrChainVerificationFailed) {
+		return true
+	}
+
+	var unknownAuthorityErr x509.UnknownAuthorityError
+	if errors.As(err, &unknownAuthorityErr) {
+		return true
+	}
+
+	var certInvalidErr x509.CertificateInvalidError
+	if errors.As(err, &certInvalidErr) {
+		return true
+	}
+
+	var hostnameErr x509.HostnameError
+	if errors.As(err, &hostnameErr) {
+		return true
+	}
+
+	var insecureAlgorithmErr x509.InsecureAlgorithmError
+	if errors.As(err, &insecureAlgorithmErr) {
+		return true
+	}
+
+	var constraintViolationErr x509.ConstraintViolationError
+	if errors.As(err, &constraintViolationErr) {
+		return true
+	}
+
+	var systemRootsErr x509.SystemRootsError
+	return errors.As(err, &systemRootsErr)
 }
 
 // folderOverrideWriter wraps filesystemWriter but forces a specific folder name

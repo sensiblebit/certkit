@@ -3362,3 +3362,35 @@ func TestConnectTLS_CRL_DuplicateLeafInChain(t *testing.T) {
 		t.Errorf("CRL.Detail = %q, want substring %q", result.CRL.Detail, FormatSerialNumber(revokedSerial))
 	}
 }
+
+func TestSignatureSchemeString(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		scheme tls.SignatureScheme
+		want   string
+	}{
+		{name: "rsa pss rsae sha256", scheme: tls.PSSWithSHA256, want: "RSA-PSS-SHA256"},
+		{name: "rsa pss pss sha256", scheme: tls.SignatureScheme(0x0809), want: "RSA-PSS-PSS-SHA256"},
+		{name: "rsa pss pss sha384", scheme: tls.SignatureScheme(0x080a), want: "RSA-PSS-PSS-SHA384"},
+		{name: "rsa pss pss sha512", scheme: tls.SignatureScheme(0x080b), want: "RSA-PSS-PSS-SHA512"},
+		{name: "rsa pkcs1 sha224", scheme: tls.SignatureScheme(0x0301), want: "RSA-PKCS1-SHA224"},
+		{name: "ecdsa sha224", scheme: tls.SignatureScheme(0x0303), want: "ECDSA-SHA224"},
+		{name: "legacy rsa md5", scheme: tls.SignatureScheme(0x0101), want: "RSA-MD5"},
+		{name: "legacy dsa sha1", scheme: tls.SignatureScheme(0x0202), want: "DSA-SHA1"},
+		{name: "legacy ecdsa sha512", scheme: tls.SignatureScheme(0x0603), want: "ECDSA-P521-SHA512"},
+		{name: "eddsa ed448", scheme: tls.SignatureScheme(0x0808), want: "Ed448"},
+		{name: "fallback unknown", scheme: tls.SignatureScheme(0x1234), want: "0x1234"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := signatureSchemeString(tt.scheme)
+			if got != tt.want {
+				t.Fatalf("signatureSchemeString(%#04x) = %q, want %q", uint16(tt.scheme), got, tt.want)
+			}
+		})
+	}
+}

@@ -13,14 +13,16 @@ import (
 // skippableDirs contains directory names that cannot contain certificates or keys
 // and should be skipped during filesystem walks to avoid unnecessary I/O.
 var skippableDirs = map[string]bool{
-	".git":         true,
-	".hg":          true,
-	".svn":         true,
-	"node_modules": true,
-	"__pycache__":  true,
-	".tox":         true,
-	".venv":        true,
-	"vendor":       true, // Go vendor — cert files belong in source, not vendored deps
+	".git":              true,
+	".hg":               true,
+	".svn":              true,
+	"node_modules":      true,
+	"__pycache__":       true,
+	".tox":              true,
+	".venv":             true,
+	".terraform":        true,
+	".terragrunt-cache": true,
+	"vendor":            true, // Go vendor — cert files belong in source, not vendored deps
 }
 
 // IsSkippableDir reports whether the given directory name should be skipped
@@ -45,8 +47,24 @@ func processPEMCSR(data []byte, path string) bool {
 			slog.Debug("computeSKI error on CSR", "path", path, "error", err)
 		}
 	}
-	slog.Info("found CSR", "path", path, "ski", ski)
+	slog.Debug("found CSR", "path", path, "ski", ski)
 	return true
+}
+
+type storeCounts struct {
+	certs int
+	keys  int
+}
+
+func snapshotStoreCounts(store *certstore.MemStore) storeCounts {
+	if store == nil {
+		return storeCounts{}
+	}
+
+	return storeCounts{
+		certs: len(store.AllCertsFlat()),
+		keys:  len(store.AllKeysFlat()),
+	}
 }
 
 // ProcessDataInput holds parameters for ProcessData.
@@ -68,6 +86,8 @@ func ProcessData(input ProcessDataInput) error {
 		return fmt.Errorf("input %s exceeds max size (%d bytes)", input.VirtualPath, input.MaxBytes)
 	}
 
+	before := snapshotStoreCounts(input.Store)
+
 	if err := certstore.ProcessData(certstore.ProcessInput{
 		Data:      input.Data,
 		Path:      input.VirtualPath,
@@ -80,6 +100,14 @@ func ProcessData(input ProcessDataInput) error {
 	// CLI-only: check for CSRs in PEM data
 	if certkit.IsPEM(input.Data) {
 		processPEMCSR(input.Data, input.VirtualPath)
+	}
+
+	after := snapshotStoreCounts(input.Store)
+	if after.certs > before.certs {
+		slog.Debug("found certificate", "path", input.VirtualPath, "count", after.certs-before.certs)
+	}
+	if after.keys > before.keys {
+		slog.Debug("found key", "path", input.VirtualPath, "count", after.keys-before.keys)
 	}
 
 	return nil

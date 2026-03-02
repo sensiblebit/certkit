@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
@@ -80,6 +81,50 @@ func runScan(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("loading passwords: %w", err)
 	}
 	passwords := passwordSets.Decode
+	scannedFiles := 0
+	var progressRootPool *x509.CertPool
+	var lastProgressUpdate time.Time
+	stdoutInfo, err := os.Stdout.Stat()
+	if err != nil {
+		return fmt.Errorf("stat stdout: %w", err)
+	}
+	progressEnabled := !jsonOutput && scanFormat == "text" && (stdoutInfo.Mode()&os.ModeCharDevice) != 0
+	if progressEnabled {
+		progressRootPool, err = certkit.MozillaRootPool()
+		if err != nil {
+			return fmt.Errorf("loading Mozilla root pool: %w", err)
+		}
+	}
+	progressWidth := 0
+	formatScanProgressLine := func(summary certstore.ScanSummary, files int) string {
+		return fmt.Sprintf(
+			"Found %d certificate(s) and %d key(s) in %d file(s)",
+			summary.Roots+summary.Intermediates+summary.Leaves,
+			summary.Keys,
+			files,
+		)
+	}
+	renderScanProgress := func() error {
+		if !progressEnabled {
+			return nil
+		}
+		if !lastProgressUpdate.IsZero() && time.Since(lastProgressUpdate) < 250*time.Millisecond {
+			return nil
+		}
+		summary := store.ScanSummary(certstore.ScanSummaryInput{RootPool: progressRootPool})
+		line := formatScanProgressLine(summary, scannedFiles)
+		if progressWidth > len(line) {
+			line += strings.Repeat(" ", progressWidth-len(line))
+		}
+		if len(line) > progressWidth {
+			progressWidth = len(line)
+		}
+		if _, err := fmt.Fprintf(os.Stdout, "\r%s", line); err != nil {
+			return fmt.Errorf("writing scan progress: %w", err)
+		}
+		lastProgressUpdate = time.Now()
+		return nil
+	}
 
 	// Only load bundle configs when exporting
 	var bundleConfigs []internal.BundleConfig
@@ -93,6 +138,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 
 	// Ingest — always store all certs including expired; filtering is output-only.
 	if inputPath == "-" {
+		scannedFiles++
 		if err := internal.ProcessFile(internal.ProcessFileInput{
 			Path:      "-",
 			Store:     store,
@@ -100,6 +146,9 @@ func runScan(cmd *cobra.Command, args []string) error {
 			MaxBytes:  scanMaxFileSize,
 		}); err != nil {
 			return fmt.Errorf("processing stdin: %w", err)
+		}
+		if err := renderScanProgress(); err != nil {
+			return err
 		}
 	} else {
 		if _, err := os.Stat(inputPath); err != nil {
@@ -110,10 +159,27 @@ func runScan(cmd *cobra.Command, args []string) error {
 			RootPath:    inputPath,
 			MaxFileSize: scanMaxFileSize,
 			OnFile: func(path string) error {
+				scannedFiles++
 				if archiveFormat := internal.ArchiveFormat(path); archiveFormat != "" {
 					data, readErr := internal.ReadFileLimited(path, scanMaxFileSize)
 					if readErr != nil {
 						return fmt.Errorf("reading archive %s: %w", path, readErr)
+					}
+					if !internal.ArchiveHasMagic(archiveFormat, data) {
+						slog.Debug("skipping archive handler due to missing magic bytes", "path", path, "format", archiveFormat)
+						if err := internal.ProcessData(internal.ProcessDataInput{
+							Data:        data,
+							VirtualPath: path,
+							Store:       store,
+							Passwords:   passwords,
+							MaxBytes:    scanMaxFileSize,
+						}); err != nil {
+							return fmt.Errorf("processing file %s: %w", path, err)
+						}
+						if err := renderScanProgress(); err != nil {
+							return err
+						}
+						return nil
 					}
 					limits := internal.DefaultArchiveLimits()
 					if scanMaxFileSize > 0 {
@@ -129,6 +195,9 @@ func runScan(cmd *cobra.Command, args []string) error {
 					}); archiveErr != nil {
 						return fmt.Errorf("processing archive %s: %w", path, archiveErr)
 					}
+					if err := renderScanProgress(); err != nil {
+						return err
+					}
 					return nil
 				}
 				if err := internal.ProcessFile(internal.ProcessFileInput{
@@ -138,6 +207,9 @@ func runScan(cmd *cobra.Command, args []string) error {
 					MaxBytes:  scanMaxFileSize,
 				}); err != nil {
 					return fmt.Errorf("processing file %s: %w", path, err)
+				}
+				if err := renderScanProgress(); err != nil {
+					return err
 				}
 				return nil
 			},
@@ -154,14 +226,14 @@ func runScan(cmd *cobra.Command, args []string) error {
 
 	// Resolve missing intermediates via AIA before trust checking
 	if certstore.HasUnresolvedIssuers(store) {
-		slog.Info("resolving certificate chains")
+		slog.Debug("resolving certificate chains")
 		aiaWarnings := certstore.ResolveAIA(cmd.Context(), certstore.ResolveAIAInput{
 			Store:                store,
 			Fetch:                httpAIAFetcher,
 			AllowPrivateNetworks: scanAllowPrivateNetwork,
 		})
 		for _, w := range aiaWarnings {
-			slog.Warn("AIA resolution", "warning", w)
+			slog.Debug("AIA resolution", "warning", w)
 		}
 	}
 
@@ -180,9 +252,9 @@ func runScan(cmd *cobra.Command, args []string) error {
 			if err := os.WriteFile(scanDumpKeys, data, 0600); err != nil {
 				return fmt.Errorf("writing keys to %s: %w", scanDumpKeys, err)
 			}
-			slog.Info("dumped keys", "count", len(keys), "path", scanDumpKeys)
+			slog.Debug("dumped keys", "count", len(keys), "path", scanDumpKeys)
 		} else {
-			slog.Info("no keys found to dump")
+			slog.Debug("no keys found to dump")
 		}
 	}
 
@@ -229,23 +301,28 @@ func runScan(cmd *cobra.Command, args []string) error {
 				count++
 			}
 			if skipped > 0 {
-				slog.Warn("skipped certificates", "count", skipped)
+				slog.Debug("skipped certificates", "count", skipped)
 			}
 			if count > 0 {
 				if err := os.WriteFile(scanDumpCerts, data, 0644); err != nil {
 					return fmt.Errorf("writing certificates to %s: %w", scanDumpCerts, err)
 				}
-				slog.Info("dumped certificates", "count", count, "path", scanDumpCerts)
+				slog.Debug("dumped certificates", "count", count, "path", scanDumpCerts)
 			} else {
-				slog.Info("no verified certificates found to dump")
+				slog.Debug("no verified certificates found to dump")
 			}
 		} else {
-			slog.Info("no certificates found to dump")
+			slog.Debug("no certificates found to dump")
 		}
 	}
 
 	if scanExport {
-		p12Password, err := bundlePassword(passwordSets.Export, insecureDefaultPassword)
+		if progressEnabled {
+			if _, err := fmt.Fprint(os.Stdout, "\r"); err != nil {
+				return fmt.Errorf("updating scan output: %w", err)
+			}
+		}
+		p12Password, err := bundlePassword(passwordSets.Export)
 		if err != nil {
 			return fmt.Errorf("determining export password for scan bundle export: %w", err)
 		}
@@ -291,6 +368,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 				RootPool: mozillaPool,
 			})
 			fmt.Print(internal.FormatScanTextSummary(internal.ScanTextSummaryInput{
+				Files:                  scannedFiles,
 				Roots:                  summary.Roots,
 				Intermediates:          summary.Intermediates,
 				Leaves:                 summary.Leaves,
@@ -310,6 +388,11 @@ func runScan(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("unsupported output format %q (use text or json)", format)
 		}
 	} else {
+		if progressEnabled {
+			if _, err := fmt.Fprint(os.Stdout, "\r"); err != nil {
+				return fmt.Errorf("updating scan output: %w", err)
+			}
+		}
 		// Print summary with trust and expiry annotations
 		mozillaPool, err := certkit.MozillaRootPool()
 		if err != nil {
@@ -340,6 +423,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 			}
 		case "text":
 			fmt.Print(internal.FormatScanTextSummary(internal.ScanTextSummaryInput{
+				Files:                  scannedFiles,
 				Roots:                  summary.Roots,
 				Intermediates:          summary.Intermediates,
 				Leaves:                 summary.Leaves,
