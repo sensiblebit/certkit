@@ -494,6 +494,18 @@ func newAIAHTTPClient(allowPrivateNetworks bool) *http.Client {
 	}
 }
 
+var (
+	aiaHTTPClientPublic  = newAIAHTTPClient(false)
+	aiaHTTPClientPrivate = newAIAHTTPClient(true)
+)
+
+func getAIAHTTPClient(allowPrivateNetworks bool) *http.Client {
+	if allowPrivateNetworks {
+		return aiaHTTPClientPrivate
+	}
+	return aiaHTTPClientPublic
+}
+
 type fetchAIAURLInput struct {
 	rawURL               string
 	allowPrivateNetworks bool
@@ -507,7 +519,7 @@ func fetchAIAURL(ctx context.Context, input fetchAIAURLInput) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("creating AIA request: %w", err)
 	}
-	resp, err := newAIAHTTPClient(input.allowPrivateNetworks).Do(req)
+	resp, err := getAIAHTTPClient(input.allowPrivateNetworks).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetching AIA URL %s: %w", input.rawURL, err)
 	}

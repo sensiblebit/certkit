@@ -56,6 +56,7 @@ func DecodeJKSKeyEntries(data []byte, passwords []string) ([]DecodedJKSKeyEntry,
 				continue
 			}
 			trustedCerts = append(trustedCerts, cert)
+			continue
 		}
 
 		if !ks.IsPrivateKeyEntry(alias) {

@@ -127,7 +127,7 @@ pre-commit run --all-files
 
 ### Test helpers
 
-Test helpers are in `testhelpers_test.go` (both root and internal). All use `t.Helper()`. Tests generate certificates dynamically — no committed fixture files. No CLI-level tests (cmd/certkit has no test files).
+Test helpers are in `testhelpers_test.go` (both root and internal). All use `t.Helper()`. Tests generate certificates dynamically — no committed fixture files. CLI-level tests in `cmd/certkit/*_test.go` are allowed only for command-surface behavior (flags, exit-code semantics, output contracts) and must avoid duplicating `internal` behavioral coverage.
 
 ### Round-trip testing
 

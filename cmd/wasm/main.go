@@ -176,7 +176,7 @@ func addFiles(_ js.Value, args []js.Value) any {
 
 			jsonBytes, err := json.Marshal(results)
 			if err != nil {
-				reject.Invoke(fmt.Sprintf("marshaling addFiles results: %v", err))
+				reject.Invoke(js.Global().Get("Error").New(fmt.Sprintf("marshaling addFiles results: %v", err)))
 				return
 			}
 			resolve.Invoke(string(jsonBytes))

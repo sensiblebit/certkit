@@ -307,12 +307,12 @@ export function isAllowedDomain(hostname: string): boolean {
 // arbitrary URLs.
 const MAX_REDIRECTS = 5;
 
-type safeFetchResult = {
+type SafeFetchResult = {
   response: Response;
   release: () => void;
 };
 
-async function safeFetch(url: string): Promise<safeFetchResult> {
+async function safeFetch(url: string): Promise<SafeFetchResult> {
   let currentURL = url;
   for (let i = 0; i <= MAX_REDIRECTS; i++) {
     const controller = new AbortController();
