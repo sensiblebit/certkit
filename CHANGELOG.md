@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `connect` automatically checks OCSP revocation status on the leaf certificate (best-effort; shows "skipped" or "unavailable" when check cannot complete) ([#78])
 - Add `--crl` flag to `connect` for opt-in CRL revocation checking via distribution points ([#78])
 - Add `FetchCRL` library function for downloading CRLs from HTTP URLs with SSRF validation ([#78])
+- Add `ReadCRLFile` library function for reading local CRL files with the same 10 MB size cap as `FetchCRL` ([#105])
 - `connect` exits with code 2 when OCSP or CRL reports a revoked certificate ([#78])
 - `connect --crl` verifies CRL signatures against the issuer certificate — rejects CRLs signed by a different CA ([#78])
 - `connect --crl` rejects expired CRLs (past `NextUpdate`) to prevent replay of stale revocation data ([#78])
@@ -67,6 +68,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Require verified WASM bundle export by default; retrying export without verification is now an explicit user action surfaced in the web UI ([#105])
 - Prefer user-provided passwords for PKCS#12/JKS outputs while keeping `changeit` as the default fallback for compatibility ([#87])
 - **Breaking:** Standardize certificate serial number formatting to `0x`-prefixed hex across CLI/JSON output ([#87])
 - Move local pre-commit hook definitions from repo config into the shared `sensiblebit/.github` hook set, and pin this branch to the shared commit so all repositories can consume the same workflow checks and Node tool bootstrapping behavior from one source ([#85])
@@ -87,6 +89,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Enforce bounded per-file and total upload limits in WASM `addFiles` and `inspect` ingestion paths to prevent unbounded memory growth ([#105])
+- Enforce local CRL file size limits for `certkit crl` and shared CRL readers to reject oversized inputs early ([#105])
 - Prevent bundle export path traversal by sanitizing bundle folder names and enforcing safe output paths ([#87])
 - Enforce size limits on input reads to avoid unbounded memory usage ([#87])
 - Add SSRF validation (`ValidateAIAURL`) to OCSP responder URLs and CRL distribution point URLs — previously only AIA certificate URLs were validated ([#78])
@@ -101,6 +105,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix max-size read failures to return stable wrapped error causes instead of requiring string matching in internal scan/read paths ([#106])
 - Fix `scan --bundle-path` to reject unsupported `--format` values with the same validation used by non-export scans (for example, `--format yaml` now errors instead of silently falling back to text) ([#106])
 - Fix `scan --bundle-path` text output to keep scan summary on stdout while sending the export destination path to stderr per CLI output conventions ([#106])
+- Fix CRL read errors to include `reading CRL data` context before caller wrapping, improving nested error diagnostics ([#105])
+- Fix WASM ingestion promises to recover from internal panics instead of crashing asynchronous file processing ([#105])
+- Fix WASM AIA fetch callback lifecycle to release JS callbacks on cancellation paths after promise completion ([#105])
+- Fix web AIA proxy upstream handling to enforce explicit fetch timeout/abort behavior and return 504 timeout errors ([#105])
+- Fix web AIA proxy timeout handling to keep abort timers active through response body reads, including stalled-after-headers upstream responses ([#105])
 - Fix verify JSON chain output to use `not_after` for consistency with other commands ([#87])
 - Fix Certificate Transparency availability handling to preserve parsed SCT candidates when the log list cannot be loaded and mark them as unavailable instead of dropping them ([#86])
 - Fix chain conversion failures in Certificate Transparency checks to report SCTs as `unavailable` instead of `invalid` and keep diagnostics as warnings ([#86])
@@ -216,6 +225,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Tests
 
+- Consolidate CRL oversize-input coverage into one table-driven test for HTTP and local-file sources, asserting `ErrCRLTooLarge` behaviorally ([#105])
 - Remove `TestBuildLegacyClientHelloMsg` — behavioral coverage exists through `TestLegacyFallbackConnect` per T-11 ([`6492fa5`])
 - Remove `TestParseCertificateMessage` — behavioral coverage exists through `TestReadServerCertificates` per T-11 ([#82])
 - Fix `_, _` error discards in `TestLegacyFallbackConnect` mock server goroutine — replaced with `slog.Debug` per ERR-5 ([#82])
@@ -946,6 +956,7 @@ Initial release.
 [#91]: https://github.com/sensiblebit/certkit/pull/91
 [#95]: https://github.com/sensiblebit/certkit/pull/95
 [#106]: https://github.com/sensiblebit/certkit/pull/106
+[#105]: https://github.com/sensiblebit/certkit/pull/105
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63
