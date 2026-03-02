@@ -59,6 +59,7 @@ func DecodeJKSKeyEntries(data []byte, passwords []string) ([]DecodedJKSKeyEntry,
 		}
 
 		if !ks.IsPrivateKeyEntry(alias) {
+			slog.Debug("skipping non-private-key JKS entry", "alias", alias)
 			continue
 		}
 
@@ -71,6 +72,7 @@ func DecodeJKSKeyEntries(data []byte, passwords []string) ([]DecodedJKSKeyEntry,
 
 			key, err := x509.ParsePKCS8PrivateKey(entry.PrivateKey)
 			if err != nil {
+				slog.Debug("skipping JKS private key entry with bad key data", "alias", alias, "error", err)
 				break // key data is bad, no point trying other passwords
 			}
 
