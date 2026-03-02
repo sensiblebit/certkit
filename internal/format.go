@@ -18,7 +18,6 @@ type ScanTextSummaryInput struct {
 	UntrustedRoots         int
 	UntrustedIntermediates int
 	UntrustedLeaves        int
-	BundlePath             string
 }
 
 // CertAnnotation returns a parenthetical annotation like " (2 expired, 1 untrusted)"
@@ -52,9 +51,6 @@ func FormatScanTextSummary(input ScanTextSummaryInput) string {
 	}
 	if input.Keys > 0 {
 		_, _ = fmt.Fprintf(&out, "  Key-cert pairs: %d\n", input.Matched)
-	}
-	if input.BundlePath != "" {
-		_, _ = fmt.Fprintf(&out, "\nExported bundles to %s\n", input.BundlePath)
 	}
 	return out.String()
 }

@@ -33,8 +33,8 @@ func TestCertAnnotation(t *testing.T) {
 }
 
 func TestFormatScanTextSummary(t *testing.T) {
-	// WHY: Scan text output must include counts in all modes and include bundle
-	// export location when scan runs with --bundle-path.
+	// WHY: Scan text output must include counts and trust/expiry annotations
+	// without mixing side-effect status messages into stdout.
 	t.Parallel()
 
 	tests := []struct {
@@ -62,13 +62,10 @@ func TestFormatScanTextSummary(t *testing.T) {
 			},
 		},
 		{
-			name: "summary with export path",
-			input: ScanTextSummaryInput{
-				BundlePath: "/tmp/out",
-			},
+			name:  "summary with zero counts",
+			input: ScanTextSummaryInput{},
 			contains: []string{
 				"Found 0 certificate(s) and 0 key(s)",
-				"Exported bundles to /tmp/out",
 			},
 		},
 	}

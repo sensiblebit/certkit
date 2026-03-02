@@ -296,8 +296,10 @@ func runScan(cmd *cobra.Command, args []string) error {
 				UntrustedRoots:         summary.UntrustedRoots,
 				UntrustedIntermediates: summary.UntrustedIntermediates,
 				UntrustedLeaves:        summary.UntrustedLeaves,
-				BundlePath:             scanBundlePath,
 			}))
+			if _, err := fmt.Fprintf(os.Stderr, "Exported bundles to %s\n", scanBundlePath); err != nil {
+				return fmt.Errorf("writing export status: %w", err)
+			}
 		default:
 			return fmt.Errorf("unsupported output format %q (use text or json)", format)
 		}
