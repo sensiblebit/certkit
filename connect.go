@@ -1290,7 +1290,6 @@ func probeCipher(ctx context.Context, input cipherProbeInput) bool {
 	}
 	tlsConn := tls.Client(conn, &tls.Config{
 		ServerName:           input.serverName,
-		InsecureSkipVerify:   true, //nolint:gosec // Cipher probing doesn't need cert verification.
 		MinVersion:           input.version,
 		MaxVersion:           input.version,
 		CipherSuites:         []uint16{input.cipherID},
@@ -1335,7 +1334,6 @@ func probeKeyExchangeGroupLegacy(ctx context.Context, input cipherProbeInput) bo
 	}
 	tlsConn := tls.Client(conn, &tls.Config{
 		ServerName:           input.serverName,
-		InsecureSkipVerify:   true, //nolint:gosec // Probing doesn't need cert verification.
 		MinVersion:           tls.VersionTLS10,
 		MaxVersion:           tls.VersionTLS12,
 		CipherSuites:         ecdheOnlyCipherSuites,

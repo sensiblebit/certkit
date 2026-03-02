@@ -7,10 +7,18 @@ repos:
         name: no commit to main
         args: [--branch, main]
 
+  - repo: local
+    hooks:
+      - id: branch-name
+        name: branch name
+        entry: scripts/branch-name-check.sh
+        language: system
+        always_run: true
+        pass_filenames: false
+
   - repo: https://github.com/sensiblebit/.github
     rev: "9bff7f460e6a6ac40de0798d7bc2f191d5143404"
     hooks:
-      - id: branch-name
       - id: commit-message
       - id: goimports
       - id: go-fix

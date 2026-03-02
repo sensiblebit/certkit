@@ -694,8 +694,15 @@ func CertFingerprintColonSHA1(cert *x509.Certificate) string {
 	return strings.ToUpper(ColonHex(hash[:]))
 }
 
+const minRSAKeyBits = 2048
+
+var errRSAKeyTooSmall = errors.New("RSA key size must be at least 2048 bits")
+
 // GenerateRSAKey generates a new RSA private key with the given bit size.
 func GenerateRSAKey(bits int) (*rsa.PrivateKey, error) {
+	if bits < minRSAKeyBits {
+		return nil, fmt.Errorf("generating RSA key: %w (got %d)", errRSAKeyTooSmall, bits)
+	}
 	key, err := rsa.GenerateKey(rand.Reader, bits)
 	if err != nil {
 		return nil, fmt.Errorf("generating RSA key: %w", err)

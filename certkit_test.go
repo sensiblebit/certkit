@@ -1316,6 +1316,18 @@ func TestGenerateECKey_NilCurve(t *testing.T) {
 	}
 }
 
+func TestGenerateRSAKey_TooSmall(t *testing.T) {
+	t.Parallel()
+
+	_, err := GenerateRSAKey(1024)
+	if err == nil {
+		t.Fatal("expected error for RSA key size below minimum")
+	}
+	if !errors.Is(err, errRSAKeyTooSmall) {
+		t.Fatalf("error = %v, want wrapped errRSAKeyTooSmall", err)
+	}
+}
+
 func TestParsePEMPrivateKeyWithPasswords_CorruptNotEncrypted(t *testing.T) {
 	// WHY: When ParsePEMPrivateKeyWithPasswords receives a corrupt but not
 	// encrypted PEM block, it falls through to re-call ParsePEMPrivateKey

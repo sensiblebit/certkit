@@ -92,6 +92,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+- Add explicit `permissions: { contents: read }` to the Cloudflare Pages deploy workflow to restrict default `GITHUB_TOKEN` scope ([#110])
 - Enforce bounded per-file and total upload limits in WASM `addFiles` and `inspect` ingestion paths to prevent unbounded memory growth ([#105])
 - Enforce local CRL file size limits for `certkit crl` and shared CRL readers to reject oversized inputs early ([#105])
 - Harden AIA/OCSP/CRL SSRF checks by validating DNS-resolved hostnames against private/internal address ranges by default, and add explicit `--allow-private-network` opt-in flags for internal PKI endpoints in `connect`, `verify`, `ocsp`, `scan`, `inspect`, and `bundle` ([#108])
@@ -105,6 +106,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Require a minimum RSA key size of 2048 bits in `GenerateRSAKey`, returning a typed error for smaller key requests ([#110])
+- Remove `InsecureSkipVerify` from TLS cipher and legacy key-exchange probe handshakes while preserving probe behavior through negotiated-state checks ([#110])
 - Fix WASM `inspect` AIA resolution to expose an explicit private-network opt-in so internal PKI intermediates can still be fetched when needed ([#108])
 - Apply a default 10-second timeout in `ConnectTLS` when callers provide a context without a deadline, preventing indefinite hangs during TCP/TLS connect and handshake operations ([#108])
 - Fix `scan` directory traversal boundaries and resilience: symlinks that point outside the scan root are skipped, max-file-size checks now apply to symlink targets and archive reads, and transient walk errors no longer prune unrelated files during traversal ([#91])
@@ -987,6 +990,7 @@ Initial release.
 [#97]: https://github.com/sensiblebit/certkit/pull/97
 [#101]: https://github.com/sensiblebit/certkit/pull/101
 [#109]: https://github.com/sensiblebit/certkit/pull/109
+[#110]: https://github.com/sensiblebit/certkit/pull/110
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63
