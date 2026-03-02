@@ -6,22 +6,27 @@ import (
 	"crypto/x509"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
 	"github.com/pavlo-v-chernykh/keystore-go/v4"
 )
 
-// DecodeJKS decodes a Java KeyStore (JKS) and returns the certificates and
-// private keys it contains. Passwords are tried in order to open the store.
-// For private key entries, all passwords are tried independently since the
-// key password may differ from the store password.
-//
-// TrustedCertificateEntry entries yield certificates. PrivateKeyEntry entries
-// yield PKCS#8 private keys and their certificate chains. Individual entry
-// errors are skipped; an error is returned only if the store cannot be loaded
-// or no usable entries are found.
-func DecodeJKS(data []byte, passwords []string) ([]*x509.Certificate, []crypto.PrivateKey, error) {
+// DecodedJKSKeyEntry represents one decoded JKS PrivateKeyEntry with its alias
+// and certificate chain.
+type DecodedJKSKeyEntry struct {
+	Alias string
+	Key   crypto.PrivateKey
+	Chain []*x509.Certificate
+}
+
+// DecodeJKSKeyEntries decodes a Java KeyStore (JKS) and returns decoded
+// private key entries (with alias + chain) and trusted-certificate entries.
+// Passwords are tried in order to open the store, and each private key entry is
+// attempted with all provided passwords to support different store/key
+// passwords.
+func DecodeJKSKeyEntries(data []byte, passwords []string) ([]DecodedJKSKeyEntry, []*x509.Certificate, error) {
 	ks := keystore.New()
 
 	var loaded bool
@@ -35,51 +40,89 @@ func DecodeJKS(data []byte, passwords []string) ([]*x509.Certificate, []crypto.P
 		return nil, nil, fmt.Errorf("loading JKS: none of the provided passwords worked")
 	}
 
-	var certs []*x509.Certificate
-	var keys []crypto.PrivateKey
+	var keyEntries []DecodedJKSKeyEntry
+	var trustedCerts []*x509.Certificate
 
 	for _, alias := range ks.Aliases() {
 		if ks.IsTrustedCertificateEntry(alias) {
 			entry, err := ks.GetTrustedCertificateEntry(alias)
 			if err != nil {
+				slog.Debug("skipping unreadable JKS trusted certificate entry", "alias", alias, "error", err)
 				continue
 			}
 			cert, err := x509.ParseCertificate(entry.Certificate.Content)
 			if err != nil {
+				slog.Debug("skipping malformed JKS trusted certificate entry", "alias", alias, "error", err)
 				continue
 			}
-			certs = append(certs, cert)
+			trustedCerts = append(trustedCerts, cert)
 		}
 
-		if ks.IsPrivateKeyEntry(alias) {
-			for _, pw := range passwords {
-				entry, err := ks.GetPrivateKeyEntry(alias, []byte(pw))
+		if !ks.IsPrivateKeyEntry(alias) {
+			slog.Debug("skipping non-private-key JKS entry", "alias", alias)
+			continue
+		}
+
+		for _, pw := range passwords {
+			entry, err := ks.GetPrivateKeyEntry(alias, []byte(pw))
+			if err != nil {
+				slog.Debug("skipping JKS private key entry password attempt", "alias", alias, "error", err)
+				continue
+			}
+
+			key, err := x509.ParsePKCS8PrivateKey(entry.PrivateKey)
+			if err != nil {
+				slog.Debug("skipping JKS private key entry with bad key data", "alias", alias, "error", err)
+				break // key data is bad, no point trying other passwords
+			}
+
+			var chain []*x509.Certificate
+			for _, certEntry := range entry.CertificateChain {
+				cert, err := x509.ParseCertificate(certEntry.Content)
 				if err != nil {
+					slog.Debug("skipping malformed certificate in JKS private key chain", "alias", alias, "error", err)
 					continue
 				}
-
-				// Parse the PKCS#8 private key
-				key, err := x509.ParsePKCS8PrivateKey(entry.PrivateKey)
-				if err != nil {
-					break // key data is bad, no point trying other passwords
-				}
-				keys = append(keys, normalizeKey(key))
-
-				// Parse the certificate chain
-				for _, certEntry := range entry.CertificateChain {
-					cert, err := x509.ParseCertificate(certEntry.Content)
-					if err != nil {
-						continue
-					}
-					certs = append(certs, cert)
-				}
-				break
+				chain = append(chain, cert)
 			}
+
+			keyEntries = append(keyEntries, DecodedJKSKeyEntry{
+				Alias: alias,
+				Key:   normalizeKey(key),
+				Chain: chain,
+			})
+			break
 		}
 	}
 
-	if len(certs) == 0 && len(keys) == 0 {
+	if len(trustedCerts) == 0 && len(keyEntries) == 0 {
 		return nil, nil, errors.New("JKS contains no usable certificates or keys")
+	}
+
+	return keyEntries, trustedCerts, nil
+}
+
+// DecodeJKS decodes a Java KeyStore (JKS) and returns the certificates and
+// private keys it contains. Passwords are tried in order to open the store.
+// For private key entries, all passwords are tried independently since the
+// key password may differ from the store password.
+//
+// TrustedCertificateEntry entries yield certificates. PrivateKeyEntry entries
+// yield PKCS#8 private keys and their certificate chains. Individual entry
+// errors are skipped; an error is returned only if the store cannot be loaded
+// or no usable entries are found.
+func DecodeJKS(data []byte, passwords []string) ([]*x509.Certificate, []crypto.PrivateKey, error) {
+	keyEntries, trustedCerts, err := DecodeJKSKeyEntries(data, passwords)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var certs []*x509.Certificate
+	var keys []crypto.PrivateKey
+	certs = append(certs, trustedCerts...)
+	for _, entry := range keyEntries {
+		keys = append(keys, entry.Key)
+		certs = append(certs, entry.Chain...)
 	}
 
 	return certs, keys, nil

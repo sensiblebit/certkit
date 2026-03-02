@@ -40,10 +40,16 @@ type KeyRecord struct {
 	Source    string // filename that contributed this key
 }
 
-// certID returns the composite key for deduplication, matching the SQLite
-// primary key of (serial_number, authority_key_identifier).
+// certID returns the composite key for deduplication.
+//
+// RFC 5280 certificate identity is (issuer DN, serial number). We also include
+// AKI when present to keep stable behavior for certificates that embed it while
+// avoiding false dedup collisions for certificates that omit AKI.
 func certID(cert *x509.Certificate) string {
-	return cert.SerialNumber.String() + "\x00" + hex.EncodeToString(cert.AuthorityKeyId)
+	if len(cert.AuthorityKeyId) > 0 {
+		return cert.SerialNumber.String() + "\x00" + hex.EncodeToString(cert.AuthorityKeyId)
+	}
+	return cert.SerialNumber.String() + "\x00" + string(cert.RawIssuer)
 }
 
 // MemStore is an in-memory certificate and key store that implements
@@ -64,9 +70,10 @@ func NewMemStore() *MemStore {
 }
 
 // HandleCertificate computes the SKI and stores the certificate. Certificates
-// are deduplicated by (serial, AKI) — the same composite key the SQLite schema
-// uses. Multiple certificates with the same SKI but different serials (key
-// reuse across renewals) are all retained.
+// are deduplicated by serial plus authority identity (AKI when present,
+// otherwise raw issuer), matching RFC 5280 identity for missing-AKI
+// certificates. Multiple certificates with the same SKI but different serials
+// (key reuse across renewals) are all retained.
 func (s *MemStore) HandleCertificate(cert *x509.Certificate, source string) error {
 	if cert == nil {
 		return errors.New("certificate is nil")

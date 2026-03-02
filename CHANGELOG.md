@@ -99,6 +99,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Fix inspect/convert/container parsing to continue past malformed PEM certificate blocks so valid certificates are still processed, and add DER private-key detection for key-only inputs ([#107])
+- Fix inspect PEM key parsing to continue past malformed private-key blocks so valid keys in the same bundle are still reported ([#107])
+- Fix JKS container selection to keep private key entries paired with their own leaf certificate and chain instead of selecting unrelated trusted entries ([#107])
+- Fix `DecodeJKSKeyEntries` to emit debug logs when skipping non-private-key aliases and malformed PKCS#8 private-key payloads (ERR-5) ([#107])
+- Fix JKS/issuer parsing edge cases by adding debug logging for skipped JKS entry errors, requiring issuer DN match during OCSP issuer auto-selection, and consolidating duplicate CSR-scan tests into a single table-driven case ([#107])
+- Fix certificate identity deduplication for certificates without AKI by falling back to issuer+serial identity, and align SQLite persistence keys with the same identity to prevent dropped certs across different issuers ([#107])
+- Fix CSR signing to reject CA certificate/key mismatches before issuing certificates ([#107])
+- Fix OCSP issuer auto-selection to choose a certificate that actually signs the leaf (with AKI/SKI preference) instead of defaulting to the first extra certificate ([#107])
 - Fix CRL read errors to include `reading CRL data` context before caller wrapping, improving nested error diagnostics ([#105])
 - Fix WASM ingestion promises to recover from internal panics instead of crashing asynchronous file processing ([#105])
 - Fix WASM AIA fetch callback lifecycle to release JS callbacks on cancellation paths after promise completion ([#105])
@@ -219,6 +227,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Tests
 
+- Add behavior-focused edge-case coverage for malformed PEM + valid cert preservation, DER private-key parsing, JKS key-entry alias pairing, issuer selection, and CA cert/key mismatch validation; remove assertions that depended on old tautological error-path expectations ([#107])
 - Consolidate CRL oversize-input coverage into one table-driven test for HTTP and local-file sources, asserting `ErrCRLTooLarge` behaviorally ([#105])
 - Remove `TestBuildLegacyClientHelloMsg` — behavioral coverage exists through `TestLegacyFallbackConnect` per T-11 ([`6492fa5`])
 - Remove `TestParseCertificateMessage` — behavioral coverage exists through `TestReadServerCertificates` per T-11 ([#82])
@@ -947,6 +956,7 @@ Initial release.
 [#85]: https://github.com/sensiblebit/certkit/pull/85
 [#86]: https://github.com/sensiblebit/certkit/pull/86
 [#87]: https://github.com/sensiblebit/certkit/pull/87
+[#107]: https://github.com/sensiblebit/certkit/pull/107
 [#105]: https://github.com/sensiblebit/certkit/pull/105
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
