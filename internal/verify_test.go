@@ -9,6 +9,7 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -1384,7 +1385,7 @@ func TestDiagnoseChain(t *testing.T) {
 				ExtraCerts: []*x509.Certificate{ca.cert},
 			},
 			wantChecks: map[string]string{
-				"expired": "fail",
+				"expired": "error",
 			},
 		},
 		{
@@ -1394,7 +1395,7 @@ func TestDiagnoseChain(t *testing.T) {
 				ExtraCerts: []*x509.Certificate{ca.cert},
 			},
 			wantChecks: map[string]string{
-				"not-yet-valid": "fail",
+				"not-yet-valid": "error",
 			},
 		},
 		{
@@ -1424,7 +1425,7 @@ func TestDiagnoseChain(t *testing.T) {
 				// No extra certs — intermediate is missing
 			},
 			wantChecks: map[string]string{
-				"missing-intermediate": "fail",
+				"missing-intermediate": "error",
 			},
 			wantDetailSubstr: map[string]string{
 				// Detail must use FormatDN (full DN), not bare CommonName
@@ -1439,7 +1440,7 @@ func TestDiagnoseChain(t *testing.T) {
 			},
 			wantChecks: map[string]string{
 				"expired":              "pass",
-				"intermediate-expired": "fail",
+				"intermediate-expired": "error",
 			},
 			wantDetailSubstr: map[string]string{
 				// Detail must use FormatDN (full DN), not bare CommonName
@@ -1500,7 +1501,7 @@ func TestFormatDiagnoses(t *testing.T) {
 	// WHY: FormatDiagnoses should include headers and status markers for each diagnosis.
 	t.Parallel()
 	diags := []Diagnosis{
-		{Check: "expired", Status: "fail", Detail: "leaf certificate expired"},
+		{Check: "expired", Status: "error", Detail: "leaf certificate expired"},
 		{Check: "self-signed", Status: "warn", Detail: "self-signed leaf"},
 		{Check: "missing-intermediate", Status: "pass", Detail: "intermediate found"},
 	}
@@ -1525,6 +1526,31 @@ func TestFormatDiagnoses(t *testing.T) {
 		if !strings.Contains(output, diag.Detail) {
 			t.Errorf("output missing detail %q", diag.Detail)
 		}
+	}
+}
+
+func TestVerifyResultJSON_UsesDiagnosticsKey(t *testing.T) {
+	t.Parallel()
+
+	data, err := json.Marshal(VerifyResult{
+		Subject: "CN=example.com",
+		Diagnostics: []Diagnosis{
+			{Check: "expired", Status: "error", Detail: "leaf certificate expired"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal verify result: %v", err)
+	}
+
+	jsonText := string(data)
+	if !strings.Contains(jsonText, `"diagnostics"`) {
+		t.Fatalf("verify result json missing diagnostics field: %s", jsonText)
+	}
+	if strings.Contains(jsonText, `"diagnoses"`) {
+		t.Fatalf("verify result json contains legacy diagnoses field: %s", jsonText)
+	}
+	if !strings.Contains(jsonText, `"status":"error"`) {
+		t.Fatalf("verify result json missing error status: %s", jsonText)
 	}
 }
 

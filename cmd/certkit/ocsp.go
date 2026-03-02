@@ -47,8 +47,8 @@ func init() {
 // ocspVerboseJSON wraps OCSPResult with certificate context for verbose JSON output.
 type ocspVerboseJSON struct {
 	*certkit.OCSPResult
-	CertSubject string `json:"cert_subject"`
-	CertIssuer  string `json:"cert_issuer"`
+	Subject string `json:"subject"`
+	Issuer  string `json:"issuer"`
 }
 
 func runOCSP(cmd *cobra.Command, args []string) error {
@@ -111,9 +111,9 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 	case "json":
 		if verbose {
 			verboseResult := ocspVerboseJSON{
-				OCSPResult:  result,
-				CertSubject: certkit.FormatDNFromRaw(contents.Leaf.RawSubject, contents.Leaf.Subject),
-				CertIssuer:  certkit.FormatDNFromRaw(contents.Leaf.RawIssuer, contents.Leaf.Issuer),
+				OCSPResult: result,
+				Subject:    certkit.FormatDNFromRaw(contents.Leaf.RawSubject, contents.Leaf.Subject),
+				Issuer:     certkit.FormatDNFromRaw(contents.Leaf.RawIssuer, contents.Leaf.Issuer),
 			}
 			data, err := json.MarshalIndent(verboseResult, "", "  ")
 			if err != nil {

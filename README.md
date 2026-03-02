@@ -10,7 +10,7 @@ A Swiss Army knife for TLS/SSL certificates. Inspect, verify, bundle, scan, and 
 - **Verify** that a cert chains to a trusted root, matches its key, and isn't about to expire
 - **Connect** to a TLS server and display its certificate chain, cipher suite, and ALPN
 - **Bundle** a leaf cert into a full chain for your web server (nginx, Apache, HAProxy, etc.)
-- **Convert** between PEM, DER, PKCS#12, JKS, PKCS#7, and Kubernetes Secrets
+- **Convert** between PEM, DER, PKCS#12, JKS, and PKCS#7
 - **Sign** certificates -- self-signed CAs or issue certs from CSRs
 - **Scan** a directory full of certs and keys to understand what you have
 - **Generate** new key pairs and CSRs for certificate renewals
@@ -116,14 +116,15 @@ See [EXAMPLES.md](EXAMPLES.md) for a complete walkthrough of every command with 
 ### Global Flags
 
 <!-- certkit:flags:global -->
-| Flag                | Default | Description                                                                        |
-| ------------------- | ------- | ---------------------------------------------------------------------------------- |
-| `--allow-expired`   | `false` | Include expired certificates                                                       |
-| `--json`            | `false` | Output in JSON format                                                              |
-| `--log-level`, `-l` | `info`  | Log level: debug, info, warn, error                                                |
-| `--password-file`   |         | File containing passwords, one per line                                            |
-| `--passwords`, `-p` |         | Comma-separated passwords for encrypted keys                                       |
-| `--verbose`, `-v`   | `false` | Extended details in output (serial, key info, signature algorithm, key usage, EKU) |
+| Flag                          | Default | Description                                                                                           |
+| ----------------------------- | ------- | ----------------------------------------------------------------------------------------------------- |
+| `--allow-expired`             | `false` | Include expired certificates                                                                          |
+| `--insecure-default-password` | `false` | Use insecure default password 'changeit' for PKCS#12/JKS export when no explicit password is provided |
+| `--json`                      | `false` | Output in JSON format                                                                                 |
+| `--log-level`, `-l`           | `info`  | Log level: debug, info, warn, error                                                                   |
+| `--password-file`             |         | File containing passwords, one per line                                                               |
+| `--passwords`, `-p`           |         | Comma-separated passwords for encrypted keys                                                          |
+| `--verbose`, `-v`             | `false` | Extended details in output (serial, key info, signature algorithm, key usage, EKU)                    |
 <!-- /certkit:flags -->
 
 Common passwords (`""`, `"password"`, `"changeit"`, `"keypassword"`) are always tried automatically.
@@ -341,10 +342,10 @@ When running `certkit scan --bundle-path`, each bundle produces the following fi
 | `<cn>.intermediates.pem` | Intermediate certificates                                                             |
 | `<cn>.root.pem`          | Root certificate                                                                      |
 | `<cn>.key`               | Private key (PEM, mode 0600)                                                          |
-| `<cn>.p12`               | PKCS#12 archive (default password: `changeit`, override via `--passwords`, mode 0600) |
+| `<cn>.p12`               | PKCS#12 archive (requires explicit export password via `--passwords`/`--password-file`; or `--insecure-default-password` for `changeit`, mode 0600) |
 | `<cn>.k8s.yaml`          | Kubernetes `kubernetes.io/tls` Secret (mode 0600)                                     |
 | `<cn>.json`              | Certificate metadata                                                                  |
-| `<cn>.yaml`              | Certificate and key metadata                                                          |
+| `<cn>.yaml`              | Certificate and key metadata (mode 0600)                                              |
 | `<cn>.csr`               | Certificate Signing Request                                                           |
 | `<cn>.csr.json`          | CSR details (subject, SANs, key algorithm)                                            |
 

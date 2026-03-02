@@ -121,6 +121,7 @@ func TestExportBundles_EndToEnd(t *testing.T) {
 		"e2e.example.com.key",
 		"e2e.example.com.p12",
 		"e2e.example.com.k8s.yaml",
+		"e2e.example.com.yaml",
 	}
 	for _, name := range sensitiveFiles {
 		info, err := os.Stat(filepath.Join(bundleDir, name))

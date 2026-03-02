@@ -59,11 +59,9 @@ func runInspect(cmd *cobra.Command, args []string) error {
 	}
 
 	if !allowExpired {
-		results = slices.DeleteFunc(results, func(r internal.InspectResult) bool {
-			return r.Expired != nil && *r.Expired
-		})
-		if len(results) == 0 {
-			return fmt.Errorf("no valid (non-expired) certificates, keys, or CSRs found in %s (use --allow-expired to include expired)", args[0])
+		results, err = filterExpiredInspectResults(results, args[0])
+		if err != nil {
+			return err
 		}
 	}
 
@@ -79,4 +77,14 @@ func runInspect(cmd *cobra.Command, args []string) error {
 
 	fmt.Print(output)
 	return nil
+}
+
+func filterExpiredInspectResults(results []internal.InspectResult, inputPath string) ([]internal.InspectResult, error) {
+	filtered := slices.DeleteFunc(results, func(result internal.InspectResult) bool {
+		return result.Expired != nil && *result.Expired
+	})
+	if len(filtered) == 0 {
+		return nil, &ValidationError{Message: fmt.Sprintf("no valid (non-expired) certificates, keys, or CSRs found in %s (use --allow-expired to include expired)", inputPath)}
+	}
+	return filtered, nil
 }

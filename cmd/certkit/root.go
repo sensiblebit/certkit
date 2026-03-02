@@ -6,12 +6,13 @@ import (
 )
 
 var (
-	logLevel     string
-	passwordList []string
-	passwordFile string
-	allowExpired bool
-	verbose      bool
-	jsonOutput   bool
+	logLevel                string
+	passwordList            []string
+	passwordFile            string
+	allowExpired            bool
+	verbose                 bool
+	jsonOutput              bool
+	insecureDefaultPassword bool
 )
 
 var rootCmd = &cobra.Command{
@@ -33,6 +34,7 @@ func init() {
 	rootCmd.PersistentFlags().BoolVar(&allowExpired, "allow-expired", false, "Include expired certificates")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Extended details in output (serial, key info, signature algorithm, key usage, EKU)")
 	rootCmd.PersistentFlags().BoolVar(&jsonOutput, "json", false, "Output in JSON format")
+	rootCmd.PersistentFlags().BoolVar(&insecureDefaultPassword, "insecure-default-password", false, "Use insecure default password 'changeit' for PKCS#12/JKS export when no explicit password is provided")
 
 	registerCompletion(rootCmd, completionInput{"log-level", fixedCompletion("debug", "info", "warn", "error")})
 

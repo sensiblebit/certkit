@@ -69,7 +69,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Require verified WASM bundle export by default; retrying export without verification is now an explicit user action surfaced in the web UI ([#105])
-- Prefer user-provided passwords for PKCS#12/JKS outputs while keeping `changeit` as the default fallback for compatibility ([#87])
+- **Breaking:** Normalize CLI diagnostics JSON schema: `verify` now emits `diagnostics` (not `diagnoses`) and uses `error` status values for failing checks ([#96])
+- **Breaking:** Normalize payload JSON for `bundle`/`convert` to use shared `data` + `encoding` fields (replacing `bundle`-only `chain_pem`) ([#96])
+- **Breaking:** Normalize verbose `ocsp --json` certificate context keys to `subject`/`issuer` for cross-command consistency ([#96])
+- Require explicit user-provided passwords for PKCS#12/JKS outputs; retain `changeit` only when `--insecure-default-password` is specified ([#87])
 - **Breaking:** Standardize certificate serial number formatting to `0x`-prefixed hex across CLI/JSON output ([#87])
 - Move local pre-commit hook definitions from repo config into the shared `sensiblebit/.github` hook set, and pin this branch to the shared commit so all repositories can consume the same workflow checks and Node tool bootstrapping behavior from one source ([#85])
 
@@ -92,6 +95,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Enforce bounded per-file and total upload limits in WASM `addFiles` and `inspect` ingestion paths to prevent unbounded memory growth ([#105])
 - Enforce local CRL file size limits for `certkit crl` and shared CRL readers to reject oversized inputs early ([#105])
 - Harden AIA/OCSP/CRL SSRF checks by validating DNS-resolved hostnames against private/internal address ranges by default, and add explicit `--allow-private-network` opt-in flags for internal PKI endpoints in `connect`, `verify`, `ocsp`, `scan`, `inspect`, and `bundle` ([#108])
+- Require explicit PKCS#12/JKS export passwords in `bundle`, `convert`, and `scan --bundle-path`; add `--insecure-default-password` for explicit legacy `changeit` fallback ([#89])
+- Mark bundle `.yaml` outputs as sensitive and write them with restrictive permissions (0600) because they include private key material ([#89])
 - Prevent bundle export path traversal by sanitizing bundle folder names and enforcing safe output paths ([#87])
 - Enforce size limits on input reads to avoid unbounded memory usage ([#87])
 - Add SSRF validation (`ValidateAIAURL`) to OCSP responder URLs and CRL distribution point URLs — previously only AIA certificate URLs were validated ([#78])
@@ -121,6 +126,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix WASM AIA fetch callback lifecycle to release JS callbacks on cancellation paths after promise completion ([#105])
 - Fix web AIA proxy upstream handling to enforce explicit fetch timeout/abort behavior and return 504 timeout errors ([#105])
 - Fix web AIA proxy timeout handling to keep abort timers active through response body reads, including stalled-after-headers upstream responses ([#105])
+- Fix `bundle` chain-verification failures returning exit code 1 — validation failures now return exit code 2 ([#88])
+- Fix `bundle --key` mismatch and `inspect` expired-only filtering returning exit code 1 — these validation failures now return exit code 2 ([#88])
+- Fix `convert --to p12` multi-key format-limit errors returning validation exit code 2 — format limitations now return exit code 1 ([#97])
+- Fix PKCS#12 export error identity so callers can reliably detect missing-password and multi-key format-limit failures with wrapped errors ([#109])
+- Fix README/EXAMPLES/help mismatches for trust-store defaults, binary-output requirements, expired-cert behavior, and supported convert formats ([#101])
 - Fix verify JSON chain output to use `not_after` for consistency with other commands ([#87])
 - Fix Certificate Transparency availability handling to preserve parsed SCT candidates when the log list cannot be loaded and mark them as unavailable instead of dropping them ([#86])
 - Fix chain conversion failures in Certificate Transparency checks to report SCTs as `unavailable` instead of `invalid` and keep diagnostics as warnings ([#86])
@@ -971,6 +981,12 @@ Initial release.
 [#106]: https://github.com/sensiblebit/certkit/pull/106
 [#107]: https://github.com/sensiblebit/certkit/pull/107
 [#105]: https://github.com/sensiblebit/certkit/pull/105
+[#88]: https://github.com/sensiblebit/certkit/pull/88
+[#89]: https://github.com/sensiblebit/certkit/pull/89
+[#96]: https://github.com/sensiblebit/certkit/pull/96
+[#97]: https://github.com/sensiblebit/certkit/pull/97
+[#101]: https://github.com/sensiblebit/certkit/pull/101
+[#109]: https://github.com/sensiblebit/certkit/pull/109
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63

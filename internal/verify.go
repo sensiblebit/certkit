@@ -69,7 +69,7 @@ type VerifyResult struct {
 	Expiry      *bool                   `json:"expires_within,omitempty"`
 	ExpiryInfo  string                  `json:"expiry_info,omitempty"`
 	Errors      []string                `json:"errors,omitempty"`
-	Diagnoses   []Diagnosis             `json:"diagnoses,omitempty"`
+	Diagnostics []Diagnosis             `json:"diagnostics,omitempty"`
 
 	// Verbose-only fields (populated when VerifyInput.Verbose is true).
 	Issuer    string   `json:"issuer,omitempty"`
@@ -294,7 +294,7 @@ func buildChainDisplay(bundle *certkit.BundleResult, verbose bool) []ChainCert {
 type Diagnosis struct {
 	// Check is a short label for the diagnostic (e.g. "expired", "self-signed").
 	Check string `json:"check"`
-	// Status is "pass", "fail", or "warn".
+	// Status is "pass", "error", or "warn".
 	Status string `json:"status"`
 	// Detail is a human-readable explanation.
 	Detail string `json:"detail"`
@@ -323,7 +323,7 @@ func DiagnoseChain(input DiagnoseChainInput) []Diagnosis {
 	if now.After(input.Cert.NotAfter) {
 		diags = append(diags, Diagnosis{
 			Check:  "expired",
-			Status: "fail",
+			Status: "error",
 			Detail: fmt.Sprintf("leaf certificate expired on %s", input.Cert.NotAfter.UTC().Format(time.RFC3339)),
 		})
 	} else {
@@ -338,7 +338,7 @@ func DiagnoseChain(input DiagnoseChainInput) []Diagnosis {
 	if now.Before(input.Cert.NotBefore) {
 		diags = append(diags, Diagnosis{
 			Check:  "not-yet-valid",
-			Status: "fail",
+			Status: "error",
 			Detail: fmt.Sprintf("leaf certificate not valid until %s", input.Cert.NotBefore.UTC().Format(time.RFC3339)),
 		})
 	}
@@ -357,7 +357,7 @@ func DiagnoseChain(input DiagnoseChainInput) []Diagnosis {
 		if now.After(extra.NotAfter) {
 			diags = append(diags, Diagnosis{
 				Check:  "intermediate-expired",
-				Status: "fail",
+				Status: "error",
 				Detail: fmt.Sprintf("intermediate %q expired on %s", certkit.FormatDNFromRaw(extra.RawSubject, extra.Subject), extra.NotAfter.UTC().Format(time.RFC3339)),
 			})
 		}
@@ -375,7 +375,7 @@ func DiagnoseChain(input DiagnoseChainInput) []Diagnosis {
 		if !found {
 			diags = append(diags, Diagnosis{
 				Check:  "missing-intermediate",
-				Status: "fail",
+				Status: "error",
 				Detail: fmt.Sprintf("no intermediate certificate found for issuer %q", certkit.FormatDNFromRaw(input.Cert.RawIssuer, input.Cert.Issuer)),
 			})
 		}
@@ -413,7 +413,7 @@ func FormatDiagnoses(diags []Diagnosis) string {
 		switch d.Status {
 		case "pass":
 			icon = "OK"
-		case "fail":
+		case "fail", "error":
 			icon = "FAIL"
 		case "warn":
 			icon = "WARN"
