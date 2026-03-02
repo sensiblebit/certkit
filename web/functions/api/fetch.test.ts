@@ -429,6 +429,64 @@ describe("fetch behavior", () => {
     expect(await errorMsg(resp)).toMatch(/Fetch failed/);
   });
 
+  it("returns 504 when upstream fetch aborts", async () => {
+    const abortError = Object.assign(new Error("timed out"), {
+      name: "AbortError",
+    });
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(abortError));
+
+    const resp = await callGet("http://crl.disa.mil/cert.p7c");
+    expect(resp.status).toBe(504);
+    expect(await errorMsg(resp)).toMatch(/timed out/);
+  });
+
+  it("returns 504 when upstream abort is a non-Error object", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue({ name: "AbortError" }));
+
+    const resp = await callGet("http://crl.disa.mil/cert.p7c");
+    expect(resp.status).toBe(504);
+    expect(await errorMsg(resp)).toMatch(/timed out/);
+  });
+
+  it("returns 504 when upstream body read stalls after headers", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn().mockImplementation((_url: string, init?: RequestInit) => {
+          const signal = init?.signal;
+          const body = new ReadableStream<Uint8Array>({
+            start(controller): void {
+              signal?.addEventListener(
+                "abort",
+                () => {
+                  controller.error({ name: "AbortError" });
+                },
+                { once: true },
+              );
+            },
+          });
+
+          return Promise.resolve(
+            new Response(body, {
+              status: 200,
+              headers: { "Content-Length": "16" },
+            }),
+          );
+        }),
+      );
+
+      const respPromise = callGet("http://crl.disa.mil/cert.p7c");
+      await vi.advanceTimersByTimeAsync(8_001);
+
+      const resp = await respPromise;
+      expect(resp.status).toBe(504);
+      expect(await errorMsg(resp)).toMatch(/timed out/);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("falls back from HTTPS to HTTP when HTTPS fails", async () => {
     const mockFetch = vi
       .fn()
