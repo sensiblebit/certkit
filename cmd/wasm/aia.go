@@ -56,13 +56,6 @@ func jsFetchURL(ctx context.Context, url string) ([]byte, error) {
 		err  error
 	}
 	ch := make(chan result, 1)
-	done := make(chan struct{})
-	var doneOnce sync.Once
-	markDone := func() {
-		doneOnce.Do(func() {
-			close(done)
-		})
-	}
 	var releaseOnce sync.Once
 	releaseCallbacks := func(thenCb js.Func, catchCb js.Func) {
 		releaseOnce.Do(func() {
@@ -90,8 +83,11 @@ func jsFetchURL(ctx context.Context, url string) ([]byte, error) {
 
 	const maxAIAResponseSize = 1 << 20 // 1MB, consistent with CLI httpAIAFetcher
 
-	thenCb := js.FuncOf(func(_ js.Value, args []js.Value) any {
-		defer markDone()
+	var thenCb js.Func
+	var catchCb js.Func
+
+	thenCb = js.FuncOf(func(_ js.Value, args []js.Value) any {
+		defer releaseCallbacks(thenCb, catchCb)
 		uint8Array := args[0]
 		size := uint8Array.Length()
 		if size > maxAIAResponseSize {
@@ -104,8 +100,8 @@ func jsFetchURL(ctx context.Context, url string) ([]byte, error) {
 		return nil
 	})
 
-	catchCb := js.FuncOf(func(_ js.Value, args []js.Value) any {
-		defer markDone()
+	catchCb = js.FuncOf(func(_ js.Value, args []js.Value) any {
+		defer releaseCallbacks(thenCb, catchCb)
 		val := args[0]
 		var errMsg string
 		if val.Type() == js.TypeObject || val.Type() == js.TypeFunction {
@@ -121,13 +117,8 @@ func jsFetchURL(ctx context.Context, url string) ([]byte, error) {
 
 	select {
 	case r := <-ch:
-		releaseCallbacks(thenCb, catchCb)
 		return r.data, r.err
 	case <-ctx.Done():
-		go func() {
-			<-done
-			releaseCallbacks(thenCb, catchCb)
-		}()
 		return nil, ctx.Err()
 	}
 }

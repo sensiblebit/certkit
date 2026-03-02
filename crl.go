@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -14,6 +15,9 @@ import (
 )
 
 const maxCRLBytes int64 = 10 << 20
+
+// ErrCRLTooLarge indicates that CRL input exceeded the maximum allowed size.
+var ErrCRLTooLarge = errors.New("CRL data exceeds max size")
 
 // CRLInfo contains parsed CRL details for display.
 type CRLInfo struct {
@@ -88,7 +92,7 @@ func FetchCRL(ctx context.Context, input FetchCRLInput) ([]byte, error) {
 	if contentLength := resp.Header.Get("Content-Length"); contentLength != "" {
 		parsedLength, err := strconv.ParseInt(contentLength, 10, 64)
 		if err == nil && parsedLength > maxCRLBytes {
-			return nil, fmt.Errorf("CRL response exceeds max size (%d bytes)", maxCRLBytes)
+			return nil, fmt.Errorf("CRL response exceeds max size (%d bytes): %w", maxCRLBytes, ErrCRLTooLarge)
 		}
 	}
 
@@ -110,7 +114,7 @@ func ReadCRLFile(path string) ([]byte, error) {
 	if info, err := f.Stat(); err != nil {
 		slog.Debug("stat failed on CRL file, skipping size pre-check", "path", path, "err", err)
 	} else if info.Size() > maxCRLBytes {
-		return nil, fmt.Errorf("CRL file exceeds max size (%d bytes)", maxCRLBytes)
+		return nil, fmt.Errorf("CRL file exceeds max size (%d bytes): %w", maxCRLBytes, ErrCRLTooLarge)
 	}
 
 	data, err := readCRLData(f)
@@ -127,7 +131,7 @@ func readCRLData(r io.Reader) ([]byte, error) {
 		return nil, err
 	}
 	if int64(len(data)) > maxCRLBytes {
-		return nil, fmt.Errorf("CRL data exceeds max size (%d bytes)", maxCRLBytes)
+		return nil, fmt.Errorf("%w (%d bytes)", ErrCRLTooLarge, maxCRLBytes)
 	}
 	return data, nil
 }

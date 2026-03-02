@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `connect` automatically checks OCSP revocation status on the leaf certificate (best-effort; shows "skipped" or "unavailable" when check cannot complete) ([#78])
 - Add `--crl` flag to `connect` for opt-in CRL revocation checking via distribution points ([#78])
 - Add `FetchCRL` library function for downloading CRLs from HTTP URLs with SSRF validation ([#78])
+- Add `ReadCRLFile` library function for reading local CRL files with the same 10 MB size cap as `FetchCRL` ([#105])
 - `connect` exits with code 2 when OCSP or CRL reports a revoked certificate ([#78])
 - `connect --crl` verifies CRL signatures against the issuer certificate — rejects CRLs signed by a different CA ([#78])
 - `connect --crl` rejects expired CRLs (past `NextUpdate`) to prevent replay of stale revocation data ([#78])

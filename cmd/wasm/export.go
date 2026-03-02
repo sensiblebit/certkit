@@ -6,12 +6,15 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/sensiblebit/certkit"
 	"github.com/sensiblebit/certkit/internal/certstore"
 )
+
+var errVerifiedExportFailed = errors.New("verified export failed")
 
 // exportBundles generates a ZIP file containing organized certificate bundles.
 // If filterSKIs is non-empty, only pairs whose colon-hex SKI appears in the
@@ -67,7 +70,7 @@ func exportBundles(ctx context.Context, input exportBundlesInput) ([]byte, error
 		P12Password:   input.P12Password,
 	}); err != nil {
 		if opts.Verify {
-			return nil, fmt.Errorf("verified export failed: %w", err)
+			return nil, fmt.Errorf("%w: %w", errVerifiedExportFailed, err)
 		}
 		return nil, fmt.Errorf("unverified export failed: %w", err)
 	}

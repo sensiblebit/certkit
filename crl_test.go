@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -326,8 +327,8 @@ func TestFetchCRL_ResponseTooLarge(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected size-limit error, got nil")
 	}
-	if !strings.Contains(err.Error(), "exceeds max size") {
-		t.Fatalf("error = %q, want size-limit message", err.Error())
+	if !errors.Is(err, ErrCRLTooLarge) {
+		t.Fatalf("error = %v, want ErrCRLTooLarge", err)
 	}
 }
 
@@ -344,8 +345,8 @@ func TestReadCRLFile_SizeLimit(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected size-limit error, got nil")
 	}
-	if !strings.Contains(err.Error(), "exceeds max size") {
-		t.Fatalf("error = %q, want size-limit message", err.Error())
+	if !errors.Is(err, ErrCRLTooLarge) {
+		t.Fatalf("error = %v, want ErrCRLTooLarge", err)
 	}
 }
 

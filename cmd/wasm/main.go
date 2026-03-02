@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -43,6 +44,41 @@ func main() {
 
 	// Block forever — WASM modules must not exit.
 	select {}
+}
+
+type readWASMFileDataInput struct {
+	DataJS     js.Value
+	Name       string
+	TotalBytes *int64
+}
+
+// readWASMFileData copies a JS Uint8Array into Go memory with hard size caps.
+func readWASMFileData(input readWASMFileDataInput) ([]byte, error) {
+	if input.DataJS.Type() != js.TypeObject {
+		return nil, fmt.Errorf("file %q has invalid data payload", input.Name)
+	}
+
+	size := input.DataJS.Length()
+	if size < 0 {
+		return nil, fmt.Errorf("file %q has invalid size", input.Name)
+	}
+
+	if size > wasmMaxInputFileBytes {
+		return nil, fmt.Errorf("file %q exceeds max size (%d bytes)", input.Name, wasmMaxInputFileBytes)
+	}
+
+	nextTotal := *input.TotalBytes + int64(size)
+	if nextTotal > wasmMaxInputTotalBytes {
+		return nil, fmt.Errorf("total upload exceeds max size (%d bytes)", wasmMaxInputTotalBytes)
+	}
+
+	data := make([]byte, size)
+	copied := js.CopyBytesToGo(data, input.DataJS)
+	if copied != size {
+		return nil, fmt.Errorf("file %q read incomplete data: expected %d bytes, got %d", input.Name, size, copied)
+	}
+	*input.TotalBytes = nextTotal
+	return data, nil
 }
 
 // addFiles processes an array of {name, data} objects with optional passwords.
@@ -105,6 +141,7 @@ func addFiles(_ js.Value, args []js.Value) any {
 					TotalBytes: &totalBytes,
 				})
 				if err != nil {
+					slog.Debug("skipping file due to read error", "name", name, "error", err)
 					results = append(results, map[string]any{
 						"name":   name,
 						"status": "error",
@@ -353,6 +390,13 @@ func exportBundlesJS(_ js.Value, args []js.Value) any {
 			})
 
 			if err != nil {
+				if errors.Is(err, errVerifiedExportFailed) {
+					errObj := js.Global().Get("Object").New()
+					errObj.Set("code", "VERIFY_FAILED")
+					errObj.Set("message", err.Error())
+					reject.Invoke(errObj)
+					return
+				}
 				reject.Invoke(js.Global().Get("Error").New(err.Error()))
 				return
 			}
@@ -399,39 +443,4 @@ func jsError(msg string) any {
 	p := js.Global().Get("Promise").New(handler)
 	handler.Release()
 	return p
-}
-
-type readWASMFileDataInput struct {
-	DataJS     js.Value
-	Name       string
-	TotalBytes *int64
-}
-
-// readWASMFileData copies a JS Uint8Array into Go memory with hard size caps.
-func readWASMFileData(input readWASMFileDataInput) ([]byte, error) {
-	if input.DataJS.Type() != js.TypeObject {
-		return nil, fmt.Errorf("file %q has invalid data payload", input.Name)
-	}
-
-	size := input.DataJS.Length()
-	if size < 0 {
-		return nil, fmt.Errorf("file %q has invalid size", input.Name)
-	}
-
-	if size > wasmMaxInputFileBytes {
-		return nil, fmt.Errorf("file %q exceeds max size (%d bytes)", input.Name, wasmMaxInputFileBytes)
-	}
-
-	nextTotal := *input.TotalBytes + int64(size)
-	if nextTotal > wasmMaxInputTotalBytes {
-		return nil, fmt.Errorf("total upload exceeds max size (%d bytes)", wasmMaxInputTotalBytes)
-	}
-
-	data := make([]byte, size)
-	copied := js.CopyBytesToGo(data, input.DataJS)
-	if copied != size {
-		return nil, fmt.Errorf("file %q read incomplete data: expected %d bytes, got %d", input.Name, size, copied)
-	}
-	*input.TotalBytes = nextTotal
-	return data, nil
 }
