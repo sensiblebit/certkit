@@ -2,9 +2,9 @@ package internal
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -14,21 +14,22 @@ func TestReadAllLimited(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name     string
-		data     []byte
-		maxBytes int64
-		wantErr  string
+		name       string
+		data       []byte
+		maxBytes   int64
+		wantErrIs  error
+		wantErrNil bool
 	}{
-		{name: "exact limit", data: []byte("abcd"), maxBytes: 4},
-		{name: "over limit", data: []byte("abcde"), maxBytes: 4, wantErr: "input exceeds max size"},
-		{name: "no limit", data: bytes.Repeat([]byte("x"), 1024), maxBytes: 0},
+		{name: "exact limit", data: []byte("abcd"), maxBytes: 4, wantErrNil: true},
+		{name: "over limit", data: []byte("abcde"), maxBytes: 4, wantErrIs: errInputExceedsMaxSize},
+		{name: "no limit", data: bytes.Repeat([]byte("x"), 1024), maxBytes: 0, wantErrNil: true},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 			out, err := readAllLimited(bytes.NewReader(tt.data), tt.maxBytes)
-			if tt.wantErr == "" {
+			if tt.wantErrNil {
 				if err != nil {
 					t.Fatalf("readAllLimited error: %v", err)
 				}
@@ -37,11 +38,8 @@ func TestReadAllLimited(t *testing.T) {
 				}
 				return
 			}
-			if err == nil {
-				t.Fatalf("expected error containing %q", tt.wantErr)
-			}
-			if !strings.Contains(err.Error(), tt.wantErr) {
-				t.Fatalf("error = %q, want substring %q", err.Error(), tt.wantErr)
+			if !errors.Is(err, tt.wantErrIs) {
+				t.Fatalf("error = %v, want errors.Is(_, %v)", err, tt.wantErrIs)
 			}
 		})
 	}
@@ -57,13 +55,13 @@ func TestReadFileLimited(t *testing.T) {
 		t.Fatalf("write file: %v", err)
 	}
 
-	if _, err := readFileLimited(file, 4); err == nil || !strings.Contains(err.Error(), "file exceeds max size") {
-		t.Fatalf("expected size error, got %v", err)
+	if _, err := ReadFileLimited(file, 4); !errors.Is(err, errFileExceedsMaxSize) {
+		t.Fatalf("error = %v, want errors.Is(_, %v)", err, errFileExceedsMaxSize)
 	}
 
-	data, err := readFileLimited(file, 5)
+	data, err := ReadFileLimited(file, 5)
 	if err != nil {
-		t.Fatalf("readFileLimited error: %v", err)
+		t.Fatalf("ReadFileLimited error: %v", err)
 	}
 	if string(data) != "abcde" {
 		t.Fatalf("data = %q, want %q", string(data), "abcde")
@@ -84,13 +82,13 @@ func TestReadFileLimited_SymlinkUsesTargetSize(t *testing.T) {
 	link := filepath.Join(dir, "target-link.bin")
 	createSymlinkOrSkip(t, target, link)
 
-	if _, err := readFileLimited(link, 4); err == nil || !strings.Contains(err.Error(), "file exceeds max size") {
-		t.Fatalf("expected size error for symlink target, got %v", err)
+	if _, err := ReadFileLimited(link, 4); !errors.Is(err, errFileExceedsMaxSize) {
+		t.Fatalf("error = %v, want errors.Is(_, %v)", err, errFileExceedsMaxSize)
 	}
 
-	data, err := readFileLimited(link, 5)
+	data, err := ReadFileLimited(link, 5)
 	if err != nil {
-		t.Fatalf("readFileLimited symlink error: %v", err)
+		t.Fatalf("ReadFileLimited symlink error: %v", err)
 	}
 	if string(data) != "abcde" {
 		t.Fatalf("data = %q, want %q", string(data), "abcde")
