@@ -172,13 +172,14 @@ Port defaults to 443 if not specified. OCSP revocation status is checked automat
 ### Bundle Flags
 
 <!-- certkit:flags:bundle -->
-| Flag               | Default    | Description                                    |
-| ------------------ | ---------- | ---------------------------------------------- |
-| `--force`, `-f`    | `false`    | Skip chain verification                        |
-| `--format`         | `pem`      | Output format: pem, chain, fullchain, p12, jks |
-| `--key`            |            | Private key file (PEM)                         |
-| `--out-file`, `-o` | _(stdout)_ | Output file                                    |
-| `--trust-store`    | `mozilla`  | Trust store: system, mozilla                   |
+| Flag                      | Default    | Description                                     |
+| ------------------------- | ---------- | ----------------------------------------------- |
+| `--allow-private-network` | `false`    | Allow AIA fetches to private/internal endpoints |
+| `--force`, `-f`           | `false`    | Skip chain verification                         |
+| `--format`                | `pem`      | Output format: pem, chain, fullchain, p12, jks  |
+| `--key`                   |            | Private key file (PEM)                          |
+| `--out-file`, `-o`        | _(stdout)_ | Output file                                     |
+| `--trust-store`           | `mozilla`  | Trust store: system, mozilla                    |
 <!-- /certkit:flags -->
 
 ### Convert Flags
