@@ -649,6 +649,106 @@ func TestDecodeJKS_MultiplePrivateKeyEntries(t *testing.T) {
 	}
 }
 
+func TestDecodeJKSKeyEntries_PreservesAliasChainPairing(t *testing.T) {
+	// WHY: Key-entry decoding must preserve alias -> key -> cert-chain pairing
+	// so callers can select a coherent leaf+chain for each private key entry.
+	t.Parallel()
+
+	password := "changeit"
+	serverKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	newSelfSigned := func(t *testing.T, cn string, pub any, signer any) []byte {
+		t.Helper()
+		tmpl := &x509.Certificate{
+			SerialNumber: randomSerial(t),
+			Subject:      pkix.Name{CommonName: cn},
+			NotBefore:    time.Now().Add(-time.Hour),
+			NotAfter:     time.Now().Add(24 * time.Hour),
+		}
+		der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, pub, signer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return der
+	}
+
+	serverCertDER := newSelfSigned(t, "server-entry", &serverKey.PublicKey, serverKey)
+	clientCertDER := newSelfSigned(t, "client-entry", &clientKey.PublicKey, clientKey)
+
+	serverPKCS8, err := x509.MarshalPKCS8PrivateKey(serverKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	clientPKCS8, err := x509.MarshalPKCS8PrivateKey(clientKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ks := keystore.New()
+	if err := ks.SetPrivateKeyEntry("server", keystore.PrivateKeyEntry{
+		CreationTime:     time.Now(),
+		PrivateKey:       serverPKCS8,
+		CertificateChain: []keystore.Certificate{{Type: "X.509", Content: serverCertDER}},
+	}, []byte(password)); err != nil {
+		t.Fatal(err)
+	}
+	if err := ks.SetPrivateKeyEntry("client", keystore.PrivateKeyEntry{
+		CreationTime:     time.Now(),
+		PrivateKey:       clientPKCS8,
+		CertificateChain: []keystore.Certificate{{Type: "X.509", Content: clientCertDER}},
+	}, []byte(password)); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := ks.Store(&buf, []byte(password)); err != nil {
+		t.Fatal(err)
+	}
+
+	entries, trusted, err := DecodeJKSKeyEntries(buf.Bytes(), []string{password})
+	if err != nil {
+		t.Fatalf("DecodeJKSKeyEntries: %v", err)
+	}
+	if len(trusted) != 0 {
+		t.Fatalf("expected 0 trusted cert entries, got %d", len(trusted))
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 key entries, got %d", len(entries))
+	}
+
+	byAlias := make(map[string]DecodedJKSKeyEntry, len(entries))
+	for _, entry := range entries {
+		byAlias[entry.Alias] = entry
+	}
+	serverEntry, ok := byAlias["server"]
+	if !ok {
+		t.Fatal("missing server alias")
+	}
+	if len(serverEntry.Chain) != 1 || serverEntry.Chain[0].Subject.CommonName != "server-entry" {
+		t.Fatalf("server entry chain mismatch: %+v", serverEntry.Chain)
+	}
+	if !serverKey.Equal(serverEntry.Key) {
+		t.Error("server key mismatch")
+	}
+
+	clientEntry, ok := byAlias["client"]
+	if !ok {
+		t.Fatal("missing client alias")
+	}
+	if len(clientEntry.Chain) != 1 || clientEntry.Chain[0].Subject.CommonName != "client-entry" {
+		t.Fatalf("client entry chain mismatch: %+v", clientEntry.Chain)
+	}
+	if !clientKey.Equal(clientEntry.Key) {
+		t.Error("client key mismatch")
+	}
+}
+
 func TestDecodeJKS_PrivateKeyEntry_EmptyCertChain(t *testing.T) {
 	// WHY: A JKS PrivateKeyEntry with a valid key but an empty certificate
 	// chain should still return the key. The cert chain is optional in the

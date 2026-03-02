@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"errors"
 	"net"
 	"testing"
 	"time"
@@ -322,5 +323,59 @@ func TestSignCSR_ChainVerifies(t *testing.T) {
 		KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}); err != nil {
 		t.Fatalf("chain verification failed: %v", err)
+	}
+}
+
+func TestSignCSR_CACertKeyMismatch(t *testing.T) {
+	// WHY: Signing must fail fast when the CA private key does not match the
+	// CA certificate to prevent issuing certs under the wrong identity.
+	t.Parallel()
+
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, err := CreateSelfSigned(SelfSignedInput{
+		Signer:  caKey,
+		Subject: pkix.Name{CommonName: "Mismatch CA"},
+		Days:    365,
+		IsCA:    true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wrongKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	csrKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrDER, err := x509.CreateCertificateRequest(rand.Reader, &x509.CertificateRequest{
+		Subject: pkix.Name{CommonName: "leaf.example.com"},
+	}, csrKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csr, err := x509.ParseCertificateRequest(csrDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = SignCSR(SignCSRInput{
+		CSR:      csr,
+		CACert:   ca,
+		CAKey:    wrongKey,
+		Days:     30,
+		CopySANs: true,
+	})
+	if err == nil {
+		t.Fatal("expected error for CA cert/key mismatch")
+	}
+	if !errors.Is(err, ErrCAKeyMismatch) {
+		t.Errorf("unexpected error: %v", err)
 	}
 }

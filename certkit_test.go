@@ -119,6 +119,43 @@ func TestParsePEMCertificates_invalidDER(t *testing.T) {
 	}
 }
 
+func TestParsePEMCertificates_PreservesValidWhenMalformedPresent(t *testing.T) {
+	// WHY: Mixed-quality bundles are common in the wild. A malformed
+	// CERTIFICATE block must not discard other valid certificates.
+	t.Parallel()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certTemplate := &x509.Certificate{
+		SerialNumber: randomSerial(t),
+		Subject:      pkix.Name{CommonName: "valid-cert.example.com"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, certTemplate, certTemplate, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	pemData := slices.Concat(
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("bad-der")}),
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: certDER}),
+	)
+
+	certs, err := ParsePEMCertificates(pemData)
+	if err != nil {
+		t.Fatalf("ParsePEMCertificates: %v", err)
+	}
+	if len(certs) != 1 {
+		t.Fatalf("expected 1 valid cert, got %d", len(certs))
+	}
+	if certs[0].Subject.CommonName != "valid-cert.example.com" {
+		t.Errorf("CN=%q, want valid-cert.example.com", certs[0].Subject.CommonName)
+	}
+}
+
 func TestCertKeyIdEmbedded_NilExtensions(t *testing.T) {
 	// WHY: Nil SubjectKeyId/AuthorityKeyId must return empty string gracefully,
 	// not panic. Populated cases are tautological (ColonHex(x) == ColonHex(x))
@@ -339,6 +376,35 @@ func TestParsePEMPrivateKey_MislabeledBlockType(t *testing.T) {
 	}
 }
 
+func TestParsePEMPrivateKey_SkipsNonKeyBlocks(t *testing.T) {
+	// WHY: ParsePEMPrivateKey is used in key-only paths and must find the first
+	// key block even when certificate blocks appear first.
+	t.Parallel()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER := x509.MarshalPKCS1PrivateKey(key)
+
+	pemData := slices.Concat(
+		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("not-a-cert")}),
+		pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: keyDER}),
+	)
+
+	parsed, err := ParsePEMPrivateKey(pemData)
+	if err != nil {
+		t.Fatalf("ParsePEMPrivateKey: %v", err)
+	}
+	rsaParsed, ok := parsed.(*rsa.PrivateKey)
+	if !ok {
+		t.Fatalf("parsed key type = %T, want *rsa.PrivateKey", parsed)
+	}
+	if !key.Equal(rsaParsed) {
+		t.Error("parsed key does not Equal original")
+	}
+}
+
 func TestParsePEMPrivateKeyWithPasswords_Encrypted(t *testing.T) {
 	// WHY: Encrypted PEM keys must decrypt with the correct password, fail
 	// clearly with wrong passwords, iterate all candidates, and handle edge
@@ -513,12 +579,12 @@ func TestParsePEMCertificateRequest_errors(t *testing.T) {
 		{
 			name:    "invalid PEM",
 			input:   []byte("not valid PEM"),
-			wantErr: "no PEM block found",
+			wantErr: "no certificate request found",
 		},
 		{
 			name:    "wrong block type",
 			input:   pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("whatever")}),
-			wantErr: "expected CERTIFICATE REQUEST",
+			wantErr: "no certificate request found",
 		},
 		{
 			name:    "invalid DER",
@@ -535,6 +601,57 @@ func TestParsePEMCertificateRequest_errors(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tt.wantErr) {
 				t.Errorf("error = %v, want substring %q", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestParsePEMCertificateRequest_SkipsBadBlocksBeforeValidCSR(t *testing.T) {
+	// WHY: CSR parsing must continue scanning when earlier PEM blocks are either
+	// wrong block types or malformed CSR DER.
+	t.Parallel()
+
+	leaf, key := generateLeafWithSANs(t)
+	csrPEM, _, err := GenerateCSR(leaf, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	csrBlock, _ := pem.Decode([]byte(csrPEM))
+	if csrBlock == nil {
+		t.Fatal("failed to decode generated CSR")
+	}
+
+	tests := []struct {
+		name      string
+		blockType string
+		blockDER  []byte
+	}{
+		{
+			name:      "skips non-CSR block before valid CSR",
+			blockType: "CERTIFICATE",
+			blockDER:  []byte("not-a-csr"),
+		},
+		{
+			name:      "skips malformed CSR block before valid CSR",
+			blockType: "CERTIFICATE REQUEST",
+			blockDER:  []byte("bad-csr-der"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			pemData := slices.Concat(
+				pem.EncodeToMemory(&pem.Block{Type: tt.blockType, Bytes: tt.blockDER}),
+				pem.EncodeToMemory(csrBlock),
+			)
+
+			csr, err := ParsePEMCertificateRequest(pemData)
+			if err != nil {
+				t.Fatalf("ParsePEMCertificateRequest: %v", err)
+			}
+			if csr.Subject.CommonName != "test.example.com" {
+				t.Errorf("CN=%q, want test.example.com", csr.Subject.CommonName)
 			}
 		})
 	}
@@ -739,6 +856,83 @@ func TestKeyMatchesCert(t *testing.T) {
 			}
 			if match != tt.want {
 				t.Errorf("KeyMatchesCert = %v, want %v", match, tt.want)
+			}
+		})
+	}
+}
+
+func TestSelectIssuerCertificate(t *testing.T) {
+	// WHY: Issuer auto-selection must choose a candidate that actually signed
+	// the leaf and prefer AKI/SKI matches to avoid wrong-issuer OCSP checks.
+	t.Parallel()
+
+	caPEM, interPEM, leafPEM := generateTestPKI(t)
+	ca, err := ParsePEMCertificate([]byte(caPEM))
+	if err != nil {
+		t.Fatal(err)
+	}
+	intermediate, err := ParsePEMCertificate([]byte(interPEM))
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := ParsePEMCertificate([]byte(leafPEM))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	wrongCAKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongCATmpl := &x509.Certificate{
+		SerialNumber: randomSerial(t),
+		Subject:      leaf.Issuer, // same issuer DN, different key
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+		IsCA:         true,
+		KeyUsage:     x509.KeyUsageCertSign,
+	}
+	wrongCADER, err := x509.CreateCertificate(rand.Reader, wrongCATmpl, wrongCATmpl, &wrongCAKey.PublicKey, wrongCAKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wrongCA, err := x509.ParseCertificate(wrongCADER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name       string
+		candidates []*x509.Certificate
+		wantIssuer *x509.Certificate
+	}{
+		{
+			name:       "prefers AKI SKI matched valid signer",
+			candidates: []*x509.Certificate{wrongCA, ca, intermediate},
+			wantIssuer: intermediate,
+		},
+		{
+			name:       "returns nil when no candidate signs leaf",
+			candidates: []*x509.Certificate{wrongCA, ca},
+			wantIssuer: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			issuer := SelectIssuerCertificate(leaf, tt.candidates)
+			if tt.wantIssuer == nil {
+				if issuer != nil {
+					t.Errorf("expected nil issuer, got CN=%q", issuer.Subject.CommonName)
+				}
+				return
+			}
+			if issuer == nil {
+				t.Fatal("expected issuer, got nil")
+			}
+			if !issuer.Equal(tt.wantIssuer) {
+				t.Errorf("selected issuer CN = %q, want %q", issuer.Subject.CommonName, tt.wantIssuer.Subject.CommonName)
 			}
 		})
 	}
@@ -1085,10 +1279,10 @@ func TestParsePEMPrivateKey_ErrorPaths(t *testing.T) {
 		input     []byte
 		wantInErr string
 	}{
-		{"empty input", nil, "no PEM block"},
+		{"empty input", nil, "no private keys found"},
 		{"corrupt OpenSSH body", corruptOpenSSH, "OpenSSH"},
 		{"garbage PRIVATE KEY block", garbagePKCS8, "parsing PRIVATE KEY"},
-		{"unsupported block type (DSA)", dsaPEM, "unsupported PEM block type"},
+		{"unsupported block type (DSA)", dsaPEM, "no private keys found"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

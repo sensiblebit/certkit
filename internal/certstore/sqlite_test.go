@@ -3,11 +3,17 @@
 package certstore
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
+	"math/big"
 	"net"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sensiblebit/certkit"
 )
@@ -230,5 +236,63 @@ func TestSaveToSQLite_DoesNotMutateDNSNames(t *testing.T) {
 	if backing[2] != "SENTINEL" || backing[3] != "SENTINEL" {
 		t.Errorf("SaveToSQLite corrupted DNSNames backing array: got %v, want sentinels",
 			backing[2:])
+	}
+}
+
+func TestSaveToSQLite_PreservesMissingAKISerialAcrossIssuers(t *testing.T) {
+	// WHY: MemStore deduplicates missing-AKI certificates by issuer+serial.
+	// SQLite persistence must use the same identity to avoid dropping one cert
+	// when two issuers reuse the same serial.
+	t.Parallel()
+
+	newLeafNoAKI := func(t *testing.T, parent *x509.Certificate, signer any, cn string) *x509.Certificate {
+		t.Helper()
+		leafKey, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tmpl := &x509.Certificate{
+			SerialNumber: big.NewInt(4242),
+			Subject:      pkix.Name{CommonName: cn},
+			NotBefore:    time.Now().Add(-time.Hour),
+			NotAfter:     time.Now().Add(24 * time.Hour),
+			KeyUsage:     x509.KeyUsageDigitalSignature,
+		}
+		leafDER, err := x509.CreateCertificate(rand.Reader, tmpl, parent, &leafKey.PublicKey, signer)
+		if err != nil {
+			t.Fatal(err)
+		}
+		leafCert, err := x509.ParseCertificate(leafDER)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return leafCert
+	}
+
+	ca1 := newRSACA(t)
+	ca2 := newECDSACA(t)
+	leaf1 := newLeafNoAKI(t, ca1.cert, ca1.key, "issuer-a.example.com")
+	leaf2 := newLeafNoAKI(t, ca2.cert, ca2.key, "issuer-b.example.com")
+
+	store := NewMemStore()
+	if err := store.HandleCertificate(leaf1, "leaf1.pem"); err != nil {
+		t.Fatalf("store leaf1: %v", err)
+	}
+	if err := store.HandleCertificate(leaf2, "leaf2.pem"); err != nil {
+		t.Fatalf("store leaf2: %v", err)
+	}
+
+	dbPath := filepath.Join(t.TempDir(), "missing-aki.db")
+	if err := SaveToSQLite(store, dbPath); err != nil {
+		t.Fatalf("SaveToSQLite: %v", err)
+	}
+
+	loaded := NewMemStore()
+	if err := LoadFromSQLite(loaded, dbPath); err != nil {
+		t.Fatalf("LoadFromSQLite: %v", err)
+	}
+
+	if got := len(loaded.AllCertsFlat()); got != 2 {
+		t.Fatalf("expected 2 certs after round-trip, got %d", got)
 	}
 }
