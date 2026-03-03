@@ -1022,11 +1022,8 @@ Initial release.
 [#110]: https://github.com/sensiblebit/certkit/pull/110
 [#112]: https://github.com/sensiblebit/certkit/pull/112
 [#119]: https://github.com/sensiblebit/certkit/pull/119
-<<<<<<< HEAD
 [#121]: https://github.com/sensiblebit/certkit/pull/121
-=======
 [#122]: https://github.com/sensiblebit/certkit/pull/122
->>>>>>> c647b36 (fix(scan): fail fast on oversized AIA responses)
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63
