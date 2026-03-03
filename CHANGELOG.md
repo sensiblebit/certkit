@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Default PKCS#12/JKS export passwords to `changeit` when no explicit export password is provided. ([#112])
 - Use `MemStore` count accessors for scan snapshot totals to avoid unnecessary full-slice materialization when reporting progress. ([#112])
 - Normalize `connect` verify status labels from `OK`/`FAILED` to lowercase `ok`/`failed`. ([#112])
+- Consolidate shared `connect` status-line formatting between standard and verbose text output paths. ([#121])
 
 ### Removed
 
@@ -27,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Wrap compatibility-parser errors in `processPEMCertificates` with parse context for clearer diagnostics. ([#112])
 - Improve TLS client-auth signature-scheme naming in `connect` by mapping additional schemes (including RSA-PSS-PSS and legacy hash/signature pairs) instead of raw hex values. ([#112])
 - Add `misordered-chain` diagnostic to `connect` when a server-sent issuer appears later in the chain instead of directly after the certificate it issued. ([#119])
+- Validate `connect` port input at parse time and reject malformed or out-of-range ports before dialing. ([#121])
 - Fix TAR archive detection to require `ustar` header bytes instead of treating every `.tar` input as valid archive content. ([#112])
 - Release reserved bundle folder names when skipping untrusted candidates to avoid false sanitized-folder collisions. ([#112])
 
@@ -1019,6 +1021,7 @@ Initial release.
 [#110]: https://github.com/sensiblebit/certkit/pull/110
 [#112]: https://github.com/sensiblebit/certkit/pull/112
 [#119]: https://github.com/sensiblebit/certkit/pull/119
+[#121]: https://github.com/sensiblebit/certkit/pull/121
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63
