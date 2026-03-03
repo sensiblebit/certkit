@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/sensiblebit/certkit"
+	"github.com/sensiblebit/certkit/internal"
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/ocsp"
 )
@@ -470,6 +471,9 @@ func TestRunBundle_CommandSurfaceOutput(t *testing.T) {
 		if err == nil {
 			t.Fatal("runBundle expected error for unsupported format")
 		}
+		if !errors.Is(err, ErrUnsupportedOutputFormat) {
+			t.Fatalf("runBundle error should wrap ErrUnsupportedOutputFormat, got: %v", err)
+		}
 	})
 }
 
@@ -542,6 +546,9 @@ func TestRunConvert_CommandSurfaceOutput(t *testing.T) {
 		})
 		if err == nil {
 			t.Fatal("runConvert expected binary-format -o validation error")
+		}
+		if !errors.Is(err, ErrBinaryOutputRequiresFile) {
+			t.Fatalf("runConvert error should wrap ErrBinaryOutputRequiresFile, got: %v", err)
 		}
 	})
 }
@@ -805,6 +812,9 @@ func TestRunCSR_CommandSurfaceOutput(t *testing.T) {
 		if err == nil {
 			t.Fatal("runCSR expected invalid algorithm error")
 		}
+		if !errors.Is(err, internal.ErrUnsupportedKeyAlgorithm) {
+			t.Fatalf("runCSR error should wrap internal.ErrUnsupportedKeyAlgorithm, got: %v", err)
+		}
 	})
 }
 
@@ -878,6 +888,9 @@ func TestRunKeygen_CommandSurfaceOutput(t *testing.T) {
 		})
 		if err == nil {
 			t.Fatal("runKeygen expected invalid algorithm error")
+		}
+		if !errors.Is(err, internal.ErrUnsupportedKeyAlgorithm) {
+			t.Fatalf("runKeygen error should wrap internal.ErrUnsupportedKeyAlgorithm, got: %v", err)
 		}
 	})
 }

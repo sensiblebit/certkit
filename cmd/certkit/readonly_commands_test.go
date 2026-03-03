@@ -171,15 +171,16 @@ func captureOutput(t *testing.T, fn func() error) (string, string, error) {
 
 	stdoutC := make(chan string, 1)
 	stderrC := make(chan string, 1)
-	readErrC := make(chan error, 2)
+	stdoutReadErrC := make(chan error, 1)
+	stderrReadErrC := make(chan error, 1)
 	go func() {
 		data, readErr := io.ReadAll(stdoutR)
-		readErrC <- readErr
+		stdoutReadErrC <- readErr
 		stdoutC <- string(data)
 	}()
 	go func() {
 		data, readErr := io.ReadAll(stderrR)
-		readErrC <- readErr
+		stderrReadErrC <- readErr
 		stderrC <- string(data)
 	}()
 
@@ -189,8 +190,8 @@ func captureOutput(t *testing.T, fn func() error) (string, string, error) {
 
 	stdout := <-stdoutC
 	stderr := <-stderrC
-	stdoutReadErr := <-readErrC
-	stderrReadErr := <-readErrC
+	stdoutReadErr := <-stdoutReadErrC
+	stderrReadErr := <-stderrReadErrC
 
 	if runErr != nil {
 		return stdout, stderr, runErr
@@ -280,8 +281,11 @@ func TestRunScan_CommandSurface(t *testing.T) {
 	if !rootsOK || !intermediatesOK || !leavesOK {
 		t.Fatalf("scan json missing certificate counts: %v", payload)
 	}
-	if int(roots+intermediates+leaves) != 1 {
-		t.Fatalf("scan json expected exactly one discovered certificate, got roots=%v intermediates=%v leaves=%v", roots, intermediates, leaves)
+	if roots != float64(int(roots)) || intermediates != float64(int(intermediates)) || leaves != float64(int(leaves)) {
+		t.Fatalf("scan json certificate counts should be integers, got roots=%v intermediates=%v leaves=%v", roots, intermediates, leaves)
+	}
+	if int(roots) != 0 || int(intermediates) != 0 || int(leaves) != 1 {
+		t.Fatalf("scan json expected roots=0 intermediates=0 leaves=1, got roots=%v intermediates=%v leaves=%v", roots, intermediates, leaves)
 	}
 }
 

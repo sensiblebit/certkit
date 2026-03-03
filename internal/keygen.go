@@ -7,11 +7,19 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 
 	"github.com/sensiblebit/certkit"
+)
+
+var (
+	// ErrUnsupportedKeyAlgorithm indicates GenerateKey was called with an unknown algorithm.
+	ErrUnsupportedKeyAlgorithm = errors.New("unsupported key algorithm")
+	// ErrUnsupportedCurve indicates GenerateKey was called with an unknown ECDSA curve.
+	ErrUnsupportedCurve = errors.New("unsupported key curve")
 )
 
 // KeygenOptions holds parameters for key and CSR generation.
@@ -69,7 +77,7 @@ func GenerateKey(input GenerateKeyInput) (crypto.Signer, error) {
 		}
 		return priv, nil
 	default:
-		return nil, fmt.Errorf("unsupported algorithm: %s (use rsa, ecdsa, or ed25519)", input.Algorithm)
+		return nil, fmt.Errorf("%w: %s (use rsa, ecdsa, or ed25519)", ErrUnsupportedKeyAlgorithm, input.Algorithm)
 	}
 }
 
@@ -177,6 +185,6 @@ func parseCurve(name string) (elliptic.Curve, error) {
 	case "P-521", "p521", "secp521r1":
 		return elliptic.P521(), nil
 	default:
-		return nil, fmt.Errorf("unsupported curve: %s (use P-256, P-384, or P-521)", name)
+		return nil, fmt.Errorf("%w: %s (use P-256, P-384, or P-521)", ErrUnsupportedCurve, name)
 	}
 }
