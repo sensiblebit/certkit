@@ -30,6 +30,15 @@ Use certkit directly in your browser at **[certkit.pages.dev](https://certkit.pa
 brew install sensiblebit/tap/certkit
 ```
 
+### Homebrew Nightly (main snapshots)
+
+Nightly formula updates are published automatically on every push to `main`.
+
+```sh
+brew install sensiblebit/tap/certkit-nightly
+certkit-nightly --version
+```
+
 ### Debian/Ubuntu (Linux)
 
 Download the `.deb` package from the [latest release](https://github.com/sensiblebit/certkit/releases/latest) and install:
