@@ -24,9 +24,9 @@ repos:
       - id: vitest
   - repo: local
     hooks:
-      - id: golangci-lint-sa5011
-        name: golangci-lint (staticcheck SA5011)
-        entry: golangci-lint run -c .golangci-sa5011.yml ./...
+      - id: golangci-lint-clean-cache
+        name: golangci-lint (clean cache)
+        entry: bash -c 'golangci-lint cache clean && golangci-lint run ./...'
         language: system
         pass_filenames: false
         types: [go]
