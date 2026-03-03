@@ -23,6 +23,7 @@ env:
 
 jobs:
   publish-nightly-cask:
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
 
     steps:
