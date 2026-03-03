@@ -1530,6 +1530,8 @@ func TestFormatDiagnoses(t *testing.T) {
 }
 
 func TestVerifyResultJSON_UsesDiagnosticsKey(t *testing.T) {
+	// WHY: Verify result JSON schema must use `diagnostics` (not legacy
+	// `diagnoses`) so machine consumers parse the documented contract.
 	t.Parallel()
 
 	data, err := json.Marshal(VerifyResult{

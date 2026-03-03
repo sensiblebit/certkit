@@ -2,6 +2,8 @@ package internal
 
 import (
 	"context"
+	"crypto/x509"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -162,10 +164,6 @@ func exportBundleCerts(ctx context.Context, input exportBundleCertsInput) error 
 		if err != nil {
 			return fmt.Errorf("sanitizing bundle folder %q: %w", bundleFolder, err)
 		}
-		if previousBundle, exists := input.UsedFolders[folder]; exists && previousBundle != input.BundleName {
-			return fmt.Errorf("sanitized bundle folder collision: %q and %q both map to %q", previousBundle, input.BundleName, folder)
-		}
-		input.UsedFolders[folder] = input.BundleName
 
 		// Look up the matching key
 		keyRec := input.Store.GetKey(certRec.SKI)
@@ -173,6 +171,10 @@ func exportBundleCerts(ctx context.Context, input exportBundleCertsInput) error 
 			slog.Debug("skipping certificate without matching key", "ski", certRec.SKI, "cn", certRec.Cert.Subject.CommonName)
 			continue
 		}
+		if previousBundle, exists := input.UsedFolders[folder]; exists && previousBundle != input.BundleName {
+			return fmt.Errorf("sanitized bundle folder collision: %q and %q both map to %q", previousBundle, input.BundleName, folder)
+		}
+		input.UsedFolders[folder] = input.BundleName
 
 		if err := certstore.ExportMatchedBundles(ctx, certstore.ExportMatchedBundleInput{
 			Store:         input.Store,
@@ -183,10 +185,44 @@ func exportBundleCerts(ctx context.Context, input exportBundleCertsInput) error 
 			RetryNoVerify: false,
 			P12Password:   input.P12Password,
 		}); err != nil {
+			if input.Opts.Verify && isBundleVerificationError(err) {
+				delete(input.UsedFolders, folder)
+				slog.Debug("skipping untrusted bundle candidate", "cn", certRec.Cert.Subject.CommonName, "error", err)
+				continue
+			}
 			return fmt.Errorf("exporting bundle for %q: %w", certRec.Cert.Subject.CommonName, err)
 		}
 	}
 	return nil
+}
+
+func isBundleVerificationError(err error) bool {
+	if errors.Is(err, certkit.ErrChainVerificationFailed) {
+		return true
+	}
+
+	var unknownAuthorityErr x509.UnknownAuthorityError
+	if errors.As(err, &unknownAuthorityErr) {
+		return true
+	}
+
+	var certInvalidErr x509.CertificateInvalidError
+	if errors.As(err, &certInvalidErr) {
+		return true
+	}
+
+	var hostnameErr x509.HostnameError
+	if errors.As(err, &hostnameErr) {
+		return true
+	}
+
+	var insecureAlgorithmErr x509.InsecureAlgorithmError
+	if errors.As(err, &insecureAlgorithmErr) {
+		return true
+	}
+
+	var constraintViolationErr x509.ConstraintViolationError
+	return errors.As(err, &constraintViolationErr)
 }
 
 // folderOverrideWriter wraps filesystemWriter but forces a specific folder name

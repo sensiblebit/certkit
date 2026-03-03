@@ -1,6 +1,7 @@
 package certstore
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -10,6 +11,8 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
+	"math/big"
 	"slices"
 	"testing"
 	"time"
@@ -176,7 +179,7 @@ func TestProcessData_DERCertificate(t *testing.T) {
 	}
 }
 
-func TestProcessData_PKCS7(t *testing.T) {
+func TestProcessData_PKCS7Bundle(t *testing.T) {
 	// WHY: PKCS#7 bundles contain multiple certs; verifies all are extracted.
 	t.Parallel()
 	ca := newRSACA(t)
@@ -631,6 +634,140 @@ func TestProcessData_MalformedPEMCert(t *testing.T) {
 
 	if len(store.AllCerts()) != 1 {
 		t.Errorf("expected 1 cert (valid one ingested, malformed skipped), got %d", len(store.AllCerts()))
+	}
+}
+
+func TestProcessData_PEMCert_CompatRFC822NameConstraint(t *testing.T) {
+	// WHY: Some real-world certificates encode an RFC822 name-constraint as
+	// "@domain". Go's stdlib parser rejects these, but certkit should still ingest
+	// such certificates for scan/catalog use via the compatibility parser.
+	t.Parallel()
+
+	caKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generate key: %v", err)
+	}
+
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "compat-name-constraint-ca"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		PermittedEmailAddresses: []string{
+			".zimperium.com",
+		},
+	}
+
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatalf("create certificate: %v", err)
+	}
+
+	needle := []byte(".zimperium.com")
+	idx := bytes.Index(der, needle)
+	if idx == -1 {
+		t.Fatal("did not find expected name-constraint bytes in DER")
+	}
+
+	mutated := bytes.Clone(der)
+	mutated[idx] = '@'
+
+	if _, err := x509.ParseCertificate(mutated); err == nil {
+		t.Fatal("expected stdlib parse to fail for @domain rfc822Name constraint")
+	}
+
+	pemData := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: mutated})
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{Data: pemData, Path: "compat.pem", Handler: store}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	allCerts := store.AllCertsFlat()
+	if len(allCerts) != 1 {
+		t.Fatalf("expected 1 cert from compatibility parse, got %d", len(allCerts))
+	}
+	if allCerts[0].Cert.Subject.CommonName != "compat-name-constraint-ca" {
+		t.Fatalf("subject CN = %q, want %q", allCerts[0].Cert.Subject.CommonName, "compat-name-constraint-ca")
+	}
+	if allCerts[0].Cert.KeyUsage != (x509.KeyUsageCertSign | x509.KeyUsageCRLSign) {
+		t.Fatalf("key usage = %v, want cert-sign+crl-sign", allCerts[0].Cert.KeyUsage)
+	}
+	if len(allCerts[0].Cert.PermittedEmailAddresses) != 1 || allCerts[0].Cert.PermittedEmailAddresses[0] != "@zimperium.com" {
+		t.Fatalf("permitted email constraints = %v, want [@zimperium.com]", allCerts[0].Cert.PermittedEmailAddresses)
+	}
+}
+
+func TestProcessData_PEMCert_CompatFailureContinues(t *testing.T) {
+	// WHY: A malformed CERTIFICATE block that fails both parsers must not abort
+	// ingestion of later valid certificates in the same PEM stream.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "compat-continue.example.com", []string{"compat-continue.example.com"})
+
+	invalid := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("not-der")})
+	data := append(bytes.Clone(invalid), leaf.certPEM...)
+
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{Data: data, Path: "mixed.pem", Handler: store}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	allCerts := store.AllCertsFlat()
+	if len(allCerts) != 1 {
+		t.Fatalf("expected 1 valid certificate after malformed block, got %d", len(allCerts))
+	}
+	if allCerts[0].Cert.Subject.CommonName != "compat-continue.example.com" {
+		t.Fatalf("subject CN = %q, want compat-continue.example.com", allCerts[0].Cert.Subject.CommonName)
+	}
+}
+
+type rejectingHandler struct {
+	certCalls int
+	keyCalls  int
+}
+
+func (h *rejectingHandler) HandleCertificate(_ *x509.Certificate, _ string) error {
+	h.certCalls++
+	if h.certCalls == 1 {
+		return errors.New("reject first cert")
+	}
+	return nil
+}
+
+func (h *rejectingHandler) HandleKey(_ any, _ []byte, _ string) error {
+	h.keyCalls++
+	if h.keyCalls == 1 {
+		return errors.New("reject first key")
+	}
+	return nil
+}
+
+func TestProcessData_HandlerRejectionContinues(t *testing.T) {
+	// WHY: Handler rejections are per-item failures; parsing should continue for
+	// later cert/key blocks in the same input.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "reject-continue.example.com", []string{"reject-continue.example.com"})
+
+	data := append(bytes.Clone(leaf.certPEM), leaf.certPEM...)
+	data = append(data, leaf.keyPEM...)
+	data = append(data, leaf.keyPEM...)
+
+	h := &rejectingHandler{}
+	if err := ProcessData(ProcessInput{Data: data, Path: "multi.pem", Handler: h}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	if h.certCalls != 2 {
+		t.Fatalf("HandleCertificate calls = %d, want 2", h.certCalls)
+	}
+	if h.keyCalls != 2 {
+		t.Fatalf("HandleKey calls = %d, want 2", h.keyCalls)
 	}
 }
 

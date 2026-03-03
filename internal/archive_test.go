@@ -39,6 +39,45 @@ func TestArchiveFormat(t *testing.T) {
 	}
 }
 
+func TestArchiveHasMagic(t *testing.T) {
+	// WHY: Extension-based archive handling must only trigger when bytes match
+	// the expected archive format signature.
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		format string
+		data   []byte
+		want   bool
+	}{
+		{name: "zip local header", format: "zip", data: []byte("PK\x03\x04..."), want: true},
+		{name: "zip empty archive", format: "zip", data: []byte("PK\x05\x06..."), want: true},
+		{name: "zip spanning archive", format: "zip", data: []byte("PK\x07\x08..."), want: true},
+		{name: "zip missing magic", format: "zip", data: []byte("notzip"), want: false},
+		{name: "tar gz magic", format: "tar.gz", data: []byte{0x1f, 0x8b, 0x08}, want: true},
+		{name: "tar gz missing magic", format: "tar.gz", data: []byte("notgz"), want: false},
+		{name: "tar magic", format: "tar", data: tarMagicFixture(), want: true},
+		{name: "tar missing magic", format: "tar", data: []byte("nottar"), want: false},
+		{name: "unknown format", format: "rar", data: []byte("Rar!"), want: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := ArchiveHasMagic(tt.format, tt.data)
+			if got != tt.want {
+				t.Fatalf("ArchiveHasMagic(%q, %q) = %v, want %v", tt.format, string(tt.data), got, tt.want)
+			}
+		})
+	}
+}
+
+func tarMagicFixture() []byte {
+	buf := make([]byte, 512)
+	copy(buf[257:262], []byte("ustar"))
+	return buf
+}
+
 func TestProcessArchive_PEMCertAllFormats(t *testing.T) {
 	// WHY: Verifies that PEM certificates are ingested from all three archive
 	// formats. Table-driven to avoid copy-paste between ZIP/TAR/TAR.GZ tests.

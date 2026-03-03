@@ -687,6 +687,13 @@ func signatureSchemeString(scheme tls.SignatureScheme) string {
 		return "RSA-PSS-SHA384"
 	case tls.PSSWithSHA512:
 		return "RSA-PSS-SHA512"
+	// RSASSA-PSS with public key OID RSASSA-PSS (RFC 8446)
+	case tls.SignatureScheme(0x0809):
+		return "RSA-PSS-PSS-SHA256"
+	case tls.SignatureScheme(0x080a):
+		return "RSA-PSS-PSS-SHA384"
+	case tls.SignatureScheme(0x080b):
+		return "RSA-PSS-PSS-SHA512"
 	// ECDSA
 	case tls.ECDSAWithP256AndSHA256:
 		return "ECDSA-P256-SHA256"
@@ -696,12 +703,49 @@ func signatureSchemeString(scheme tls.SignatureScheme) string {
 		return "ECDSA-P521-SHA512"
 	case tls.ECDSAWithSHA1:
 		return "ECDSA-SHA1"
+	case tls.SignatureScheme(0x0301):
+		return "RSA-PKCS1-SHA224"
+	case tls.SignatureScheme(0x0303):
+		return "ECDSA-SHA224"
 	// EdDSA
 	case tls.Ed25519:
 		return "Ed25519"
+	case tls.SignatureScheme(0x0808):
+		return "Ed448"
 	default:
+		if legacyName, ok := legacySignatureSchemeName(scheme); ok {
+			return legacyName
+		}
 		return fmt.Sprintf("0x%04x", uint16(scheme))
 	}
+}
+
+func legacySignatureSchemeName(scheme tls.SignatureScheme) (string, bool) {
+	hashID := uint8(uint16(scheme) >> 8)
+	sigID := uint8(uint16(scheme))
+
+	hashName, ok := map[uint8]string{
+		1: "MD5",
+		2: "SHA1",
+		3: "SHA224",
+		4: "SHA256",
+		5: "SHA384",
+		6: "SHA512",
+	}[hashID]
+	if !ok {
+		return "", false
+	}
+
+	sigName, ok := map[uint8]string{
+		1: "RSA",
+		2: "DSA",
+		3: "ECDSA",
+	}[sigID]
+	if !ok {
+		return "", false
+	}
+
+	return fmt.Sprintf("%s-%s", sigName, hashName), true
 }
 
 // tlsVersionString returns a human-readable TLS version string.
@@ -1597,11 +1641,11 @@ func FormatConnectResult(r *ConnectResult) string {
 	}
 
 	if r.VerifyError != "" {
-		fmt.Fprintf(&out, "Verify:       FAILED (%s)\n", r.VerifyError)
+		fmt.Fprintf(&out, "Verify:       failed (%s)\n", r.VerifyError)
 	} else if r.AIAFetched {
-		out.WriteString("Verify:       OK (intermediates fetched via AIA)\n")
+		out.WriteString("Verify:       ok (intermediates fetched via AIA)\n")
 	} else {
-		out.WriteString("Verify:       OK\n")
+		out.WriteString("Verify:       ok\n")
 	}
 
 	out.WriteString(FormatCTLine(r.CT))

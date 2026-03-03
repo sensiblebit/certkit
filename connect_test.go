@@ -466,6 +466,23 @@ func TestConnectTLS_ClientAuth(t *testing.T) {
 			if len(result.ClientAuth.SignatureSchemes) == 0 {
 				t.Error("SignatureSchemes is empty")
 			}
+			hasNamedScheme := false
+			hasWellKnownNamedScheme := false
+			for _, scheme := range result.ClientAuth.SignatureSchemes {
+				if !strings.HasPrefix(scheme, "0x") {
+					hasNamedScheme = true
+				}
+				switch scheme {
+				case "RSA-PSS-SHA256", "ECDSA-P256-SHA256", "Ed25519":
+					hasWellKnownNamedScheme = true
+				}
+			}
+			if !hasNamedScheme {
+				t.Errorf("expected at least one named signature scheme, got %v", result.ClientAuth.SignatureSchemes)
+			}
+			if !hasWellKnownNamedScheme {
+				t.Errorf("expected a well-known named signature scheme mapping, got %v", result.ClientAuth.SignatureSchemes)
+			}
 
 			// Chain should still be present and verifiable properties intact.
 			if len(result.PeerChain) == 0 {
@@ -669,7 +686,8 @@ func TestConnectTLS_IPv6Loopback(t *testing.T) {
 		Certificates: []tls.Certificate{tlsCert},
 	})
 	if err != nil {
-		t.Skip("IPv6 loopback not available")
+		t.Logf("IPv6 loopback not available: %v", err)
+		return
 	}
 	t.Cleanup(func() { _ = listener.Close() })
 
@@ -798,7 +816,7 @@ func TestFormatConnectResult(t *testing.T) {
 			diagnostics: []ChainDiagnostic{
 				{Check: "root-in-chain", Status: "warn", Detail: `server sent root certificate "CN=Root CA" (position 2)`},
 			},
-			wantStrings: []string{"Diagnostics:", "[WARN] root-in-chain:", "Verify:       OK\n"},
+			wantStrings: []string{"Diagnostics:", "[WARN] root-in-chain:", "Verify:       ok\n"},
 		},
 		{
 			name: "error-level diagnostic rendered with ERR tag",
@@ -808,7 +826,7 @@ func TestFormatConnectResult(t *testing.T) {
 			verifyError: "x509: certificate is valid for *.badssl.com, badssl.com, not wrong.host.badssl.com",
 			wantStrings: []string{
 				"[ERR] hostname-mismatch:",
-				"Verify:       FAILED",
+				"Verify:       failed",
 			},
 			notWantStrings: []string{"[WARN] hostname-mismatch:"},
 		},
@@ -818,11 +836,11 @@ func TestFormatConnectResult(t *testing.T) {
 			diagnostics: []ChainDiagnostic{
 				{Check: "missing-intermediate", Status: "warn", Detail: "server does not send intermediate certificates; chain was completed via AIA"},
 			},
-			wantStrings: []string{"Verify:       OK (intermediates fetched via AIA)", "[WARN] missing-intermediate:"},
+			wantStrings: []string{"Verify:       ok (intermediates fetched via AIA)", "[WARN] missing-intermediate:"},
 		},
 		{
 			name:           "no diagnostics section when empty",
-			wantStrings:    []string{"Verify:       OK\n"},
+			wantStrings:    []string{"Verify:       ok\n"},
 			notWantStrings: []string{"Diagnostics:"},
 		},
 		{
@@ -876,9 +894,9 @@ func TestFormatConnectResult(t *testing.T) {
 			name:        "verify failed",
 			verifyError: "x509: certificate signed by unknown authority",
 			wantStrings: []string{
-				"Verify:       FAILED (x509: certificate signed by unknown authority)",
+				"Verify:       failed (x509: certificate signed by unknown authority)",
 			},
-			notWantStrings: []string{"Verify:       OK"},
+			notWantStrings: []string{"Verify:       ok"},
 		},
 		{
 			name:       "client auth requested (any CA)",
@@ -949,7 +967,7 @@ func TestFormatConnectResult(t *testing.T) {
 			"Note:",
 			"raw probe",
 			"server key possession not verified",
-			"Verify:       OK",
+			"Verify:       ok",
 		} {
 			if !strings.Contains(output, want) {
 				t.Errorf("output missing %q\ngot:\n%s", want, output)

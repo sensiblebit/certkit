@@ -134,6 +134,47 @@ func TestExportBundles_EndToEnd(t *testing.T) {
 	}
 }
 
+func TestSafeJoin(t *testing.T) {
+	// WHY: safeJoin is the path-traversal guard for bundle exports and must reject
+	// empty/absolute/escaping paths while allowing normal relative folders.
+	t.Parallel()
+
+	base := t.TempDir()
+	absPath := filepath.Join(string(filepath.Separator), "abs")
+
+	tests := []struct {
+		name    string
+		folder  string
+		wantErr bool
+		want    string
+	}{
+		{name: "empty folder", folder: "", wantErr: true},
+		{name: "dot folder", folder: ".", wantErr: true},
+		{name: "dotdot folder", folder: "..", wantErr: true},
+		{name: "parent escape", folder: "../outside", wantErr: true},
+		{name: "absolute folder", folder: absPath, wantErr: true},
+		{name: "valid nested folder", folder: "nested/bundle", want: filepath.Join(base, "nested", "bundle")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := safeJoin(base, tt.folder)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("safeJoin(%q) error = nil, want non-nil", tt.folder)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("safeJoin(%q) unexpected error: %v", tt.folder, err)
+			}
+			if got != tt.want {
+				t.Fatalf("safeJoin(%q) = %q, want %q", tt.folder, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestExportBundles_EmptyBundleNameSkipped(t *testing.T) {
 	// WHY: Keys matched to certs with empty BundleName must be silently skipped,
 	// not cause errors or write to empty-named directories.
@@ -178,6 +219,138 @@ func TestExportBundles_EmptyBundleNameSkipped(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Errorf("expected empty output dir (cert has no bundle name), got %d entries", len(entries))
+	}
+}
+
+func TestExportBundles_UntrustedBundleSkippedWithoutForce(t *testing.T) {
+	// WHY: scan --bundle-path should continue exporting other bundles when a
+	// candidate fails trust verification; untrusted entries are skipped unless
+	// --force is requested.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "privateca.example.com", []string{"privateca.example.com"}, nil)
+
+	store := certstore.NewMemStore()
+	if err := store.HandleCertificate(leaf.cert, "test"); err != nil {
+		t.Fatalf("store cert: %v", err)
+	}
+	if err := store.HandleCertificate(ca.cert, "test"); err != nil {
+		t.Fatalf("store CA cert: %v", err)
+	}
+	if err := store.HandleKey(leaf.key, leaf.keyPEM, "test"); err != nil {
+		t.Fatalf("store key: %v", err)
+	}
+
+	rawSKI, err := certkit.ComputeSKI(leaf.cert.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.SetBundleName(hex.EncodeToString(rawSKI), "privateca-bundle")
+
+	outDir := t.TempDir()
+	err = ExportBundles(context.Background(), ExportBundlesInput{
+		OutDir:      outDir,
+		Store:       store,
+		ForceBundle: false,
+		Duplicates:  false,
+		P12Password: "testpass",
+	})
+	if err != nil {
+		t.Fatalf("ExportBundles should skip untrusted bundle without failing: %v", err)
+	}
+
+	entries, err := os.ReadDir(outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected no exported bundles, got %d entries", len(entries))
+	}
+}
+
+func TestExportBundles_UntrustedSkipDoesNotReserveFolder(t *testing.T) {
+	// WHY: Skipping an untrusted bundle candidate must release any reserved
+	// folder name so later candidates with the same sanitized folder can proceed.
+	t.Parallel()
+
+	ca1 := newRSACA(t)
+	ca2 := newECDSACA(t)
+	leaf1 := newRSALeaf(t, ca1, "first.example.com", []string{"first.example.com"}, nil)
+	leaf2 := newRSALeaf(t, ca2, "second.example.com", []string{"second.example.com"}, nil)
+
+	store := certstore.NewMemStore()
+	for _, cert := range []*x509.Certificate{leaf1.cert, leaf2.cert, ca1.cert, ca2.cert} {
+		if err := store.HandleCertificate(cert, "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.HandleKey(leaf1.key, leaf1.keyPEM, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HandleKey(leaf2.key, leaf2.keyPEM, "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	rawSKI1, err := certkit.ComputeSKI(leaf1.cert.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawSKI2, err := certkit.ComputeSKI(leaf2.cert.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.SetBundleName(hex.EncodeToString(rawSKI1), "a/b")
+	store.SetBundleName(hex.EncodeToString(rawSKI2), "a_b")
+
+	err = ExportBundles(context.Background(), ExportBundlesInput{
+		OutDir:      t.TempDir(),
+		Store:       store,
+		ForceBundle: false,
+		P12Password: "testpass",
+	})
+	if err != nil {
+		t.Fatalf("ExportBundles should skip untrusted bundles without collision errors: %v", err)
+	}
+}
+
+func TestExportBundles_InvalidBundleNameFails(t *testing.T) {
+	// WHY: ExportBundles validates configured bundle folder names up front and
+	// must fail fast on invalid values to avoid ambiguous output paths.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "fallback.example.com", []string{"fallback.example.com"}, nil)
+
+	store := certstore.NewMemStore()
+	if err := store.HandleCertificate(leaf.cert, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HandleCertificate(ca.cert, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HandleKey(leaf.key, leaf.keyPEM, "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	rawSKI, err := certkit.ComputeSKI(leaf.cert.PublicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.SetBundleName(hex.EncodeToString(rawSKI), "..")
+
+	outDir := t.TempDir()
+	err = ExportBundles(context.Background(), ExportBundlesInput{
+		OutDir:      outDir,
+		Store:       store,
+		ForceBundle: true,
+		P12Password: "testpass",
+	})
+	if err == nil {
+		t.Fatal("expected invalid bundle folder error, got nil")
+	}
+	if !strings.Contains(err.Error(), "bundle folder name") {
+		t.Fatalf("error = %q, want bundle folder validation message", err.Error())
 	}
 }
 

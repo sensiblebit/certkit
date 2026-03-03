@@ -31,6 +31,8 @@ func buildCertificateMessageBody(certs ...[]byte) []byte {
 }
 
 func TestReadServerCertificates(t *testing.T) {
+	// WHY: Raw TLS parsing must extract ServerHello and certificate chains
+	// across record-layout variations and reject malformed record conditions.
 	t.Parallel()
 
 	// Generate a test CA and leaf certificate.
@@ -168,6 +170,8 @@ func TestReadServerCertificates(t *testing.T) {
 // arrives after a ServerHello, the ServerHello result is still returned alongside
 // the errAlertReceived sentinel.
 func TestReadServerCertificates_AlertAfterServerHello(t *testing.T) {
+	// WHY: Legacy parser must return parsed ServerHello context even when a
+	// fatal alert follows, preserving diagnostic signal for callers.
 	t.Parallel()
 	serverHello := buildMockServerHello(0x0303, 0x0033)
 	records := append(wrapTLSRecord(serverHello), buildAlertRecord()...)
@@ -188,6 +192,8 @@ func TestReadServerCertificates_AlertAfterServerHello(t *testing.T) {
 // rejects a stream that would exceed maxCertificatePayload before allocating
 // the payload buffer.
 func TestReadServerCertificates_PayloadLimit(t *testing.T) {
+	// WHY: The raw handshake reader must enforce payload ceilings to prevent
+	// unbounded allocations on crafted record streams.
 	t.Parallel()
 
 	// Generate records with ignored handshake messages (CertificateRequest, type 0x0D)
@@ -265,6 +271,8 @@ func buildAlertRecord() []byte {
 }
 
 func TestLegacyFallbackConnect(t *testing.T) {
+	// WHY: Legacy fallback connection mode must return negotiated metadata and
+	// parsed certificates from byte-level TLS handshakes.
 	t.Parallel()
 
 	// Start a mock server that speaks raw TLS: sends ServerHello + Certificate

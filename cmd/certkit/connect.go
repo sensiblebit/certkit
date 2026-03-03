@@ -303,11 +303,11 @@ func formatConnectVerbose(r *certkit.ConnectResult, now time.Time) string {
 	}
 
 	if r.VerifyError != "" {
-		fmt.Fprintf(&out, "Verify:       FAILED (%s)\n", r.VerifyError)
+		fmt.Fprintf(&out, "Verify:       failed (%s)\n", r.VerifyError)
 	} else if r.AIAFetched {
-		out.WriteString("Verify:       OK (intermediates fetched via AIA)\n")
+		out.WriteString("Verify:       ok (intermediates fetched via AIA)\n")
 	} else {
-		out.WriteString("Verify:       OK\n")
+		out.WriteString("Verify:       ok\n")
 	}
 
 	out.WriteString(certkit.FormatCTLine(r.CT))

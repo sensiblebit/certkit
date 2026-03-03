@@ -28,6 +28,9 @@ var (
 	mozillaSubjects     map[string]bool
 	mozillaRootKeysOnce sync.Once
 	mozillaRootKeys     map[string][]byte // RawSubject → marshaled PKIX public key
+
+	// ErrChainVerificationFailed indicates that certificate path validation failed.
+	ErrChainVerificationFailed = errors.New("chain verification failed")
 )
 
 // privateNetworks contains CIDR ranges for private, reserved, and shared
@@ -635,7 +638,7 @@ func Bundle(ctx context.Context, input BundleInput) (*BundleResult, error) {
 		}
 		chains, err := leaf.Verify(verifyOpts)
 		if err != nil {
-			return nil, fmt.Errorf("chain verification failed: %w", err)
+			return nil, fmt.Errorf("%w: %w", ErrChainVerificationFailed, err)
 		}
 
 		// Pick shortest valid chain

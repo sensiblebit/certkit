@@ -13,6 +13,8 @@ import (
 )
 
 func TestCreateSelfSigned(t *testing.T) {
+	// WHY: Self-signed issuance is a core command path and must preserve CA/leaf
+	// template semantics, validity defaults, and issuer/subject behavior.
 	t.Parallel()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -116,6 +118,8 @@ func TestCreateSelfSigned(t *testing.T) {
 }
 
 func TestSignCSR(t *testing.T) {
+	// WHY: CSR signing must copy subject/SAN fields and enforce input-validation
+	// semantics across sign modes used by CLI workflows.
 	t.Parallel()
 
 	// Create a CA
@@ -271,6 +275,8 @@ func TestSignCSR(t *testing.T) {
 }
 
 func TestSignCSR_ChainVerifies(t *testing.T) {
+	// WHY: A certificate signed via SignCSR must chain-verify against the
+	// issuing CA, proving end-to-end issuance correctness.
 	t.Parallel()
 
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

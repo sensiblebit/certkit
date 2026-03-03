@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Reduce `scan` runtime verbosity by moving ingestion/archive/export progress logs to debug level while keeping final summaries on stdout. ([#112])
+- Default PKCS#12/JKS export passwords to `changeit` when no explicit export password is provided. ([#112])
+- Use `MemStore` count accessors for scan snapshot totals to avoid unnecessary full-slice materialization when reporting progress. ([#112])
+
+### Removed
+
+- **Breaking:** Remove `--insecure-default-password`; PKCS#12/JKS export now falls back to `changeit` when no explicit export password is provided. ([#112])
+
+### Fixed
+
+- Make `scan --bundle-path` skip untrusted/verification-failing bundle candidates instead of aborting the full export run. ([#112])
+- Improve scan summaries by adding `in <files> file(s)` and live TTY progress updates for certificates/keys/files. ([#112])
+- Send live scan progress updates to stderr so stdout remains clean for piped output. ([#112])
+- Add compatibility parsing fallback for PEM certificates rejected by Go stdlib on specific name-constraint encodings (e.g. `@domain` rfc822Name constraints). ([#112])
+- Wrap compatibility-parser errors in `processPEMCertificates` with parse context for clearer diagnostics. ([#112])
+- Improve TLS client-auth signature-scheme naming in `connect` by mapping additional schemes (including RSA-PSS-PSS and legacy hash/signature pairs) instead of raw hex values. ([#112])
+- Fix TAR archive detection to require `ustar` header bytes instead of treating every `.tar` input as valid archive content. ([#112])
+- Release reserved bundle folder names when skipping untrusted candidates to avoid false sanitized-folder collisions. ([#112])
+
 ## [0.8.2] - 2026-03-02
 
 ### Added
@@ -994,6 +1015,7 @@ Initial release.
 [#101]: https://github.com/sensiblebit/certkit/pull/101
 [#109]: https://github.com/sensiblebit/certkit/pull/109
 [#110]: https://github.com/sensiblebit/certkit/pull/110
+[#112]: https://github.com/sensiblebit/certkit/pull/112
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63

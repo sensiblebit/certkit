@@ -33,8 +33,8 @@ When --key is provided, convert matches keys to leaf certificates and builds
 chain bundles. If multiple keys match different certs, JKS output creates a
 multi-alias keystore. PKCS#12 supports only a single key entry.
 
-PKCS#12/JKS outputs require an explicit export password via --passwords or
---password-file. Use --insecure-default-password to force legacy "changeit".`,
+PKCS#12/JKS outputs use the first non-empty export password from --passwords or
+--password-file. When omitted, export defaults to password "changeit".`,
 	Example: `  certkit convert cert.der --to pem
   certkit convert cert.pem --to der -o cert.der
   certkit convert cert.pem --key key.pem --to p12 -o bundle.p12
@@ -140,7 +140,7 @@ func runConvert(cmd *cobra.Command, args []string) error {
 
 	exportPassword := ""
 	if convertTo == "p12" || convertTo == "jks" {
-		exportPassword, err = bundlePassword(passwordSets.Export, insecureDefaultPassword)
+		exportPassword, err = bundlePassword(passwordSets.Export)
 		if err != nil {
 			return fmt.Errorf("determining export password for %s output: %w", convertTo, err)
 		}

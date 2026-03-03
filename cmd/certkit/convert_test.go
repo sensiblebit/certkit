@@ -287,7 +287,6 @@ func TestRunConvert_PKCS12MultiMatchIsGeneralError(t *testing.T) {
 	oldConvertKeyPath := convertKeyPath
 	oldPasswordList := passwordList
 	oldPasswordFile := passwordFile
-	oldInsecureDefaultPassword := insecureDefaultPassword
 	oldJSONOutput := jsonOutput
 	t.Cleanup(func() {
 		convertTo = oldConvertTo
@@ -295,7 +294,6 @@ func TestRunConvert_PKCS12MultiMatchIsGeneralError(t *testing.T) {
 		convertKeyPath = oldConvertKeyPath
 		passwordList = oldPasswordList
 		passwordFile = oldPasswordFile
-		insecureDefaultPassword = oldInsecureDefaultPassword
 		jsonOutput = oldJSONOutput
 	})
 
@@ -304,7 +302,6 @@ func TestRunConvert_PKCS12MultiMatchIsGeneralError(t *testing.T) {
 	convertKeyPath = keyPath
 	passwordList = []string{"topsecret"}
 	passwordFile = ""
-	insecureDefaultPassword = false
 	jsonOutput = false
 
 	err := runConvert(nil, []string{certPath})

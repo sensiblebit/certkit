@@ -116,15 +116,14 @@ See [EXAMPLES.md](EXAMPLES.md) for a complete walkthrough of every command with 
 ### Global Flags
 
 <!-- certkit:flags:global -->
-| Flag                          | Default | Description                                                                                           |
-| ----------------------------- | ------- | ----------------------------------------------------------------------------------------------------- |
-| `--allow-expired`             | `false` | Include expired certificates                                                                          |
-| `--insecure-default-password` | `false` | Use insecure default password 'changeit' for PKCS#12/JKS export when no explicit password is provided |
-| `--json`                      | `false` | Output in JSON format                                                                                 |
-| `--log-level`, `-l`           | `info`  | Log level: debug, info, warn, error                                                                   |
-| `--password-file`             |         | File containing passwords, one per line                                                               |
-| `--passwords`, `-p`           |         | Comma-separated passwords for encrypted keys                                                          |
-| `--verbose`, `-v`             | `false` | Extended details in output (serial, key info, signature algorithm, key usage, EKU)                    |
+| Flag                | Default | Description                                                                        |
+| ------------------- | ------- | ---------------------------------------------------------------------------------- |
+| `--allow-expired`   | `false` | Include expired certificates                                                       |
+| `--json`            | `false` | Output in JSON format                                                              |
+| `--log-level`, `-l` | `info`  | Log level: debug, info, warn, error                                                |
+| `--password-file`   |         | File containing passwords, one per line                                            |
+| `--passwords`, `-p` |         | Comma-separated passwords for encrypted keys                                       |
+| `--verbose`, `-v`   | `false` | Extended details in output (serial, key info, signature algorithm, key usage, EKU) |
 <!-- /certkit:flags -->
 
 Common passwords (`""`, `"password"`, `"changeit"`, `"keypassword"`) are always tried automatically.
@@ -342,7 +341,7 @@ When running `certkit scan --bundle-path`, each bundle produces the following fi
 | `<cn>.intermediates.pem` | Intermediate certificates                                                             |
 | `<cn>.root.pem`          | Root certificate                                                                      |
 | `<cn>.key`               | Private key (PEM, mode 0600)                                                          |
-| `<cn>.p12`               | PKCS#12 archive (requires explicit export password via `--passwords`/`--password-file`; or `--insecure-default-password` for `changeit`, mode 0600) |
+| `<cn>.p12`               | PKCS#12 archive (uses first non-empty export password from `--passwords`/`--password-file`, or defaults to `changeit`, mode 0600) |
 | `<cn>.k8s.yaml`          | Kubernetes `kubernetes.io/tls` Secret (mode 0600)                                     |
 | `<cn>.json`              | Certificate metadata                                                                  |
 | `<cn>.yaml`              | Certificate and key metadata (mode 0600)                                              |

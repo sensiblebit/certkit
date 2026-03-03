@@ -355,7 +355,7 @@ func ExportMatchedBundles(ctx context.Context, input ExportMatchedBundleInput) e
 		}
 		if err != nil {
 			wrapped := fmt.Errorf("bundling certificate %q: %w", certRec.Cert.Subject.CommonName, err)
-			slog.Warn("bundling cert", "cn", certRec.Cert.Subject.CommonName, "ski", ski, "error", wrapped)
+			slog.Debug("bundling cert", "cn", certRec.Cert.Subject.CommonName, "ski", ski, "error", wrapped)
 			return wrapped
 		}
 
@@ -403,7 +403,7 @@ func ExportMatchedBundles(ctx context.Context, input ExportMatchedBundleInput) e
 			slog.Warn("writing bundle files", "cn", certRec.Cert.Subject.CommonName, "error", wrapped)
 			return wrapped
 		}
-		slog.Info("exported bundle", "cn", certRec.Cert.Subject.CommonName, "folder", folder)
+		slog.Debug("exported bundle", "cn", certRec.Cert.Subject.CommonName, "folder", folder)
 	}
 	return nil
 }
