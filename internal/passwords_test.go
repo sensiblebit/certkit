@@ -91,3 +91,50 @@ func TestProcessPasswordSets(t *testing.T) {
 		t.Fatalf("export passwords = %v, want [cli-pass filepass]", sets.Export)
 	}
 }
+
+func TestProcessUserPasswords(t *testing.T) {
+	// WHY: ProcessUserPasswords is used by commands that require explicit export
+	// passwords only; it must not include built-in defaults and must dedupe
+	// non-empty values from CLI + file in stable order.
+	t.Parallel()
+
+	t.Run("empty input returns empty list", func(t *testing.T) {
+		t.Parallel()
+		got, err := ProcessUserPasswords(nil, "")
+		if err != nil {
+			t.Fatalf("ProcessUserPasswords error: %v", err)
+		}
+		if len(got) != 0 {
+			t.Fatalf("expected empty list, got: %v", got)
+		}
+	})
+
+	t.Run("merge and dedupe explicit passwords", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		path := filepath.Join(dir, "passwords.txt")
+		if err := os.WriteFile(path, []byte("file-a\n file-b \nfile-a\n"), 0644); err != nil {
+			t.Fatalf("write password file: %v", err)
+		}
+
+		got, err := ProcessUserPasswords([]string{"cli-a", "", " file-b ", "cli-a"}, path)
+		if err != nil {
+			t.Fatalf("ProcessUserPasswords error: %v", err)
+		}
+		want := []string{"cli-a", "file-b", "file-a"}
+		if !slices.Equal(got, want) {
+			t.Fatalf("passwords = %v, want %v", got, want)
+		}
+	})
+
+	t.Run("bad file returns error", func(t *testing.T) {
+		t.Parallel()
+		_, err := ProcessUserPasswords(nil, "/nonexistent/passwords.txt")
+		if err == nil {
+			t.Fatal("expected error for missing password file")
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("expected os.ErrNotExist, got: %v", err)
+		}
+	})
+}
