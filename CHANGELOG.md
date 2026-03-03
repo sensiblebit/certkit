@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Add configurable `--aia-timeout` flag to `scan` for AIA certificate fetches (default: `2s`). ([#122])
+- Add exported sentinel errors `ErrUnsupportedOutputFormat` and `ErrBinaryOutputRequiresFile` to `cmd/certkit`, plus `ErrUnsupportedKeyAlgorithm` and `ErrUnsupportedCurve` to `internal/keygen`, and wrap command errors with `%w` to support typed matching via `errors.Is`. ([#126])
 
 ### Removed
 
