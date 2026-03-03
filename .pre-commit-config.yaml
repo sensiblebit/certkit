@@ -1,12 +1,4 @@
 repos:
-  # ── Git Conventions ──
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v6.0.0
-    hooks:
-      - id: no-commit-to-branch
-        name: no commit to main
-        args: [--branch, main]
-
   - repo: https://github.com/sensiblebit/.github
     rev: "fb8829a3bdb52f8263024528909088706009c1e1"
     hooks:
@@ -27,9 +19,12 @@ repos:
       - id: go-mod-update
       - id: npm-update
 
-  # ── Markdown ──
-  - repo: https://github.com/igorshubovych/markdownlint-cli
-    rev: v0.47.0
+  - repo: local
     hooks:
       - id: markdownlint
+        name: markdownlint
+        language: node
+        entry: markdownlint
+        additional_dependencies: [markdownlint-cli@0.47.0]
         args: [--config, .markdownlint.yaml]
+        types: [markdown]
