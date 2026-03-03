@@ -8,50 +8,59 @@ import (
 	"testing"
 )
 
-func TestLoadContainerFile_PEMCertificate(t *testing.T) {
+func TestLoadContainerFile_ValidInputs(t *testing.T) {
 	// WHY: LoadContainerFile is the shared CLI entrypoint for cert/key loading;
-	// PEM certificate files must resolve a leaf cert through the file-read + parse pipeline.
+	// valid certificate-only and key-only PEM files must both parse via file-read + parse pipeline.
 	t.Parallel()
 
-	dir := t.TempDir()
 	ca := newRSACA(t)
-	path := filepath.Join(dir, "cert.pem")
-	if err := os.WriteFile(path, ca.certPEM, 0644); err != nil {
-		t.Fatalf("write certificate: %v", err)
+	cases := []struct {
+		name     string
+		filename string
+		mode     os.FileMode
+		data     []byte
+		wantLeaf bool
+		wantKey  bool
+	}{
+		{
+			name:     "pem certificate",
+			filename: "cert.pem",
+			mode:     0644,
+			data:     ca.certPEM,
+			wantLeaf: true,
+			wantKey:  false,
+		},
+		{
+			name:     "key only pem",
+			filename: "key.pem",
+			mode:     0600,
+			data:     rsaKeyPEM(t),
+			wantLeaf: false,
+			wantKey:  true,
+		},
 	}
 
-	contents, err := LoadContainerFile(path, nil)
-	if err != nil {
-		t.Fatalf("LoadContainerFile error: %v", err)
-	}
-	if contents.Leaf == nil {
-		t.Fatal("expected leaf certificate, got nil")
-	}
-	if contents.Key != nil {
-		t.Fatalf("expected nil key for certificate-only input, got %T", contents.Key)
-	}
-}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
 
-func TestLoadContainerFile_KeyOnlyPEM(t *testing.T) {
-	// WHY: Key-only files are valid CLI inputs; the loader must surface Key with
-	// nil Leaf so callers can apply command-specific behavior.
-	t.Parallel()
+			dir := t.TempDir()
+			path := filepath.Join(dir, tc.filename)
+			if err := os.WriteFile(path, tc.data, tc.mode); err != nil {
+				t.Fatalf("write test input: %v", err)
+			}
 
-	dir := t.TempDir()
-	path := filepath.Join(dir, "key.pem")
-	if err := os.WriteFile(path, rsaKeyPEM(t), 0600); err != nil {
-		t.Fatalf("write key: %v", err)
-	}
-
-	contents, err := LoadContainerFile(path, nil)
-	if err != nil {
-		t.Fatalf("LoadContainerFile error: %v", err)
-	}
-	if contents.Key == nil {
-		t.Fatal("expected parsed key, got nil")
-	}
-	if contents.Leaf != nil {
-		t.Fatalf("expected nil leaf for key-only input, got %v", contents.Leaf.Subject)
+			contents, err := LoadContainerFile(path, nil)
+			if err != nil {
+				t.Fatalf("LoadContainerFile error: %v", err)
+			}
+			if (contents.Leaf != nil) != tc.wantLeaf {
+				t.Fatalf("leaf presence = %v, want %v", contents.Leaf != nil, tc.wantLeaf)
+			}
+			if (contents.Key != nil) != tc.wantKey {
+				t.Fatalf("key presence = %v, want %v", contents.Key != nil, tc.wantKey)
+			}
+		})
 	}
 }
 
