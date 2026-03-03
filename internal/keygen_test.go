@@ -5,6 +5,7 @@ import (
 	"crypto/elliptic"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -77,10 +78,10 @@ func TestGenerateKey_ErrorPaths(t *testing.T) {
 		name    string
 		algo    string
 		curve   string
-		wantErr string
+		wantErr error
 	}{
-		{"unsupported algorithm", "dsa", "", "unsupported algorithm"},
-		{"invalid ECDSA curve", "ecdsa", "invalid-curve", "unsupported curve"},
+		{"unsupported algorithm", "dsa", "", ErrUnsupportedKeyAlgorithm},
+		{"invalid ECDSA curve", "ecdsa", "invalid-curve", ErrUnsupportedCurve},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -93,8 +94,8 @@ func TestGenerateKey_ErrorPaths(t *testing.T) {
 			if err == nil {
 				t.Fatal("expected error")
 			}
-			if !strings.Contains(err.Error(), tt.wantErr) {
-				t.Errorf("error = %v, want substring %q", err, tt.wantErr)
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("error = %v, want errors.Is(_, %v)", err, tt.wantErr)
 			}
 		})
 	}

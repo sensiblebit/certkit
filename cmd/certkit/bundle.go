@@ -293,7 +293,7 @@ func formatBundleOutput(input formatBundleOutputInput) ([]byte, error) {
 		return jks, nil
 
 	default:
-		return nil, fmt.Errorf("unsupported output format %q (use pem, chain, fullchain, p12, or jks)", input.format)
+		return nil, fmt.Errorf("%w %q (use pem, chain, fullchain, p12, or jks)", ErrUnsupportedOutputFormat, input.format)
 	}
 }
 

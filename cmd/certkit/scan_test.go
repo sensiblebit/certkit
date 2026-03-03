@@ -17,54 +17,98 @@ func TestFetchAIAURL(t *testing.T) {
 	tests := []struct {
 		name      string
 		timeout   time.Duration
-		handler   http.HandlerFunc
-		redirect  bool
+		newRawURL func(t *testing.T) string
 		wantErr   string
 		wantBytes []byte
 	}{
 		{
 			name:    "timeout",
 			timeout: 30 * time.Millisecond,
-			handler: func(w http.ResponseWriter, r *http.Request) {
-				time.Sleep(150 * time.Millisecond)
-				_, _ = w.Write([]byte("slow"))
+			newRawURL: func(t *testing.T) string {
+				t.Helper()
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					time.Sleep(150 * time.Millisecond)
+					_, _ = w.Write([]byte("slow"))
+				}))
+				t.Cleanup(server.Close)
+				return server.URL
 			},
 			wantErr: "fetching AIA URL",
 		},
 		{
 			name:    "oversized response",
 			timeout: time.Second,
-			handler: func(w http.ResponseWriter, r *http.Request) {
-				_, _ = w.Write(bytes.Repeat([]byte("A"), maxAIAResponseBytes+32))
+			newRawURL: func(t *testing.T) string {
+				t.Helper()
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					_, _ = w.Write(bytes.Repeat([]byte("A"), maxAIAResponseBytes+32))
+				}))
+				t.Cleanup(server.Close)
+				return server.URL
 			},
 			wantErr: "response exceeds",
 		},
 		{
 			name:    "redirect success",
 			timeout: time.Second,
-			handler: func(w http.ResponseWriter, r *http.Request) {
-				_, _ = w.Write([]byte("target-cert"))
+			newRawURL: func(t *testing.T) string {
+				t.Helper()
+				target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					_, _ = w.Write([]byte("target-cert"))
+				}))
+				t.Cleanup(target.Close)
+				redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					http.Redirect(w, r, target.URL, http.StatusFound)
+				}))
+				t.Cleanup(redirector.Close)
+				return redirector.URL
 			},
-			redirect:  true,
 			wantBytes: []byte("target-cert"),
+		},
+		{
+			name:    "redirect limit",
+			timeout: time.Second,
+			newRawURL: func(t *testing.T) string {
+				t.Helper()
+				redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					http.Redirect(w, r, r.URL.String(), http.StatusFound)
+				}))
+				t.Cleanup(redirector.Close)
+				return redirector.URL
+			},
+			wantErr: "stopped after 3 redirects",
+		},
+		{
+			name:    "default timeout",
+			timeout: 0,
+			newRawURL: func(t *testing.T) string {
+				t.Helper()
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					_, _ = w.Write([]byte("ok"))
+				}))
+				t.Cleanup(server.Close)
+				return server.URL
+			},
+			wantBytes: []byte("ok"),
+		},
+		{
+			name:    "non-200 status",
+			timeout: time.Second,
+			newRawURL: func(t *testing.T) string {
+				t.Helper()
+				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+					http.Error(w, "nope", http.StatusBadGateway)
+				}))
+				t.Cleanup(server.Close)
+				return server.URL
+			},
+			wantErr: fmt.Sprintf("HTTP %d", http.StatusBadGateway),
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Helper()
-
-			target := httptest.NewServer(tt.handler)
-			defer target.Close()
-
-			rawURL := target.URL
-			if tt.redirect {
-				redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					http.Redirect(w, r, target.URL, http.StatusFound)
-				}))
-				defer redirector.Close()
-				rawURL = redirector.URL
-			}
+			rawURL := tt.newRawURL(t)
 
 			data, err := fetchAIAURL(context.Background(), fetchAIAURLInput{
 				rawURL:               rawURL,
@@ -106,63 +150,6 @@ func TestRunScan_InvalidAIATimeout(t *testing.T) {
 		t.Fatal("expected invalid timeout error")
 	}
 	if !strings.Contains(err.Error(), "invalid --aia-timeout") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestFetchAIAURL_RedirectLimit(t *testing.T) {
-	redirectServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, r.URL.String(), http.StatusFound)
-	}))
-	defer redirectServer.Close()
-
-	_, err := fetchAIAURL(context.Background(), fetchAIAURLInput{
-		rawURL:               redirectServer.URL,
-		allowPrivateNetworks: true,
-		timeout:              time.Second,
-	})
-	if err == nil {
-		t.Fatal("expected redirect limit error")
-	}
-	if !strings.Contains(err.Error(), "stopped after 3 redirects") {
-		t.Fatalf("unexpected error: %v", err)
-	}
-}
-
-func TestFetchAIAURL_DefaultTimeout(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte("ok"))
-	}))
-	defer server.Close()
-
-	data, err := fetchAIAURL(context.Background(), fetchAIAURLInput{
-		rawURL:               server.URL,
-		allowPrivateNetworks: true,
-		timeout:              0,
-	})
-	if err != nil {
-		t.Fatalf("fetchAIAURL with default timeout failed: %v", err)
-	}
-	if got := string(data); got != "ok" {
-		t.Fatalf("data = %q, want %q", got, "ok")
-	}
-}
-
-func TestFetchAIAURL_StatusCode(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Error(w, "nope", http.StatusBadGateway)
-	}))
-	defer server.Close()
-
-	_, err := fetchAIAURL(context.Background(), fetchAIAURLInput{
-		rawURL:               server.URL,
-		allowPrivateNetworks: true,
-		timeout:              time.Second,
-	})
-	if err == nil {
-		t.Fatal("expected status code error")
-	}
-	if !strings.Contains(err.Error(), fmt.Sprintf("HTTP %d", http.StatusBadGateway)) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

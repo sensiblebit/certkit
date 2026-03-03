@@ -135,7 +135,7 @@ func runConvert(cmd *cobra.Command, args []string) error {
 
 	isBinary := convertTo == "p12" || convertTo == "jks" || convertTo == "der" || convertTo == "p7b"
 	if convertOutFile == "" && isBinary {
-		return fmt.Errorf("output format %q is binary; use -o to write to a file", convertTo)
+		return fmt.Errorf("%w: output format %q is binary (use -o to write to a file)", ErrBinaryOutputRequiresFile, convertTo)
 	}
 
 	exportPassword := ""
@@ -239,7 +239,7 @@ func formatConvertOutput(input formatConvertInput) ([]byte, error) {
 		return data, nil
 
 	default:
-		return nil, fmt.Errorf("unsupported output format %q (use pem, der, p12, jks, or p7b)", input.format)
+		return nil, fmt.Errorf("%w %q (use pem, der, p12, jks, or p7b)", ErrUnsupportedOutputFormat, input.format)
 	}
 }
 
