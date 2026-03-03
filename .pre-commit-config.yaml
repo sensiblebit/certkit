@@ -1,6 +1,6 @@
 repos:
   - repo: https://github.com/sensiblebit/.github
-    rev: "fb8829a3bdb52f8263024528909088706009c1e1"
+    rev: "6b8b7cc2c3ff7549b510865c478cb5f8b43d0f4e"
     hooks:
       - id: branch-name
       - id: commit-message
@@ -14,17 +14,9 @@ repos:
       - id: govulncheck
       - id: gendocs
       - id: prettier
+      - id: markdownlint
+        args: [--config, .markdownlint.yaml]
       - id: vitest
       - id: wrangler-build
       - id: go-mod-update
       - id: npm-update
-
-  - repo: local
-    hooks:
-      - id: markdownlint
-        name: markdownlint
-        language: node
-        entry: markdownlint
-        additional_dependencies: [markdownlint-cli@0.47.0]
-        args: [--config, .markdownlint.yaml]
-        types: [markdown]
