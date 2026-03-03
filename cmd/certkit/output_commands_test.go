@@ -393,62 +393,84 @@ func TestRunBundle_CommandSurfaceOutput(t *testing.T) {
 	_, leaf := createSelfSignedCert114(t, "bundle.example.com", false, time.Now().Add(365*24*time.Hour))
 	leafPath := writeCertificatePEM114(t, dir, "leaf.pem", leaf)
 
-	passwordList = nil
-	passwordFile = ""
-	jsonOutput = false
-	allowExpired = true
-	bundleKeyPath = ""
-	bundleOutFile = ""
-	bundleFormat = "pem"
-	bundleForce = true
-	bundleAllowPrivateNetwork = false
-	bundleTrustStore = "mozilla"
+	t.Run("text output", func(t *testing.T) {
+		passwordList = nil
+		passwordFile = ""
+		jsonOutput = false
+		allowExpired = true
+		bundleKeyPath = ""
+		bundleOutFile = ""
+		bundleFormat = "pem"
+		bundleForce = true
+		bundleAllowPrivateNetwork = false
+		bundleTrustStore = "mozilla"
 
-	stdout, stderr, err := captureCmdOutput114(t, func() error {
-		return runBundle(newContextCmd114(), []string{leafPath})
+		stdout, stderr, err := captureCmdOutput114(t, func() error {
+			return runBundle(newContextCmd114(), []string{leafPath})
+		})
+		if err != nil {
+			t.Fatalf("runBundle text failed: %v", err)
+		}
+		if !strings.Contains(stdout, "BEGIN CERTIFICATE") {
+			t.Fatalf("bundle text output missing certificate:\n%s", stdout)
+		}
+		if stderr != "" {
+			t.Fatalf("bundle text wrote unexpected stderr:\n%s", stderr)
+		}
 	})
-	if err != nil {
-		t.Fatalf("runBundle text failed: %v", err)
-	}
-	if !strings.Contains(stdout, "BEGIN CERTIFICATE") {
-		t.Fatalf("bundle text output missing certificate:\n%s", stdout)
-	}
-	if stderr != "" {
-		t.Fatalf("bundle text wrote unexpected stderr:\n%s", stderr)
-	}
 
-	jsonOutput = true
-	stdout, stderr, err = captureCmdOutput114(t, func() error {
-		return runBundle(newContextCmd114(), []string{leafPath})
-	})
-	if err != nil {
-		t.Fatalf("runBundle json failed: %v", err)
-	}
-	if stderr != "" {
-		t.Fatalf("bundle json wrote unexpected stderr:\n%s", stderr)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
-		t.Fatalf("bundle json unmarshal: %v\noutput:\n%s", err, stdout)
-	}
-	if payload["format"] != "pem" || payload["encoding"] != "pem" {
-		t.Fatalf("bundle json format contract mismatch: %v", payload)
-	}
-	if data, _ := payload["data"].(string); !strings.Contains(data, "BEGIN CERTIFICATE") {
-		t.Fatalf("bundle json data missing certificate: %v", payload["data"])
-	}
+	t.Run("json output", func(t *testing.T) {
+		passwordList = nil
+		passwordFile = ""
+		jsonOutput = true
+		allowExpired = true
+		bundleKeyPath = ""
+		bundleOutFile = ""
+		bundleFormat = "pem"
+		bundleForce = true
+		bundleAllowPrivateNetwork = false
+		bundleTrustStore = "mozilla"
 
-	jsonOutput = false
-	bundleFormat = "not-a-format"
-	_, _, err = captureCmdOutput114(t, func() error {
-		return runBundle(newContextCmd114(), []string{leafPath})
+		stdout, stderr, err := captureCmdOutput114(t, func() error {
+			return runBundle(newContextCmd114(), []string{leafPath})
+		})
+		if err != nil {
+			t.Fatalf("runBundle json failed: %v", err)
+		}
+		if stderr != "" {
+			t.Fatalf("bundle json wrote unexpected stderr:\n%s", stderr)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+			t.Fatalf("bundle json unmarshal: %v\noutput:\n%s", err, stdout)
+		}
+		if payload["format"] != "pem" || payload["encoding"] != "pem" {
+			t.Fatalf("bundle json format contract mismatch: %v", payload)
+		}
+		if data, _ := payload["data"].(string); !strings.Contains(data, "BEGIN CERTIFICATE") {
+			t.Fatalf("bundle json data missing certificate: %v", payload["data"])
+		}
 	})
-	if err == nil {
-		t.Fatal("runBundle expected error for unsupported format")
-	}
-	if !strings.Contains(err.Error(), "unsupported output format") {
-		t.Fatalf("bundle unsupported-format error = %v", err)
-	}
+
+	t.Run("error path", func(t *testing.T) {
+		passwordList = nil
+		passwordFile = ""
+		jsonOutput = false
+		allowExpired = true
+		bundleKeyPath = ""
+		bundleOutFile = ""
+		bundleFormat = "not-a-format"
+		bundleForce = true
+		bundleAllowPrivateNetwork = false
+		bundleTrustStore = "mozilla"
+
+		_, _, err := captureCmdOutput114(t, func() error {
+			return runBundle(newContextCmd114(), []string{leafPath})
+		})
+		if err == nil {
+			t.Fatal("runBundle expected error for unsupported format")
+		}
+	})
 }
 
 func TestRunConvert_CommandSurfaceOutput(t *testing.T) {
@@ -459,113 +481,147 @@ func TestRunConvert_CommandSurfaceOutput(t *testing.T) {
 	_, leaf := generateKeyAndCert(t, "convert.example.com", false)
 	leafPath := writeCertificatePEM114(t, dir, "leaf.pem", leaf)
 
-	passwordList = nil
-	passwordFile = ""
-	convertTo = "pem"
-	convertOutFile = ""
-	convertKeyPath = ""
-	jsonOutput = false
+	t.Run("text output", func(t *testing.T) {
+		passwordList = nil
+		passwordFile = ""
+		convertTo = "pem"
+		convertOutFile = ""
+		convertKeyPath = ""
+		jsonOutput = false
 
-	stdout, stderr, err := captureCmdOutput114(t, func() error {
-		return runConvert(newContextCmd114(), []string{leafPath})
+		stdout, stderr, err := captureCmdOutput114(t, func() error {
+			return runConvert(newContextCmd114(), []string{leafPath})
+		})
+		if err != nil {
+			t.Fatalf("runConvert text failed: %v", err)
+		}
+		if !strings.Contains(stdout, "BEGIN CERTIFICATE") {
+			t.Fatalf("convert text output missing certificate:\n%s", stdout)
+		}
+		if stderr != "" {
+			t.Fatalf("convert text wrote unexpected stderr:\n%s", stderr)
+		}
 	})
-	if err != nil {
-		t.Fatalf("runConvert text failed: %v", err)
-	}
-	if !strings.Contains(stdout, "BEGIN CERTIFICATE") {
-		t.Fatalf("convert text output missing certificate:\n%s", stdout)
-	}
-	if stderr != "" {
-		t.Fatalf("convert text wrote unexpected stderr:\n%s", stderr)
-	}
 
-	jsonOutput = true
-	stdout, stderr, err = captureCmdOutput114(t, func() error {
-		return runConvert(newContextCmd114(), []string{leafPath})
-	})
-	if err != nil {
-		t.Fatalf("runConvert json failed: %v", err)
-	}
-	if stderr != "" {
-		t.Fatalf("convert json wrote unexpected stderr:\n%s", stderr)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
-		t.Fatalf("convert json unmarshal: %v\noutput:\n%s", err, stdout)
-	}
-	if payload["format"] != "pem" || payload["encoding"] != "pem" {
-		t.Fatalf("convert json contract mismatch: %v", payload)
-	}
+	t.Run("json output", func(t *testing.T) {
+		passwordList = nil
+		passwordFile = ""
+		convertTo = "pem"
+		convertOutFile = ""
+		convertKeyPath = ""
+		jsonOutput = true
 
-	jsonOutput = false
-	convertTo = "der"
-	convertOutFile = ""
-	_, _, err = captureCmdOutput114(t, func() error {
-		return runConvert(newContextCmd114(), []string{leafPath})
+		stdout, stderr, err := captureCmdOutput114(t, func() error {
+			return runConvert(newContextCmd114(), []string{leafPath})
+		})
+		if err != nil {
+			t.Fatalf("runConvert json failed: %v", err)
+		}
+		if stderr != "" {
+			t.Fatalf("convert json wrote unexpected stderr:\n%s", stderr)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+			t.Fatalf("convert json unmarshal: %v\noutput:\n%s", err, stdout)
+		}
+		if payload["format"] != "pem" || payload["encoding"] != "pem" {
+			t.Fatalf("convert json contract mismatch: %v", payload)
+		}
 	})
-	if err == nil {
-		t.Fatal("runConvert expected binary-format -o validation error")
-	}
-	if !strings.Contains(err.Error(), "is binary; use -o to write to a file") {
-		t.Fatalf("convert binary-format error = %v", err)
-	}
+
+	t.Run("error path", func(t *testing.T) {
+		passwordList = nil
+		passwordFile = ""
+		convertTo = "der"
+		convertOutFile = ""
+		convertKeyPath = ""
+		jsonOutput = false
+
+		_, _, err := captureCmdOutput114(t, func() error {
+			return runConvert(newContextCmd114(), []string{leafPath})
+		})
+		if err == nil {
+			t.Fatal("runConvert expected binary-format -o validation error")
+		}
+	})
 }
 
 func TestRunSignSelfSigned_CommandSurfaceOutput(t *testing.T) {
 	snap := snapshotOutputGlobals114()
 	t.Cleanup(func() { restoreOutputGlobals114(snap) })
 
-	passwordList = nil
-	passwordFile = ""
-	selfSignedCN = "selfsigned.example.com"
-	selfSignedDays = 30
-	selfSignedIsCA = true
-	selfSignedKeyPath = ""
-	selfSignedOutFile = ""
-	jsonOutput = false
+	t.Run("text output", func(t *testing.T) {
+		passwordList = nil
+		passwordFile = ""
+		selfSignedCN = "selfsigned.example.com"
+		selfSignedDays = 30
+		selfSignedIsCA = true
+		selfSignedKeyPath = ""
+		selfSignedOutFile = ""
+		jsonOutput = false
 
-	stdout, stderr, err := captureCmdOutput114(t, func() error {
-		return runSignSelfSigned(newContextCmd114(), nil)
+		stdout, stderr, err := captureCmdOutput114(t, func() error {
+			return runSignSelfSigned(newContextCmd114(), nil)
+		})
+		if err != nil {
+			t.Fatalf("runSignSelfSigned text failed: %v", err)
+		}
+		if !strings.Contains(stdout, "BEGIN CERTIFICATE") || !strings.Contains(stdout, "BEGIN PRIVATE KEY") {
+			t.Fatalf("sign self-signed text output missing expected PEM blocks:\n%s", stdout)
+		}
+		if stderr != "" {
+			t.Fatalf("sign self-signed text wrote unexpected stderr:\n%s", stderr)
+		}
 	})
-	if err != nil {
-		t.Fatalf("runSignSelfSigned text failed: %v", err)
-	}
-	if !strings.Contains(stdout, "BEGIN CERTIFICATE") || !strings.Contains(stdout, "BEGIN PRIVATE KEY") {
-		t.Fatalf("sign self-signed text output missing expected PEM blocks:\n%s", stdout)
-	}
-	if stderr != "" {
-		t.Fatalf("sign self-signed text wrote unexpected stderr:\n%s", stderr)
-	}
 
-	jsonOutput = true
-	stdout, stderr, err = captureCmdOutput114(t, func() error {
-		return runSignSelfSigned(newContextCmd114(), nil)
-	})
-	if err != nil {
-		t.Fatalf("runSignSelfSigned json failed: %v", err)
-	}
-	if stderr != "" {
-		t.Fatalf("sign self-signed json wrote unexpected stderr:\n%s", stderr)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
-		t.Fatalf("sign self-signed json unmarshal: %v\noutput:\n%s", err, stdout)
-	}
-	if payload["certificate_pem"] == "" || payload["key_pem"] == "" {
-		t.Fatalf("sign self-signed json missing certificate/key: %v", payload)
-	}
+	t.Run("json output", func(t *testing.T) {
+		passwordList = nil
+		passwordFile = ""
+		selfSignedCN = "selfsigned.example.com"
+		selfSignedDays = 30
+		selfSignedIsCA = true
+		selfSignedKeyPath = ""
+		selfSignedOutFile = ""
+		jsonOutput = true
 
-	jsonOutput = false
-	selfSignedKeyPath = filepath.Join(t.TempDir(), "missing.key")
-	_, _, err = captureCmdOutput114(t, func() error {
-		return runSignSelfSigned(newContextCmd114(), nil)
+		stdout, stderr, err := captureCmdOutput114(t, func() error {
+			return runSignSelfSigned(newContextCmd114(), nil)
+		})
+		if err != nil {
+			t.Fatalf("runSignSelfSigned json failed: %v", err)
+		}
+		if stderr != "" {
+			t.Fatalf("sign self-signed json wrote unexpected stderr:\n%s", stderr)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+			t.Fatalf("sign self-signed json unmarshal: %v\noutput:\n%s", err, stdout)
+		}
+		if payload["certificate_pem"] == "" || payload["key_pem"] == "" {
+			t.Fatalf("sign self-signed json missing certificate/key: %v", payload)
+		}
 	})
-	if err == nil {
-		t.Fatal("runSignSelfSigned expected missing key file error")
-	}
-	if !strings.Contains(err.Error(), "reading key file") {
-		t.Fatalf("sign self-signed missing key error = %v", err)
-	}
+
+	t.Run("error path", func(t *testing.T) {
+		passwordList = nil
+		passwordFile = ""
+		selfSignedCN = "selfsigned.example.com"
+		selfSignedDays = 30
+		selfSignedIsCA = true
+		selfSignedKeyPath = filepath.Join(t.TempDir(), "missing.key")
+		selfSignedOutFile = ""
+		jsonOutput = false
+
+		_, _, err := captureCmdOutput114(t, func() error {
+			return runSignSelfSigned(newContextCmd114(), nil)
+		})
+		if err == nil {
+			t.Fatal("runSignSelfSigned expected missing key file error")
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("sign self-signed missing key should wrap os.ErrNotExist, got: %v", err)
+		}
+	})
 }
 
 func TestRunSignCSR_CommandSurfaceOutput(t *testing.T) {
@@ -578,56 +634,78 @@ func TestRunSignCSR_CommandSurfaceOutput(t *testing.T) {
 	caKeyPath := writeECDSAPrivateKeyPEM114(t, dir, "ca.key", caKey)
 	csrPath := writeCSRPEM114(t, dir, "leaf.csr", "leaf.example.com", []string{"leaf.example.com"})
 
-	passwordList = nil
-	passwordFile = ""
-	signCSRCAPath = caCertPath
-	signCSRKeyPath = caKeyPath
-	signCSRDays = 90
-	signCSRCopySAN = true
-	signCSROutFile = ""
-	jsonOutput = false
+	t.Run("text output", func(t *testing.T) {
+		passwordList = nil
+		passwordFile = ""
+		signCSRCAPath = caCertPath
+		signCSRKeyPath = caKeyPath
+		signCSRDays = 90
+		signCSRCopySAN = true
+		signCSROutFile = ""
+		jsonOutput = false
 
-	stdout, stderr, err := captureCmdOutput114(t, func() error {
-		return runSignCSR(newContextCmd114(), []string{csrPath})
+		stdout, stderr, err := captureCmdOutput114(t, func() error {
+			return runSignCSR(newContextCmd114(), []string{csrPath})
+		})
+		if err != nil {
+			t.Fatalf("runSignCSR text failed: %v", err)
+		}
+		if !strings.Contains(stdout, "BEGIN CERTIFICATE") {
+			t.Fatalf("sign csr text output missing certificate:\n%s", stdout)
+		}
+		if stderr != "" {
+			t.Fatalf("sign csr text wrote unexpected stderr:\n%s", stderr)
+		}
 	})
-	if err != nil {
-		t.Fatalf("runSignCSR text failed: %v", err)
-	}
-	if !strings.Contains(stdout, "BEGIN CERTIFICATE") {
-		t.Fatalf("sign csr text output missing certificate:\n%s", stdout)
-	}
-	if stderr != "" {
-		t.Fatalf("sign csr text wrote unexpected stderr:\n%s", stderr)
-	}
 
-	jsonOutput = true
-	stdout, stderr, err = captureCmdOutput114(t, func() error {
-		return runSignCSR(newContextCmd114(), []string{csrPath})
-	})
-	if err != nil {
-		t.Fatalf("runSignCSR json failed: %v", err)
-	}
-	if stderr != "" {
-		t.Fatalf("sign csr json wrote unexpected stderr:\n%s", stderr)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
-		t.Fatalf("sign csr json unmarshal: %v\noutput:\n%s", err, stdout)
-	}
-	if payload["certificate_pem"] == "" {
-		t.Fatalf("sign csr json missing certificate_pem: %v", payload)
-	}
+	t.Run("json output", func(t *testing.T) {
+		passwordList = nil
+		passwordFile = ""
+		signCSRCAPath = caCertPath
+		signCSRKeyPath = caKeyPath
+		signCSRDays = 90
+		signCSRCopySAN = true
+		signCSROutFile = ""
+		jsonOutput = true
 
-	jsonOutput = false
-	_, _, err = captureCmdOutput114(t, func() error {
-		return runSignCSR(newContextCmd114(), []string{filepath.Join(dir, "missing.csr")})
+		stdout, stderr, err := captureCmdOutput114(t, func() error {
+			return runSignCSR(newContextCmd114(), []string{csrPath})
+		})
+		if err != nil {
+			t.Fatalf("runSignCSR json failed: %v", err)
+		}
+		if stderr != "" {
+			t.Fatalf("sign csr json wrote unexpected stderr:\n%s", stderr)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+			t.Fatalf("sign csr json unmarshal: %v\noutput:\n%s", err, stdout)
+		}
+		if payload["certificate_pem"] == "" {
+			t.Fatalf("sign csr json missing certificate_pem: %v", payload)
+		}
 	})
-	if err == nil {
-		t.Fatal("runSignCSR expected missing CSR file error")
-	}
-	if !strings.Contains(err.Error(), "reading CSR") {
-		t.Fatalf("sign csr missing CSR error = %v", err)
-	}
+
+	t.Run("error path", func(t *testing.T) {
+		passwordList = nil
+		passwordFile = ""
+		signCSRCAPath = caCertPath
+		signCSRKeyPath = caKeyPath
+		signCSRDays = 90
+		signCSRCopySAN = true
+		signCSROutFile = ""
+		jsonOutput = false
+
+		_, _, err := captureCmdOutput114(t, func() error {
+			return runSignCSR(newContextCmd114(), []string{filepath.Join(dir, "missing.csr")})
+		})
+		if err == nil {
+			t.Fatal("runSignCSR expected missing CSR file error")
+		}
+		if !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("sign csr missing CSR should wrap os.ErrNotExist, got: %v", err)
+		}
+	})
 }
 
 func TestRunCSR_CommandSurfaceOutput(t *testing.T) {
@@ -650,123 +728,158 @@ func TestRunCSR_CommandSurfaceOutput(t *testing.T) {
 		t.Fatalf("write template: %v", err)
 	}
 
-	passwordList = nil
-	passwordFile = ""
-	csrTemplatePath = tmplPath
-	csrCertPath = ""
-	csrFromCSR = ""
-	csrKeyPath = ""
-	csrAlgorithm = "ecdsa"
-	csrBits = 2048
-	csrCurve = "P-256"
-	csrOutPath = ""
-	jsonOutput = false
+	t.Run("text output", func(t *testing.T) {
+		passwordList = nil
+		passwordFile = ""
+		csrTemplatePath = tmplPath
+		csrCertPath = ""
+		csrFromCSR = ""
+		csrKeyPath = ""
+		csrAlgorithm = "ecdsa"
+		csrBits = 2048
+		csrCurve = "P-256"
+		csrOutPath = ""
+		jsonOutput = false
 
-	stdout, stderr, err := captureCmdOutput114(t, func() error {
-		return runCSR(newContextCmd114(), nil)
+		stdout, stderr, err := captureCmdOutput114(t, func() error {
+			return runCSR(newContextCmd114(), nil)
+		})
+		if err != nil {
+			t.Fatalf("runCSR text failed: %v", err)
+		}
+		if !strings.Contains(stdout, "BEGIN CERTIFICATE REQUEST") || !strings.Contains(stdout, "BEGIN PRIVATE KEY") {
+			t.Fatalf("csr text output missing expected PEM blocks:\n%s", stdout)
+		}
+		if stderr != "" {
+			t.Fatalf("csr text wrote unexpected stderr:\n%s", stderr)
+		}
 	})
-	if err != nil {
-		t.Fatalf("runCSR text failed: %v", err)
-	}
-	if !strings.Contains(stdout, "BEGIN CERTIFICATE REQUEST") || !strings.Contains(stdout, "BEGIN PRIVATE KEY") {
-		t.Fatalf("csr text output missing expected PEM blocks:\n%s", stdout)
-	}
-	if stderr != "" {
-		t.Fatalf("csr text wrote unexpected stderr:\n%s", stderr)
-	}
 
-	jsonOutput = true
-	csrOutPath = filepath.Join(dir, "out")
-	stdout, stderr, err = captureCmdOutput114(t, func() error {
-		return runCSR(newContextCmd114(), nil)
-	})
-	if err != nil {
-		t.Fatalf("runCSR json failed: %v", err)
-	}
-	if !strings.Contains(stderr, "CSR:") {
-		t.Fatalf("csr json expected out-path stderr summary, got:\n%s", stderr)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
-		t.Fatalf("csr json unmarshal: %v\noutput:\n%s", err, stdout)
-	}
-	if payload["csr_file"] == "" || payload["key_file"] == "" {
-		t.Fatalf("csr json missing file outputs: %v", payload)
-	}
+	t.Run("json output", func(t *testing.T) {
+		passwordList = nil
+		passwordFile = ""
+		csrTemplatePath = tmplPath
+		csrCertPath = ""
+		csrFromCSR = ""
+		csrKeyPath = ""
+		csrAlgorithm = "ecdsa"
+		csrBits = 2048
+		csrCurve = "P-256"
+		csrOutPath = filepath.Join(dir, "out")
+		jsonOutput = true
 
-	jsonOutput = false
-	csrAlgorithm = "invalid-algo"
-	csrOutPath = ""
-	_, _, err = captureCmdOutput114(t, func() error {
-		return runCSR(newContextCmd114(), nil)
+		stdout, stderr, err := captureCmdOutput114(t, func() error {
+			return runCSR(newContextCmd114(), nil)
+		})
+		if err != nil {
+			t.Fatalf("runCSR json failed: %v", err)
+		}
+		if !strings.Contains(stderr, "CSR:") {
+			t.Fatalf("csr json expected out-path stderr summary, got:\n%s", stderr)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+			t.Fatalf("csr json unmarshal: %v\noutput:\n%s", err, stdout)
+		}
+		if payload["csr_file"] == "" || payload["key_file"] == "" {
+			t.Fatalf("csr json missing file outputs: %v", payload)
+		}
 	})
-	if err == nil {
-		t.Fatal("runCSR expected invalid algorithm error")
-	}
-	if !strings.Contains(err.Error(), "unsupported algorithm") {
-		t.Fatalf("csr invalid algorithm error = %v", err)
-	}
+
+	t.Run("error path", func(t *testing.T) {
+		passwordList = nil
+		passwordFile = ""
+		csrTemplatePath = tmplPath
+		csrCertPath = ""
+		csrFromCSR = ""
+		csrKeyPath = ""
+		csrAlgorithm = "invalid-algo"
+		csrBits = 2048
+		csrCurve = "P-256"
+		csrOutPath = ""
+		jsonOutput = false
+
+		_, _, err := captureCmdOutput114(t, func() error {
+			return runCSR(newContextCmd114(), nil)
+		})
+		if err == nil {
+			t.Fatal("runCSR expected invalid algorithm error")
+		}
+	})
 }
 
 func TestRunKeygen_CommandSurfaceOutput(t *testing.T) {
 	snap := snapshotOutputGlobals114()
 	t.Cleanup(func() { restoreOutputGlobals114(snap) })
 
-	keygenAlgorithm = "ecdsa"
-	keygenBits = 2048
-	keygenCurve = "P-256"
-	keygenOutPath = ""
-	keygenCN = ""
-	keygenSANs = nil
-	jsonOutput = false
-
-	stdout, stderr, err := captureCmdOutput114(t, func() error {
-		return runKeygen(newContextCmd114(), nil)
-	})
-	if err != nil {
-		t.Fatalf("runKeygen text failed: %v", err)
-	}
-	if !strings.Contains(stdout, "BEGIN PRIVATE KEY") || !strings.Contains(stdout, "BEGIN PUBLIC KEY") {
-		t.Fatalf("keygen text output missing expected PEM blocks:\n%s", stdout)
-	}
-	if stderr != "" {
-		t.Fatalf("keygen text wrote unexpected stderr:\n%s", stderr)
-	}
-
 	dir := t.TempDir()
-	jsonOutput = true
-	keygenOutPath = filepath.Join(dir, "out")
-	keygenCN = "keygen.example.com"
-	keygenSANs = []string{"keygen.example.com"}
-	stdout, stderr, err = captureCmdOutput114(t, func() error {
-		return runKeygen(newContextCmd114(), nil)
-	})
-	if err != nil {
-		t.Fatalf("runKeygen json failed: %v", err)
-	}
-	if !strings.Contains(stderr, "Private key:") {
-		t.Fatalf("keygen json expected out-path stderr summary, got:\n%s", stderr)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
-		t.Fatalf("keygen json unmarshal: %v\noutput:\n%s", err, stdout)
-	}
-	if payload["key_pem"] == "" || payload["public_key_pem"] == "" || payload["key_file"] == "" || payload["public_key_file"] == "" {
-		t.Fatalf("keygen json missing contract fields: %v", payload)
-	}
 
-	jsonOutput = false
-	keygenAlgorithm = "invalid-algo"
-	keygenOutPath = ""
-	_, _, err = captureCmdOutput114(t, func() error {
-		return runKeygen(newContextCmd114(), nil)
+	t.Run("text output", func(t *testing.T) {
+		keygenAlgorithm = "ecdsa"
+		keygenBits = 2048
+		keygenCurve = "P-256"
+		keygenOutPath = ""
+		keygenCN = ""
+		keygenSANs = nil
+		jsonOutput = false
+
+		stdout, stderr, err := captureCmdOutput114(t, func() error {
+			return runKeygen(newContextCmd114(), nil)
+		})
+		if err != nil {
+			t.Fatalf("runKeygen text failed: %v", err)
+		}
+		if !strings.Contains(stdout, "BEGIN PRIVATE KEY") || !strings.Contains(stdout, "BEGIN PUBLIC KEY") {
+			t.Fatalf("keygen text output missing expected PEM blocks:\n%s", stdout)
+		}
+		if stderr != "" {
+			t.Fatalf("keygen text wrote unexpected stderr:\n%s", stderr)
+		}
 	})
-	if err == nil {
-		t.Fatal("runKeygen expected invalid algorithm error")
-	}
-	if !strings.Contains(err.Error(), "unsupported algorithm") {
-		t.Fatalf("keygen invalid algorithm error = %v", err)
-	}
+
+	t.Run("json output", func(t *testing.T) {
+		keygenAlgorithm = "ecdsa"
+		keygenBits = 2048
+		keygenCurve = "P-256"
+		keygenOutPath = filepath.Join(dir, "out")
+		keygenCN = "keygen.example.com"
+		keygenSANs = []string{"keygen.example.com"}
+		jsonOutput = true
+
+		stdout, stderr, err := captureCmdOutput114(t, func() error {
+			return runKeygen(newContextCmd114(), nil)
+		})
+		if err != nil {
+			t.Fatalf("runKeygen json failed: %v", err)
+		}
+		if !strings.Contains(stderr, "Private key:") {
+			t.Fatalf("keygen json expected out-path stderr summary, got:\n%s", stderr)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+			t.Fatalf("keygen json unmarshal: %v\noutput:\n%s", err, stdout)
+		}
+		if payload["key_pem"] == "" || payload["public_key_pem"] == "" || payload["key_file"] == "" || payload["public_key_file"] == "" {
+			t.Fatalf("keygen json missing contract fields: %v", payload)
+		}
+	})
+
+	t.Run("error path", func(t *testing.T) {
+		keygenAlgorithm = "invalid-algo"
+		keygenBits = 2048
+		keygenCurve = "P-256"
+		keygenOutPath = ""
+		keygenCN = ""
+		keygenSANs = nil
+		jsonOutput = false
+
+		_, _, err := captureCmdOutput114(t, func() error {
+			return runKeygen(newContextCmd114(), nil)
+		})
+		if err == nil {
+			t.Fatal("runKeygen expected invalid algorithm error")
+		}
+	})
 }
 
 func TestRunCRL_CommandSurfaceOutput(t *testing.T) {
@@ -782,65 +895,80 @@ func TestRunCRL_CommandSurfaceOutput(t *testing.T) {
 	revokedPath := writeCertificatePEM114(t, dir, "revoked.pem", revokedLeaf)
 	cleanPath := writeCertificatePEM114(t, dir, "clean.pem", cleanLeaf)
 
-	passwordList = nil
-	passwordFile = ""
-	jsonOutput = false
-	crlFormat = "text"
-	crlCheckPath = cleanPath
+	t.Run("text output", func(t *testing.T) {
+		passwordList = nil
+		passwordFile = ""
+		jsonOutput = false
+		crlFormat = "text"
+		crlCheckPath = cleanPath
 
-	stdout, stderr, err := captureCmdOutput114(t, func() error {
-		return runCRL(newContextCmd114(), []string{crlPath})
+		stdout, stderr, err := captureCmdOutput114(t, func() error {
+			return runCRL(newContextCmd114(), []string{crlPath})
+		})
+		if err != nil {
+			t.Fatalf("runCRL text failed: %v", err)
+		}
+		if !strings.Contains(stdout, "NOT in this CRL") {
+			t.Fatalf("crl text output missing non-revoked check result:\n%s", stdout)
+		}
+		if stderr != "" {
+			t.Fatalf("crl text wrote unexpected stderr:\n%s", stderr)
+		}
 	})
-	if err != nil {
-		t.Fatalf("runCRL text failed: %v", err)
-	}
-	if !strings.Contains(stdout, "NOT in this CRL") {
-		t.Fatalf("crl text output missing non-revoked check result:\n%s", stdout)
-	}
-	if stderr != "" {
-		t.Fatalf("crl text wrote unexpected stderr:\n%s", stderr)
-	}
 
-	jsonOutput = true
-	stdout, stderr, err = captureCmdOutput114(t, func() error {
-		return runCRL(newContextCmd114(), []string{crlPath})
-	})
-	if err != nil {
-		t.Fatalf("runCRL json failed: %v", err)
-	}
-	if stderr != "" {
-		t.Fatalf("crl json wrote unexpected stderr:\n%s", stderr)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
-		t.Fatalf("crl json unmarshal: %v\noutput:\n%s", err, stdout)
-	}
-	checkResult, ok := payload["check_result"].(map[string]any)
-	if !ok {
-		t.Fatalf("crl json missing check_result object: %v", payload)
-	}
-	if revoked, _ := checkResult["revoked"].(bool); revoked {
-		t.Fatalf("crl json expected non-revoked check result: %v", checkResult)
-	}
+	t.Run("json output", func(t *testing.T) {
+		passwordList = nil
+		passwordFile = ""
+		jsonOutput = true
+		crlFormat = "text"
+		crlCheckPath = cleanPath
 
-	jsonOutput = false
-	crlCheckPath = revokedPath
-	stdout, stderr, err = captureCmdOutput114(t, func() error {
-		return runCRL(newContextCmd114(), []string{crlPath})
+		stdout, stderr, err := captureCmdOutput114(t, func() error {
+			return runCRL(newContextCmd114(), []string{crlPath})
+		})
+		if err != nil {
+			t.Fatalf("runCRL json failed: %v", err)
+		}
+		if stderr != "" {
+			t.Fatalf("crl json wrote unexpected stderr:\n%s", stderr)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+			t.Fatalf("crl json unmarshal: %v\noutput:\n%s", err, stdout)
+		}
+		checkResult, ok := payload["check_result"].(map[string]any)
+		if !ok {
+			t.Fatalf("crl json missing check_result object: %v", payload)
+		}
+		if revoked, _ := checkResult["revoked"].(bool); revoked {
+			t.Fatalf("crl json expected non-revoked check result: %v", checkResult)
+		}
 	})
-	if err == nil {
-		t.Fatal("runCRL expected validation error for revoked certificate")
-	}
-	var validationErr *ValidationError
-	if !errors.As(err, &validationErr) {
-		t.Fatalf("runCRL error type = %T, want *ValidationError", err)
-	}
-	if !strings.Contains(stdout, "REVOKED") {
-		t.Fatalf("crl revoked output missing marker:\n%s", stdout)
-	}
-	if stderr != "" {
-		t.Fatalf("crl revoked wrote unexpected stderr:\n%s", stderr)
-	}
+
+	t.Run("revoked validation error", func(t *testing.T) {
+		passwordList = nil
+		passwordFile = ""
+		jsonOutput = false
+		crlFormat = "text"
+		crlCheckPath = revokedPath
+
+		stdout, stderr, err := captureCmdOutput114(t, func() error {
+			return runCRL(newContextCmd114(), []string{crlPath})
+		})
+		if err == nil {
+			t.Fatal("runCRL expected validation error for revoked certificate")
+		}
+		var validationErr *ValidationError
+		if !errors.As(err, &validationErr) {
+			t.Fatalf("runCRL error type = %T, want *ValidationError", err)
+		}
+		if !strings.Contains(stdout, "REVOKED") {
+			t.Fatalf("crl revoked output missing marker:\n%s", stdout)
+		}
+		if stderr != "" {
+			t.Fatalf("crl revoked wrote unexpected stderr:\n%s", stderr)
+		}
+	})
 }
 
 func TestRunOCSP_CommandSurfaceOutput(t *testing.T) {
@@ -857,93 +985,86 @@ func TestRunOCSP_CommandSurfaceOutput(t *testing.T) {
 	goodLeaf := createLeafWithOCSP114(t, caKey, caCert, goodSerial, "good.example.com", goodURL)
 	goodPath := writeCertificatePEM114(t, dir, "good.pem", goodLeaf)
 
-	passwordList = nil
-	passwordFile = ""
-	jsonOutput = false
-	verbose = false
-	ocspIssuerPath = issuerPath
-	ocspFormat = "text"
-	ocspAllowPrivateNetwork = true
-
-	stdout, stderr, err := captureCmdOutput114(t, func() error {
-		return runOCSP(newContextCmd114(), []string{goodPath})
-	})
-	if err != nil {
-		t.Fatalf("runOCSP text failed: %v", err)
-	}
-	if !strings.Contains(stdout, "Status:       good") {
-		t.Fatalf("ocsp text output missing good status:\n%s", stdout)
-	}
-	if stderr != "" {
-		t.Fatalf("ocsp text wrote unexpected stderr:\n%s", stderr)
-	}
-
-	jsonOutput = true
-	verbose = true
-	stdout, stderr, err = captureCmdOutput114(t, func() error {
-		return runOCSP(newContextCmd114(), []string{goodPath})
-	})
-	if err != nil {
-		t.Fatalf("runOCSP json failed: %v", err)
-	}
-	if stderr != "" {
-		t.Fatalf("ocsp json wrote unexpected stderr:\n%s", stderr)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
-		t.Fatalf("ocsp json unmarshal: %v\noutput:\n%s", err, stdout)
-	}
-	if payload["status"] != "good" || payload["subject"] == "" || payload["issuer"] == "" {
-		t.Fatalf("ocsp json contract mismatch: %v", payload)
-	}
-
 	revokedSerial := big.NewInt(1002)
 	revokedResponder := startOCSPResponder114(t, caKey, caCert, revokedSerial, ocsp.Revoked)
 	revokedURL := strings.Replace(revokedResponder.URL, "127.0.0.1", "localhost", 1)
 	revokedLeaf := createLeafWithOCSP114(t, caKey, caCert, revokedSerial, "revoked.example.com", revokedURL)
 	revokedPath := writeCertificatePEM114(t, dir, "revoked.pem", revokedLeaf)
 
-	jsonOutput = false
-	verbose = false
-	stdout, stderr, err = captureCmdOutput114(t, func() error {
-		return runOCSP(newContextCmd114(), []string{revokedPath})
+	t.Run("text output", func(t *testing.T) {
+		passwordList = nil
+		passwordFile = ""
+		jsonOutput = false
+		verbose = false
+		ocspIssuerPath = issuerPath
+		ocspFormat = "text"
+		ocspAllowPrivateNetwork = true
+
+		stdout, stderr, err := captureCmdOutput114(t, func() error {
+			return runOCSP(newContextCmd114(), []string{goodPath})
+		})
+		if err != nil {
+			t.Fatalf("runOCSP text failed: %v", err)
+		}
+		if !strings.Contains(stdout, "Status:       good") {
+			t.Fatalf("ocsp text output missing good status:\n%s", stdout)
+		}
+		if stderr != "" {
+			t.Fatalf("ocsp text wrote unexpected stderr:\n%s", stderr)
+		}
 	})
-	if err == nil {
-		t.Fatal("runOCSP expected validation error for revoked certificate")
-	}
-	var validationErr *ValidationError
-	if !errors.As(err, &validationErr) {
-		t.Fatalf("runOCSP error type = %T, want *ValidationError", err)
-	}
-	if !strings.Contains(stdout, "Status:       revoked") {
-		t.Fatalf("ocsp revoked output missing status:\n%s", stdout)
-	}
-	if stderr != "" {
-		t.Fatalf("ocsp revoked wrote unexpected stderr:\n%s", stderr)
-	}
-}
 
-func TestParseAnyCertificate(t *testing.T) {
-	_, cert := generateKeyAndCert(t, "parse-any.example.com", false)
-	pemBytes := []byte(certkit.CertToPEM(cert))
+	t.Run("json output", func(t *testing.T) {
+		passwordList = nil
+		passwordFile = ""
+		jsonOutput = true
+		verbose = true
+		ocspIssuerPath = issuerPath
+		ocspFormat = "text"
+		ocspAllowPrivateNetwork = true
 
-	fromPEM, err := parseAnyCertificate(pemBytes)
-	if err != nil {
-		t.Fatalf("parseAnyCertificate PEM error: %v", err)
-	}
-	if fromPEM.SerialNumber.Cmp(cert.SerialNumber) != 0 {
-		t.Fatalf("PEM serial = %s, want %s", fromPEM.SerialNumber, cert.SerialNumber)
-	}
+		stdout, stderr, err := captureCmdOutput114(t, func() error {
+			return runOCSP(newContextCmd114(), []string{goodPath})
+		})
+		if err != nil {
+			t.Fatalf("runOCSP json failed: %v", err)
+		}
+		if stderr != "" {
+			t.Fatalf("ocsp json wrote unexpected stderr:\n%s", stderr)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+			t.Fatalf("ocsp json unmarshal: %v\noutput:\n%s", err, stdout)
+		}
+		if payload["status"] != "good" || payload["subject"] == "" || payload["issuer"] == "" {
+			t.Fatalf("ocsp json contract mismatch: %v", payload)
+		}
+	})
 
-	fromDER, err := parseAnyCertificate(cert.Raw)
-	if err != nil {
-		t.Fatalf("parseAnyCertificate DER error: %v", err)
-	}
-	if fromDER.SerialNumber.Cmp(cert.SerialNumber) != 0 {
-		t.Fatalf("DER serial = %s, want %s", fromDER.SerialNumber, cert.SerialNumber)
-	}
+	t.Run("revoked validation error", func(t *testing.T) {
+		passwordList = nil
+		passwordFile = ""
+		jsonOutput = false
+		verbose = false
+		ocspIssuerPath = issuerPath
+		ocspFormat = "text"
+		ocspAllowPrivateNetwork = true
 
-	if _, err := parseAnyCertificate([]byte("invalid-certificate-data")); err == nil {
-		t.Fatal("parseAnyCertificate expected error for invalid data")
-	}
+		stdout, stderr, err := captureCmdOutput114(t, func() error {
+			return runOCSP(newContextCmd114(), []string{revokedPath})
+		})
+		if err == nil {
+			t.Fatal("runOCSP expected validation error for revoked certificate")
+		}
+		var validationErr *ValidationError
+		if !errors.As(err, &validationErr) {
+			t.Fatalf("runOCSP error type = %T, want *ValidationError", err)
+		}
+		if !strings.Contains(stdout, "Status:       revoked") {
+			t.Fatalf("ocsp revoked output missing status:\n%s", stdout)
+		}
+		if stderr != "" {
+			t.Fatalf("ocsp revoked wrote unexpected stderr:\n%s", stderr)
+		}
+	})
 }

@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Normalize `connect` verify status labels from `OK`/`FAILED` to lowercase `ok`/`failed`. ([#112])
 - Consolidate shared `connect` status-line formatting between standard and verbose text output paths. ([#121])
 
+### Added
+
+- Add configurable `--aia-timeout` flag to `scan` for AIA certificate fetches (default: `2s`). ([#122])
+
 ### Removed
 
 - **Breaking:** Remove `--insecure-default-password`; PKCS#12/JKS export now falls back to `changeit` when no explicit export password is provided. ([#112])
@@ -29,7 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Improve TLS client-auth signature-scheme naming in `connect` by mapping additional schemes (including RSA-PSS-PSS and legacy hash/signature pairs) instead of raw hex values. ([#112])
 - Add `misordered-chain` diagnostic to `connect` when a server-sent issuer appears later in the chain instead of directly after the certificate it issued. ([#119])
 - Validate `connect` port input at parse time and reject malformed or out-of-range ports before dialing. ([#121])
-- Harden `scan` AIA fetching with configurable `--aia-timeout` and explicit oversized-response errors instead of silent truncation. ([#122])
+- Return an explicit error when an AIA HTTP response exceeds 1 MiB instead of silently accepting truncated data. ([#122])
 - Fix TAR archive detection to require `ustar` header bytes instead of treating every `.tar` input as valid archive content. ([#112])
 - Release reserved bundle folder names when skipping untrusted candidates to avoid false sanitized-folder collisions. ([#112])
 

@@ -6,7 +6,9 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
+	"log/slog"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -146,38 +148,67 @@ func captureOutput(t *testing.T, fn func() error) (string, string, error) {
 
 	origStdout := os.Stdout
 	origStderr := os.Stderr
+	origLogger := slog.Default()
 	stdoutR, stdoutW, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("creating stdout pipe: %v", err)
 	}
+	defer func() { _ = stdoutR.Close() }()
 	stderrR, stderrW, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("creating stderr pipe: %v", err)
 	}
+	defer func() { _ = stderrR.Close() }()
 
 	os.Stdout = stdoutW
 	os.Stderr = stderrW
+	slog.SetDefault(slog.New(slog.NewTextHandler(stderrW, nil)))
 	defer func() {
 		os.Stdout = origStdout
 		os.Stderr = origStderr
+		slog.SetDefault(origLogger)
 	}()
 
 	stdoutC := make(chan string, 1)
 	stderrC := make(chan string, 1)
+	readErrC := make(chan error, 2)
 	go func() {
-		data, _ := io.ReadAll(stdoutR)
+		data, readErr := io.ReadAll(stdoutR)
+		readErrC <- readErr
 		stdoutC <- string(data)
 	}()
 	go func() {
-		data, _ := io.ReadAll(stderrR)
+		data, readErr := io.ReadAll(stderrR)
+		readErrC <- readErr
 		stderrC <- string(data)
 	}()
 
 	runErr := fn()
-	_ = stdoutW.Close()
-	_ = stderrW.Close()
+	closeStdoutErr := stdoutW.Close()
+	closeStderrErr := stderrW.Close()
 
-	return <-stdoutC, <-stderrC, runErr
+	stdout := <-stdoutC
+	stderr := <-stderrC
+	stdoutReadErr := <-readErrC
+	stderrReadErr := <-readErrC
+
+	if runErr != nil {
+		return stdout, stderr, runErr
+	}
+	if closeStdoutErr != nil {
+		return stdout, stderr, fmt.Errorf("closing stdout writer: %w", closeStdoutErr)
+	}
+	if closeStderrErr != nil {
+		return stdout, stderr, fmt.Errorf("closing stderr writer: %w", closeStderrErr)
+	}
+	if stdoutReadErr != nil {
+		return stdout, stderr, fmt.Errorf("reading captured stdout: %w", stdoutReadErr)
+	}
+	if stderrReadErr != nil {
+		return stdout, stderr, fmt.Errorf("reading captured stderr: %w", stderrReadErr)
+	}
+
+	return stdout, stderr, nil
 }
 
 func writeCertPEM(t *testing.T, dir, name string, cert *x509.Certificate) string {
@@ -243,8 +274,14 @@ func TestRunScan_CommandSurface(t *testing.T) {
 	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
 		t.Fatalf("scan json unmarshal: %v\noutput:\n%s", err, stdout)
 	}
-	if _, ok := payload["roots"]; !ok {
-		t.Fatalf("scan json missing roots field: %v", payload)
+	roots, rootsOK := payload["roots"].(float64)
+	intermediates, intermediatesOK := payload["intermediates"].(float64)
+	leaves, leavesOK := payload["leaves"].(float64)
+	if !rootsOK || !intermediatesOK || !leavesOK {
+		t.Fatalf("scan json missing certificate counts: %v", payload)
+	}
+	if int(roots+intermediates+leaves) != 1 {
+		t.Fatalf("scan json expected exactly one discovered certificate, got roots=%v intermediates=%v leaves=%v", roots, intermediates, leaves)
 	}
 }
 
