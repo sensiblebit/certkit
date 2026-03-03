@@ -1017,11 +1017,12 @@ func TestFormatConnectResult(t *testing.T) {
 }
 
 func TestDiagnoseConnectChain(t *testing.T) {
-	// WHY: DiagnoseConnectChain should flag root-in-chain and duplicate certs
-	// without false positives for clean chains.
+	// WHY: DiagnoseConnectChain should flag root-in-chain, duplicate certs, and
+	// misordered chains without false positives for clean chains.
 	t.Parallel()
 
 	root, intermediates, leaf := buildChain(t, 3)
+	_, deepIntermediates, deepLeaf := buildChain(t, 4)
 
 	tests := []struct {
 		name               string
@@ -1045,10 +1046,24 @@ func TestDiagnoseConnectChain(t *testing.T) {
 			wantChecks: nil,
 		},
 		{
+			name:       "misordered-chain detected",
+			peerChain:  []*x509.Certificate{deepLeaf, deepIntermediates[0], deepIntermediates[1]},
+			wantChecks: []string{"misordered-chain"},
+			wantDetailContains: [][]string{
+				{"chain-leaf.example.com", "Intermediate CA 2", "Intermediate CA 1", "position 0", "position 1", "position 2"},
+			},
+		},
+		{
 			name:               "root-in-chain detected",
 			peerChain:          []*x509.Certificate{leaf, intermediates[0], root},
 			wantChecks:         []string{"root-in-chain"},
 			wantDetailContains: [][]string{{"Chain Root CA", "position 2"}},
+		},
+		{
+			name:               "missing intermediate does not trigger misordered-chain",
+			peerChain:          []*x509.Certificate{leaf, root},
+			wantChecks:         []string{"root-in-chain"},
+			wantDetailContains: [][]string{{"Chain Root CA", "position 1"}},
 		},
 		{
 			name:               "duplicate-cert detected",
@@ -1537,6 +1552,51 @@ func TestConnectTLS_AIAFetch_LoopbackRejected(t *testing.T) {
 	}
 	if result.VerifyError == "" {
 		t.Fatal("expected verify error when AIA fetch is blocked")
+	}
+}
+
+func TestConnectTLS_MisorderedChainDiagnostic(t *testing.T) {
+	// WHY: ConnectTLS should flag server chains where the issuer is present but
+	// appears later than expected.
+	t.Parallel()
+
+	root := generateTestCA(t, "Misordered Root")
+	intermediate1 := generateIntermediateCA(t, root, "Misordered Intermediate 1")
+	intermediate2 := generateIntermediateCA(t, intermediate1, "Misordered Intermediate 2")
+	leaf := generateTestLeafCert(t, intermediate2)
+
+	// Server sends [leaf, intermediate1, intermediate2] instead of
+	// [leaf, intermediate2, intermediate1].
+	port := startTLSServer(t, [][]byte{leaf.DER, intermediate1.CertDER, intermediate2.CertDER}, leaf.Key)
+
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(root.Cert)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := ConnectTLS(ctx, ConnectTLSInput{
+		Host:                 "127.0.0.1",
+		Port:                 port,
+		RootCAs:              rootPool,
+		AllowPrivateNetworks: true,
+	})
+	if err != nil {
+		t.Fatalf("ConnectTLS failed: %v", err)
+	}
+	if result.VerifyError != "" {
+		t.Fatalf("expected chain verification to succeed, got %q", result.VerifyError)
+	}
+
+	misorderedChain := false
+	for _, diag := range result.Diagnostics {
+		if diag.Check == "misordered-chain" {
+			misorderedChain = true
+			break
+		}
+	}
+	if !misorderedChain {
+		t.Fatal("expected misordered-chain diagnostic")
 	}
 }
 
