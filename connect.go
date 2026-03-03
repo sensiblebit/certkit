@@ -1673,34 +1673,7 @@ func FormatConnectResult(r *ConnectResult) string {
 	fmt.Fprintf(&out, "Protocol:     %s\n", r.Protocol)
 	fmt.Fprintf(&out, "Cipher Suite: %s\n", r.CipherSuite)
 	fmt.Fprintf(&out, "Server Name:  %s\n", r.ServerName)
-
-	if r.LegacyProbe {
-		out.WriteString("Note:         certificate obtained via raw probe — server key possession not verified\n")
-	}
-
-	if r.ALPN != "" {
-		fmt.Fprintf(&out, "ALPN:         %s\n", r.ALPN)
-	}
-
-	if r.VerifyError != "" {
-		fmt.Fprintf(&out, "Verify:       failed (%s)\n", r.VerifyError)
-	} else if r.AIAFetched {
-		out.WriteString("Verify:       ok (intermediates fetched via AIA)\n")
-	} else {
-		out.WriteString("Verify:       ok\n")
-	}
-
-	out.WriteString(FormatCTLine(r.CT))
-
-	if r.OCSP != nil {
-		out.WriteString(FormatOCSPLine(r.OCSP))
-	}
-
-	if r.CRL != nil {
-		out.WriteString(FormatCRLLine(r.CRL))
-	}
-
-	out.WriteString(FormatCipherRatingLine(r.CipherScan))
+	out.WriteString(FormatConnectStatusLines(r))
 
 	if r.ClientAuth != nil && r.ClientAuth.Requested {
 		if len(r.ClientAuth.AcceptableCAs) > 0 {
@@ -1739,5 +1712,41 @@ func FormatConnectResult(r *ConnectResult) string {
 		}
 	}
 
+	return out.String()
+}
+
+// FormatConnectStatusLines formats the shared status line section for connect
+// output (note, ALPN, verify, CT, OCSP, CRL, and cipher rating). This is used
+// by both the library formatter and CLI verbose formatter to prevent drift.
+func FormatConnectStatusLines(r *ConnectResult) string {
+	var out strings.Builder
+
+	if r.LegacyProbe {
+		out.WriteString("Note:         certificate obtained via raw probe — server key possession not verified\n")
+	}
+
+	if r.ALPN != "" {
+		fmt.Fprintf(&out, "ALPN:         %s\n", r.ALPN)
+	}
+
+	if r.VerifyError != "" {
+		fmt.Fprintf(&out, "Verify:       failed (%s)\n", r.VerifyError)
+	} else if r.AIAFetched {
+		out.WriteString("Verify:       ok (intermediates fetched via AIA)\n")
+	} else {
+		out.WriteString("Verify:       ok\n")
+	}
+
+	out.WriteString(FormatCTLine(r.CT))
+
+	if r.OCSP != nil {
+		out.WriteString(FormatOCSPLine(r.OCSP))
+	}
+
+	if r.CRL != nil {
+		out.WriteString(FormatCRLLine(r.CRL))
+	}
+
+	out.WriteString(FormatCipherRatingLine(r.CipherScan))
 	return out.String()
 }

@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"math/big"
 	"net"
+	"strconv"
 	"strings"
 	"time"
 
@@ -293,34 +294,7 @@ func formatConnectVerbose(r *certkit.ConnectResult, now time.Time) string {
 	fmt.Fprintf(&out, "Protocol:     %s\n", r.Protocol)
 	fmt.Fprintf(&out, "Cipher Suite: %s\n", r.CipherSuite)
 	fmt.Fprintf(&out, "Server Name:  %s\n", r.ServerName)
-
-	if r.LegacyProbe {
-		out.WriteString("Note:         certificate obtained via raw probe — server key possession not verified\n")
-	}
-
-	if r.ALPN != "" {
-		fmt.Fprintf(&out, "ALPN:         %s\n", r.ALPN)
-	}
-
-	if r.VerifyError != "" {
-		fmt.Fprintf(&out, "Verify:       failed (%s)\n", r.VerifyError)
-	} else if r.AIAFetched {
-		out.WriteString("Verify:       ok (intermediates fetched via AIA)\n")
-	} else {
-		out.WriteString("Verify:       ok\n")
-	}
-
-	out.WriteString(certkit.FormatCTLine(r.CT))
-
-	if r.OCSP != nil {
-		out.WriteString(certkit.FormatOCSPLine(r.OCSP))
-	}
-
-	if r.CRL != nil {
-		out.WriteString(certkit.FormatCRLLine(r.CRL))
-	}
-
-	out.WriteString(certkit.FormatCipherRatingLine(r.CipherScan))
+	out.WriteString(certkit.FormatConnectStatusLines(r))
 
 	if r.ClientAuth != nil && r.ClientAuth.Requested {
 		out.WriteString("Client Auth:  requested\n")
@@ -411,6 +385,8 @@ func formatSerial(serial *big.Int) string {
 // parseHostPort splits a host[:port] string, defaulting port to "443".
 // Accepts bare hosts, host:port, and URLs (https://host[:port][/path]).
 func parseHostPort(addr string) (string, string, error) {
+	rawInput := addr
+
 	// Strip scheme if present (e.g., "https://host:port/path" → "host:port")
 	if after, ok := strings.CutPrefix(addr, "https://"); ok {
 		addr = after
@@ -430,7 +406,17 @@ func parseHostPort(addr string) (string, string, error) {
 		if trimmed == "" {
 			return "", "", fmt.Errorf("empty host in %q", addr)
 		}
-		return trimmed, "443", nil
+		if strings.HasSuffix(addr, ":") && net.ParseIP(trimmed) == nil {
+			return "", "", fmt.Errorf("empty port in %q", rawInput)
+		}
+		// Bare host (no colon) or bare IPv6 literal are valid host-only inputs.
+		if !strings.Contains(addr, ":") || net.ParseIP(trimmed) != nil {
+			return trimmed, "443", nil
+		}
+		return "", "", fmt.Errorf("invalid address %q: %w", rawInput, err)
+	}
+	if err := validatePort(port, rawInput); err != nil {
+		return "", "", err
 	}
 	if host == "" {
 		return "", "", fmt.Errorf("empty host in %q", addr)
@@ -439,4 +425,19 @@ func parseHostPort(addr string) (string, string, error) {
 		return "", "", fmt.Errorf("empty port in %q", addr)
 	}
 	return host, port, nil
+}
+
+func validatePort(port, rawInput string) error {
+	if port == "" {
+		return fmt.Errorf("empty port in %q", rawInput)
+	}
+
+	n, err := strconv.Atoi(port)
+	if err != nil {
+		return fmt.Errorf("invalid port %q in %q: must be numeric", port, rawInput)
+	}
+	if n < 1 || n > 65535 {
+		return fmt.Errorf("invalid port %q in %q: must be between 1 and 65535", port, rawInput)
+	}
+	return nil
 }
