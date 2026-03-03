@@ -164,10 +164,6 @@ func exportBundleCerts(ctx context.Context, input exportBundleCertsInput) error 
 		if err != nil {
 			return fmt.Errorf("sanitizing bundle folder %q: %w", bundleFolder, err)
 		}
-		if previousBundle, exists := input.UsedFolders[folder]; exists && previousBundle != input.BundleName {
-			return fmt.Errorf("sanitized bundle folder collision: %q and %q both map to %q", previousBundle, input.BundleName, folder)
-		}
-		input.UsedFolders[folder] = input.BundleName
 
 		// Look up the matching key
 		keyRec := input.Store.GetKey(certRec.SKI)
@@ -175,6 +171,10 @@ func exportBundleCerts(ctx context.Context, input exportBundleCertsInput) error 
 			slog.Debug("skipping certificate without matching key", "ski", certRec.SKI, "cn", certRec.Cert.Subject.CommonName)
 			continue
 		}
+		if previousBundle, exists := input.UsedFolders[folder]; exists && previousBundle != input.BundleName {
+			return fmt.Errorf("sanitized bundle folder collision: %q and %q both map to %q", previousBundle, input.BundleName, folder)
+		}
+		input.UsedFolders[folder] = input.BundleName
 
 		if err := certstore.ExportMatchedBundles(ctx, certstore.ExportMatchedBundleInput{
 			Store:         input.Store,
@@ -186,6 +186,7 @@ func exportBundleCerts(ctx context.Context, input exportBundleCertsInput) error 
 			P12Password:   input.P12Password,
 		}); err != nil {
 			if input.Opts.Verify && isBundleVerificationError(err) {
+				delete(input.UsedFolders, folder)
 				slog.Debug("skipping untrusted bundle candidate", "cn", certRec.Cert.Subject.CommonName, "error", err)
 				continue
 			}

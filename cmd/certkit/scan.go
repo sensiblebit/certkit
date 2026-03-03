@@ -82,17 +82,17 @@ func runScan(cmd *cobra.Command, args []string) error {
 	passwords := passwordSets.Decode
 	scannedFiles := 0
 	var lastProgressUpdate time.Time
-	stdoutInfo, err := os.Stdout.Stat()
+	stderrInfo, err := os.Stderr.Stat()
 	if err != nil {
-		slog.Debug("disabling scan progress: stat stdout", "error", err)
+		slog.Debug("disabling scan progress: stat stderr", "error", err)
 	}
-	progressEnabled := err == nil && !jsonOutput && scanFormat == "text" && (stdoutInfo.Mode()&os.ModeCharDevice) != 0
+	progressEnabled := err == nil && !jsonOutput && scanFormat == "text" && (stderrInfo.Mode()&os.ModeCharDevice) != 0
 	progressWidth := 0
 	clearScanProgressLine := func() error {
 		if !progressEnabled || progressWidth == 0 {
 			return nil
 		}
-		if _, err := fmt.Fprintf(os.Stdout, "\r%s\r", strings.Repeat(" ", progressWidth)); err != nil {
+		if _, err := fmt.Fprintf(os.Stderr, "\r%s\r", strings.Repeat(" ", progressWidth)); err != nil {
 			return fmt.Errorf("clearing scan progress line: %w", err)
 		}
 		return nil
@@ -119,7 +119,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 		if len(line) > progressWidth {
 			progressWidth = len(line)
 		}
-		if _, err := fmt.Fprintf(os.Stdout, "\r%s", line); err != nil {
+		if _, err := fmt.Fprintf(os.Stderr, "\r%s", line); err != nil {
 			return fmt.Errorf("writing scan progress: %w", err)
 		}
 		lastProgressUpdate = time.Now()

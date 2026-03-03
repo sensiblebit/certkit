@@ -269,9 +269,9 @@ func TestExportBundles_UntrustedBundleSkippedWithoutForce(t *testing.T) {
 	}
 }
 
-func TestExportBundles_UntrustedSkipContinuesToNextBundle(t *testing.T) {
-	// WHY: When one bundle candidate is skipped for verification failure, export
-	// must continue to later bundle names instead of aborting early.
+func TestExportBundles_UntrustedSkipDoesNotReserveFolder(t *testing.T) {
+	// WHY: Skipping an untrusted bundle candidate must release any reserved
+	// folder name so later candidates with the same sanitized folder can proceed.
 	t.Parallel()
 
 	ca1 := newRSACA(t)
@@ -309,11 +309,8 @@ func TestExportBundles_UntrustedSkipContinuesToNextBundle(t *testing.T) {
 		ForceBundle: false,
 		P12Password: "testpass",
 	})
-	if err == nil {
-		t.Fatal("expected collision error after continuing past untrusted first bundle")
-	}
-	if !strings.Contains(err.Error(), "sanitized bundle folder collision") {
-		t.Fatalf("error = %q, want collision message", err.Error())
+	if err != nil {
+		t.Fatalf("ExportBundles should skip untrusted bundles without collision errors: %v", err)
 	}
 }
 

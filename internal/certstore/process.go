@@ -7,6 +7,7 @@ import (
 	stdpkix "crypto/x509/pkix"
 	"encoding/asn1"
 	"encoding/pem"
+	"fmt"
 	"log/slog"
 	"net"
 	"strings"
@@ -87,10 +88,13 @@ func processPEMCertificates(data []byte, source string, handler CertHandler) {
 func parseCertificateCompat(der []byte) (*x509.Certificate, error) {
 	ctCert, err := ctx509.ParseCertificate(der)
 	if err != nil && ctx509.IsFatal(err) {
-		return nil, err
+		return nil, fmt.Errorf("compat certificate parse: %w", err)
 	}
 	if ctCert == nil {
-		return nil, err
+		if err != nil {
+			return nil, fmt.Errorf("compat certificate parse returned nil: %w", err)
+		}
+		return nil, fmt.Errorf("compat certificate parse returned nil certificate")
 	}
 
 	cert := &x509.Certificate{
