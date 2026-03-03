@@ -30,6 +30,7 @@ var (
 	scanDumpCerts           string
 	scanMaxFileSize         int64
 	scanFormat              string
+	scanAIATimeout          time.Duration
 	scanAllowPrivateNetwork bool
 )
 
@@ -54,6 +55,7 @@ func init() {
 	scanCmd.Flags().StringVar(&scanDumpCerts, "dump-certs", "", "Dump all discovered certificates to a single PEM file")
 	scanCmd.Flags().Int64Var(&scanMaxFileSize, "max-file-size", 10*1024*1024, "Skip files larger than this size in bytes (0 to disable)")
 	scanCmd.Flags().StringVar(&scanFormat, "format", "text", "Output format: text, json")
+	scanCmd.Flags().DurationVar(&scanAIATimeout, "aia-timeout", defaultAIAHTTPTimeout, "Timeout for AIA certificate fetches (e.g. 2s, 500ms)")
 	scanCmd.Flags().BoolVar(&scanAllowPrivateNetwork, "allow-private-network", false, "Allow AIA fetches to private/internal endpoints")
 	scanCmd.Flags().StringVar(&scanSaveDB, "save-db", "", "Save the in-memory database to disk after scanning")
 	scanCmd.Flags().StringVar(&scanLoadDB, "load-db", "", "Load an existing database into memory before scanning")
@@ -64,6 +66,9 @@ func init() {
 
 func runScan(cmd *cobra.Command, args []string) error {
 	inputPath := args[0]
+	if scanAIATimeout <= 0 {
+		return fmt.Errorf("invalid --aia-timeout %q: must be greater than 0", scanAIATimeout)
+	}
 
 	scanExport := scanBundlePath != ""
 
@@ -563,9 +568,9 @@ func printScanVerboseText(store *certstore.MemStore) {
 
 // newAIAHTTPClient creates an HTTP client for AIA fetches.
 // Redirects are limited to 3 and validated against SSRF rules.
-func newAIAHTTPClient(allowPrivateNetworks bool) *http.Client {
+func newAIAHTTPClient(allowPrivateNetworks bool, timeout time.Duration) *http.Client {
 	return &http.Client{
-		Timeout: 2 * time.Second,
+		Timeout: timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 3 {
 				return fmt.Errorf("stopped after 3 redirects")
@@ -578,32 +583,30 @@ func newAIAHTTPClient(allowPrivateNetworks bool) *http.Client {
 	}
 }
 
-var (
-	aiaHTTPClientPublic  = newAIAHTTPClient(false)
-	aiaHTTPClientPrivate = newAIAHTTPClient(true)
+const (
+	defaultAIAHTTPTimeout = 2 * time.Second
+	maxAIAResponseBytes   = 1 << 20 // 1 MiB
 )
-
-func getAIAHTTPClient(allowPrivateNetworks bool) *http.Client {
-	if allowPrivateNetworks {
-		return aiaHTTPClientPrivate
-	}
-	return aiaHTTPClientPublic
-}
 
 type fetchAIAURLInput struct {
 	rawURL               string
 	allowPrivateNetworks bool
+	timeout              time.Duration
 }
 
 func fetchAIAURL(ctx context.Context, input fetchAIAURLInput) ([]byte, error) {
 	if err := certkit.ValidateAIAURLWithOptions(ctx, certkit.ValidateAIAURLInput{URL: input.rawURL, AllowPrivateNetworks: input.allowPrivateNetworks}); err != nil {
 		return nil, fmt.Errorf("AIA URL rejected: %w", err)
 	}
+	timeout := input.timeout
+	if timeout <= 0 {
+		timeout = defaultAIAHTTPTimeout
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, input.rawURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating AIA request: %w", err)
 	}
-	resp, err := getAIAHTTPClient(input.allowPrivateNetworks).Do(req)
+	resp, err := newAIAHTTPClient(input.allowPrivateNetworks, timeout).Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetching AIA URL %s: %w", input.rawURL, err)
 	}
@@ -611,16 +614,24 @@ func fetchAIAURL(ctx context.Context, input fetchAIAURLInput) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, input.rawURL)
 	}
-	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1MB limit
+	limited := &io.LimitedReader{R: resp.Body, N: maxAIAResponseBytes + 1}
+	data, err := io.ReadAll(limited)
 	if err != nil {
 		return nil, fmt.Errorf("reading AIA response from %s: %w", input.rawURL, err)
+	}
+	if len(data) > maxAIAResponseBytes {
+		return nil, fmt.Errorf("reading AIA response from %s: response exceeds %d bytes", input.rawURL, maxAIAResponseBytes)
 	}
 	return data, nil
 }
 
 // httpAIAFetcher fetches raw certificate bytes from a URL via HTTP.
 func httpAIAFetcher(ctx context.Context, rawURL string) ([]byte, error) {
-	return fetchAIAURL(ctx, fetchAIAURLInput{rawURL: rawURL, allowPrivateNetworks: scanAllowPrivateNetwork})
+	return fetchAIAURL(ctx, fetchAIAURLInput{
+		rawURL:               rawURL,
+		allowPrivateNetworks: scanAllowPrivateNetwork,
+		timeout:              scanAIATimeout,
+	})
 }
 
 // formatDN formats a pkix.Name as a one-line distinguished name string
