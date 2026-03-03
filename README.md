@@ -223,6 +223,7 @@ Input format is auto-detected.
 <!-- certkit:flags:scan -->
 | Flag                      | Default          | Description                                              |
 | ------------------------- | ---------------- | -------------------------------------------------------- |
+| `--aia-timeout`           | `2s`             | Timeout for AIA certificate fetches (e.g. 2s, 500ms)     |
 | `--allow-private-network` | `false`          | Allow AIA fetches to private/internal endpoints          |
 | `--bundle-path`           |                  | Export bundles to this directory                         |
 | `--config`, `-c`          | `./bundles.yaml` | Path to bundle config YAML                               |

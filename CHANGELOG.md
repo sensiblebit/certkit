@@ -29,6 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Improve TLS client-auth signature-scheme naming in `connect` by mapping additional schemes (including RSA-PSS-PSS and legacy hash/signature pairs) instead of raw hex values. ([#112])
 - Add `misordered-chain` diagnostic to `connect` when a server-sent issuer appears later in the chain instead of directly after the certificate it issued. ([#119])
 - Validate `connect` port input at parse time and reject malformed or out-of-range ports before dialing. ([#121])
+- Harden `scan` AIA fetching with configurable `--aia-timeout` and explicit oversized-response errors instead of silent truncation. ([#122])
 - Fix TAR archive detection to require `ustar` header bytes instead of treating every `.tar` input as valid archive content. ([#112])
 - Release reserved bundle folder names when skipping untrusted candidates to avoid false sanitized-folder collisions. ([#112])
 
@@ -1021,7 +1022,11 @@ Initial release.
 [#110]: https://github.com/sensiblebit/certkit/pull/110
 [#112]: https://github.com/sensiblebit/certkit/pull/112
 [#119]: https://github.com/sensiblebit/certkit/pull/119
+<<<<<<< HEAD
 [#121]: https://github.com/sensiblebit/certkit/pull/121
+=======
+[#122]: https://github.com/sensiblebit/certkit/pull/122
+>>>>>>> c647b36 (fix(scan): fail fast on oversized AIA responses)
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63
