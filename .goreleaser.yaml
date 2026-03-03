@@ -62,6 +62,7 @@ homebrew_casks:
     homepage: https://github.com/sensiblebit/certkit
     description: A certificate management tool that ingests TLS/SSL certificates and keys, catalogs them in SQLite, and exports organized bundles.
     custom_block: |
+      conflicts_with cask: "certkit@nightly"
       postflight do
         system_command "/usr/bin/xattr",
                        args: ["-dr", "com.apple.quarantine", "#{staged_path}"]

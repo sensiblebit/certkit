@@ -120,12 +120,37 @@ cask "certkit@nightly" do
 end
 EOF
 
+          stable_cask="/tmp/homebrew-tap/Casks/certkit.rb"
+          if [[ -f "${stable_cask}" ]] && ! grep -q 'conflicts_with cask: "certkit@nightly"' "${stable_cask}"; then
+            awk '
+              /^[[:space:]]*binary "certkit"/ && !inserted {
+                print "  conflicts_with cask: \"certkit@nightly\""
+                inserted=1
+              }
+              { print }
+              END {
+                if (!inserted) {
+                  exit 7
+                }
+              }
+            ' "${stable_cask}" > "${stable_cask}.tmp"
+            mv "${stable_cask}.tmp" "${stable_cask}"
+          fi
+
       - name: Commit and push tap update
         run: |
           set -euo pipefail
           cd /tmp/homebrew-tap
 
-          if git diff --quiet -- Casks/certkit@nightly.rb; then
+          changed=0
+          if ! git diff --quiet -- Casks/certkit@nightly.rb; then
+            changed=1
+          fi
+          if [[ -f Casks/certkit.rb ]] && ! git diff --quiet -- Casks/certkit.rb; then
+            changed=1
+          fi
+
+          if [[ "${changed}" -eq 0 ]]; then
             echo "No cask changes detected."
             exit 0
           fi
@@ -134,5 +159,8 @@ EOF
           git config user.email "github-actions[bot]@users.noreply.github.com"
 
           git add Casks/certkit@nightly.rb
+          if [[ -f Casks/certkit.rb ]]; then
+            git add Casks/certkit.rb
+          fi
           git commit -m "chore: update certkit@nightly to ${{ steps.meta.outputs.nightly_version }}"
           git push origin HEAD:main
