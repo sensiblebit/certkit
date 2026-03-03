@@ -1,6 +1,7 @@
 package certkit
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"crypto/tls"
@@ -21,7 +22,7 @@ const defaultConnectTimeout = 10 * time.Second
 
 // ChainDiagnostic describes a single chain configuration issue found during connection probing.
 type ChainDiagnostic struct {
-	// Check is the diagnostic identifier (e.g. "root-in-chain", "duplicate-cert", "missing-intermediate").
+	// Check is the diagnostic identifier (e.g. "root-in-chain", "duplicate-cert", "misordered-chain", "missing-intermediate").
 	Check string `json:"check"`
 	// Status is the severity level: "warn" for configuration issues, "error" for verification failures.
 	Status string `json:"status"`
@@ -37,7 +38,7 @@ type DiagnoseConnectChainInput struct {
 
 // DiagnoseConnectChain inspects a server-presented certificate chain for
 // misconfigurations: root certificates included in the chain (wastes bandwidth,
-// per RFC 8446 §4.4.2) and duplicate certificates.
+// per RFC 8446 §4.4.2), duplicate certificates, and misordered intermediates.
 func DiagnoseConnectChain(input DiagnoseConnectChainInput) []ChainDiagnostic {
 	var diags []ChainDiagnostic
 
@@ -65,6 +66,47 @@ func DiagnoseConnectChain(input DiagnoseConnectChainInput) []ChainDiagnostic {
 				Detail: fmt.Sprintf("server sent root certificate %q (position %d)", FormatDNFromRaw(cert.RawSubject, cert.Subject), i),
 			})
 		}
+	}
+
+	// Check for misordered chains where the correct issuer is present later in
+	// the server-sent list, but not directly after the certificate it issued.
+	for i := 0; i+1 < len(input.PeerChain); i++ {
+		cert := input.PeerChain[i]
+		next := input.PeerChain[i+1]
+
+		// Adjacent issuer matches expected order.
+		if bytes.Equal(cert.RawIssuer, next.RawSubject) {
+			continue
+		}
+
+		expectedPos := -1
+		for j := i + 2; j < len(input.PeerChain); j++ {
+			if bytes.Equal(cert.RawIssuer, input.PeerChain[j].RawSubject) {
+				expectedPos = j
+				break
+			}
+		}
+		// If the issuer is absent, this is likely an incomplete chain, not
+		// a misordered one.
+		if expectedPos == -1 {
+			continue
+		}
+
+		expectedIssuer := input.PeerChain[expectedPos]
+		diags = append(diags, ChainDiagnostic{
+			Check:  "misordered-chain",
+			Status: "warn",
+			Detail: fmt.Sprintf(
+				"certificate %q (position %d) is issued by %q (position %d), but position %d contains %q",
+				FormatDNFromRaw(cert.RawSubject, cert.Subject),
+				i,
+				FormatDNFromRaw(expectedIssuer.RawSubject, expectedIssuer.Subject),
+				expectedPos,
+				i+1,
+				FormatDNFromRaw(next.RawSubject, next.Subject),
+			),
+		})
+		break
 	}
 
 	return diags
