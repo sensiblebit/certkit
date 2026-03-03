@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Use `MemStore` count accessors for scan snapshot totals to avoid unnecessary full-slice materialization when reporting progress. ([#112])
 - Normalize `connect` verify status labels from `OK`/`FAILED` to lowercase `ok`/`failed`. ([#112])
 - Consolidate shared `connect` status-line formatting between standard and verbose text output paths. ([#121])
+- Centralize pre-commit hooks under the shared `sensiblebit/.github` hook set (including shared `markdownlint`) and run dependency update hooks first; refresh resulting indirect Go and web lockfile dependencies. ([#128])
 
 ### Added
 
@@ -1032,6 +1033,7 @@ Initial release.
 [#122]: https://github.com/sensiblebit/certkit/pull/122
 [#126]: https://github.com/sensiblebit/certkit/pull/126
 [#127]: https://github.com/sensiblebit/certkit/pull/127
+[#128]: https://github.com/sensiblebit/certkit/pull/128
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63
