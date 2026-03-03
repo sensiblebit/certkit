@@ -1,6 +1,6 @@
 repos:
   - repo: https://github.com/sensiblebit/.github
-    rev: "18310fd25db7cb182403c55e6495a2f9049b3078"
+    rev: "c50f977afaa9eaf67c13a08f5fae77ed4baf0015"
     hooks:
       - id: branch-name
       - id: commit-message
@@ -22,11 +22,3 @@ repos:
       - id: wrangler-build
       - id: go-test
       - id: vitest
-  - repo: local
-    hooks:
-      - id: golangci-lint-clean-cache
-        name: golangci-lint (clean cache)
-        entry: bash -c 'golangci-lint cache clean && golangci-lint run ./...'
-        language: system
-        pass_filenames: false
-        types: [go]
