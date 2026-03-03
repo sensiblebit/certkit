@@ -173,6 +173,7 @@ EOF
             git add Casks/certkit.rb
           fi
           git commit -m "chore: update certkit@nightly to ${{ steps.meta.outputs.nightly_version }}"
+          git pull --rebase origin main
           git push origin HEAD:main
 
       - name: Prune superseded nightly release assets
