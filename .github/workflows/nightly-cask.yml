@@ -63,14 +63,10 @@ jobs:
           set -euo pipefail
 
           if gh release view nightly >/dev/null 2>&1; then
-            gh release edit nightly --prerelease --title "Nightly" --notes "Auto-updated nightly snapshot of main."
+            gh release edit nightly --target "${GITHUB_SHA}" --prerelease --title "Nightly" --notes "Auto-updated nightly snapshot of main."
           else
             gh release create nightly --target "${GITHUB_SHA}" --prerelease --title "Nightly" --notes "Auto-updated nightly snapshot of main."
           fi
-
-          gh release view nightly --json assets --jq '.assets[].id' | while read -r asset_id; do
-            gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"
-          done
 
           gh release upload nightly /tmp/nightly-dist/*.tar.gz
 
@@ -133,19 +129,29 @@ EOF
 
           stable_cask="homebrew-tap/Casks/certkit.rb"
           if [[ -f "${stable_cask}" ]] && ! grep -q 'conflicts_with cask: "certkit@nightly"' "${stable_cask}"; then
-            awk '
-              /^[[:space:]]*binary "certkit"/ && !inserted {
-                print "  conflicts_with cask: \"certkit@nightly\""
-                inserted=1
-              }
-              { print }
-              END {
-                if (!inserted) {
-                  exit 7
+            if grep -q '^[[:space:]]*binary "certkit"' "${stable_cask}"; then
+              awk '
+                /^[[:space:]]*binary "certkit"/ && !inserted {
+                  print "  conflicts_with cask: \"certkit@nightly\""
+                  inserted=1
                 }
-              }
-            ' "${stable_cask}" > "${stable_cask}.tmp"
-            mv "${stable_cask}.tmp" "${stable_cask}"
+                { print }
+              ' "${stable_cask}" > "${stable_cask}.tmp"
+              mv "${stable_cask}.tmp" "${stable_cask}"
+            elif grep -q '^[[:space:]]*cask[[:space:]]+"certkit"[[:space:]]+do[[:space:]]*$' "${stable_cask}"; then
+              awk '
+                /^[[:space:]]*cask[[:space:]]+"certkit"[[:space:]]+do[[:space:]]*$/ && !inserted {
+                  print
+                  print "  conflicts_with cask: \"certkit@nightly\""
+                  inserted=1
+                  next
+                }
+                { print }
+              ' "${stable_cask}" > "${stable_cask}.tmp"
+              mv "${stable_cask}.tmp" "${stable_cask}"
+            else
+              echo "::warning::Unable to patch ${stable_cask}; add conflicts_with cask: \\\"certkit@nightly\\\" manually if needed."
+            fi
           fi
 
       - name: Commit and push tap update
@@ -168,3 +174,21 @@ EOF
           fi
           git commit -m "chore: update certkit@nightly to ${{ steps.meta.outputs.nightly_version }}"
           git push origin HEAD:main
+
+      - name: Prune superseded nightly release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          keep_prefix="certkit_${{ steps.meta.outputs.nightly_version }}_"
+          gh release view nightly --json assets --jq '.assets[] | [.id, .name] | @tsv' \
+            | while IFS=$'\t' read -r asset_id asset_name; do
+              if [[ "${asset_name}" != certkit_* ]]; then
+                continue
+              fi
+              if [[ "${asset_name}" == "${keep_prefix}"* ]]; then
+                continue
+              fi
+              gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"
+            done
