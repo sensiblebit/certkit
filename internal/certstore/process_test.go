@@ -11,6 +11,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"math/big"
 	"slices"
 	"testing"
@@ -696,6 +697,77 @@ func TestProcessData_PEMCert_CompatRFC822NameConstraint(t *testing.T) {
 	}
 	if len(allCerts[0].Cert.PermittedEmailAddresses) != 1 || allCerts[0].Cert.PermittedEmailAddresses[0] != "@zimperium.com" {
 		t.Fatalf("permitted email constraints = %v, want [@zimperium.com]", allCerts[0].Cert.PermittedEmailAddresses)
+	}
+}
+
+func TestProcessData_PEMCert_CompatFailureContinues(t *testing.T) {
+	// WHY: A malformed CERTIFICATE block that fails both parsers must not abort
+	// ingestion of later valid certificates in the same PEM stream.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "compat-continue.example.com", []string{"compat-continue.example.com"})
+
+	invalid := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("not-der")})
+	data := append(bytes.Clone(invalid), leaf.certPEM...)
+
+	store := NewMemStore()
+	if err := ProcessData(ProcessInput{Data: data, Path: "mixed.pem", Handler: store}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	allCerts := store.AllCertsFlat()
+	if len(allCerts) != 1 {
+		t.Fatalf("expected 1 valid certificate after malformed block, got %d", len(allCerts))
+	}
+	if allCerts[0].Cert.Subject.CommonName != "compat-continue.example.com" {
+		t.Fatalf("subject CN = %q, want compat-continue.example.com", allCerts[0].Cert.Subject.CommonName)
+	}
+}
+
+type rejectingHandler struct {
+	certCalls int
+	keyCalls  int
+}
+
+func (h *rejectingHandler) HandleCertificate(_ *x509.Certificate, _ string) error {
+	h.certCalls++
+	if h.certCalls == 1 {
+		return errors.New("reject first cert")
+	}
+	return nil
+}
+
+func (h *rejectingHandler) HandleKey(_ any, _ []byte, _ string) error {
+	h.keyCalls++
+	if h.keyCalls == 1 {
+		return errors.New("reject first key")
+	}
+	return nil
+}
+
+func TestProcessData_HandlerRejectionContinues(t *testing.T) {
+	// WHY: Handler rejections are per-item failures; parsing should continue for
+	// later cert/key blocks in the same input.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "reject-continue.example.com", []string{"reject-continue.example.com"})
+
+	data := append(bytes.Clone(leaf.certPEM), leaf.certPEM...)
+	data = append(data, leaf.keyPEM...)
+	data = append(data, leaf.keyPEM...)
+
+	h := &rejectingHandler{}
+	if err := ProcessData(ProcessInput{Data: data, Path: "multi.pem", Handler: h}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	if h.certCalls != 2 {
+		t.Fatalf("HandleCertificate calls = %d, want 2", h.certCalls)
+	}
+	if h.keyCalls != 2 {
+		t.Fatalf("HandleKey calls = %d, want 2", h.keyCalls)
 	}
 }
 

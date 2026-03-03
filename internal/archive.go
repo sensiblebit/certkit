@@ -91,7 +91,7 @@ func ArchiveHasMagic(format string, data []byte) bool {
 	case "tar.gz":
 		return len(data) >= 2 && data[0] == 0x1f && data[1] == 0x8b
 	case "tar":
-		return true
+		return hasTARMagic(data)
 	default:
 		return false
 	}
@@ -361,4 +361,11 @@ func hasZIPMagic(data []byte) bool {
 	return bytes.Equal(data[:4], []byte("PK\x03\x04")) ||
 		bytes.Equal(data[:4], []byte("PK\x05\x06")) ||
 		bytes.Equal(data[:4], []byte("PK\x07\x08"))
+}
+
+func hasTARMagic(data []byte) bool {
+	if len(data) < 262 {
+		return false
+	}
+	return bytes.Equal(data[257:262], []byte("ustar"))
 }

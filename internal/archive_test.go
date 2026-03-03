@@ -40,6 +40,8 @@ func TestArchiveFormat(t *testing.T) {
 }
 
 func TestArchiveHasMagic(t *testing.T) {
+	// WHY: Extension-based archive handling must only trigger when bytes match
+	// the expected archive format signature.
 	t.Parallel()
 
 	tests := []struct {
@@ -54,7 +56,8 @@ func TestArchiveHasMagic(t *testing.T) {
 		{name: "zip missing magic", format: "zip", data: []byte("notzip"), want: false},
 		{name: "tar gz magic", format: "tar.gz", data: []byte{0x1f, 0x8b, 0x08}, want: true},
 		{name: "tar gz missing magic", format: "tar.gz", data: []byte("notgz"), want: false},
-		{name: "tar extension only", format: "tar", data: []byte("anything"), want: true},
+		{name: "tar magic", format: "tar", data: tarMagicFixture(), want: true},
+		{name: "tar missing magic", format: "tar", data: []byte("nottar"), want: false},
 		{name: "unknown format", format: "rar", data: []byte("Rar!"), want: false},
 	}
 
@@ -67,6 +70,12 @@ func TestArchiveHasMagic(t *testing.T) {
 			}
 		})
 	}
+}
+
+func tarMagicFixture() []byte {
+	buf := make([]byte, 512)
+	copy(buf[257:262], []byte("ustar"))
+	return buf
 }
 
 func TestProcessArchive_PEMCertAllFormats(t *testing.T) {

@@ -2,6 +2,7 @@ package certstore
 
 import (
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -133,6 +134,34 @@ func TestGenerateBundleFiles_AllFileTypes(t *testing.T) {
 			}
 			if secret.Data["tls.key"] == "" {
 				t.Error("k8s.yaml: tls.key is empty")
+			}
+
+			tlsCrtBytes, err := base64.StdEncoding.DecodeString(secret.Data["tls.crt"])
+			if err != nil {
+				t.Fatalf("k8s.yaml: decode tls.crt: %v", err)
+			}
+			leafCert, err := certkit.ParsePEMCertificate(tlsCrtBytes)
+			if err != nil {
+				t.Fatalf("k8s.yaml: parse tls.crt PEM: %v", err)
+			}
+			if leafCert.Subject.CommonName != "example.com" {
+				t.Fatalf("k8s.yaml: tls.crt CN = %q, want example.com", leafCert.Subject.CommonName)
+			}
+
+			tlsKeyBytes, err := base64.StdEncoding.DecodeString(secret.Data["tls.key"])
+			if err != nil {
+				t.Fatalf("k8s.yaml: decode tls.key: %v", err)
+			}
+			key, err := certkit.ParsePEMPrivateKey(tlsKeyBytes)
+			if err != nil {
+				t.Fatalf("k8s.yaml: parse tls.key PEM: %v", err)
+			}
+			matches, err := certkit.KeyMatchesCert(key, leafCert)
+			if err != nil {
+				t.Fatalf("k8s.yaml: key-cert match check: %v", err)
+			}
+			if !matches {
+				t.Fatal("k8s.yaml: tls.key does not match tls.crt")
 			}
 		}
 	}
@@ -1067,6 +1096,57 @@ func TestExportMatchedBundles_WildcardFolder(t *testing.T) {
 	}
 }
 
+func TestExportMatchedBundles_InvalidBundleNameFallsBackToCN(t *testing.T) {
+	// WHY: Invalid bundle names from upstream assignment should fall back to a
+	// CN-derived safe folder inside ExportMatchedBundles.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "fallback.example.com", []string{"fallback.example.com"})
+
+	store := NewMemStore()
+	if err := store.HandleCertificate(leaf.cert, "test"); err != nil {
+		t.Fatalf("store cert: %v", err)
+	}
+	if err := store.HandleCertificate(ca.cert, "test"); err != nil {
+		t.Fatalf("store CA cert: %v", err)
+	}
+	if err := store.HandleKey(leaf.key, leaf.keyPEM, "test"); err != nil {
+		t.Fatalf("store key: %v", err)
+	}
+
+	skis := store.MatchedPairs()
+	if len(skis) == 0 {
+		t.Fatal("expected at least one matched pair")
+	}
+	store.SetBundleName(skis[0], "..")
+
+	var written []mockWriteCall
+	writer := &mockBundleWriter{calls: &written}
+
+	err := ExportMatchedBundles(t.Context(), ExportMatchedBundleInput{
+		Store:  store,
+		SKIs:   skis,
+		Writer: writer,
+		BundleOpts: certkit.BundleOptions{
+			CustomRoots: []*x509.Certificate{ca.cert},
+			TrustStore:  "custom",
+			Verify:      true,
+		},
+		P12Password: "testpass",
+	})
+	if err != nil {
+		t.Fatalf("ExportMatchedBundles: %v", err)
+	}
+
+	if len(written) != 1 {
+		t.Fatalf("expected 1 write call, got %d", len(written))
+	}
+	if written[0].folder != "fallback.example.com" {
+		t.Fatalf("folder = %q, want fallback.example.com", written[0].folder)
+	}
+}
+
 func TestExportMatchedBundles_RetryNoVerify(t *testing.T) {
 	// WHY: RetryNoVerify retries bundling with Verify=false when verification fails
 	// (e.g., private CA). This 5-line code path (export.go:335-339) had zero test
@@ -1124,6 +1204,101 @@ func TestExportMatchedBundles_RetryNoVerify(t *testing.T) {
 		if len(f.Data) == 0 {
 			t.Errorf("file %q has empty data after retry", f.Name)
 		}
+	}
+}
+
+func TestExportMatchedBundles_NoRetryWhenDisabled(t *testing.T) {
+	// WHY: When RetryNoVerify is false, verification failures must be returned to
+	// callers instead of silently falling back.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "noretry.example.com", []string{"noretry.example.com"})
+
+	store := NewMemStore()
+	if err := store.HandleCertificate(leaf.cert, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HandleCertificate(ca.cert, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HandleKey(leaf.key, leaf.keyPEM, "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	skis := store.MatchedPairs()
+	if len(skis) == 0 {
+		t.Fatal("expected at least one matched pair")
+	}
+
+	var written []mockWriteCall
+	writer := &mockBundleWriter{calls: &written}
+
+	err := ExportMatchedBundles(t.Context(), ExportMatchedBundleInput{
+		Store: store,
+		SKIs:  skis,
+		BundleOpts: certkit.BundleOptions{
+			TrustStore: "mozilla",
+			Verify:     true,
+		},
+		Writer:        writer,
+		RetryNoVerify: false,
+		P12Password:   "testpass",
+	})
+	if err == nil {
+		t.Fatal("expected verification error with RetryNoVerify disabled")
+	}
+	if !errors.Is(err, certkit.ErrChainVerificationFailed) {
+		t.Fatalf("error = %v, want ErrChainVerificationFailed", err)
+	}
+	if len(written) != 0 {
+		t.Fatalf("expected 0 writes after verification failure, got %d", len(written))
+	}
+}
+
+func TestExportMatchedBundles_VerifyFalseDoesNotNeedRetry(t *testing.T) {
+	// WHY: Verify=false should succeed directly even when RetryNoVerify=true,
+	// proving the retry path is unnecessary in no-verify mode.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "noverify.example.com", []string{"noverify.example.com"})
+
+	store := NewMemStore()
+	if err := store.HandleCertificate(leaf.cert, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HandleCertificate(ca.cert, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HandleKey(leaf.key, leaf.keyPEM, "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	skis := store.MatchedPairs()
+	if len(skis) == 0 {
+		t.Fatal("expected at least one matched pair")
+	}
+
+	var written []mockWriteCall
+	writer := &mockBundleWriter{calls: &written}
+
+	err := ExportMatchedBundles(t.Context(), ExportMatchedBundleInput{
+		Store: store,
+		SKIs:  skis,
+		BundleOpts: certkit.BundleOptions{
+			TrustStore: "mozilla",
+			Verify:     false,
+		},
+		Writer:        writer,
+		RetryNoVerify: true,
+		P12Password:   "testpass",
+	})
+	if err != nil {
+		t.Fatalf("ExportMatchedBundles: %v", err)
+	}
+	if len(written) != 1 {
+		t.Fatalf("expected 1 write call, got %d", len(written))
 	}
 }
 

@@ -466,6 +466,16 @@ func TestConnectTLS_ClientAuth(t *testing.T) {
 			if len(result.ClientAuth.SignatureSchemes) == 0 {
 				t.Error("SignatureSchemes is empty")
 			}
+			hasNamedScheme := false
+			for _, scheme := range result.ClientAuth.SignatureSchemes {
+				if !strings.HasPrefix(scheme, "0x") {
+					hasNamedScheme = true
+					break
+				}
+			}
+			if !hasNamedScheme {
+				t.Errorf("expected at least one named signature scheme, got %v", result.ClientAuth.SignatureSchemes)
+			}
 
 			// Chain should still be present and verifiable properties intact.
 			if len(result.PeerChain) == 0 {
@@ -3364,6 +3374,8 @@ func TestConnectTLS_CRL_DuplicateLeafInChain(t *testing.T) {
 }
 
 func TestSignatureSchemeString(t *testing.T) {
+	// WHY: Human-readable scheme names are user-facing security diagnostics;
+	// explicit and fallback mappings must remain stable across Go/TLS updates.
 	t.Parallel()
 
 	tests := []struct {
@@ -3372,15 +3384,27 @@ func TestSignatureSchemeString(t *testing.T) {
 		want   string
 	}{
 		{name: "rsa pss rsae sha256", scheme: tls.PSSWithSHA256, want: "RSA-PSS-SHA256"},
+		{name: "rsa pss rsae sha384", scheme: tls.PSSWithSHA384, want: "RSA-PSS-SHA384"},
+		{name: "rsa pss rsae sha512", scheme: tls.PSSWithSHA512, want: "RSA-PSS-SHA512"},
 		{name: "rsa pss pss sha256", scheme: tls.SignatureScheme(0x0809), want: "RSA-PSS-PSS-SHA256"},
 		{name: "rsa pss pss sha384", scheme: tls.SignatureScheme(0x080a), want: "RSA-PSS-PSS-SHA384"},
 		{name: "rsa pss pss sha512", scheme: tls.SignatureScheme(0x080b), want: "RSA-PSS-PSS-SHA512"},
+		{name: "explicit rsa pkcs1 sha256", scheme: tls.PKCS1WithSHA256, want: "RSA-PKCS1-SHA256"},
+		{name: "explicit rsa pkcs1 sha384", scheme: tls.PKCS1WithSHA384, want: "RSA-PKCS1-SHA384"},
+		{name: "explicit rsa pkcs1 sha512", scheme: tls.PKCS1WithSHA512, want: "RSA-PKCS1-SHA512"},
+		{name: "explicit rsa pkcs1 sha1", scheme: tls.PKCS1WithSHA1, want: "RSA-PKCS1-SHA1"},
 		{name: "rsa pkcs1 sha224", scheme: tls.SignatureScheme(0x0301), want: "RSA-PKCS1-SHA224"},
+		{name: "explicit ecdsa sha256", scheme: tls.ECDSAWithP256AndSHA256, want: "ECDSA-P256-SHA256"},
+		{name: "explicit ecdsa sha384", scheme: tls.ECDSAWithP384AndSHA384, want: "ECDSA-P384-SHA384"},
 		{name: "ecdsa sha224", scheme: tls.SignatureScheme(0x0303), want: "ECDSA-SHA224"},
+		{name: "explicit ecdsa sha1", scheme: tls.ECDSAWithSHA1, want: "ECDSA-SHA1"},
 		{name: "legacy rsa md5", scheme: tls.SignatureScheme(0x0101), want: "RSA-MD5"},
 		{name: "legacy dsa sha1", scheme: tls.SignatureScheme(0x0202), want: "DSA-SHA1"},
-		{name: "legacy ecdsa sha512", scheme: tls.SignatureScheme(0x0603), want: "ECDSA-P521-SHA512"},
+		{name: "explicit ecdsa sha512", scheme: tls.SignatureScheme(0x0603), want: "ECDSA-P521-SHA512"},
+		{name: "explicit ed25519", scheme: tls.Ed25519, want: "Ed25519"},
 		{name: "eddsa ed448", scheme: tls.SignatureScheme(0x0808), want: "Ed448"},
+		{name: "known hash unknown sig falls back", scheme: tls.SignatureScheme(0x0100), want: "0x0100"},
+		{name: "unknown hash known sig falls back", scheme: tls.SignatureScheme(0x0001), want: "0x0001"},
 		{name: "fallback unknown", scheme: tls.SignatureScheme(0x1234), want: "0x1234"},
 	}
 

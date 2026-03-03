@@ -82,6 +82,60 @@ func TestMemStore_HandleCertificate_DuplicateIgnored(t *testing.T) {
 	}
 }
 
+func TestMemStore_Counts(t *testing.T) {
+	// WHY: CertCount/KeyCount are used by scan progress and must reflect dedup
+	// and key-overwrite behavior accurately.
+	t.Parallel()
+
+	store := NewMemStore()
+	if store.CertCount() != 0 {
+		t.Fatalf("initial CertCount = %d, want 0", store.CertCount())
+	}
+	if store.KeyCount() != 0 {
+		t.Fatalf("initial KeyCount = %d, want 0", store.KeyCount())
+	}
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "counts.example.com", []string{"counts.example.com"})
+
+	if err := store.HandleCertificate(leaf.cert, "first.pem"); err != nil {
+		t.Fatal(err)
+	}
+	if store.CertCount() != 1 {
+		t.Fatalf("CertCount after first cert = %d, want 1", store.CertCount())
+	}
+
+	if err := store.HandleCertificate(leaf.cert, "duplicate.pem"); err != nil {
+		t.Fatal(err)
+	}
+	if store.CertCount() != 1 {
+		t.Fatalf("CertCount after duplicate cert = %d, want 1", store.CertCount())
+	}
+
+	if err := store.HandleKey(leaf.key, leaf.keyPEM, "first.key"); err != nil {
+		t.Fatal(err)
+	}
+	if store.KeyCount() != 1 {
+		t.Fatalf("KeyCount after first key = %d, want 1", store.KeyCount())
+	}
+
+	if err := store.HandleKey(leaf.key, leaf.keyPEM, "replacement.key"); err != nil {
+		t.Fatal(err)
+	}
+	if store.KeyCount() != 1 {
+		t.Fatalf("KeyCount after replacement key = %d, want 1", store.KeyCount())
+	}
+
+	ski := computeSKIHex(t, leaf.cert)
+	rec := store.GetKey(ski)
+	if rec == nil {
+		t.Fatal("expected key record for leaf SKI")
+	}
+	if rec.Source != "replacement.key" {
+		t.Fatalf("key source = %q, want replacement.key", rec.Source)
+	}
+}
+
 func TestMemStore_HandleCertificate_MissingAKIDUsesIssuerIdentity(t *testing.T) {
 	// WHY: Certificates without AKI should deduplicate by issuer+serial, not
 	// serial alone. Different issuers may legitimately issue the same serial.

@@ -62,8 +62,8 @@ func snapshotStoreCounts(store *certstore.MemStore) storeCounts {
 	}
 
 	return storeCounts{
-		certs: len(store.AllCertsFlat()),
-		keys:  len(store.AllKeysFlat()),
+		certs: store.CertCount(),
+		keys:  store.KeyCount(),
 	}
 }
 
