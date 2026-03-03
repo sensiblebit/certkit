@@ -5,10 +5,13 @@ import (
 	"crypto/ed25519"
 	"crypto/x509"
 	stdpkix "crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/pem"
 	"log/slog"
+	"net"
 	"strings"
 
+	ctasn1 "github.com/google/certificate-transparency-go/asn1"
 	ctx509 "github.com/google/certificate-transparency-go/x509"
 	ctpkix "github.com/google/certificate-transparency-go/x509/pkix"
 	"github.com/sensiblebit/certkit"
@@ -70,10 +73,10 @@ func processPEMCertificates(data []byte, source string, handler CertHandler) {
 			var fallbackErr error
 			cert, fallbackErr = parseCertificateCompat(block.Bytes)
 			if fallbackErr != nil {
-				slog.Debug("skipping malformed certificate", "path", source, "error", err)
+				slog.Debug("skipping malformed certificate", "path", source, "parse_error", err, "compat_error", fallbackErr)
 				continue
 			}
-			slog.Debug("parsed certificate with compatibility parser", "path", source, "error", err)
+			slog.Debug("parsed certificate with compatibility parser", "path", source, "parse_error", err)
 		}
 		if err := handler.HandleCertificate(cert, source); err != nil {
 			slog.Debug("handler rejected certificate", "path", source, "error", err)
@@ -91,32 +94,48 @@ func parseCertificateCompat(der []byte) (*x509.Certificate, error) {
 	}
 
 	cert := &x509.Certificate{
-		Raw:                     ctCert.Raw,
-		RawTBSCertificate:       ctCert.RawTBSCertificate,
-		RawSubjectPublicKeyInfo: ctCert.RawSubjectPublicKeyInfo,
-		RawSubject:              ctCert.RawSubject,
-		RawIssuer:               ctCert.RawIssuer,
-		Signature:               ctCert.Signature,
-		PublicKey:               ctCert.PublicKey,
-		Version:                 ctCert.Version,
-		SerialNumber:            ctCert.SerialNumber,
-		Issuer:                  convertPKIXName(ctCert.Issuer),
-		Subject:                 convertPKIXName(ctCert.Subject),
-		NotBefore:               ctCert.NotBefore,
-		NotAfter:                ctCert.NotAfter,
-		IsCA:                    ctCert.IsCA,
-		BasicConstraintsValid:   ctCert.BasicConstraintsValid,
-		MaxPathLen:              ctCert.MaxPathLen,
-		MaxPathLenZero:          ctCert.MaxPathLenZero,
-		SubjectKeyId:            ctCert.SubjectKeyId,
-		AuthorityKeyId:          ctCert.AuthorityKeyId,
-		DNSNames:                ctCert.DNSNames,
-		EmailAddresses:          ctCert.EmailAddresses,
-		IPAddresses:             ctCert.IPAddresses,
-		URIs:                    ctCert.URIs,
-		OCSPServer:              ctCert.OCSPServer,
-		IssuingCertificateURL:   ctCert.IssuingCertificateURL,
-		CRLDistributionPoints:   ctCert.CRLDistributionPoints,
+		Raw:                         ctCert.Raw,
+		RawTBSCertificate:           ctCert.RawTBSCertificate,
+		RawSubjectPublicKeyInfo:     ctCert.RawSubjectPublicKeyInfo,
+		RawSubject:                  ctCert.RawSubject,
+		RawIssuer:                   ctCert.RawIssuer,
+		Signature:                   ctCert.Signature,
+		PublicKey:                   ctCert.PublicKey,
+		Version:                     ctCert.Version,
+		SerialNumber:                ctCert.SerialNumber,
+		Issuer:                      convertPKIXName(ctCert.Issuer),
+		Subject:                     convertPKIXName(ctCert.Subject),
+		NotBefore:                   ctCert.NotBefore,
+		NotAfter:                    ctCert.NotAfter,
+		KeyUsage:                    x509.KeyUsage(ctCert.KeyUsage),
+		Extensions:                  convertExtensions(ctCert.Extensions),
+		ExtraExtensions:             convertExtensions(ctCert.ExtraExtensions),
+		UnhandledCriticalExtensions: convertObjectIdentifiers(ctCert.UnhandledCriticalExtensions),
+		ExtKeyUsage:                 convertExtKeyUsages(ctCert.ExtKeyUsage),
+		UnknownExtKeyUsage:          convertObjectIdentifiers(ctCert.UnknownExtKeyUsage),
+		IsCA:                        ctCert.IsCA,
+		BasicConstraintsValid:       ctCert.BasicConstraintsValid,
+		MaxPathLen:                  ctCert.MaxPathLen,
+		MaxPathLenZero:              ctCert.MaxPathLenZero,
+		SubjectKeyId:                ctCert.SubjectKeyId,
+		AuthorityKeyId:              ctCert.AuthorityKeyId,
+		PermittedDNSDomainsCritical: ctCert.PermittedDNSDomainsCritical,
+		PermittedDNSDomains:         append([]string(nil), ctCert.PermittedDNSDomains...),
+		ExcludedDNSDomains:          append([]string(nil), ctCert.ExcludedDNSDomains...),
+		PermittedIPRanges:           append([]*net.IPNet(nil), ctCert.PermittedIPRanges...),
+		ExcludedIPRanges:            append([]*net.IPNet(nil), ctCert.ExcludedIPRanges...),
+		PermittedEmailAddresses:     append([]string(nil), ctCert.PermittedEmailAddresses...),
+		ExcludedEmailAddresses:      append([]string(nil), ctCert.ExcludedEmailAddresses...),
+		PermittedURIDomains:         append([]string(nil), ctCert.PermittedURIDomains...),
+		ExcludedURIDomains:          append([]string(nil), ctCert.ExcludedURIDomains...),
+		DNSNames:                    ctCert.DNSNames,
+		EmailAddresses:              ctCert.EmailAddresses,
+		IPAddresses:                 ctCert.IPAddresses,
+		URIs:                        ctCert.URIs,
+		OCSPServer:                  ctCert.OCSPServer,
+		IssuingCertificateURL:       ctCert.IssuingCertificateURL,
+		CRLDistributionPoints:       ctCert.CRLDistributionPoints,
+		PolicyIdentifiers:           convertObjectIdentifiers(ctCert.PolicyIdentifiers),
 	}
 
 	if algo, ok := convertPublicKeyAlgorithm(ctCert.PublicKeyAlgorithm); ok {
@@ -140,7 +159,49 @@ func convertPKIXName(name ctpkix.Name) stdpkix.Name {
 		PostalCode:         append([]string(nil), name.PostalCode...),
 		SerialNumber:       name.SerialNumber,
 		CommonName:         name.CommonName,
+		Names:              convertAttributeTypeAndValues(name.Names),
+		ExtraNames:         convertAttributeTypeAndValues(name.ExtraNames),
 	}
+}
+
+func convertExtensions(exts []ctpkix.Extension) []stdpkix.Extension {
+	out := make([]stdpkix.Extension, 0, len(exts))
+	for _, ext := range exts {
+		out = append(out, stdpkix.Extension{Id: convertObjectIdentifier(ext.Id), Critical: ext.Critical, Value: ext.Value})
+	}
+	return out
+}
+
+func convertAttributeTypeAndValues(values []ctpkix.AttributeTypeAndValue) []stdpkix.AttributeTypeAndValue {
+	out := make([]stdpkix.AttributeTypeAndValue, 0, len(values))
+	for _, value := range values {
+		out = append(out, stdpkix.AttributeTypeAndValue{Type: convertObjectIdentifier(value.Type), Value: value.Value})
+	}
+	return out
+}
+
+func convertObjectIdentifiers(oids []ctasn1.ObjectIdentifier) []asn1.ObjectIdentifier {
+	out := make([]asn1.ObjectIdentifier, 0, len(oids))
+	for _, oid := range oids {
+		out = append(out, convertObjectIdentifier(oid))
+	}
+	return out
+}
+
+func convertObjectIdentifier(oid ctasn1.ObjectIdentifier) asn1.ObjectIdentifier {
+	converted := make(asn1.ObjectIdentifier, len(oid))
+	for i, v := range oid {
+		converted[i] = int(v)
+	}
+	return converted
+}
+
+func convertExtKeyUsages(usages []ctx509.ExtKeyUsage) []x509.ExtKeyUsage {
+	out := make([]x509.ExtKeyUsage, 0, len(usages))
+	for _, usage := range usages {
+		out = append(out, x509.ExtKeyUsage(usage))
+	}
+	return out
 }
 
 func convertPublicKeyAlgorithm(algo ctx509.PublicKeyAlgorithm) (x509.PublicKeyAlgorithm, bool) {

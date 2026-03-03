@@ -221,12 +221,7 @@ func isBundleVerificationError(err error) bool {
 	}
 
 	var constraintViolationErr x509.ConstraintViolationError
-	if errors.As(err, &constraintViolationErr) {
-		return true
-	}
-
-	var systemRootsErr x509.SystemRootsError
-	return errors.As(err, &systemRootsErr)
+	return errors.As(err, &constraintViolationErr)
 }
 
 // folderOverrideWriter wraps filesystemWriter but forces a specific folder name

@@ -69,6 +69,16 @@ func NewMemStore() *MemStore {
 	}
 }
 
+// CertCount returns the number of unique certificates in the store.
+func (s *MemStore) CertCount() int {
+	return len(s.certsByID)
+}
+
+// KeyCount returns the number of private keys in the store.
+func (s *MemStore) KeyCount() int {
+	return len(s.keys)
+}
+
 // HandleCertificate computes the SKI and stores the certificate. Certificates
 // are deduplicated by serial plus authority identity (AKI when present,
 // otherwise raw issuer), matching RFC 5280 identity for missing-AKI

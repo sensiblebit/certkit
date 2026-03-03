@@ -691,6 +691,12 @@ func TestProcessData_PEMCert_CompatRFC822NameConstraint(t *testing.T) {
 	if allCerts[0].Cert.Subject.CommonName != "compat-name-constraint-ca" {
 		t.Fatalf("subject CN = %q, want %q", allCerts[0].Cert.Subject.CommonName, "compat-name-constraint-ca")
 	}
+	if allCerts[0].Cert.KeyUsage != (x509.KeyUsageCertSign | x509.KeyUsageCRLSign) {
+		t.Fatalf("key usage = %v, want cert-sign+crl-sign", allCerts[0].Cert.KeyUsage)
+	}
+	if len(allCerts[0].Cert.PermittedEmailAddresses) != 1 || allCerts[0].Cert.PermittedEmailAddresses[0] != "@zimperium.com" {
+		t.Fatalf("permitted email constraints = %v, want [@zimperium.com]", allCerts[0].Cert.PermittedEmailAddresses)
+	}
 }
 
 // TestProcessData_EndToEnd_IngestExportRoundTrip verifies the full pipeline:

@@ -41,7 +41,7 @@ When a key is provided (via --key or embedded in a PKCS#12/JKS file), the
 matching certificate is automatically selected as the leaf. Remaining
 certificates are used as extra intermediates for chain building.
 
-PKCS#12/JKS outputs require an explicit export password via --passwords or
+PKCS#12/JKS outputs use the first non-empty export password from --passwords or
 --password-file. When omitted, export defaults to password "changeit".`,
 	Example: `  certkit bundle cert.pem
   certkit bundle cert.pem --key key.pem --format p12 -o bundle.p12

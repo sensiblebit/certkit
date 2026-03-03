@@ -33,7 +33,7 @@ When --key is provided, convert matches keys to leaf certificates and builds
 chain bundles. If multiple keys match different certs, JKS output creates a
 multi-alias keystore. PKCS#12 supports only a single key entry.
 
-PKCS#12/JKS outputs require an explicit export password via --passwords or
+PKCS#12/JKS outputs use the first non-empty export password from --passwords or
 --password-file. When omitted, export defaults to password "changeit".`,
 	Example: `  certkit convert cert.der --to pem
   certkit convert cert.pem --to der -o cert.der

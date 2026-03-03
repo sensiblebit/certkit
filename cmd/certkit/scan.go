@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
@@ -82,25 +81,27 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 	passwords := passwordSets.Decode
 	scannedFiles := 0
-	var progressRootPool *x509.CertPool
 	var lastProgressUpdate time.Time
 	stdoutInfo, err := os.Stdout.Stat()
 	if err != nil {
-		return fmt.Errorf("stat stdout: %w", err)
+		slog.Debug("disabling scan progress: stat stdout", "error", err)
 	}
-	progressEnabled := !jsonOutput && scanFormat == "text" && (stdoutInfo.Mode()&os.ModeCharDevice) != 0
-	if progressEnabled {
-		progressRootPool, err = certkit.MozillaRootPool()
-		if err != nil {
-			return fmt.Errorf("loading Mozilla root pool: %w", err)
-		}
-	}
+	progressEnabled := err == nil && !jsonOutput && scanFormat == "text" && (stdoutInfo.Mode()&os.ModeCharDevice) != 0
 	progressWidth := 0
-	formatScanProgressLine := func(summary certstore.ScanSummary, files int) string {
+	clearScanProgressLine := func() error {
+		if !progressEnabled || progressWidth == 0 {
+			return nil
+		}
+		if _, err := fmt.Fprintf(os.Stdout, "\r%s\r", strings.Repeat(" ", progressWidth)); err != nil {
+			return fmt.Errorf("clearing scan progress line: %w", err)
+		}
+		return nil
+	}
+	formatScanProgressLine := func(certs, keys, files int) string {
 		return fmt.Sprintf(
 			"Found %d certificate(s) and %d key(s) in %d file(s)",
-			summary.Roots+summary.Intermediates+summary.Leaves,
-			summary.Keys,
+			certs,
+			keys,
 			files,
 		)
 	}
@@ -111,8 +112,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 		if !lastProgressUpdate.IsZero() && time.Since(lastProgressUpdate) < 250*time.Millisecond {
 			return nil
 		}
-		summary := store.ScanSummary(certstore.ScanSummaryInput{RootPool: progressRootPool})
-		line := formatScanProgressLine(summary, scannedFiles)
+		line := formatScanProgressLine(store.CertCount(), store.KeyCount(), scannedFiles)
 		if progressWidth > len(line) {
 			line += strings.Repeat(" ", progressWidth-len(line))
 		}
@@ -318,8 +318,8 @@ func runScan(cmd *cobra.Command, args []string) error {
 
 	if scanExport {
 		if progressEnabled {
-			if _, err := fmt.Fprint(os.Stdout, "\r"); err != nil {
-				return fmt.Errorf("updating scan output: %w", err)
+			if err := clearScanProgressLine(); err != nil {
+				return err
 			}
 		}
 		p12Password, err := bundlePassword(passwordSets.Export)
@@ -389,8 +389,8 @@ func runScan(cmd *cobra.Command, args []string) error {
 		}
 	} else {
 		if progressEnabled {
-			if _, err := fmt.Fprint(os.Stdout, "\r"); err != nil {
-				return fmt.Errorf("updating scan output: %w", err)
+			if err := clearScanProgressLine(); err != nil {
+				return err
 			}
 		}
 		// Print summary with trust and expiry annotations
