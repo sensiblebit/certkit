@@ -154,7 +154,7 @@ func processZipArchive(input ProcessArchiveInput) (int, error) {
 		if f.CompressedSize64 > 0 {
 			ratio := int64(f.UncompressedSize64) / int64(f.CompressedSize64)
 			if ratio > input.Limits.MaxDecompressionRatio {
-				slog.Warn("skipping suspicious ZIP entry: decompression ratio too high",
+				slog.Debug("skipping suspicious ZIP entry: decompression ratio too high",
 					"archive", input.ArchivePath, "entry", f.Name,
 					"ratio", ratio, "limit", input.Limits.MaxDecompressionRatio)
 				continue

@@ -355,7 +355,7 @@ func ExportMatchedBundles(ctx context.Context, input ExportMatchedBundleInput) e
 		}
 		if err != nil {
 			wrapped := fmt.Errorf("bundling certificate %q: %w", certRec.Cert.Subject.CommonName, err)
-			slog.Warn("bundling cert", "cn", certRec.Cert.Subject.CommonName, "ski", ski, "error", wrapped)
+			slog.Debug("bundling cert", "cn", certRec.Cert.Subject.CommonName, "ski", ski, "error", wrapped)
 			return wrapped
 		}
 
