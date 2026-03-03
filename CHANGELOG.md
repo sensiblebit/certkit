@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reduce `scan` runtime verbosity by moving ingestion/archive/export progress logs to debug level while keeping final summaries on stdout. ([#112])
 - Default PKCS#12/JKS export passwords to `changeit` when no explicit export password is provided. ([#112])
 - Use `MemStore` count accessors for scan snapshot totals to avoid unnecessary full-slice materialization when reporting progress. ([#112])
+- Normalize `connect` verify status labels from `OK`/`FAILED` to lowercase `ok`/`failed`. ([#112])
 
 ### Removed
 
