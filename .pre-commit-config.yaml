@@ -22,3 +22,11 @@ repos:
       - id: wrangler-build
       - id: go-test
       - id: vitest
+  - repo: local
+    hooks:
+      - id: golangci-lint-sa5011
+        name: golangci-lint (staticcheck SA5011)
+        entry: golangci-lint run -c .golangci-sa5011.yml ./...
+        language: system
+        pass_filenames: false
+        types: [go]
