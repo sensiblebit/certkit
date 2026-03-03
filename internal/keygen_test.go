@@ -152,6 +152,7 @@ func TestGenerateKeyFiles(t *testing.T) {
 	pubBlock, _ := pem.Decode(pubData)
 	if pubBlock == nil {
 		t.Fatal("pub.pem contains no PEM block")
+		return
 	}
 	parsedPub, err := x509.ParsePKIXPublicKey(pubBlock.Bytes)
 	if err != nil {
