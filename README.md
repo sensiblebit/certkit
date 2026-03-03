@@ -32,11 +32,11 @@ brew install sensiblebit/tap/certkit
 
 ### Homebrew Nightly (main snapshots)
 
-Nightly formula updates are published automatically on every push to `main`.
+Nightly cask updates are published automatically on every push to `main`.
 
 ```sh
-brew install sensiblebit/tap/certkit-nightly
-certkit-nightly --version
+brew install sensiblebit/tap/certkit@nightly
+certkit --version
 ```
 
 ### Debian/Ubuntu (Linux)
