@@ -18,6 +18,8 @@ import (
 )
 
 func TestParseCRL(t *testing.T) {
+	// WHY: ParseCRL must accept both DER and PEM-encoded CRLs and reject
+	// malformed input to protect revocation-check call paths.
 	t.Parallel()
 
 	ca := generateTestCA(t, "CRL Test CA")
@@ -78,6 +80,8 @@ func TestParseCRL(t *testing.T) {
 }
 
 func TestCRLContainsCertificate(t *testing.T) {
+	// WHY: Serial lookup in CRL entries drives revocation decisions and must be
+	// correct for revoked, non-revoked, zero-serial, and empty-CRL cases.
 	t.Parallel()
 
 	ca := generateTestCA(t, "CRL Contains CA")
@@ -137,6 +141,8 @@ func TestCRLContainsCertificate(t *testing.T) {
 }
 
 func TestCRLInfoFromList(t *testing.T) {
+	// WHY: CRL metadata formatting powers CLI output and must preserve entry
+	// counts, CRL numbers, and key identifying summary fields.
 	t.Parallel()
 
 	ca := generateTestCA(t, "CRL Info CA")
@@ -185,6 +191,8 @@ func TestCRLInfoFromList(t *testing.T) {
 }
 
 func TestFetchCRL(t *testing.T) {
+	// WHY: FetchCRL is the network ingestion path and must enforce HTTP status,
+	// redirect, and SSRF validation semantics consistently.
 	t.Parallel()
 
 	ca := generateTestCA(t, "FetchCRL Test CA")
@@ -281,11 +289,9 @@ func TestFetchCRL(t *testing.T) {
 }
 
 func TestFetchCRL_AllowPrivateNetworks(t *testing.T) {
+	// WHY: User-supplied CRL URLs can opt into private-network access and must
+	// bypass default SSRF blocking only when explicitly requested.
 	t.Parallel()
-
-	// WHY: When AllowPrivateNetworks is true, FetchCRL should succeed even for
-	// loopback IPs. This is used by the `crl` CLI command where the URL is
-	// user-provided, not from an untrusted certificate extension.
 	ca := generateTestCA(t, "FetchCRL Private CA")
 	now := time.Now()
 	crlDER, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
@@ -316,6 +322,8 @@ func TestFetchCRL_AllowPrivateNetworks(t *testing.T) {
 }
 
 func TestCRLSizeLimit(t *testing.T) {
+	// WHY: CRL readers must enforce maximum size limits for both HTTP and local
+	// file inputs to avoid unbounded memory consumption.
 	t.Parallel()
 
 	const tooLargeBytes = 10<<20 + 1
@@ -373,6 +381,8 @@ func TestCRLSizeLimit(t *testing.T) {
 }
 
 func TestCheckLeafCRL(t *testing.T) {
+	// WHY: CheckLeafCRL controls revoked/good/unavailable status reporting and
+	// must correctly handle issuer/signature/CDP edge cases.
 	t.Parallel()
 
 	ca := generateTestCA(t, "CheckLeafCRL CA")
@@ -518,6 +528,8 @@ func TestCheckLeafCRL(t *testing.T) {
 }
 
 func TestFormatCRLLine(t *testing.T) {
+	// WHY: FormatCRLLine is user-facing CLI output; status-specific formatting
+	// must remain stable for scripts and operator readability.
 	t.Parallel()
 
 	tests := []struct {

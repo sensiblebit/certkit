@@ -102,7 +102,7 @@ func TestParseContainerData_JKS_TrustedCertOnly(t *testing.T) {
 	}
 }
 
-func TestParseContainerData_PKCS7(t *testing.T) {
+func TestParseContainerData_PKCS7Bundle(t *testing.T) {
 	// WHY: ParseContainerData has a PKCS#7 parsing branch that must be
 	// exercised directly. Without this, a regression in the PKCS#7 path
 	// could go undetected since ProcessData tests PKCS#7 via a different route.

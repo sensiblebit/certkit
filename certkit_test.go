@@ -1317,6 +1317,8 @@ func TestGenerateECKey_NilCurve(t *testing.T) {
 }
 
 func TestGenerateRSAKey_TooSmall(t *testing.T) {
+	// WHY: GenerateRSAKey must enforce the minimum key size so weak RSA keys
+	// are rejected before any signing or export path can use them.
 	t.Parallel()
 
 	_, err := GenerateRSAKey(1024)
@@ -2037,6 +2039,8 @@ func TestValidateAIAURL(t *testing.T) {
 }
 
 func TestValidateAIAURLWithOptions_HostnameResolution(t *testing.T) {
+	// WHY: DNS resolution in AIA URL validation must reject private or empty
+	// answers and only allow publicly routable resolution results by default.
 	t.Parallel()
 
 	lookup := func(_ context.Context, host string) ([]net.IP, error) {
@@ -2119,6 +2123,8 @@ func TestValidateAIAURLWithOptions_HostnameResolution(t *testing.T) {
 }
 
 func TestValidateAIAURLWithOptions_ContextDeadline(t *testing.T) {
+	// WHY: AIA URL validation must propagate context cancellation/deadline errors
+	// from DNS resolution so callers can enforce strict time bounds.
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Millisecond)

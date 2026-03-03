@@ -179,7 +179,7 @@ func TestProcessData_DERCertificate(t *testing.T) {
 	}
 }
 
-func TestProcessData_PKCS7(t *testing.T) {
+func TestProcessData_PKCS7Bundle(t *testing.T) {
 	// WHY: PKCS#7 bundles contain multiple certs; verifies all are extracted.
 	t.Parallel()
 	ca := newRSACA(t)

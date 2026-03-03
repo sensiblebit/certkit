@@ -9,6 +9,8 @@ import (
 )
 
 func TestJSONSchemaConsistency(t *testing.T) {
+	// WHY: JSON field names are a CLI contract; regressions in key names would
+	// break downstream integrations expecting stable schema keys.
 	t.Parallel()
 
 	t.Run("ocsp verbose uses subject and issuer keys", func(t *testing.T) {

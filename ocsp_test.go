@@ -14,6 +14,8 @@ import (
 )
 
 func TestCheckOCSP_MockResponse(t *testing.T) {
+	// WHY: CheckOCSP must correctly map responder statuses and revocation
+	// metadata into stable result fields used by CLI/API outputs.
 	t.Parallel()
 
 	ca := generateTestCA(t, "OCSP Test CA")
@@ -123,6 +125,8 @@ func TestCheckOCSP_MockResponse(t *testing.T) {
 }
 
 func TestCheckOCSP_InvalidInputs(t *testing.T) {
+	// WHY: Input validation must fail fast for nil cert/issuer and missing
+	// responder URLs to avoid network calls with malformed state.
 	t.Parallel()
 	tests := []struct {
 		name  string
@@ -144,6 +148,8 @@ func TestCheckOCSP_InvalidInputs(t *testing.T) {
 }
 
 func TestFormatOCSPResult(t *testing.T) {
+	// WHY: FormatOCSPResult is user-facing output and must include all key
+	// fields with stable labels for operational debugging.
 	t.Parallel()
 	now := time.Now()
 	result := &OCSPResult{
@@ -172,6 +178,8 @@ func TestFormatOCSPResult(t *testing.T) {
 }
 
 func TestCheckOCSP_PrivateEndpointBlockedByDefault(t *testing.T) {
+	// WHY: OCSP URL validation must block private endpoints by default to
+	// prevent SSRF from certificate-controlled responder URLs.
 	t.Parallel()
 
 	ca := generateTestCA(t, "OCSP Private Endpoint CA")

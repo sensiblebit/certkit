@@ -51,7 +51,7 @@ func TestGenerateKey_CurveAliases(t *testing.T) {
 	}
 }
 
-func TestGenerateKey_Ed25519(t *testing.T) {
+func TestGenerateKey_Ed25519Algorithm(t *testing.T) {
 	// WHY: The Ed25519 branch in GenerateKey (keygen.go:50-55) was the only
 	// algorithm path with zero test coverage. A bug swapping return values
 	// or wrapping the wrong type would go undetected.

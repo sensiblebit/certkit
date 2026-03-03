@@ -19,6 +19,8 @@ import (
 )
 
 func TestCheckExpiration(t *testing.T) {
+	// WHY: Expiration status drives validation pass/fail outcomes and must map
+	// valid, expired, and not-yet-valid certificates correctly.
 	t.Parallel()
 
 	tests := []struct {
@@ -70,6 +72,8 @@ func TestCheckExpiration(t *testing.T) {
 }
 
 func TestCheckKeyStrength(t *testing.T) {
+	// WHY: Key-strength checks enforce minimum cryptographic bar and must return
+	// expected pass/fail status across supported key types.
 	t.Parallel()
 
 	tests := []struct {
@@ -148,6 +152,8 @@ func TestCheckKeyStrength(t *testing.T) {
 }
 
 func TestCheckSignature(t *testing.T) {
+	// WHY: Signature-algorithm diagnostics are security-sensitive and must
+	// classify modern, legacy, and weak algorithms into correct statuses.
 	t.Parallel()
 
 	tests := []struct {
@@ -177,6 +183,8 @@ func TestCheckSignature(t *testing.T) {
 }
 
 func TestCheckTrustChain(t *testing.T) {
+	// WHY: Trust-chain checks must return deterministic failure status for
+	// missing roots and untrusted self-signed leaves.
 	t.Parallel()
 
 	tests := []struct {
@@ -255,6 +263,8 @@ func TestCheckTrustChain(t *testing.T) {
 // where a leaf verifies against a root in the provided pool, exercising the
 // chain-building logic, path formatting, and root CN extraction.
 func TestCheckTrustChain_ValidChain(t *testing.T) {
+	// WHY: A valid chain should produce passing trust-chain diagnostics and a
+	// non-Mozilla root warning while preserving readable chain detail text.
 	t.Parallel()
 
 	ca := newRSACA(t)
@@ -318,6 +328,8 @@ func skiToColonHex(t *testing.T, hexSKI string) string {
 // ValidationResult, Valid field computation, nil-SANs-to-empty-slice
 // conversion, and RFC3339 date formatting.
 func TestRunValidation(t *testing.T) {
+	// WHY: RunValidation aggregates all checks into a single result object and
+	// must preserve status, SAN, and error semantics for callers.
 	t.Parallel()
 
 	tests := []struct {
@@ -494,6 +506,8 @@ func TestRunValidation(t *testing.T) {
 // a cert without DNSNames to verify the conversion independently from the
 // main table-driven test above.
 func TestRunValidation_NilSANsBecomesEmptySlice(t *testing.T) {
+	// WHY: RunValidation must normalize nil SAN lists to an empty slice to keep
+	// JSON/API output stable for clients.
 	t.Parallel()
 
 	// Create a cert with no DNSNames (only a CN).

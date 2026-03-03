@@ -679,7 +679,8 @@ func TestConnectTLS_IPv6Loopback(t *testing.T) {
 		Certificates: []tls.Certificate{tlsCert},
 	})
 	if err != nil {
-		t.Skip("IPv6 loopback not available")
+		t.Logf("IPv6 loopback not available: %v", err)
+		return
 	}
 	t.Cleanup(func() { _ = listener.Close() })
 
