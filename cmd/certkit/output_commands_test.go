@@ -1100,8 +1100,8 @@ func TestRunOCSP_CommandSurfaceOutput(t *testing.T) {
 		if err == nil {
 			t.Fatal("runOCSP expected error for corrupt issuer certificate")
 		}
-		if !strings.Contains(err.Error(), "parsing issuer certificate") {
-			t.Fatalf("runOCSP error = %v, want parsing issuer certificate context", err)
+		if !errors.Is(err, ErrParsingIssuerCertificate) {
+			t.Fatalf("runOCSP error = %v, want errors.Is(err, ErrParsingIssuerCertificate)", err)
 		}
 		if stderr != "" {
 			t.Fatalf("ocsp corrupt issuer wrote unexpected stderr:\n%s", stderr)

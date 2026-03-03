@@ -75,7 +75,7 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 		}
 		issuerCert, err := parseAnyCertificate(issuerData)
 		if err != nil {
-			return fmt.Errorf("parsing issuer certificate: %w", err)
+			return fmt.Errorf("%w: %w", ErrParsingIssuerCertificate, err)
 		}
 		ocspInput = &certkit.CheckOCSPInput{
 			Cert:                 contents.Leaf,
