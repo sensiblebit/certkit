@@ -991,6 +991,14 @@ func TestRunOCSP_CommandSurfaceOutput(t *testing.T) {
 	dir := t.TempDir()
 	caKey, caCert := generateKeyAndCert(t, "OCSP CA", true)
 	issuerPath := writeCertificatePEM114(t, dir, "issuer.pem", caCert)
+	issuerDERPath := filepath.Join(dir, "issuer.der")
+	if err := os.WriteFile(issuerDERPath, caCert.Raw, 0644); err != nil {
+		t.Fatalf("write issuer DER: %v", err)
+	}
+	corruptIssuerPath := filepath.Join(dir, "issuer-corrupt.der")
+	if err := os.WriteFile(corruptIssuerPath, []byte("not-a-certificate"), 0644); err != nil {
+		t.Fatalf("write corrupt issuer: %v", err)
+	}
 
 	goodSerial := big.NewInt(1001)
 	goodResponder := startOCSPResponder114(t, caKey, caCert, goodSerial, ocsp.Good)
@@ -1004,28 +1012,36 @@ func TestRunOCSP_CommandSurfaceOutput(t *testing.T) {
 	revokedLeaf := createLeafWithOCSP114(t, caKey, caCert, revokedSerial, "revoked.example.com", revokedURL)
 	revokedPath := writeCertificatePEM114(t, dir, "revoked.pem", revokedLeaf)
 
-	t.Run("text output", func(t *testing.T) {
-		passwordList = nil
-		passwordFile = ""
-		jsonOutput = false
-		verbose = false
-		ocspIssuerPath = issuerPath
-		ocspFormat = "text"
-		ocspAllowPrivateNetwork = true
+	for _, tc := range []struct {
+		name       string
+		issuerPath string
+	}{
+		{name: "text output with pem issuer", issuerPath: issuerPath},
+		{name: "text output with der issuer", issuerPath: issuerDERPath},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			passwordList = nil
+			passwordFile = ""
+			jsonOutput = false
+			verbose = false
+			ocspIssuerPath = tc.issuerPath
+			ocspFormat = "text"
+			ocspAllowPrivateNetwork = true
 
-		stdout, stderr, err := captureCmdOutput114(t, func() error {
-			return runOCSP(newContextCmd114(), []string{goodPath})
+			stdout, stderr, err := captureCmdOutput114(t, func() error {
+				return runOCSP(newContextCmd114(), []string{goodPath})
+			})
+			if err != nil {
+				t.Fatalf("runOCSP text failed: %v", err)
+			}
+			if !strings.Contains(stdout, "Status:       good") {
+				t.Fatalf("ocsp text output missing good status:\n%s", stdout)
+			}
+			if stderr != "" {
+				t.Fatalf("ocsp text wrote unexpected stderr:\n%s", stderr)
+			}
 		})
-		if err != nil {
-			t.Fatalf("runOCSP text failed: %v", err)
-		}
-		if !strings.Contains(stdout, "Status:       good") {
-			t.Fatalf("ocsp text output missing good status:\n%s", stdout)
-		}
-		if stderr != "" {
-			t.Fatalf("ocsp text wrote unexpected stderr:\n%s", stderr)
-		}
-	})
+	}
 
 	t.Run("json output", func(t *testing.T) {
 		passwordList = nil
@@ -1051,6 +1067,29 @@ func TestRunOCSP_CommandSurfaceOutput(t *testing.T) {
 		}
 		if payload["status"] != "good" || payload["subject"] == "" || payload["issuer"] == "" {
 			t.Fatalf("ocsp json contract mismatch: %v", payload)
+		}
+	})
+
+	t.Run("corrupted issuer input", func(t *testing.T) {
+		passwordList = nil
+		passwordFile = ""
+		jsonOutput = false
+		verbose = false
+		ocspIssuerPath = corruptIssuerPath
+		ocspFormat = "text"
+		ocspAllowPrivateNetwork = true
+
+		_, stderr, err := captureCmdOutput114(t, func() error {
+			return runOCSP(newContextCmd114(), []string{goodPath})
+		})
+		if err == nil {
+			t.Fatal("runOCSP expected error for corrupt issuer certificate")
+		}
+		if !errors.Is(err, ErrParsingIssuerCertificate) {
+			t.Fatalf("runOCSP error = %v, want errors.Is(err, ErrParsingIssuerCertificate)", err)
+		}
+		if stderr != "" {
+			t.Fatalf("ocsp corrupt issuer wrote unexpected stderr:\n%s", stderr)
 		}
 	})
 

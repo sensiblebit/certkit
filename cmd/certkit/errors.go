@@ -20,4 +20,6 @@ var (
 	ErrUnsupportedOutputFormat = errors.New("unsupported output format")
 	// ErrBinaryOutputRequiresFile indicates binary output was requested without an output file path.
 	ErrBinaryOutputRequiresFile = errors.New("binary output requires file")
+	// ErrParsingIssuerCertificate indicates OCSP issuer data could not be parsed as a certificate.
+	ErrParsingIssuerCertificate = errors.New("parsing issuer certificate")
 )

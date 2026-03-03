@@ -18,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Add configurable `--aia-timeout` flag to `scan` for AIA certificate fetches (default: `2s`). ([#122])
+- Add exported sentinel errors `ErrUnsupportedOutputFormat` and `ErrBinaryOutputRequiresFile` to `cmd/certkit`, plus `ErrUnsupportedKeyAlgorithm` and `ErrUnsupportedCurve` to `internal/keygen`, and wrap command errors with `%w` to support typed matching via `errors.Is`. ([#126])
+- Add `ErrParsingIssuerCertificate` sentinel in `cmd/certkit` so `ocsp --issuer` parse failures support stable typed matching via `errors.Is`. ([#127])
 
 ### Removed
 
@@ -1028,6 +1030,8 @@ Initial release.
 [#119]: https://github.com/sensiblebit/certkit/pull/119
 [#121]: https://github.com/sensiblebit/certkit/pull/121
 [#122]: https://github.com/sensiblebit/certkit/pull/122
+[#126]: https://github.com/sensiblebit/certkit/pull/126
+[#127]: https://github.com/sensiblebit/certkit/pull/127
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63
