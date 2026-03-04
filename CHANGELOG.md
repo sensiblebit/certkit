@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Normalize `connect` verify status labels from `OK`/`FAILED` to lowercase `ok`/`failed`. ([#112])
 - Consolidate shared `connect` status-line formatting between standard and verbose text output paths. ([#121])
 - Centralize pre-commit hooks under the shared `sensiblebit/.github` hook set (including shared `markdownlint`) and run dependency update hooks first; refresh resulting indirect Go and web lockfile dependencies. ([#128])
+- Add Homebrew cask conflict metadata so stable `certkit` and `certkit@nightly` are explicitly mutually exclusive installs. ([#128])
 
 ### Added
 

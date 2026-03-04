@@ -155,7 +155,7 @@ patch_stable_cask_conflict() {
     return
   fi
 
-  if grep -q '^[[:space:]]*cask[[:space:]]+"certkit"[[:space:]]+do[[:space:]]*$' "${stable_cask}"; then
+  if grep -Eq '^[[:space:]]*cask[[:space:]]+"certkit"[[:space:]]+do[[:space:]]*$' "${stable_cask}"; then
     awk '
       /^[[:space:]]*cask[[:space:]]+"certkit"[[:space:]]+do[[:space:]]*$/ && !inserted {
         print
@@ -200,18 +200,18 @@ prune_superseded_assets() {
   require_env "NIGHTLY_VERSION"
   require_env "GITHUB_REPOSITORY"
 
-  local keep_prefix asset_id asset_name
+  local keep_prefix asset_api_url asset_name
   keep_prefix="certkit_${NIGHTLY_VERSION}_"
 
-  gh release view "${NIGHTLY_TAG}" --json assets --jq '.assets[] | [.id, .name] | @tsv' \
-    | while IFS=$'\t' read -r asset_id asset_name; do
+  gh release view "${NIGHTLY_TAG}" --json assets --jq '.assets[] | [.apiUrl, .name] | @tsv' \
+    | while IFS=$'\t' read -r asset_api_url asset_name; do
         if [[ "${asset_name}" != certkit_* ]]; then
           continue
         fi
         if [[ "${asset_name}" == "${keep_prefix}"* ]]; then
           continue
         fi
-        gh api -X DELETE "repos/${GITHUB_REPOSITORY}/releases/assets/${asset_id}"
+        gh api -X DELETE "${asset_api_url}"
       done
 }
 
