@@ -116,6 +116,7 @@ func TestInspectFile_PrivateKey(t *testing.T) {
 	}
 	if keyResult == nil {
 		t.Fatal("expected to find a private_key result")
+		return
 	}
 	if keyResult.KeyType != "RSA" {
 		t.Errorf("key type = %s, want RSA", keyResult.KeyType)
@@ -286,6 +287,7 @@ func TestInspectFile_CSR(t *testing.T) {
 	}
 	if csrResult == nil {
 		t.Fatal("expected to find a csr result")
+		return
 	}
 	if !strings.Contains(csrResult.CSRSubject, "csr.example.com") {
 		t.Errorf("CSR subject should contain CN, got %s", csrResult.CSRSubject)

@@ -1,35 +1,24 @@
 repos:
-  # ── Git Conventions ──
-  - repo: https://github.com/pre-commit/pre-commit-hooks
-    rev: v6.0.0
-    hooks:
-      - id: no-commit-to-branch
-        name: no commit to main
-        args: [--branch, main]
-
   - repo: https://github.com/sensiblebit/.github
-    rev: "fb8829a3bdb52f8263024528909088706009c1e1"
+    rev: "ddffb3a8d3bc086e7f51cec776d94d3ef21755c7"
     hooks:
       - id: branch-name
       - id: commit-message
+      - id: go-mod-update
+        stages: [pre-commit]
+      - id: npm-update
+        stages: [pre-commit]
       - id: goimports
       - id: go-fix
-      - id: go-vet
-      - id: golangci-lint
-      - id: wasm
-      - id: go-build
-      - id: go-test
-      - id: govulncheck
-      - id: gendocs
       - id: prettier
-      - id: vitest
-      - id: wrangler-build
-      - id: go-mod-update
-      - id: npm-update
-
-  # ── Markdown ──
-  - repo: https://github.com/igorshubovych/markdownlint-cli
-    rev: v0.47.0
-    hooks:
       - id: markdownlint
         args: [--config, .markdownlint.yaml]
+      - id: go-vet
+      - id: golangci-lint
+      - id: govulncheck
+      - id: gendocs
+      - id: wasm
+      - id: go-build
+      - id: wrangler-build
+      - id: go-test
+      - id: vitest

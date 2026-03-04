@@ -1,0 +1,80 @@
+name: Nightly Cask
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: nightly-cask
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+env:
+  NIGHTLY_TAG: nightly
+  NIGHTLY_DIST_DIR: /tmp/nightly-dist
+  NIGHTLY_BUILD_DIR: /tmp/nightly-build
+  NIGHTLY_RELEASE_TITLE: Nightly
+  NIGHTLY_RELEASE_NOTES: Auto-updated nightly snapshot of main.
+  TAP_REPO_PATH: homebrew-tap
+
+jobs:
+  publish-nightly-cask:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: stable
+          check-latest: true
+          cache: true
+
+      - name: Build nightly archives
+        id: meta
+        run: ./.github/scripts/nightly-cask.sh build-archives
+
+      - name: Publish nightly release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: ./.github/scripts/nightly-cask.sh publish-release-assets
+
+      - name: Checkout tap repository
+        uses: actions/checkout@v6
+        with:
+          repository: sensiblebit/homebrew-tap
+          path: ${{ env.TAP_REPO_PATH }}
+          fetch-depth: 0
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+
+      - name: Render nightly cask
+        env:
+          NIGHTLY_VERSION: ${{ steps.meta.outputs.nightly_version }}
+          SHA_DARWIN_AMD64: ${{ steps.meta.outputs.sha_darwin_amd64 }}
+          SHA_DARWIN_ARM64: ${{ steps.meta.outputs.sha_darwin_arm64 }}
+          SHA_LINUX_AMD64: ${{ steps.meta.outputs.sha_linux_amd64 }}
+          SHA_LINUX_ARM64: ${{ steps.meta.outputs.sha_linux_arm64 }}
+        run: ./.github/scripts/nightly-cask.sh render-nightly-cask
+
+      - name: Patch stable cask conflict
+        run: ./.github/scripts/nightly-cask.sh patch-stable-cask-conflict
+
+      - name: Commit and push tap update
+        env:
+          NIGHTLY_VERSION: ${{ steps.meta.outputs.nightly_version }}
+        run: ./.github/scripts/nightly-cask.sh commit-and-push-tap-update
+
+      - name: Prune superseded nightly release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NIGHTLY_VERSION: ${{ steps.meta.outputs.nightly_version }}
+        run: ./.github/scripts/nightly-cask.sh prune-superseded-assets

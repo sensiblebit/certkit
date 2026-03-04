@@ -343,7 +343,7 @@ pre-commit run --all-files  # Manual run against all files
 
 - **PC-1 (MUST)** Use `pre-commit run --all-files` for required checks; do not run individual tools manually unless debugging.
 
-Configured hooks: `no-commit-to-branch`, `branch-name`, `commit-message` (commit-msg stage), `goimports`, `go-fix`, `go-vet`, `golangci-lint`, `wasm`, `go-build`, `go-test`, `gendocs`, `prettier`, `vitest`, `wrangler-build`, `markdownlint`.
+Configured hooks: `branch-name`, `commit-message` (commit-msg stage), `go-mod-update`, `npm-update`, `goimports`, `go-fix`, `prettier`, `markdownlint`, `go-vet`, `golangci-lint`, `govulncheck`, `gendocs`, `wasm`, `go-build`, `wrangler-build`, `go-test`, `vitest`.
 
 ### Tooling gates
 
