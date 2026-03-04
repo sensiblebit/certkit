@@ -15,7 +15,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Normalize `connect` verify status labels from `OK`/`FAILED` to lowercase `ok`/`failed`. ([#112])
 - Consolidate shared `connect` status-line formatting between standard and verbose text output paths. ([#121])
 - Centralize pre-commit hooks under the shared `sensiblebit/.github` hook set (including shared `markdownlint`) and run dependency update hooks first; refresh resulting indirect Go and web lockfile dependencies. ([#128])
-- Add Homebrew cask conflict metadata so stable `certkit` and `certkit@nightly` are explicitly mutually exclusive installs. ([#128])
 
 ### Added
 
@@ -23,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add exported sentinel errors `ErrUnsupportedOutputFormat` and `ErrBinaryOutputRequiresFile` to `cmd/certkit`, plus `ErrUnsupportedKeyAlgorithm` and `ErrUnsupportedCurve` to `internal/keygen`, and wrap command errors with `%w` to support typed matching via `errors.Is`. ([#126])
 - Add `ErrParsingIssuerCertificate` sentinel in `cmd/certkit` so `ocsp --issuer` parse failures support stable typed matching via `errors.Is`. ([#127])
 - Add `Nightly Cask` workflow to publish `certkit@nightly` in `sensiblebit/homebrew-tap` on every push to `main`. ([#128])
+- Add Homebrew cask conflict metadata so stable `certkit` and `certkit@nightly` are explicitly mutually exclusive installs. ([#128])
 
 ### Removed
 
