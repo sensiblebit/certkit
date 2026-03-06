@@ -25,9 +25,6 @@ func inspectFiles(_ js.Value, args []js.Value) any {
 
 	filesArg := args[0]
 	length := filesArg.Length()
-	if length > wasmMaxInputFiles {
-		return jsError(fmt.Sprintf("too many files: %d (max %d)", length, wasmMaxInputFiles))
-	}
 
 	var passwords []string
 	if len(args) >= 2 && args[1].Type() == js.TypeString {

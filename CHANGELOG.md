@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Remove the arbitrary 200-file cap from WASM upload and inspect flows; rely on byte limits instead.
 - Make `scan --bundle-path` skip untrusted/verification-failing bundle candidates instead of aborting the full export run. ([#112])
 - Improve scan summaries by adding `in <files> file(s)` and live TTY progress updates for certificates/keys/files. ([#112])
 - Send live scan progress updates to stderr so stdout remains clean for piped output. ([#112])
