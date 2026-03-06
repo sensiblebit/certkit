@@ -20,8 +20,10 @@ import (
 	"github.com/sensiblebit/certkit/internal/certstore"
 )
 
+// Keep these as byte limits only. Do not add a file-count cap for WASM input:
+// the browser app runs on the user's machine, and folder drops may
+// legitimately contain thousands of small files.
 const (
-	wasmMaxInputFiles      = 200
 	wasmMaxInputFileBytes  = 10 * 1024 * 1024
 	wasmMaxInputTotalBytes = 50 * 1024 * 1024
 )
@@ -90,9 +92,6 @@ func addFiles(_ js.Value, args []js.Value) any {
 
 	filesArg := args[0]
 	length := filesArg.Length()
-	if length > wasmMaxInputFiles {
-		return jsError(fmt.Sprintf("too many files: %d (max %d)", length, wasmMaxInputFiles))
-	}
 
 	var passwords []string
 	if len(args) >= 2 && args[1].Type() == js.TypeString {
