@@ -8,6 +8,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/sha1" //nolint:gosec // Test coverage for legacy X.509 SHA-1 compatibility paths.
 	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -191,7 +192,8 @@ func TestCertSKI_vs_Embedded(t *testing.T) {
 	if _, err := asn1.Unmarshal(pubKeyDER, &spki); err != nil {
 		t.Fatal(err)
 	}
-	sha1Hash := sha1Digest(spki.PublicKey.Bytes)
+	//nolint:gosec // Test coverage for legacy SHA-1 SKI compatibility.
+	sha1Hash := sha1.Sum(spki.PublicKey.Bytes)
 
 	template := &x509.Certificate{
 		SerialNumber: randomSerial(t),
@@ -1505,7 +1507,8 @@ func TestCertFingerprints(t *testing.T) {
 
 	// Compute expected fingerprints independently to verify certkit wiring.
 	sha256Hash := sha256.Sum256(cert.Raw)
-	sha1Hash := sha1Digest(cert.Raw)
+	//nolint:gosec // Test coverage for legacy SHA-1 certificate fingerprints.
+	sha1Hash := sha1.Sum(cert.Raw)
 
 	t.Run("SHA256 hex", func(t *testing.T) {
 		t.Parallel()
@@ -1585,7 +1588,8 @@ func TestComputeSKILegacy(t *testing.T) {
 	if _, err := asn1.Unmarshal(pubDER, &spki); err != nil {
 		t.Fatal(err)
 	}
-	expected := sha1Digest(spki.PublicKey.Bytes)
+	//nolint:gosec // Test coverage for legacy SHA-1 SKI compatibility.
+	expected := sha1.Sum(spki.PublicKey.Bytes)
 	if !slices.Equal(ski, expected[:]) {
 		t.Errorf("ComputeSKILegacy = %x, want SHA-1(%x...) = %x", ski, spki.PublicKey.Bytes[:8], expected)
 	}

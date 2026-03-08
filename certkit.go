@@ -415,7 +415,8 @@ func CertFingerprint(cert *x509.Certificate) string {
 // CertFingerprintSHA1 returns the SHA-1 fingerprint of a certificate as a lowercase hex string.
 // SHA-1 fingerprints are widely used in browser UIs, CT logs, and legacy systems.
 func CertFingerprintSHA1(cert *x509.Certificate) string {
-	hash := sha1Digest(cert.Raw)
+	//nolint:gosec // Legacy certificate fingerprint compatibility requires SHA-1.
+	hash := sha1.Sum(cert.Raw)
 	return hex.EncodeToString(hash[:])
 }
 
@@ -608,7 +609,8 @@ func ComputeSKILegacy(pub crypto.PublicKey) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("extracting public key bit string: %w", err)
 	}
-	sum := sha1Digest(bits)
+	//nolint:gosec // RFC 5280 SKI compatibility requires SHA-1 of subjectPublicKey bits.
+	sum := sha1.Sum(bits)
 	return sum[:], nil
 }
 
@@ -721,13 +723,9 @@ func CertFingerprintColonSHA256(cert *x509.Certificate) string {
 // in uppercase colon-separated hex format (AA:BB:CC:...), matching the format
 // used by OpenSSL and browser certificate viewers.
 func CertFingerprintColonSHA1(cert *x509.Certificate) string {
-	hash := sha1Digest(cert.Raw)
+	//nolint:gosec // Legacy certificate fingerprint compatibility requires SHA-1.
+	hash := sha1.Sum(cert.Raw)
 	return strings.ToUpper(ColonHex(hash[:]))
-}
-
-func sha1Digest(data []byte) [sha1.Size]byte {
-	//nolint:gosec // Legacy X.509 fingerprint and SKI compatibility requires SHA-1.
-	return sha1.Sum(data)
 }
 
 const minRSAKeyBits = 2048
