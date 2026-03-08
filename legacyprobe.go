@@ -81,7 +81,11 @@ func buildLegacyClientHelloMsg(input legacyClientHelloInput) ([]byte, error) {
 
 	// Build extensions.
 	var exts []byte
-	exts = appendSNIExtension(exts, input.serverName)
+	var err error
+	exts, err = appendSNIExtension(exts, input.serverName)
+	if err != nil {
+		return nil, fmt.Errorf("building SNI extension: %w", err)
+	}
 	exts = appendSignatureAlgorithmsExtension(exts)
 	exts = appendECPointFormatsExtension(exts)
 
@@ -167,7 +171,11 @@ func probeLegacyCipher(ctx context.Context, input cipherProbeInput) (uint16, boo
 		return 0, false
 	}
 
-	if _, err := conn.Write(wrapTLSRecord(msg)); err != nil {
+	record, err := wrapTLSRecord(msg)
+	if err != nil {
+		return 0, false
+	}
+	if _, err := conn.Write(record); err != nil {
 		return 0, false
 	}
 
@@ -365,7 +373,11 @@ func legacyFallbackConnect(ctx context.Context, input legacyFallbackInput) (*leg
 		return nil, fmt.Errorf("building legacy client hello: %w", err)
 	}
 
-	if _, err := conn.Write(wrapTLSRecord(msg)); err != nil {
+	record, err := wrapTLSRecord(msg)
+	if err != nil {
+		return nil, fmt.Errorf("wrapping legacy client hello: %w", err)
+	}
+	if _, err := conn.Write(record); err != nil {
 		return nil, fmt.Errorf("sending legacy client hello: %w", err)
 	}
 

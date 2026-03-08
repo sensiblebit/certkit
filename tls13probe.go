@@ -113,17 +113,29 @@ func buildClientHelloMsg(input clientHelloInput) ([]byte, error) {
 
 	// Build extensions.
 	var exts []byte
-	exts = appendSNIExtension(exts, input.serverName)
+	exts, err = appendSNIExtension(exts, input.serverName)
+	if err != nil {
+		return nil, fmt.Errorf("building SNI extension: %w", err)
+	}
 	exts = appendSupportedGroupsExtension(exts, input.groupID)
 	exts = appendSignatureAlgorithmsExtension(exts)
-	exts = appendKeyShareExtension(exts, appendKeyShareExtensionInput{groupID: input.groupID, keyData: keyShareData})
+	exts, err = appendKeyShareExtension(exts, appendKeyShareExtensionInput{groupID: input.groupID, keyData: keyShareData})
+	if err != nil {
+		return nil, fmt.Errorf("building key share extension: %w", err)
+	}
 	exts = appendSupportedVersionsExtension(exts)
 	exts = appendPSKKeyExchangeModesExtension(exts)
 	if len(input.alpn) > 0 {
-		exts = appendALPNExtension(exts, input.alpn)
+		exts, err = appendALPNExtension(exts, input.alpn)
+		if err != nil {
+			return nil, fmt.Errorf("building ALPN extension: %w", err)
+		}
 	}
 	if input.quic {
-		exts = appendQUICTransportParamsExtension(exts, input.quicSCID)
+		exts, err = appendQUICTransportParamsExtension(exts, input.quicSCID)
+		if err != nil {
+			return nil, fmt.Errorf("building QUIC transport parameters extension: %w", err)
+		}
 	}
 
 	// Build ClientHello body.
@@ -184,17 +196,17 @@ func buildClientHelloMsg(input clientHelloInput) ([]byte, error) {
 }
 
 // wrapTLSRecord wraps a handshake message in a TLS record header.
-func wrapTLSRecord(handshakeMsg []byte) []byte {
+func wrapTLSRecord(handshakeMsg []byte) ([]byte, error) {
 	record := make([]byte, 0, 5+len(handshakeMsg))
 	record = append(record, 0x16)       // ContentType: Handshake
 	record = append(record, 0x03, 0x01) // Record version: TLS 1.0 (compatibility)
 	handshakeLen, err := checkedUint16Len(len(handshakeMsg), "tls record payload")
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	record = appendUint16(record, handshakeLen)
 	record = append(record, handshakeMsg...)
-	return record
+	return record, nil
 }
 
 // generateKeyShare produces an ephemeral key share for the given named group.
@@ -436,7 +448,11 @@ func probeTLS13Cipher(ctx context.Context, input cipherProbeInput) bool {
 		return false
 	}
 
-	if _, err := conn.Write(wrapTLSRecord(msg)); err != nil {
+	record, err := wrapTLSRecord(msg)
+	if err != nil {
+		return false
+	}
+	if _, err := conn.Write(record); err != nil {
 		return false
 	}
 
@@ -472,7 +488,11 @@ func probeKeyExchangeGroup(ctx context.Context, input cipherProbeInput) bool {
 		return false
 	}
 
-	if _, err := conn.Write(wrapTLSRecord(msg)); err != nil {
+	record, err := wrapTLSRecord(msg)
+	if err != nil {
+		return false
+	}
+	if _, err := conn.Write(record); err != nil {
 		return false
 	}
 
@@ -490,24 +510,24 @@ func isPQKeyExchange(id tls.CurveID) bool {
 }
 
 // appendSNIExtension appends a server_name extension (0x0000).
-func appendSNIExtension(b []byte, serverName string) []byte {
+func appendSNIExtension(b []byte, serverName string) ([]byte, error) {
 	if serverName == "" {
-		return b
+		return b, nil
 	}
 	name := []byte(serverName)
 	listLen := 1 + 2 + len(name) // type(1) + name_len(2) + name
 
 	extLen, err := checkedUint16Len(2+listLen, "SNI extension length")
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	nameListLen, err := checkedUint16Len(listLen, "SNI server name list")
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	nameLen, err := checkedUint16Len(len(name), "SNI server name")
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	b = appendUint16(b, 0x0000) // extension type
@@ -515,7 +535,7 @@ func appendSNIExtension(b []byte, serverName string) []byte {
 	b = appendUint16(b, nameListLen)
 	b = append(b, 0x00) // name type: host_name
 	b = appendUint16(b, nameLen)
-	return append(b, name...)
+	return append(b, name...), nil
 }
 
 // appendSupportedGroupsExtension appends a supported_groups extension (0x000a).
@@ -543,19 +563,19 @@ type appendKeyShareExtensionInput struct {
 }
 
 // appendKeyShareExtension appends a key_share extension (0x0033).
-func appendKeyShareExtension(b []byte, input appendKeyShareExtensionInput) []byte {
+func appendKeyShareExtension(b []byte, input appendKeyShareExtensionInput) ([]byte, error) {
 	entryLen := 2 + 2 + len(input.keyData) // group(2) + key_len(2) + key_data
 	extLen, err := checkedUint16Len(2+entryLen, "key share extension length")
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	keySharesLen, err := checkedUint16Len(entryLen, "key share list length")
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	keyDataLen, err := checkedUint16Len(len(input.keyData), "key share data")
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 
 	b = appendUint16(b, 0x0033)                // extension type
@@ -563,7 +583,7 @@ func appendKeyShareExtension(b []byte, input appendKeyShareExtensionInput) []byt
 	b = appendUint16(b, keySharesLen)          // client key shares length
 	b = appendUint16(b, uint16(input.groupID)) // named group
 	b = appendUint16(b, keyDataLen)
-	return append(b, input.keyData...)
+	return append(b, input.keyData...), nil
 }
 
 // appendSupportedVersionsExtension appends a supported_versions extension (0x002b)
@@ -584,36 +604,36 @@ func appendPSKKeyExchangeModesExtension(b []byte) []byte {
 }
 
 // appendALPNExtension appends an application_layer_protocol_negotiation extension (0x0010).
-func appendALPNExtension(b []byte, protocols []string) []byte {
+func appendALPNExtension(b []byte, protocols []string) ([]byte, error) {
 	// ALPN protocol list: each entry is length(1) + name.
 	var list []byte
 	for _, p := range protocols {
 		protoLen, err := checkedUint8Len(len(p), "ALPN protocol")
 		if err != nil {
-			panic(err)
+			return nil, err
 		}
 		list = append(list, protoLen)
 		list = append(list, []byte(p)...)
 	}
 	extLen, err := checkedUint16Len(2+len(list), "ALPN extension length")
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	listLen, err := checkedUint16Len(len(list), "ALPN protocol list")
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	b = appendUint16(b, 0x0010) // extension type
 	b = appendUint16(b, extLen) // extension data length
 	b = appendUint16(b, listLen)
-	return append(b, list...)
+	return append(b, list...), nil
 }
 
 // appendQUICTransportParamsExtension appends a quic_transport_parameters
 // extension (0x0039) as required by RFC 9001 §8.2. Includes
 // initial_source_connection_id (MUST per RFC 9000 §18.2) and flow control
 // parameters that real QUIC clients send.
-func appendQUICTransportParamsExtension(b []byte, scid []byte) []byte {
+func appendQUICTransportParamsExtension(b []byte, scid []byte) ([]byte, error) {
 	// Format: param_id(varint) + param_len(varint) + value
 	var params []byte
 
@@ -644,8 +664,8 @@ func appendQUICTransportParamsExtension(b []byte, scid []byte) []byte {
 
 	paramsLen, err := checkedUint16Len(len(params), "QUIC transport parameters")
 	if err != nil {
-		panic(err)
+		return nil, err
 	}
 	b = appendUint16(b, 0x0039) // extension type
-	return append(appendUint16(b, paramsLen), params...)
+	return append(appendUint16(b, paramsLen), params...), nil
 }

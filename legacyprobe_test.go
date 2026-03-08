@@ -16,6 +16,15 @@ import (
 	"time"
 )
 
+func mustWrapTLSRecord(t *testing.T, handshakeMsg []byte) []byte {
+	t.Helper()
+	record, err := wrapTLSRecord(handshakeMsg)
+	if err != nil {
+		t.Fatalf("wrap TLS record: %v", err)
+	}
+	return record
+}
+
 // buildCertificateMessageBody constructs a TLS Certificate message body
 // from DER-encoded certificates.
 func buildCertificateMessageBody(certs ...[]byte) []byte {
@@ -84,14 +93,14 @@ func TestReadServerCertificates(t *testing.T) {
 	}{
 		{
 			name:      "single record with ServerHello + Certificate",
-			records:   wrapTLSRecord(append(serverHello, certMsg...)),
+			records:   mustWrapTLSRecord(t, append(serverHello, certMsg...)),
 			wantCS:    0x0033,
 			wantVer:   0x0303,
 			wantCerts: 1,
 		},
 		{
 			name:      "separate records for ServerHello and Certificate",
-			records:   append(wrapTLSRecord(serverHello), wrapTLSRecord(certMsg)...),
+			records:   append(mustWrapTLSRecord(t, serverHello), mustWrapTLSRecord(t, certMsg)...),
 			wantCS:    0x0033,
 			wantVer:   0x0303,
 			wantCerts: 1,
@@ -99,8 +108,8 @@ func TestReadServerCertificates(t *testing.T) {
 		{
 			name: "Certificate message spanning two records",
 			records: append(
-				wrapTLSRecord(serverHello),
-				append(wrapTLSRecord(certMsgSplit1), wrapTLSRecord(certMsgSplit2)...)...,
+				mustWrapTLSRecord(t, serverHello),
+				append(mustWrapTLSRecord(t, certMsgSplit1), mustWrapTLSRecord(t, certMsgSplit2)...)...,
 			),
 			wantCS:    0x0033,
 			wantVer:   0x0303,
@@ -113,7 +122,7 @@ func TestReadServerCertificates(t *testing.T) {
 		},
 		{
 			name:      "ServerHelloDone without Certificate",
-			records:   wrapTLSRecord(append(serverHello, serverHelloDone...)),
+			records:   mustWrapTLSRecord(t, append(serverHello, serverHelloDone...)),
 			wantCS:    0x0033,
 			wantVer:   0x0303,
 			wantCerts: 0,
@@ -182,7 +191,7 @@ func TestReadServerCertificates_AlertAfterServerHello(t *testing.T) {
 	// fatal alert follows, preserving diagnostic signal for callers.
 	t.Parallel()
 	serverHello := buildMockServerHello(0x0303, 0x0033)
-	records := append(wrapTLSRecord(serverHello), buildAlertRecord()...)
+	records := append(mustWrapTLSRecord(t, serverHello), buildAlertRecord()...)
 
 	sh, certs, err := readServerCertificates(bytes.NewReader(records))
 	if !errors.Is(err, errAlertReceived) {
@@ -214,7 +223,7 @@ func TestReadServerCertificates_PayloadLimit(t *testing.T) {
 
 	var records []byte
 	for len(records) <= maxCertificatePayload {
-		records = append(records, wrapTLSRecord(chunkMsg)...)
+		records = append(records, mustWrapTLSRecord(t, chunkMsg)...)
 	}
 
 	_, _, err := readServerCertificates(bytes.NewReader(records))
@@ -340,7 +349,8 @@ func TestLegacyFallbackConnect(t *testing.T) {
 			handshake = append(handshake, certMsg...)
 			handshake = append(handshake, helloDone...)
 
-			if _, err := conn.Write(wrapTLSRecord(handshake)); err != nil {
+			record := mustWrapTLSRecord(t, handshake)
+			if _, err := conn.Write(record); err != nil {
 				slog.Debug("TestLegacyFallbackConnect: writing server response", "error", err)
 			}
 			_ = conn.Close()
