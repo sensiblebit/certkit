@@ -56,6 +56,7 @@ func inspectFiles(_ js.Value, args []js.Value) any {
 			defer cancel()
 
 			var allResults []internal.InspectResult
+			var overflowSkipped int
 			var totalBytes int64
 			for i := range length {
 				select {
@@ -76,6 +77,10 @@ func inspectFiles(_ js.Value, args []js.Value) any {
 					TotalBytes: &totalBytes,
 				})
 				if err != nil {
+					if isWASMTotalInputBytesExceeded(err) {
+						overflowSkipped++
+						continue
+					}
 					reject.Invoke(js.Global().Get("Error").New(err.Error()))
 					return
 				}
@@ -85,8 +90,15 @@ func inspectFiles(_ js.Value, args []js.Value) any {
 			}
 
 			if len(allResults) == 0 {
+				if overflowSkipped > 0 {
+					reject.Invoke(js.Global().Get("Error").New(wasmTotalInputBytesExceededMessage(overflowSkipped)))
+					return
+				}
 				reject.Invoke(js.Global().Get("Error").New("no certificates, keys, or CSRs found"))
 				return
+			}
+			if overflowSkipped > 0 {
+				slog.Debug("skipping files during inspect due to total upload size limit", "count", overflowSkipped, "max_bytes", wasmMaxInputTotalBytes)
 			}
 
 			// Resolve missing intermediates via AIA before trust annotation.

@@ -30,6 +30,18 @@ const (
 
 var errWASMTotalInputBytesExceeded = errors.New("total upload exceeds max size")
 
+func isWASMTotalInputBytesExceeded(err error) bool {
+	return errors.Is(err, errWASMTotalInputBytesExceeded)
+}
+
+func wasmTotalInputBytesExceededMessage(skipped int) string {
+	return fmt.Sprintf(
+		"skipped %d file(s) because total upload exceeds max size (%d bytes)",
+		skipped,
+		wasmMaxInputTotalBytes,
+	)
+}
+
 // version is set at build time via -ldflags "-X main.version=v0.6.1".
 var version = "dev"
 
@@ -127,6 +139,7 @@ func addFiles(_ js.Value, args []js.Value) any {
 			storeMu.Lock()
 			defer storeMu.Unlock()
 			var results []map[string]any
+			var overflowSkipped int
 			var totalBytes int64
 			for i := range length {
 				select {
@@ -147,15 +160,16 @@ func addFiles(_ js.Value, args []js.Value) any {
 					TotalBytes: &totalBytes,
 				})
 				if err != nil {
+					if isWASMTotalInputBytesExceeded(err) {
+						overflowSkipped++
+						continue
+					}
 					slog.Debug("skipping file due to read error", "name", name, "error", err)
 					results = append(results, map[string]any{
 						"name":   name,
 						"status": "error",
 						"error":  err.Error(),
 					})
-					if errors.Is(err, errWASMTotalInputBytesExceeded) {
-						break
-					}
 					continue
 				}
 
@@ -175,6 +189,14 @@ func addFiles(_ js.Value, args []js.Value) any {
 					"name":   name,
 					"status": status,
 					"error":  errMsg,
+				})
+			}
+			if overflowSkipped > 0 {
+				slog.Debug("skipping files due to total upload size limit", "count", overflowSkipped, "max_bytes", wasmMaxInputTotalBytes)
+				results = append(results, map[string]any{
+					"name":   "upload",
+					"status": "error",
+					"error":  wasmTotalInputBytesExceededMessage(overflowSkipped),
 				})
 			}
 
