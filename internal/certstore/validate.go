@@ -103,14 +103,14 @@ func CheckExpiration(cert *x509.Certificate, now time.Time) ValidationCheck {
 		return ValidationCheck{
 			Name:   "Expiration",
 			Status: "fail",
-			Detail: fmt.Sprintf("Not valid until %s", cert.NotBefore.UTC().Format("Jan 2, 2006")),
+			Detail: "Not valid until " + cert.NotBefore.UTC().Format("Jan 2, 2006"),
 		}
 	}
 	if now.After(cert.NotAfter) {
 		return ValidationCheck{
 			Name:   "Expiration",
 			Status: "fail",
-			Detail: fmt.Sprintf("Expired %s", cert.NotAfter.UTC().Format("Jan 2, 2006")),
+			Detail: "Expired " + cert.NotAfter.UTC().Format("Jan 2, 2006"),
 		}
 	}
 	remaining := cert.NotAfter.Sub(now)
@@ -164,7 +164,7 @@ func CheckKeyStrength(cert *x509.Certificate) ValidationCheck {
 
 // CheckSignature evaluates the certificate's signature algorithm.
 func CheckSignature(cert *x509.Certificate) ValidationCheck {
-	switch cert.SignatureAlgorithm { //nolint:exhaustive // only flagging known-weak algorithms
+	switch cert.SignatureAlgorithm { //nolint:exhaustive // Only weak/legacy algorithms need special handling; all others share the default pass path.
 	case x509.MD2WithRSA, x509.MD5WithRSA:
 		return ValidationCheck{
 			Name:   "Signature",

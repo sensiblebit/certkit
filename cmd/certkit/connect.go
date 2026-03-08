@@ -374,7 +374,7 @@ func formatConnectVerbose(r *certkit.ConnectResult, now time.Time) string {
 func publicKeySize(pub crypto.PublicKey) string {
 	switch k := pub.(type) {
 	case *rsa.PublicKey:
-		return fmt.Sprintf("%d", k.N.BitLen())
+		return strconv.Itoa(k.N.BitLen())
 	case *ecdsa.PublicKey:
 		return k.Curve.Params().Name
 	case ed25519.PublicKey:

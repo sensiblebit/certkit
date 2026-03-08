@@ -21,9 +21,12 @@ linters:
     - gosec
     - loggercheck
     - misspell
+    - modernize
     - nilerr
     - nilnil
+    - nilnesserr
     - nolintlint
+    - perfsprint
     - predeclared
     - revive
     - rowserrcheck
@@ -36,5 +39,10 @@ linters:
     - unconvert
     - unparam
     - usetesting
+    - usestdlibvars
     - wastedassign
     - wrapcheck
+    - canonicalheader
+    - copyloopvar
+    - durationcheck
+    - fatcontext

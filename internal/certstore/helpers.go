@@ -92,7 +92,7 @@ func GetKeyType(cert *x509.Certificate) string {
 	case *rsa.PublicKey:
 		return fmt.Sprintf("RSA %d bits", pub.N.BitLen())
 	case *ecdsa.PublicKey:
-		return fmt.Sprintf("ECDSA %s", pub.Curve.Params().Name)
+		return "ECDSA " + pub.Curve.Params().Name
 	case ed25519.PublicKey:
 		return "Ed25519"
 	default:
@@ -111,7 +111,7 @@ func FormatCN(cert *x509.Certificate) string {
 		return cert.DNSNames[0]
 	}
 	if cert.SerialNumber != nil {
-		return fmt.Sprintf("serial:%s", cert.SerialNumber.String())
+		return "serial:" + cert.SerialNumber.String()
 	}
 	return "unknown"
 }

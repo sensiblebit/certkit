@@ -698,7 +698,7 @@ func CheckLeafCRL(ctx context.Context, input CheckLeafCRLInput) *CRLCheckResult 
 		return &CRLCheckResult{
 			Status: "unavailable",
 			URL:    cdpURL,
-			Detail: fmt.Sprintf("CRL expired at %s", crl.NextUpdate.UTC().Format(time.RFC3339)),
+			Detail: "CRL expired at " + crl.NextUpdate.UTC().Format(time.RFC3339),
 		}
 	}
 
@@ -839,7 +839,7 @@ func FormatOCSPStatusLine(prefix string, r *OCSPResult) string {
 	case "skipped":
 		return fmt.Sprintf("%sskipped (%s)\n", prefix, r.Detail)
 	case "unknown":
-		return fmt.Sprintf("%sunknown (responder does not recognize this certificate)\n", prefix)
+		return prefix + "unknown (responder does not recognize this certificate)\n"
 	default:
 		return fmt.Sprintf("%s%s\n", prefix, r.Status)
 	}

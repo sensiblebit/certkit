@@ -5,7 +5,7 @@ package certkit
 import (
 	"bytes"
 	"crypto"
-	"crypto/dsa" //nolint:staticcheck // needed for legacy DSA certificate key identification
+	"crypto/dsa" //nolint:staticcheck // DSA remains needed to identify and parse legacy certificate/key material.
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -232,7 +232,7 @@ func ParsePEMPrivateKeyWithPasswords(pemData []byte, passwords []string) (crypto
 			continue
 		}
 
-		//nolint:staticcheck // x509.IsEncryptedPEMBlock is deprecated but needed for legacy encrypted PEM support
+		//nolint:staticcheck // Legacy PEM decryption support is intentional for backward compatibility with encrypted PEM inputs.
 		if !x509.IsEncryptedPEMBlock(block) {
 			if firstErr == nil {
 				firstErr = parseErr
@@ -243,7 +243,7 @@ func ParsePEMPrivateKeyWithPasswords(pemData []byte, passwords []string) (crypto
 
 		var encryptedErr error
 		for _, password := range passwords {
-			//nolint:staticcheck // x509.DecryptPEMBlock is deprecated but needed for legacy encrypted PEM support
+			//nolint:staticcheck // Legacy PEM decryption support is intentional for backward compatibility with encrypted PEM inputs.
 			decrypted, err := x509.DecryptPEMBlock(block, []byte(password))
 			if err != nil {
 				if encryptedErr == nil {

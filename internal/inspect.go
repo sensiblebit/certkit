@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -327,7 +328,7 @@ func boolYesNo(v bool) string {
 func publicKeySize(pub any) string {
 	switch k := pub.(type) {
 	case *rsa.PublicKey:
-		return fmt.Sprintf("%d", k.N.BitLen())
+		return strconv.Itoa(k.N.BitLen())
 	case *ecdsa.PublicKey:
 		return k.Curve.Params().Name
 	case ed25519.PublicKey:
@@ -340,7 +341,7 @@ func publicKeySize(pub any) string {
 func privateKeySize(key any) string {
 	switch k := key.(type) {
 	case *rsa.PrivateKey:
-		return fmt.Sprintf("%d", k.N.BitLen())
+		return strconv.Itoa(k.N.BitLen())
 	case *ecdsa.PrivateKey:
 		return k.Curve.Params().Name
 	case ed25519.PrivateKey, *ed25519.PrivateKey:

@@ -159,7 +159,7 @@ func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) 
 		result.ChainValid = &valid
 		if bundleErr != nil {
 			result.ChainErr = bundleErr.Error()
-			result.Errors = append(result.Errors, fmt.Sprintf("chain validation: %s", bundleErr.Error()))
+			result.Errors = append(result.Errors, "chain validation: "+bundleErr.Error())
 		}
 		if bundle != nil {
 			result.Chain = buildChainDisplay(bundle, input.Verbose)
@@ -329,13 +329,13 @@ func DiagnoseChain(input DiagnoseChainInput) []Diagnosis {
 		diags = append(diags, Diagnosis{
 			Check:  "expired",
 			Status: "error",
-			Detail: fmt.Sprintf("leaf certificate expired on %s", input.Cert.NotAfter.UTC().Format(time.RFC3339)),
+			Detail: "leaf certificate expired on " + input.Cert.NotAfter.UTC().Format(time.RFC3339),
 		})
 	} else {
 		diags = append(diags, Diagnosis{
 			Check:  "expired",
 			Status: "pass",
-			Detail: fmt.Sprintf("leaf certificate valid until %s", input.Cert.NotAfter.UTC().Format(time.RFC3339)),
+			Detail: "leaf certificate valid until " + input.Cert.NotAfter.UTC().Format(time.RFC3339),
 		})
 	}
 
@@ -344,7 +344,7 @@ func DiagnoseChain(input DiagnoseChainInput) []Diagnosis {
 		diags = append(diags, Diagnosis{
 			Check:  "not-yet-valid",
 			Status: "error",
-			Detail: fmt.Sprintf("leaf certificate not valid until %s", input.Cert.NotBefore.UTC().Format(time.RFC3339)),
+			Detail: "leaf certificate not valid until " + input.Cert.NotBefore.UTC().Format(time.RFC3339),
 		})
 	}
 

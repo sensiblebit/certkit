@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -524,7 +525,7 @@ func buildScanKeyList(store *certstore.MemStore) []scanKeyEntry {
 	for _, rec := range keys {
 		entries = append(entries, scanKeyEntry{
 			KeyType: rec.KeyType,
-			Size:    fmt.Sprintf("%d", rec.BitLength),
+			Size:    strconv.Itoa(rec.BitLength),
 			SKI:     rec.SKI,
 			Source:  rec.Source,
 		})

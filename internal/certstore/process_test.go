@@ -102,7 +102,7 @@ func TestProcessData_PEMEncryptedKey_Passwords(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	//nolint:staticcheck // testing legacy encrypted PEM
+	//nolint:staticcheck // Tests intentionally generate legacy encrypted PEM to verify backward-compatible decryption support.
 	encBlock, err := x509.EncryptPEMBlock(rand.Reader, "RSA PRIVATE KEY", x509.MarshalPKCS1PrivateKey(rsaKey), []byte("testpass"), x509.PEMCipherAES256)
 	if err != nil {
 		t.Fatalf("encrypt PEM: %v", err)
@@ -1128,7 +1128,7 @@ func TestProcessData_PEMMixedEncrypted_PartialPasswordMatch(t *testing.T) {
 
 	// Key 1: encrypted with "pass1" (RSA PKCS#1)
 	rsaDER1 := x509.MarshalPKCS1PrivateKey(rsaKey1)
-	//nolint:staticcheck // x509.EncryptPEMBlock is deprecated but intentionally used
+	//nolint:staticcheck // Tests intentionally generate legacy encrypted PEM to verify backward-compatible decryption support.
 	encBlock1, err := x509.EncryptPEMBlock(rand.Reader, "RSA PRIVATE KEY", rsaDER1, []byte("pass1"), x509.PEMCipherAES256)
 	if err != nil {
 		t.Fatal(err)
@@ -1137,7 +1137,7 @@ func TestProcessData_PEMMixedEncrypted_PartialPasswordMatch(t *testing.T) {
 
 	// Key 2: encrypted with "pass2" (RSA PKCS#1)
 	rsaDER2 := x509.MarshalPKCS1PrivateKey(rsaKey2)
-	//nolint:staticcheck
+	//nolint:staticcheck // Tests intentionally generate legacy encrypted PEM to verify backward-compatible decryption support.
 	encBlock2, err := x509.EncryptPEMBlock(rand.Reader, "RSA PRIVATE KEY", rsaDER2, []byte("pass2"), x509.PEMCipherAES256)
 	if err != nil {
 		t.Fatal(err)
@@ -1149,7 +1149,7 @@ func TestProcessData_PEMMixedEncrypted_PartialPasswordMatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	//nolint:staticcheck
+	//nolint:staticcheck // Tests intentionally generate legacy encrypted PEM to verify backward-compatible decryption support.
 	encBlock3, err := x509.EncryptPEMBlock(rand.Reader, "EC PRIVATE KEY", ecDER, []byte("pass3"), x509.PEMCipherAES256)
 	if err != nil {
 		t.Fatal(err)
