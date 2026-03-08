@@ -2493,7 +2493,7 @@ func TestConnectTLS_CRL(t *testing.T) {
 		},
 		{
 			name: "wrong issuer",
-			setupCRL: func(_ *testing.T, _ *testCA) ([]byte, *testCA) {
+			setupCRL: func(t *testing.T, _ *testCA) ([]byte, *testCA) {
 				t.Helper()
 				wrongCA := generateTestCA(t, "CRL Wrong CA")
 				der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{

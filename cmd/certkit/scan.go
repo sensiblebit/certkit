@@ -72,7 +72,7 @@ func init() {
 func runScan(cmd *cobra.Command, args []string) error {
 	inputPath := args[0]
 	if scanAIATimeout <= 0 {
-		return fmt.Errorf("%w %q: must be greater than 0", errScanAIATimeout, scanAIATimeout)
+		return fmt.Errorf("%w %s: must be greater than 0", errScanAIATimeout, scanAIATimeout)
 	}
 
 	scanExport := scanBundlePath != ""
