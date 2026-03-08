@@ -16,7 +16,7 @@ var (
 
 func checkedUint8Len(n int, field string) (byte, error) {
 	if n < 0 || n > math.MaxUint8 {
-		return 0, fmt.Errorf("%w for %s: %d > %d", errProtocolLengthOverflow, field, n, math.MaxUint8)
+		return 0, fmt.Errorf("%w for %s: %d outside range [0, %d]", errProtocolLengthOverflow, field, n, math.MaxUint8)
 	}
 	var buf [2]byte
 	binary.BigEndian.PutUint16(buf[:], uint16(n))
@@ -25,14 +25,14 @@ func checkedUint8Len(n int, field string) (byte, error) {
 
 func checkedUint16Len(n int, field string) (uint16, error) {
 	if n < 0 || n > math.MaxUint16 {
-		return 0, fmt.Errorf("%w for %s: %d > %d", errProtocolLengthOverflow, field, n, math.MaxUint16)
+		return 0, fmt.Errorf("%w for %s: %d outside range [0, %d]", errProtocolLengthOverflow, field, n, math.MaxUint16)
 	}
 	return uint16(n), nil
 }
 
 func checkedUint24Len(n int, field string) (uint32, error) {
 	if n < 0 || n > maxUint24 {
-		return 0, fmt.Errorf("%w for %s: %d > %d", errProtocolLengthOverflow, field, n, maxUint24)
+		return 0, fmt.Errorf("%w for %s: %d outside range [0, %d]", errProtocolLengthOverflow, field, n, maxUint24)
 	}
 	return uint32(n), nil
 }

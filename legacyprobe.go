@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 )
 
@@ -168,11 +169,21 @@ func probeLegacyCipher(ctx context.Context, input cipherProbeInput) (uint16, boo
 		cipherSuites: []uint16{input.cipherID},
 	})
 	if err != nil {
+		slog.Debug("probe legacy cipher: building client hello failed",
+			"addr", input.addr,
+			"server_name", input.serverName,
+			"cipher_id", input.cipherID,
+			"error", err)
 		return 0, false
 	}
 
 	record, err := wrapTLSRecord(msg)
 	if err != nil {
+		slog.Debug("probe legacy cipher: wrapping tls record failed",
+			"addr", input.addr,
+			"server_name", input.serverName,
+			"cipher_id", input.cipherID,
+			"error", err)
 		return 0, false
 	}
 	if _, err := conn.Write(record); err != nil {

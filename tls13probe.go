@@ -19,6 +19,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 )
 
@@ -445,11 +446,21 @@ func probeTLS13Cipher(ctx context.Context, input cipherProbeInput) bool {
 		groupID:     tls.X25519,
 	})
 	if err != nil {
+		slog.Debug("probe tls13 cipher: building client hello failed",
+			"addr", input.addr,
+			"server_name", input.serverName,
+			"cipher_id", input.cipherID,
+			"error", err)
 		return false
 	}
 
 	record, err := wrapTLSRecord(msg)
 	if err != nil {
+		slog.Debug("probe tls13 cipher: wrapping tls record failed",
+			"addr", input.addr,
+			"server_name", input.serverName,
+			"cipher_id", input.cipherID,
+			"error", err)
 		return false
 	}
 	if _, err := conn.Write(record); err != nil {
@@ -485,11 +496,21 @@ func probeKeyExchangeGroup(ctx context.Context, input cipherProbeInput) bool {
 		groupID:     input.groupID,
 	})
 	if err != nil {
+		slog.Debug("probe key exchange group: building client hello failed",
+			"addr", input.addr,
+			"server_name", input.serverName,
+			"group_id", input.groupID,
+			"error", err)
 		return false
 	}
 
 	record, err := wrapTLSRecord(msg)
 	if err != nil {
+		slog.Debug("probe key exchange group: wrapping tls record failed",
+			"addr", input.addr,
+			"server_name", input.serverName,
+			"group_id", input.groupID,
+			"error", err)
 		return false
 	}
 	if _, err := conn.Write(record); err != nil {
