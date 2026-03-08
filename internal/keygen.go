@@ -124,7 +124,8 @@ func GenerateKeyFiles(opts KeygenOptions) (*KeygenResult, error) {
 
 	// Write files only when an output path is specified
 	if opts.OutPath != "" {
-		if err := os.MkdirAll(opts.OutPath, 0o750); err != nil {
+		//nolint:gosec // Output dirs need traversal bits so public artifacts in this folder remain readable; key.pem stays 0600.
+		if err := os.MkdirAll(opts.OutPath, 0o755); err != nil {
 			return nil, fmt.Errorf("creating output directory: %w", err)
 		}
 
@@ -134,13 +135,15 @@ func GenerateKeyFiles(opts KeygenOptions) (*KeygenResult, error) {
 		}
 
 		result.PubFile = filepath.Join(opts.OutPath, "pub.pem")
-		if err := os.WriteFile(result.PubFile, []byte(pubPEM), 0o600); err != nil {
+		//nolint:gosec // Public keys are intentionally non-secret output artifacts.
+		if err := os.WriteFile(result.PubFile, []byte(pubPEM), 0o644); err != nil {
 			return nil, fmt.Errorf("writing public key: %w", err)
 		}
 
 		if result.CSRPEM != "" {
 			result.CSRFile = filepath.Join(opts.OutPath, "csr.pem")
-			if err := os.WriteFile(result.CSRFile, []byte(result.CSRPEM), 0o600); err != nil {
+			//nolint:gosec // CSRs are intentionally shareable request artifacts and contain no private key material.
+			if err := os.WriteFile(result.CSRFile, []byte(result.CSRPEM), 0o644); err != nil {
 				return nil, fmt.Errorf("writing CSR: %w", err)
 			}
 		}

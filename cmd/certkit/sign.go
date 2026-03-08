@@ -159,10 +159,12 @@ func runSignSelfSigned(_ *cobra.Command, _ []string) error {
 
 	if selfSignedOutFile != "" {
 		output := certPEM
+		perm := os.FileMode(0o644)
 		if keyPEM != "" {
 			output += keyPEM
+			perm = 0o600
 		}
-		perm := os.FileMode(0600) // contains key or is a CA cert
+		// Generated cert+key output is secret (0600); cert-only output is intentionally public (0644).
 		if err := os.WriteFile(selfSignedOutFile, []byte(output), perm); err != nil {
 			return fmt.Errorf("writing output: %w", err)
 		}
@@ -246,7 +248,8 @@ func runSignCSR(_ *cobra.Command, args []string) error {
 	certPEM := certkit.CertToPEM(cert)
 
 	if signCSROutFile != "" {
-		if err := os.WriteFile(signCSROutFile, []byte(certPEM), 0600); err != nil {
+		//nolint:gosec // Signed certificates are public artifacts and do not contain private key material.
+		if err := os.WriteFile(signCSROutFile, []byte(certPEM), 0o644); err != nil {
 			return fmt.Errorf("writing output: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "Wrote %s (%d bytes)\n", signCSROutFile, len(certPEM))

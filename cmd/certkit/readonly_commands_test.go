@@ -289,6 +289,44 @@ func TestRunScan_CommandSurface(t *testing.T) {
 	}
 }
 
+func TestRunScan_DumpCertsPermissions(t *testing.T) {
+	snap := snapshotReadonlyGlobals()
+	t.Cleanup(func() { restoreReadonlyGlobals(snap) })
+
+	dir := t.TempDir()
+	_, cert := generateKeyAndCert(t, "scan.example.com", false)
+	writeCertPEM(t, dir, "leaf.pem", cert)
+
+	passwordList = nil
+	passwordFile = ""
+	verbose = false
+	jsonOutput = false
+	scanBundlePath = ""
+	scanConfigPath = filepath.Join(dir, "missing-config.yaml")
+	scanForceExport = true
+	scanDuplicates = false
+	scanDumpKeys = ""
+	scanDumpCerts = filepath.Join(dir, "dumped-certs.pem")
+	scanMaxFileSize = 10 * 1024 * 1024
+	scanFormat = "text"
+	scanAllowPrivateNetwork = false
+	scanSaveDB = ""
+	scanLoadDB = ""
+
+	_, _, err := captureOutput(t, func() error { return runScan(newCommandWithContext(), []string{dir}) })
+	if err != nil {
+		t.Fatalf("runScan with --dump-certs failed: %v", err)
+	}
+
+	info, err := os.Stat(scanDumpCerts)
+	if err != nil {
+		t.Fatalf("stat dumped certs: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o644 {
+		t.Fatalf("dumped certs permissions = %04o, want 0644", perm)
+	}
+}
+
 func TestRunInspect_CommandSurface(t *testing.T) {
 	snap := snapshotReadonlyGlobals()
 	t.Cleanup(func() { restoreReadonlyGlobals(snap) })

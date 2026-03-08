@@ -137,6 +137,14 @@ func TestGenerateKeyFiles(t *testing.T) {
 		t.Errorf("key file permissions = %04o, want 0600", perm)
 	}
 
+	dirInfo, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := dirInfo.Mode().Perm(); perm != 0o755 {
+		t.Errorf("output directory permissions = %04o, want 0755", perm)
+	}
+
 	// Verify pub.pem exists, is parseable, and has standard permissions
 	pubPath := filepath.Join(dir, "pub.pem")
 	pubData := mustReadTestFile(t, pubPath)
@@ -173,8 +181,8 @@ func TestGenerateKeyFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if perm := pubInfo.Mode().Perm(); perm != 0600 {
-		t.Errorf("pub file permissions = %04o, want 0600", perm)
+	if perm := pubInfo.Mode().Perm(); perm != 0o644 {
+		t.Errorf("pub file permissions = %04o, want 0644", perm)
 	}
 
 	// No CSR should be created without CN/SANs
@@ -246,6 +254,13 @@ func TestGenerateKeyFiles_WithCSR_Content(t *testing.T) {
 	csr, err := certkit.ParsePEMCertificateRequest(csrData)
 	if err != nil {
 		t.Fatalf("parsing CSR: %v", err)
+	}
+	csrInfo, err := os.Stat(filepath.Join(dir, "csr.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := csrInfo.Mode().Perm(); perm != 0o644 {
+		t.Errorf("csr file permissions = %04o, want 0644", perm)
 	}
 
 	if csr.Subject.CommonName != "keymatch.example.com" {

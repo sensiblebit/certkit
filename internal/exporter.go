@@ -33,7 +33,8 @@ func (w *filesystemWriter) WriteBundleFiles(folder string, files []certstore.Bun
 	if err != nil {
 		return fmt.Errorf("resolving bundle directory %q: %w", folder, err)
 	}
-	if err := os.MkdirAll(folderPath, 0o750); err != nil {
+	//nolint:gosec // Bundle dirs need traversal bits so non-sensitive bundle files remain readable; sensitive files stay 0600.
+	if err := os.MkdirAll(folderPath, 0o755); err != nil {
 		return fmt.Errorf("creating bundle directory %s: %w", folderPath, err)
 	}
 

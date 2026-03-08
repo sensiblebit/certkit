@@ -199,6 +199,20 @@ func TestGenerateCSRFiles_WithExistingKey(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse CSR: %v", err)
 	}
+	csrInfo, err := os.Stat(filepath.Join(outDir, "csr.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := csrInfo.Mode().Perm(); perm != 0o644 {
+		t.Errorf("csr file permissions = %04o, want 0644", perm)
+	}
+	outDirInfo, err := os.Stat(outDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := outDirInfo.Mode().Perm(); perm != 0o755 {
+		t.Errorf("output directory permissions = %04o, want 0755", perm)
+	}
 	if !key.PublicKey.Equal(csr.PublicKey) {
 		t.Error("CSR public key does not match existing key — CSR was signed by a different key")
 	}

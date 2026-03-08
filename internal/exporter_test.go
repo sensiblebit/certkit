@@ -126,6 +126,28 @@ func TestExportBundles_EndToEnd(t *testing.T) {
 			t.Errorf("%s permissions = %04o, want 0600", name, perm)
 		}
 	}
+
+	publicFiles := []string{
+		"e2e.example.com.pem",
+		"e2e.example.com.json",
+	}
+	for _, name := range publicFiles {
+		info, err := os.Stat(filepath.Join(bundleDir, name))
+		if err != nil {
+			t.Fatalf("stat %s: %v", name, err)
+		}
+		if perm := info.Mode().Perm(); perm != 0o644 {
+			t.Errorf("%s permissions = %04o, want 0644", name, perm)
+		}
+	}
+
+	bundleDirInfo, err := os.Stat(bundleDir)
+	if err != nil {
+		t.Fatalf("stat bundle dir: %v", err)
+	}
+	if perm := bundleDirInfo.Mode().Perm(); perm != 0o755 {
+		t.Errorf("bundle directory permissions = %04o, want 0755", perm)
+	}
 }
 
 func TestSafeJoin(t *testing.T) {

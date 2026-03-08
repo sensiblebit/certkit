@@ -629,6 +629,69 @@ func TestRunSignSelfSigned_CommandSurfaceOutput(t *testing.T) {
 			t.Fatalf("sign self-signed missing key should wrap os.ErrNotExist, got: %v", err)
 		}
 	})
+
+	t.Run("out-file permissions", func(t *testing.T) {
+		passwordList = nil
+		passwordFile = ""
+		selfSignedCN = "selfsigned.example.com"
+		selfSignedDays = 30
+		selfSignedIsCA = true
+		selfSignedKeyPath = ""
+		selfSignedOutFile = filepath.Join(t.TempDir(), "selfsigned.pem")
+		jsonOutput = false
+
+		_, stderr, err := captureCmdOutput114(t, func() error {
+			return runSignSelfSigned(newContextCmd114(), nil)
+		})
+		if err != nil {
+			t.Fatalf("runSignSelfSigned out-file failed: %v", err)
+		}
+		if !strings.Contains(stderr, "Wrote ") {
+			t.Fatalf("sign self-signed out-file missing write confirmation:\n%s", stderr)
+		}
+
+		info, err := os.Stat(selfSignedOutFile)
+		if err != nil {
+			t.Fatalf("stat self-signed output: %v", err)
+		}
+		if perm := info.Mode().Perm(); perm != 0o600 {
+			t.Fatalf("self-signed output permissions = %04o, want 0600", perm)
+		}
+	})
+
+	t.Run("out-file permissions with existing key", func(t *testing.T) {
+		passwordList = nil
+		passwordFile = ""
+		selfSignedCN = "selfsigned.example.com"
+		selfSignedDays = 30
+		selfSignedIsCA = true
+		dir := t.TempDir()
+		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatalf("generating key: %v", err)
+		}
+		selfSignedKeyPath = writeECDSAPrivateKeyPEM114(t, dir, "existing.key", key)
+		selfSignedOutFile = filepath.Join(dir, "selfsigned-cert.pem")
+		jsonOutput = false
+
+		_, stderr, err := captureCmdOutput114(t, func() error {
+			return runSignSelfSigned(newContextCmd114(), nil)
+		})
+		if err != nil {
+			t.Fatalf("runSignSelfSigned existing-key out-file failed: %v", err)
+		}
+		if !strings.Contains(stderr, "Wrote ") {
+			t.Fatalf("sign self-signed existing-key out-file missing write confirmation:\n%s", stderr)
+		}
+
+		info, err := os.Stat(selfSignedOutFile)
+		if err != nil {
+			t.Fatalf("stat self-signed cert-only output: %v", err)
+		}
+		if perm := info.Mode().Perm(); perm != 0o644 {
+			t.Fatalf("self-signed cert-only output permissions = %04o, want 0644", perm)
+		}
+	})
 }
 
 func TestRunSignCSR_CommandSurfaceOutput(t *testing.T) {
@@ -711,6 +774,35 @@ func TestRunSignCSR_CommandSurfaceOutput(t *testing.T) {
 		}
 		if !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("sign csr missing CSR should wrap os.ErrNotExist, got: %v", err)
+		}
+	})
+
+	t.Run("out-file permissions", func(t *testing.T) {
+		passwordList = nil
+		passwordFile = ""
+		signCSRCAPath = caCertPath
+		signCSRKeyPath = caKeyPath
+		signCSRDays = 90
+		signCSRCopySAN = true
+		signCSROutFile = filepath.Join(t.TempDir(), "leaf.pem")
+		jsonOutput = false
+
+		_, stderr, err := captureCmdOutput114(t, func() error {
+			return runSignCSR(newContextCmd114(), []string{csrPath})
+		})
+		if err != nil {
+			t.Fatalf("runSignCSR out-file failed: %v", err)
+		}
+		if !strings.Contains(stderr, "Wrote ") {
+			t.Fatalf("sign csr out-file missing write confirmation:\n%s", stderr)
+		}
+
+		info, err := os.Stat(signCSROutFile)
+		if err != nil {
+			t.Fatalf("stat sign csr output: %v", err)
+		}
+		if perm := info.Mode().Perm(); perm != 0o644 {
+			t.Fatalf("sign csr output permissions = %04o, want 0644", perm)
 		}
 	})
 }

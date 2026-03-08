@@ -151,12 +151,14 @@ func GenerateCSRFiles(opts CSROptions) (*CSRResult, error) {
 
 	// Write files only when an output path is specified
 	if opts.OutPath != "" {
-		if err := os.MkdirAll(opts.OutPath, 0o750); err != nil {
+		//nolint:gosec // Output dirs need traversal bits so public CSRs remain readable; key.pem stays 0600.
+		if err := os.MkdirAll(opts.OutPath, 0o755); err != nil {
 			return nil, fmt.Errorf("creating output directory: %w", err)
 		}
 
 		result.CSRFile = filepath.Join(opts.OutPath, "csr.pem")
-		if err := os.WriteFile(result.CSRFile, []byte(csrPEM), 0o600); err != nil {
+		//nolint:gosec // CSRs are intentionally non-secret output files.
+		if err := os.WriteFile(result.CSRFile, []byte(csrPEM), 0o644); err != nil {
 			return nil, fmt.Errorf("writing CSR: %w", err)
 		}
 
