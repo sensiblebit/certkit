@@ -63,7 +63,7 @@ func GenerateCSRFiles(opts CSROptions) (*CSRResult, error) {
 	var signer crypto.Signer
 	keyGenerated := false
 	if opts.KeyPath != "" {
-		keyData, err := os.ReadFile(opts.KeyPath)
+		keyData, err := readFileLimited(opts.KeyPath, 0)
 		if err != nil {
 			return nil, fmt.Errorf("reading key file: %w", err)
 		}
@@ -95,7 +95,7 @@ func GenerateCSRFiles(opts CSROptions) (*CSRResult, error) {
 
 	switch {
 	case opts.TemplatePath != "":
-		data, readErr := os.ReadFile(opts.TemplatePath)
+		data, readErr := readFileLimited(opts.TemplatePath, 0)
 		if readErr != nil {
 			return nil, fmt.Errorf("reading template: %w", readErr)
 		}
@@ -106,7 +106,7 @@ func GenerateCSRFiles(opts CSROptions) (*CSRResult, error) {
 		csrPEM, err = certkit.GenerateCSRFromTemplate(tmpl, signer)
 
 	case opts.CertPath != "":
-		data, readErr := os.ReadFile(opts.CertPath)
+		data, readErr := readFileLimited(opts.CertPath, 0)
 		if readErr != nil {
 			return nil, fmt.Errorf("reading certificate: %w", readErr)
 		}
@@ -122,7 +122,7 @@ func GenerateCSRFiles(opts CSROptions) (*CSRResult, error) {
 		csrPEM, _, err = certkit.GenerateCSR(cert, signer)
 
 	case opts.CSRPath != "":
-		data, readErr := os.ReadFile(opts.CSRPath)
+		data, readErr := readFileLimited(opts.CSRPath, 0)
 		if readErr != nil {
 			return nil, fmt.Errorf("reading CSR: %w", readErr)
 		}
@@ -151,12 +151,12 @@ func GenerateCSRFiles(opts CSROptions) (*CSRResult, error) {
 
 	// Write files only when an output path is specified
 	if opts.OutPath != "" {
-		if err := os.MkdirAll(opts.OutPath, 0755); err != nil {
+		if err := os.MkdirAll(opts.OutPath, 0o750); err != nil {
 			return nil, fmt.Errorf("creating output directory: %w", err)
 		}
 
 		result.CSRFile = filepath.Join(opts.OutPath, "csr.pem")
-		if err := os.WriteFile(result.CSRFile, []byte(csrPEM), 0644); err != nil {
+		if err := os.WriteFile(result.CSRFile, []byte(csrPEM), 0o600); err != nil {
 			return nil, fmt.Errorf("writing CSR: %w", err)
 		}
 

@@ -119,7 +119,7 @@ func runSignSelfSigned(_ *cobra.Command, _ []string) error {
 	var keyPEM string
 
 	if selfSignedKeyPath != "" {
-		keyData, err := os.ReadFile(selfSignedKeyPath)
+		keyData, err := readCLIFile(selfSignedKeyPath)
 		if err != nil {
 			return fmt.Errorf("reading key file: %w", err)
 		}
@@ -199,7 +199,7 @@ func runSignCSR(_ *cobra.Command, args []string) error {
 	}
 
 	// Load CSR
-	csrData, err := os.ReadFile(args[0])
+	csrData, err := readCLIFile(args[0])
 	if err != nil {
 		return fmt.Errorf("reading CSR: %w", err)
 	}
@@ -209,7 +209,7 @@ func runSignCSR(_ *cobra.Command, args []string) error {
 	}
 
 	// Load CA cert
-	caData, err := os.ReadFile(signCSRCAPath)
+	caData, err := readCLIFile(signCSRCAPath)
 	if err != nil {
 		return fmt.Errorf("reading CA certificate: %w", err)
 	}
@@ -219,7 +219,7 @@ func runSignCSR(_ *cobra.Command, args []string) error {
 	}
 
 	// Load CA key
-	caKeyData, err := os.ReadFile(signCSRKeyPath)
+	caKeyData, err := readCLIFile(signCSRKeyPath)
 	if err != nil {
 		return fmt.Errorf("reading CA key: %w", err)
 	}
@@ -246,7 +246,7 @@ func runSignCSR(_ *cobra.Command, args []string) error {
 	certPEM := certkit.CertToPEM(cert)
 
 	if signCSROutFile != "" {
-		if err := os.WriteFile(signCSROutFile, []byte(certPEM), 0644); err != nil {
+		if err := os.WriteFile(signCSROutFile, []byte(certPEM), 0600); err != nil {
 			return fmt.Errorf("writing output: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "Wrote %s (%d bytes)\n", signCSROutFile, len(certPEM))

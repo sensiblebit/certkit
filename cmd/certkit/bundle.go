@@ -83,7 +83,7 @@ func runBundle(cmd *cobra.Command, args []string) error {
 
 	// Load explicit key if provided
 	if bundleKeyPath != "" {
-		keyData, err := os.ReadFile(bundleKeyPath)
+		keyData, err := readCLIFile(bundleKeyPath)
 		if err != nil {
 			return fmt.Errorf("reading key file: %w", err)
 		}

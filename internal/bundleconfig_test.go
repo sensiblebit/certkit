@@ -24,7 +24,7 @@ bundles:
   - commonNames: ["other.com"]
     bundleName: "other-bundle"
 `
-	if err := os.WriteFile(path, []byte(yaml), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(yaml), 0600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -63,7 +63,7 @@ func TestLoadBundleConfigs_OldFormat(t *testing.T) {
 - commonNames: ["other.com"]
   bundleName: "other-bundle"
 `
-	if err := os.WriteFile(path, []byte(yaml), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(yaml), 0600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -100,7 +100,7 @@ func TestLoadBundleConfigs_InvalidYAML(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bundles.yaml")
-	if err := os.WriteFile(path, []byte("{{{{not yaml"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("{{{{not yaml"), 0600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -141,7 +141,7 @@ bundles:
   - commonNames: ["second.com"]
     bundleName: "second"
 `
-	if err := os.WriteFile(path, []byte(yamlContent), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(yamlContent), 0600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -189,7 +189,7 @@ bundles:
   - commonNames: ["inherit.com"]
     bundleName: "inherit"
 `
-	if err := os.WriteFile(path, []byte(yamlContent), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(yamlContent), 0600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
@@ -241,7 +241,7 @@ defaultSubject:
   country: ["US"]
 bundles: []
 `
-	if err := os.WriteFile(path, []byte(yamlContent), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(yamlContent), 0600); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 

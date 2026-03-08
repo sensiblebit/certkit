@@ -102,7 +102,7 @@ func runConvert(_ *cobra.Command, args []string) error {
 	// matches keys to leaf certificates and builds chain bundles. Multiple
 	// matches produce multiple entries (for JKS multi-alias output).
 	if convertKeyPath != "" {
-		keyData, err := os.ReadFile(convertKeyPath)
+		keyData, err := readCLIFile(convertKeyPath)
 		if err != nil {
 			return fmt.Errorf("reading key file: %w", err)
 		}

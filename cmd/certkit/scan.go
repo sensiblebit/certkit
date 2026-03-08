@@ -314,7 +314,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 				slog.Debug("skipped certificates", "count", skipped)
 			}
 			if count > 0 {
-				if err := os.WriteFile(scanDumpCerts, data, 0644); err != nil {
+				if err := os.WriteFile(scanDumpCerts, data, 0600); err != nil {
 					return fmt.Errorf("writing certificates to %s: %w", scanDumpCerts, err)
 				}
 				slog.Debug("dumped certificates", "count", count, "path", scanDumpCerts)
@@ -334,7 +334,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 		}
 		p12Password := bundlePassword(passwordSets.Export)
 		// Full export workflow — MemStore handles chain resolution via raw ASN.1 matching
-		if err := os.MkdirAll(scanBundlePath, 0755); err != nil {
+		if err := os.MkdirAll(scanBundlePath, 0750); err != nil {
 			return fmt.Errorf("creating output directory %s: %w", scanBundlePath, err)
 		}
 		if err := internal.ExportBundles(cmd.Context(), internal.ExportBundlesInput{

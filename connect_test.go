@@ -61,6 +61,8 @@ func TestConnectTLS(t *testing.T) {
 				}
 
 				listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+					MinVersion:   tls.VersionTLS12,
+					MaxVersion:   tls.VersionTLS13,
 					Certificates: []tls.Certificate{tlsCert},
 				})
 				if err != nil {
@@ -190,6 +192,8 @@ func TestConnectTLS(t *testing.T) {
 					PrivateKey:  key,
 				}
 				listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+					MinVersion:   tls.VersionTLS12,
+					MaxVersion:   tls.VersionTLS13,
 					Certificates: []tls.Certificate{tlsCert},
 				})
 				if err != nil {
@@ -420,6 +424,8 @@ func TestConnectTLS_ClientAuth(t *testing.T) {
 			// WHY: Ensures mTLS detection handles acceptable CA lists correctly.
 			t.Parallel()
 			listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+				MinVersion:   tls.VersionTLS12,
+				MaxVersion:   tls.VersionTLS13,
 				Certificates: []tls.Certificate{tlsCert},
 				ClientAuth:   tls.RequestClientCert,
 				ClientCAs:    tt.clientCAs,
@@ -517,6 +523,8 @@ func TestConnectTLS_ClientAuth_Required(t *testing.T) {
 	rootPool.AddCert(serverCA.Cert)
 
 	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		MaxVersion: tls.VersionTLS13,
 		Certificates: []tls.Certificate{{
 			Certificate: [][]byte{leaf.DER, serverCA.CertDER},
 			PrivateKey:  leaf.Key,
@@ -690,6 +698,8 @@ func TestConnectTLS_IPv6Loopback(t *testing.T) {
 	}
 
 	listener, err := tls.Listen("tcp", "[::1]:0", &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		MaxVersion:   tls.VersionTLS13,
 		Certificates: []tls.Certificate{tlsCert},
 	})
 	if err != nil {
@@ -1442,6 +1452,8 @@ func TestConnectTLS_AIAFetch(t *testing.T) {
 		PrivateKey:  leafKey,
 	}
 	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		MaxVersion:   tls.VersionTLS13,
 		Certificates: []tls.Certificate{tlsCert},
 	})
 	if err != nil {
@@ -1826,6 +1838,8 @@ func TestConnectTLS_AIAFetch_Failure(t *testing.T) {
 			}
 
 			listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+				MinVersion:   tls.VersionTLS12,
+				MaxVersion:   tls.VersionTLS13,
 				Certificates: []tls.Certificate{{Certificate: [][]byte{leafDER}, PrivateKey: leafKey}},
 			})
 			if err != nil {
@@ -1967,6 +1981,8 @@ func TestConnectTLS_NoCertificates(t *testing.T) {
 				return
 			}
 			tlsConn := tls.Server(conn, &tls.Config{
+				MinVersion: tls.VersionTLS12,
+				MaxVersion: tls.VersionTLS13,
 				GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
 					var cert *tls.Certificate
 					return cert, nil
@@ -2066,6 +2082,8 @@ func TestConnectTLS_AIAFetch_DisableAIA(t *testing.T) {
 		PrivateKey:  leafKey,
 	}
 	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		MaxVersion:   tls.VersionTLS13,
 		Certificates: []tls.Certificate{tlsCert},
 	})
 	if err != nil {

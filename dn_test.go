@@ -7,6 +7,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"net"
@@ -263,7 +264,13 @@ func mustMarshalSequence(t *testing.T, elements ...[]byte) []byte {
 	case length <= 0xff:
 		return append([]byte{0x30, 0x81, byte(length)}, content...)
 	case length <= 0xffff:
-		return append([]byte{0x30, 0x82, byte(length >> 8), byte(length)}, content...)
+		length16, err := checkedUint16Len(length, "ASN.1 sequence length")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var lengthBytes [2]byte
+		binary.BigEndian.PutUint16(lengthBytes[:], length16)
+		return append([]byte{0x30, 0x82, lengthBytes[0], lengthBytes[1]}, content...)
 	default:
 		t.Fatalf("sequence too large: %d", length)
 		return nil
@@ -1050,8 +1057,7 @@ func bmpStringBytes(s string) []byte {
 	encoded := utf16.Encode([]rune(s))
 	bytes := make([]byte, len(encoded)*2)
 	for i, r := range encoded {
-		bytes[i*2] = byte(r >> 8)
-		bytes[i*2+1] = byte(r)
+		binary.BigEndian.PutUint16(bytes[i*2:i*2+2], r)
 	}
 	return bytes
 }

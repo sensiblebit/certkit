@@ -216,7 +216,7 @@ func writeCertPEM(t *testing.T, dir, name string, cert *x509.Certificate) string
 	t.Helper()
 	path := filepath.Join(dir, name)
 	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
-	if err := os.WriteFile(path, pemBytes, 0644); err != nil {
+	if err := os.WriteFile(path, pemBytes, 0600); err != nil {
 		t.Fatalf("writing cert %s: %v", path, err)
 	}
 	return path

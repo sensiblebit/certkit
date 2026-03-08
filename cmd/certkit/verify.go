@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -125,7 +124,7 @@ func runVerify(cmd *cobra.Command, args []string) error {
 	// Load explicit key from --key flag (overrides embedded key)
 	var key crypto.PrivateKey
 	if verifyKeyPath != "" {
-		keyData, err := os.ReadFile(verifyKeyPath)
+		keyData, err := readCLIFile(verifyKeyPath)
 		if err != nil {
 			return fmt.Errorf("reading key file: %w", err)
 		}

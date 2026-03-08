@@ -25,6 +25,11 @@ import (
 	"github.com/sensiblebit/certkit"
 )
 
+var (
+	errInspectUnexpectedURL = errors.New("unexpected URL")
+	errInspectConnRefused   = errors.New("connection refused")
+)
+
 func assertColonHex(t *testing.T, label, value string, wantBytes int) {
 	t.Helper()
 	wantLen := wantBytes*3 - 1 // 2 hex + 1 colon per byte, minus trailing colon
@@ -64,7 +69,7 @@ func TestInspectFile_CertificateFormats_PEM_DER(t *testing.T) {
 			t.Parallel()
 			dir := t.TempDir()
 			certFile := filepath.Join(dir, tt.filename)
-			if err := os.WriteFile(certFile, tt.data, 0644); err != nil {
+			if err := os.WriteFile(certFile, tt.data, 0600); err != nil {
 				t.Fatal(err)
 			}
 
@@ -219,7 +224,7 @@ func TestInspectFile_ContainerFormats(t *testing.T) {
 
 			dir := t.TempDir()
 			path := filepath.Join(dir, tt.filename)
-			if err := os.WriteFile(path, data, 0644); err != nil {
+			if err := os.WriteFile(path, data, 0600); err != nil {
 				t.Fatal(err)
 			}
 
@@ -314,7 +319,7 @@ func TestInspectFile_CertWithIPSANs(t *testing.T) {
 
 	dir := t.TempDir()
 	certFile := filepath.Join(dir, "cert-ip.pem")
-	if err := os.WriteFile(certFile, leaf.certPEM, 0644); err != nil {
+	if err := os.WriteFile(certFile, leaf.certPEM, 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -355,7 +360,7 @@ func TestInspectFile_MultiplePEMObjects(t *testing.T) {
 
 	dir := t.TempDir()
 	mixedFile := filepath.Join(dir, "mixed.pem")
-	if err := os.WriteFile(mixedFile, combined, 0644); err != nil {
+	if err := os.WriteFile(mixedFile, combined, 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -402,7 +407,7 @@ func TestInspectFile_PEMMalformedCertAndValidCert(t *testing.T) {
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "mixed-malformed.pem")
-	if err := os.WriteFile(path, combined, 0644); err != nil {
+	if err := os.WriteFile(path, combined, 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -499,7 +504,7 @@ func TestInspectFile_GarbageData(t *testing.T) {
 	for i := range garbage {
 		garbage[i] = byte(i % 251)
 	}
-	if err := os.WriteFile(garbageFile, garbage, 0644); err != nil {
+	if err := os.WriteFile(garbageFile, garbage, 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -745,7 +750,7 @@ func TestInspectFile_ExpiredCert(t *testing.T) {
 
 	dir := t.TempDir()
 	certFile := filepath.Join(dir, "expired.pem")
-	if err := os.WriteFile(certFile, leaf.certPEM, 0644); err != nil {
+	if err := os.WriteFile(certFile, leaf.certPEM, 0600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -961,7 +966,7 @@ func TestResolveInspectAIA_FetchesIntermediate(t *testing.T) {
 		if url == "http://example.com/ca.crt" {
 			return ca.certDER, nil
 		}
-		return nil, fmt.Errorf("unexpected URL: %s", url)
+		return nil, fmt.Errorf("%w: %s", errInspectUnexpectedURL, url)
 	}
 
 	got, warnings := ResolveInspectAIA(context.Background(), ResolveInspectAIAInput{
@@ -1011,7 +1016,7 @@ func TestResolveInspectAIA_FetcherError(t *testing.T) {
 	results := []InspectResult{inspectCert(leaf.cert)}
 
 	fetcher := func(_ context.Context, _ string) ([]byte, error) {
-		return nil, fmt.Errorf("connection refused")
+		return nil, errInspectConnRefused
 	}
 
 	got, warnings := ResolveInspectAIA(context.Background(), ResolveInspectAIAInput{
@@ -1049,7 +1054,7 @@ func TestResolveInspectAIA_DeduplicatesExisting(t *testing.T) {
 		if url == "http://example.com/ca.crt" {
 			return ca.certDER, nil
 		}
-		return nil, fmt.Errorf("unexpected URL: %s", url)
+		return nil, fmt.Errorf("%w: %s", errInspectUnexpectedURL, url)
 	}
 
 	got, warnings := ResolveInspectAIA(context.Background(), ResolveInspectAIAInput{

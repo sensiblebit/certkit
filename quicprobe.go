@@ -17,10 +17,35 @@ import (
 	"crypto/sha256"
 	"crypto/tls"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net"
+)
+
+var (
+	errQUICHeaderProtectionSampleShort = errors.New("packet too short for header protection sample")
+	errQUICPacketTooShort              = errors.New("quic packet too short")
+	errQUICNotLongHeader               = errors.New("not a long header packet")
+	errQUICTruncatedVersion            = errors.New("packet truncated at version")
+	errQUICTruncatedDCIDLength         = errors.New("packet truncated at DCID length")
+	errQUICTruncatedDCID               = errors.New("packet truncated at DCID")
+	errQUICTruncatedSCIDLength         = errors.New("packet truncated at SCID length")
+	errQUICTruncatedSCID               = errors.New("packet truncated at SCID")
+	errQUICTruncatedTokenLength        = errors.New("packet truncated at token length")
+	errQUICMalformedTokenLength        = errors.New("malformed token length varint")
+	errQUICTruncatedTokenData          = errors.New("packet truncated at token data")
+	errQUICTruncatedPayloadLength      = errors.New("packet truncated at payload length")
+	errQUICMalformedPayloadLength      = errors.New("malformed payload length varint")
+	errQUICPayloadLengthExceeded       = errors.New("payload length exceeds remaining packet")
+	errQUICHeaderProtectionSampleNeed  = errors.New("packet too short for HP sample")
+	errQUICTruncatedPacketNumberBytes  = errors.New("packet truncated at packet number bytes")
+	errQUICTruncatedPacketNumber       = errors.New("packet truncated at packet number")
+	errQUICMalformedCryptoOffset       = errors.New("malformed crypto frame offset")
+	errQUICMalformedCryptoLength       = errors.New("malformed crypto frame length")
+	errQUICTruncatedCryptoData         = errors.New("crypto frame data truncated")
+	errQUICNoCryptoFrame               = errors.New("no crypto frame found in quic initial response")
 )
 
 // quicV1InitialSalt is the salt used to derive Initial keys for QUIC v1
@@ -98,8 +123,16 @@ func hkdfExpandLabel(input hkdfExpandLabelInput) ([]byte, error) {
 
 	// Build HkdfLabel struct: uint16 length + opaque label<7..255> + opaque context<0..255>
 	var info []byte
-	info = appendUint16(info, uint16(input.length))
-	info = append(info, byte(len(fullLabel)))
+	length, err := checkedUint16Len(input.length, "HKDF label output length")
+	if err != nil {
+		return nil, err
+	}
+	labelLen, err := checkedUint8Len(len(fullLabel), "HKDF label")
+	if err != nil {
+		return nil, err
+	}
+	info = appendUint16(info, length)
+	info = append(info, labelLen)
 	info = append(info, []byte(fullLabel)...)
 	info = append(info, 0) // empty context
 
@@ -142,9 +175,17 @@ func buildQUICInitialPacket(input quicInitialPacketInput) ([]byte, error) {
 	var header []byte
 	header = append(header, firstByte)
 	header = append(header, 0x00, 0x00, 0x00, 0x01) // Version: QUIC v1
-	header = append(header, byte(len(input.dcid)))
+	dcidLen, err := checkedUint8Len(len(input.dcid), "QUIC destination connection ID")
+	if err != nil {
+		return nil, err
+	}
+	header = append(header, dcidLen)
 	header = append(header, input.dcid...)
-	header = append(header, byte(len(input.scid)))
+	scidLen, err := checkedUint8Len(len(input.scid), "QUIC source connection ID")
+	if err != nil {
+		return nil, err
+	}
+	header = append(header, scidLen)
 	header = append(header, input.scid...)
 	header = append(header, 0x00) // Token length: 0 (no token for Initial)
 
@@ -200,7 +241,7 @@ func buildQUICInitialPacket(input quicInitialPacketInput) ([]byte, error) {
 	// Sample starts 4 bytes after the start of the packet number field.
 	sampleOffset := pnOffset + 4
 	if sampleOffset+16 > len(packet) {
-		return nil, fmt.Errorf("packet too short for header protection sample")
+		return nil, errQUICHeaderProtectionSampleShort
 	}
 	sample := packet[sampleOffset : sampleOffset+16]
 
@@ -226,13 +267,13 @@ func buildQUICInitialPacket(input quicInitialPacketInput) ([]byte, error) {
 // extracts the ServerHello from the CRYPTO frame.
 func parseQUICInitialResponse(packet []byte, serverKeys quicInitialKeys) (*serverHelloResult, error) {
 	if len(packet) < 5 {
-		return nil, fmt.Errorf("quic packet too short: %d bytes", len(packet))
+		return nil, fmt.Errorf("%w: %d bytes", errQUICPacketTooShort, len(packet))
 	}
 
 	// Check it's a Long Header Initial packet.
 	firstByte := packet[0]
 	if firstByte&0x80 == 0 {
-		return nil, fmt.Errorf("not a long header packet")
+		return nil, errQUICNotLongHeader
 	}
 
 	// Remove header protection first.
@@ -240,69 +281,77 @@ func parseQUICInitialResponse(packet []byte, serverKeys quicInitialKeys) (*serve
 	pos := 1
 	// Version (4 bytes).
 	if pos+4 > len(packet) {
-		return nil, fmt.Errorf("packet truncated at version")
+		return nil, errQUICTruncatedVersion
 	}
 	pos += 4
 
 	// DCID.
 	if pos+1 > len(packet) {
-		return nil, fmt.Errorf("packet truncated at DCID length")
+		return nil, errQUICTruncatedDCIDLength
 	}
 	dcidLen := int(packet[pos])
 	pos++
 	if pos+dcidLen > len(packet) {
-		return nil, fmt.Errorf("packet truncated at DCID: need %d bytes", dcidLen)
+		return nil, fmt.Errorf("%w: need %d bytes", errQUICTruncatedDCID, dcidLen)
 	}
 	pos += dcidLen
 
 	// SCID.
 	if pos+1 > len(packet) {
-		return nil, fmt.Errorf("packet truncated at SCID length")
+		return nil, errQUICTruncatedSCIDLength
 	}
 	scidLen := int(packet[pos])
 	pos++
 	if pos+scidLen > len(packet) {
-		return nil, fmt.Errorf("packet truncated at SCID: need %d bytes", scidLen)
+		return nil, fmt.Errorf("%w: need %d bytes", errQUICTruncatedSCID, scidLen)
 	}
 	pos += scidLen
 
 	// Token length (varint).
 	if pos >= len(packet) {
-		return nil, fmt.Errorf("packet truncated at token length")
+		return nil, errQUICTruncatedTokenLength
 	}
 	tokenLen, tokenVarLen := decodeQUICVarint(packet[pos:])
 	if tokenVarLen == 0 {
-		return nil, fmt.Errorf("malformed token length varint")
+		return nil, errQUICMalformedTokenLength
 	}
 	pos += tokenVarLen
-	if tokenLen > uint64(len(packet)-pos) {
-		return nil, fmt.Errorf("packet truncated at token data")
+	tokenLenInt, err := checkedIntFromUint64(tokenLen, "QUIC token length")
+	if err != nil {
+		return nil, err
 	}
-	pos += int(tokenLen)
+	if tokenLenInt > len(packet)-pos {
+		return nil, errQUICTruncatedTokenData
+	}
+	pos += tokenLenInt
 
 	// Payload length (varint) — covers packet number + encrypted data + AEAD tag.
 	// Must be kept to avoid decrypting coalesced packets (Initial + Handshake).
 	if pos >= len(packet) {
-		return nil, fmt.Errorf("packet truncated at payload length")
+		return nil, errQUICTruncatedPayloadLength
 	}
 	payloadLen, payloadVarLen := decodeQUICVarint(packet[pos:])
 	if payloadVarLen == 0 {
-		return nil, fmt.Errorf("malformed payload length varint")
+		return nil, errQUICMalformedPayloadLength
 	}
 	pos += payloadVarLen
 
 	pnOffset := pos
-	if payloadLen > uint64(len(packet)-pnOffset) {
-		return nil, fmt.Errorf("payload length %d exceeds remaining packet", payloadLen)
+	payloadLenInt, err := checkedIntFromUint64(payloadLen, "QUIC payload length")
+	if err != nil {
+		return nil, err
 	}
-	payloadEnd := pnOffset + int(payloadLen)
+	if payloadLenInt > len(packet)-pnOffset {
+		return nil, fmt.Errorf("%w: %d", errQUICPayloadLengthExceeded, payloadLen)
+	}
+	payloadEnd := pnOffset + payloadLenInt
 
 	// We need the sample for header protection removal.
 	// The PN length is encoded in the first byte (lower 2 bits after unmasking).
 	// But we need to unmask it first. Sample is at pnOffset + 4.
 	sampleOffset := pnOffset + 4
 	if sampleOffset+16 > len(packet) {
-		return nil, fmt.Errorf("packet too short for HP sample: need %d, have %d", sampleOffset+16, len(packet))
+		return nil, fmt.Errorf("%w: need %d, have %d", errQUICHeaderProtectionSampleNeed, sampleOffset+16, len(packet))
 	}
 	sample := packet[sampleOffset : sampleOffset+16]
 
@@ -319,7 +368,7 @@ func parseQUICInitialResponse(packet []byte, serverKeys quicInitialKeys) (*serve
 
 	// Validate that the packet number bytes fit within the packet.
 	if pnOffset+pnLen > len(packet) {
-		return nil, fmt.Errorf("packet truncated at packet number bytes")
+		return nil, errQUICTruncatedPacketNumberBytes
 	}
 
 	// Unmask packet number.
@@ -330,7 +379,7 @@ func parseQUICInitialResponse(packet []byte, serverKeys quicInitialKeys) (*serve
 	// The header is everything up to and including the packet number.
 	headerEnd := pnOffset + pnLen
 	if headerEnd >= len(packet) {
-		return nil, fmt.Errorf("packet truncated at packet number")
+		return nil, errQUICTruncatedPacketNumber
 	}
 
 	// Decrypt the payload.
@@ -449,26 +498,30 @@ func parseQUICInitialResponse(packet []byte, serverKeys quicInitialKeys) (*serve
 		fpos++ // skip frame type
 		_, varLen := decodeQUICVarint(plaintext[fpos:])
 		if varLen == 0 {
-			return nil, fmt.Errorf("malformed crypto frame offset")
+			return nil, errQUICMalformedCryptoOffset
 		}
 		fpos += varLen // skip offset
 
 		dataLen, varLen := decodeQUICVarint(plaintext[fpos:])
 		if varLen == 0 {
-			return nil, fmt.Errorf("malformed crypto frame length")
+			return nil, errQUICMalformedCryptoLength
 		}
 		fpos += varLen
 
-		if dataLen > uint64(len(plaintext)-fpos) {
-			return nil, fmt.Errorf("crypto frame data truncated")
+		dataLenInt, err := checkedIntFromUint64(dataLen, "QUIC crypto frame length")
+		if err != nil {
+			return nil, err
 		}
-		cryptoData := plaintext[fpos : fpos+int(dataLen)]
+		if dataLenInt > len(plaintext)-fpos {
+			return nil, errQUICTruncatedCryptoData
+		}
+		cryptoData := plaintext[fpos : fpos+dataLenInt]
 
 		// The crypto data is a TLS handshake message (ServerHello).
 		return parseServerHello(cryptoData)
 	}
 
-	return nil, fmt.Errorf("no crypto frame found in quic initial response")
+	return nil, errQUICNoCryptoFrame
 }
 
 // probeQUICCipher sends a QUIC Initial packet to the provided UDP address
@@ -554,9 +607,15 @@ func probeQUICCipher(ctx context.Context, input cipherProbeInput) bool {
 func appendQUICVarint(b []byte, v uint64) []byte {
 	switch {
 	case v < 64:
-		return append(b, byte(v))
+		vByte, err := checkedUint8Len(int(v), "QUIC varint")
+		if err != nil {
+			panic(err)
+		}
+		return append(b, vByte)
 	case v < 16384:
-		return append(b, byte(0x40|v>>8), byte(v))
+		var buf [2]byte
+		binary.BigEndian.PutUint16(buf[:], uint16(v)|0x4000)
+		return append(b, buf[:]...)
 	case v < 1073741824:
 		var buf [4]byte
 		binary.BigEndian.PutUint32(buf[:], uint32(v)|0x80000000)
@@ -573,7 +632,9 @@ func appendQUICVarint(b []byte, v uint64) []byte {
 // on unexpected input from untrusted servers.
 func appendQUICVarint2(b []byte, v uint64) []byte {
 	if v < 16384 {
-		return append(b, byte(0x40|v>>8), byte(v))
+		var buf [2]byte
+		binary.BigEndian.PutUint16(buf[:], uint16(v)|0x4000)
+		return append(b, buf[:]...)
 	}
 	return appendQUICVarint(b, v)
 }

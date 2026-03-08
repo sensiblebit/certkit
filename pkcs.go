@@ -13,13 +13,20 @@ import (
 	gopkcs12 "software.sslmate.com/src/go-pkcs12"
 )
 
+var (
+	errUnsupportedPKCS12KeyType = errors.New("unsupported private key type")
+	errPKCS12LeafNil            = errors.New("leaf certificate cannot be nil")
+	errPKCS7NoCertificates      = errors.New("no certificates to encode")
+	errPKCS7BundleEmpty         = errors.New("PKCS#7 bundle contains no certificates")
+)
+
 // validatePKCS12KeyType checks that the private key is a supported type for PKCS#12 encoding.
 func validatePKCS12KeyType(privateKey crypto.PrivateKey) error {
 	switch privateKey.(type) {
 	case *rsa.PrivateKey, *ecdsa.PrivateKey, ed25519.PrivateKey:
 		return nil
 	default:
-		return fmt.Errorf("unsupported private key type %T", privateKey)
+		return fmt.Errorf("%w %T", errUnsupportedPKCS12KeyType, privateKey)
 	}
 }
 
@@ -28,7 +35,7 @@ func validatePKCS12KeyType(privateKey crypto.PrivateKey) error {
 // Normalizes Ed25519 pointer form to value form before encoding.
 func EncodePKCS12(privateKey crypto.PrivateKey, leaf *x509.Certificate, caCerts []*x509.Certificate, password string) ([]byte, error) {
 	if leaf == nil {
-		return nil, errors.New("leaf certificate cannot be nil")
+		return nil, errPKCS12LeafNil
 	}
 	privateKey = normalizeKey(privateKey)
 	if err := validatePKCS12KeyType(privateKey); err != nil {
@@ -46,7 +53,7 @@ func EncodePKCS12(privateKey crypto.PrivateKey, leaf *x509.Certificate, caCerts 
 // Normalizes Ed25519 pointer form to value form before encoding.
 func EncodePKCS12Legacy(privateKey crypto.PrivateKey, leaf *x509.Certificate, caCerts []*x509.Certificate, password string) ([]byte, error) {
 	if leaf == nil {
-		return nil, errors.New("leaf certificate cannot be nil")
+		return nil, errPKCS12LeafNil
 	}
 	privateKey = normalizeKey(privateKey)
 	if err := validatePKCS12KeyType(privateKey); err != nil {
@@ -73,7 +80,7 @@ func DecodePKCS12(pfxData []byte, password string) (crypto.PrivateKey, *x509.Cer
 // Returns the DER-encoded PKCS#7 SignedData structure.
 func EncodePKCS7(certs []*x509.Certificate) ([]byte, error) {
 	if len(certs) == 0 {
-		return nil, errors.New("no certificates to encode")
+		return nil, errPKCS7NoCertificates
 	}
 	var derBytes []byte
 	for _, cert := range certs {
@@ -94,7 +101,7 @@ func DecodePKCS7(derData []byte) ([]*x509.Certificate, error) {
 		return nil, fmt.Errorf("parsing PKCS#7: %w", err)
 	}
 	if len(p7.Certificates) == 0 {
-		return nil, errors.New("PKCS#7 bundle contains no certificates")
+		return nil, errPKCS7BundleEmpty
 	}
 	return p7.Certificates, nil
 }

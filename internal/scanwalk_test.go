@@ -19,12 +19,12 @@ func TestWalkScanFiles_SkipsSymlinkOutsideRoot(t *testing.T) {
 	outsideDir := t.TempDir()
 
 	insideFile := filepath.Join(root, "inside.pem")
-	if err := os.WriteFile(insideFile, []byte("inside"), 0644); err != nil {
+	if err := os.WriteFile(insideFile, []byte("inside"), 0600); err != nil {
 		t.Fatalf("write inside file: %v", err)
 	}
 
 	outsideFile := filepath.Join(outsideDir, "outside.pem")
-	if err := os.WriteFile(outsideFile, []byte("outside"), 0644); err != nil {
+	if err := os.WriteFile(outsideFile, []byte("outside"), 0600); err != nil {
 		t.Fatalf("write outside file: %v", err)
 	}
 
@@ -59,12 +59,12 @@ func TestWalkScanFiles_UsesTargetSizeForSymlink(t *testing.T) {
 	root := t.TempDir()
 
 	smallFile := filepath.Join(root, "small.pem")
-	if err := os.WriteFile(smallFile, []byte("small"), 0644); err != nil {
+	if err := os.WriteFile(smallFile, []byte("small"), 0600); err != nil {
 		t.Fatalf("write small file: %v", err)
 	}
 
 	largeTarget := filepath.Join(root, "large-target.pem")
-	if err := os.WriteFile(largeTarget, []byte("this file is definitely larger than ten bytes"), 0644); err != nil {
+	if err := os.WriteFile(largeTarget, []byte("this file is definitely larger than ten bytes"), 0600); err != nil {
 		t.Fatalf("write large file: %v", err)
 	}
 
@@ -99,7 +99,7 @@ func TestWalkScanFiles_WalkErrorDoesNotPruneSiblings(t *testing.T) {
 
 	root := t.TempDir()
 	dir := filepath.Join(root, "input")
-	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "sub"), 0750); err != nil {
 		t.Fatalf("mkdir input: %v", err)
 	}
 
@@ -107,7 +107,7 @@ func TestWalkScanFiles_WalkErrorDoesNotPruneSiblings(t *testing.T) {
 	removed := filepath.Join(dir, "b-removed.pem")
 	nested := filepath.Join(dir, "sub", "c-nested.pem")
 	for _, p := range []string{first, removed, nested} {
-		if err := os.WriteFile(p, []byte("x"), 0644); err != nil {
+		if err := os.WriteFile(p, []byte("x"), 0600); err != nil {
 			t.Fatalf("write %s: %v", p, err)
 		}
 	}
@@ -143,7 +143,7 @@ func TestWalkScanFiles_PropagatesOnFileError(t *testing.T) {
 
 	root := t.TempDir()
 	inputFile := filepath.Join(root, "input.pem")
-	if err := os.WriteFile(inputFile, []byte("x"), 0644); err != nil {
+	if err := os.WriteFile(inputFile, []byte("x"), 0600); err != nil {
 		t.Fatalf("write input file: %v", err)
 	}
 

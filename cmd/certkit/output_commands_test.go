@@ -240,7 +240,7 @@ func writeCertificatePEM114(t *testing.T, dir, name string, cert *x509.Certifica
 	t.Helper()
 	path := filepath.Join(dir, name)
 	pemBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
-	if err := os.WriteFile(path, pemBytes, 0644); err != nil {
+	if err := os.WriteFile(path, pemBytes, 0600); err != nil {
 		t.Fatalf("writing certificate %s: %v", path, err)
 	}
 	return path
@@ -271,7 +271,7 @@ func writeCSRPEM114(t *testing.T, dir, name, cn string, sans []string) string {
 	}
 	path := filepath.Join(dir, name)
 	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: csrDER})
-	if err := os.WriteFile(path, csrPEM, 0644); err != nil {
+	if err := os.WriteFile(path, csrPEM, 0600); err != nil {
 		t.Fatalf("writing CSR %s: %v", path, err)
 	}
 	return path
@@ -355,7 +355,7 @@ func writePEMCRL114(t *testing.T, dir, name string, caKey *ecdsa.PrivateKey, caC
 
 	path := filepath.Join(dir, name)
 	crlPEM := pem.EncodeToMemory(&pem.Block{Type: "X509 CRL", Bytes: crlDER})
-	if err := os.WriteFile(path, crlPEM, 0644); err != nil {
+	if err := os.WriteFile(path, crlPEM, 0600); err != nil {
 		t.Fatalf("writing CRL %s: %v", path, err)
 	}
 	return path
@@ -731,7 +731,7 @@ func TestRunCSR_CommandSurfaceOutput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal template: %v", err)
 	}
-	if err := os.WriteFile(tmplPath, tmplJSON, 0644); err != nil {
+	if err := os.WriteFile(tmplPath, tmplJSON, 0600); err != nil {
 		t.Fatalf("write template: %v", err)
 	}
 
@@ -992,11 +992,11 @@ func TestRunOCSP_CommandSurfaceOutput(t *testing.T) {
 	caKey, caCert := generateKeyAndCert(t, "OCSP CA", true)
 	issuerPath := writeCertificatePEM114(t, dir, "issuer.pem", caCert)
 	issuerDERPath := filepath.Join(dir, "issuer.der")
-	if err := os.WriteFile(issuerDERPath, caCert.Raw, 0644); err != nil {
+	if err := os.WriteFile(issuerDERPath, caCert.Raw, 0600); err != nil {
 		t.Fatalf("write issuer DER: %v", err)
 	}
 	corruptIssuerPath := filepath.Join(dir, "issuer-corrupt.der")
-	if err := os.WriteFile(corruptIssuerPath, []byte("not-a-certificate"), 0644); err != nil {
+	if err := os.WriteFile(corruptIssuerPath, []byte("not-a-certificate"), 0600); err != nil {
 		t.Fatalf("write corrupt issuer: %v", err)
 	}
 

@@ -16,9 +16,23 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+)
+
+var (
+	errLegacyNoCipherSuites         = errors.New("building legacy client hello: no cipher suites specified")
+	errLegacyTLSRecordTooLarge      = errors.New("tls record too large")
+	errLegacyHandshakeLimitExceeded = errors.New("exceeded byte limit reading server handshake")
+	errLegacyUnexpectedContentType  = errors.New("unexpected tls content type")
+	errLegacyCertMsgTooShort        = errors.New("certificate message too short")
+	errLegacyCertMsgTruncated       = errors.New("certificate message truncated")
+	errLegacyCertEntryTruncated     = errors.New("truncated certificate entry")
+	errLegacyCertEntrySizeTruncated = errors.New("certificate entry truncated")
+	errLegacyNoServerHello          = errors.New("no server hello received")
+	errLegacyNoServerCertificates   = errors.New("no certificates received from server")
 )
 
 // legacyCipherDef describes a cipher suite not implemented by Go's crypto/tls.
@@ -62,7 +76,7 @@ type legacyClientHelloInput struct {
 // supported_versions, key_share, or psk_key_exchange_modes extensions.
 func buildLegacyClientHelloMsg(input legacyClientHelloInput) ([]byte, error) {
 	if len(input.cipherSuites) == 0 {
-		return nil, fmt.Errorf("building legacy client hello: no cipher suites specified")
+		return nil, errLegacyNoCipherSuites
 	}
 
 	// Build extensions.
@@ -88,7 +102,11 @@ func buildLegacyClientHelloMsg(input legacyClientHelloInput) ([]byte, error) {
 	body = append(body, 0x00)
 
 	// Cipher suites.
-	body = appendUint16(body, uint16(len(input.cipherSuites)*2))
+	cipherSuitesLen, err := checkedUint16Len(len(input.cipherSuites)*2, "legacy cipher suites")
+	if err != nil {
+		return nil, err
+	}
+	body = appendUint16(body, cipherSuitesLen)
 	for _, cs := range input.cipherSuites {
 		body = appendUint16(body, cs)
 	}
@@ -97,12 +115,20 @@ func buildLegacyClientHelloMsg(input legacyClientHelloInput) ([]byte, error) {
 	body = append(body, 1, 0)
 
 	// Extensions.
-	body = appendUint16(body, uint16(len(exts)))
+	extsLen, err := checkedUint16Len(len(exts), "legacy extensions")
+	if err != nil {
+		return nil, err
+	}
+	body = appendUint16(body, extsLen)
 	body = append(body, exts...)
 
 	// Wrap in handshake header: type(1) + length(3) + body.
 	msg := []byte{0x01} // ClientHello
-	msg = appendUint24(msg, uint32(len(body)))
+	bodyLen, err := checkedUint24Len(len(body), "legacy client hello body")
+	if err != nil {
+		return nil, err
+	}
+	msg = appendUint24(msg, bodyLen)
 	msg = append(msg, body...)
 
 	return msg, nil
@@ -191,12 +217,12 @@ func readServerCertificates(r io.Reader) (*serverHelloResult, []*x509.Certificat
 		recordLen := int(binary.BigEndian.Uint16(header[3:5]))
 
 		if recordLen > 16640 {
-			return shResult, certs, fmt.Errorf("tls record too large: %d bytes", recordLen)
+			return shResult, certs, fmt.Errorf("%w: %d bytes", errLegacyTLSRecordTooLarge, recordLen)
 		}
 		// Check before allocating: a malicious server cannot force us to allocate
 		// more than maxCertificatePayload bytes even if record sizes are valid.
 		if totalRead+recordLen > maxCertificatePayload {
-			return shResult, certs, fmt.Errorf("exceeded %d byte limit reading server handshake", maxCertificatePayload)
+			return shResult, certs, fmt.Errorf("%w: %d", errLegacyHandshakeLimitExceeded, maxCertificatePayload)
 		}
 
 		payload := make([]byte, recordLen)
@@ -214,7 +240,7 @@ func readServerCertificates(r io.Reader) (*serverHelloResult, []*x509.Certificat
 		}
 
 		if contentType != 0x16 {
-			return shResult, certs, fmt.Errorf("unexpected tls content type: 0x%02x", contentType)
+			return shResult, certs, fmt.Errorf("%w: 0x%02x", errLegacyUnexpectedContentType, contentType)
 		}
 
 		// Append to handshake buffer and process complete messages.
@@ -258,25 +284,25 @@ func readServerCertificates(r io.Reader) (*serverHelloResult, []*x509.Certificat
 // The format is: total_length(3) + [cert_length(3) + cert_der(...)]*
 func parseCertificateMessage(data []byte) ([]*x509.Certificate, error) {
 	if len(data) < 3 {
-		return nil, fmt.Errorf("certificate message too short: %d bytes", len(data))
+		return nil, fmt.Errorf("%w: %d bytes", errLegacyCertMsgTooShort, len(data))
 	}
 
 	totalLen := int(data[0])<<16 | int(data[1])<<8 | int(data[2])
 	data = data[3:]
 	if len(data) < totalLen {
-		return nil, fmt.Errorf("certificate message truncated: need %d bytes, have %d", totalLen, len(data))
+		return nil, fmt.Errorf("%w: need %d bytes, have %d", errLegacyCertMsgTruncated, totalLen, len(data))
 	}
 	data = data[:totalLen]
 
 	var certs []*x509.Certificate
 	for len(data) > 0 {
 		if len(data) < 3 {
-			return certs, fmt.Errorf("truncated certificate entry")
+			return certs, errLegacyCertEntryTruncated
 		}
 		certLen := int(data[0])<<16 | int(data[1])<<8 | int(data[2])
 		data = data[3:]
 		if len(data) < certLen {
-			return certs, fmt.Errorf("certificate entry truncated: need %d bytes, have %d", certLen, len(data))
+			return certs, fmt.Errorf("%w: need %d bytes, have %d", errLegacyCertEntrySizeTruncated, certLen, len(data))
 		}
 		cert, err := x509.ParseCertificate(data[:certLen])
 		if err != nil {
@@ -348,10 +374,10 @@ func legacyFallbackConnect(ctx context.Context, input legacyFallbackInput) (*leg
 		return nil, fmt.Errorf("reading server certificates: %w", err)
 	}
 	if shResult == nil {
-		return nil, fmt.Errorf("no server hello received")
+		return nil, errLegacyNoServerHello
 	}
 	if len(certs) == 0 {
-		return nil, fmt.Errorf("no certificates received from server")
+		return nil, errLegacyNoServerCertificates
 	}
 
 	return &legacyFallbackResult{

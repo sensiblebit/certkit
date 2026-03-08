@@ -87,10 +87,7 @@ func TestExportBundles_EndToEnd(t *testing.T) {
 	}
 
 	// Verify leaf PEM is parseable with correct CN
-	leafPEM, err := os.ReadFile(filepath.Join(bundleDir, "e2e.example.com.pem"))
-	if err != nil {
-		t.Fatalf("read leaf PEM: %v", err)
-	}
+	leafPEM := mustReadTestFile(t, filepath.Join(bundleDir, "e2e.example.com.pem"))
 	leafCert, err := certkit.ParsePEMCertificate(leafPEM)
 	if err != nil {
 		t.Fatalf("parse leaf PEM: %v", err)
@@ -100,10 +97,7 @@ func TestExportBundles_EndToEnd(t *testing.T) {
 	}
 
 	// Verify key file is parseable and matches the leaf cert
-	keyPEM, err := os.ReadFile(filepath.Join(bundleDir, "e2e.example.com.key"))
-	if err != nil {
-		t.Fatalf("read key PEM: %v", err)
-	}
+	keyPEM := mustReadTestFile(t, filepath.Join(bundleDir, "e2e.example.com.key"))
 	parsedKey, err := certkit.ParsePEMPrivateKey(keyPEM)
 	if err != nil {
 		t.Fatalf("parse key PEM: %v", err)

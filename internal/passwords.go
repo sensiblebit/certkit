@@ -2,9 +2,8 @@ package internal
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
-	"log/slog"
-	"os"
 	"slices"
 	"strings"
 
@@ -19,18 +18,13 @@ type PasswordSets struct {
 
 // LoadPasswordsFromFile loads passwords from a file, one password per line.
 func LoadPasswordsFromFile(filename string) ([]string, error) {
-	file, err := os.Open(filename)
+	data, err := readFileLimited(filename, 0)
 	if err != nil {
-		return nil, fmt.Errorf("opening password file %s: %w", filename, err)
+		return nil, fmt.Errorf("reading password file %s: %w", filename, err)
 	}
-	defer func() {
-		if closeErr := file.Close(); closeErr != nil {
-			slog.Warn("closing password file", "file", filename, "error", closeErr)
-		}
-	}()
 
 	var passwords []string
-	scanner := bufio.NewScanner(file)
+	scanner := bufio.NewScanner(bytes.NewReader(data))
 	for scanner.Scan() {
 		if pwd := strings.TrimSpace(scanner.Text()); pwd != "" {
 			passwords = append(passwords, pwd)

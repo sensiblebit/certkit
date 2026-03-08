@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -16,6 +17,12 @@ import (
 	"time"
 
 	"github.com/sensiblebit/certkit"
+)
+
+var (
+	errUnexpectedURL = errors.New("unexpected URL")
+	errFetcherUnused = errors.New("should not be called")
+	errConnRefused   = errors.New("connection refused")
 )
 
 func TestHasUnresolvedIssuers(t *testing.T) {
@@ -221,7 +228,7 @@ func TestResolveAIA_FetchesMissingIssuer(t *testing.T) {
 		if url == "http://example.com/ca.cer" {
 			return caDER, nil
 		}
-		return nil, fmt.Errorf("unexpected URL: %s", url)
+		return nil, fmt.Errorf("%w: %s", errUnexpectedURL, url)
 	}
 
 	warnings := ResolveAIA(context.Background(), ResolveAIAInput{
@@ -329,7 +336,7 @@ func TestResolveAIA_SkipsResolvedAndRoots(t *testing.T) {
 			var fetchCount atomic.Int32
 			fetcher := func(_ context.Context, _ string) ([]byte, error) {
 				fetchCount.Add(1)
-				return nil, fmt.Errorf("should not be called")
+				return nil, errFetcherUnused
 			}
 
 			warnings := ResolveAIA(context.Background(), ResolveAIAInput{
@@ -358,7 +365,7 @@ func TestResolveAIA_FailureProducesWarning(t *testing.T) {
 		fetcher func(context.Context, string) ([]byte, error)
 	}{
 		{"fetch_failure", func(_ context.Context, _ string) ([]byte, error) {
-			return nil, fmt.Errorf("connection refused")
+			return nil, errConnRefused
 		}},
 		{"parse_failure", func(_ context.Context, _ string) ([]byte, error) {
 			return []byte("not a certificate"), nil
@@ -712,7 +719,7 @@ func TestResolveAIA_PKCS7Response(t *testing.T) {
 		if url == "http://crl.example.mil/issuedto/root_IT.p7c" {
 			return p7Data, nil
 		}
-		return nil, fmt.Errorf("unexpected URL: %s", url)
+		return nil, fmt.Errorf("%w: %s", errUnexpectedURL, url)
 	}
 
 	warnings := ResolveAIA(context.Background(), ResolveAIAInput{
@@ -1022,7 +1029,7 @@ func TestResolveAIA_ProgressNoDuplicateCounting(t *testing.T) {
 		if url == "http://example.com/ca-a.cer" {
 			return caADER, nil
 		}
-		return nil, fmt.Errorf("connection refused")
+		return nil, errConnRefused
 	}
 
 	var mu sync.Mutex

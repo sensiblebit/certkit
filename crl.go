@@ -109,6 +109,7 @@ func FetchCRL(ctx context.Context, input FetchCRLInput) ([]byte, error) {
 
 // ReadCRLFile reads a local CRL file with the same hard size cap as FetchCRL.
 func ReadCRLFile(path string) ([]byte, error) {
+	//nolint:gosec // CLI/API callers intentionally provide the local CRL path to inspect.
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("opening CRL file: %w", err)

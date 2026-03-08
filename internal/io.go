@@ -51,7 +51,7 @@ func readFileLimited(path string, maxBytes int64) ([]byte, error) {
 		}
 	}
 
-	file, err := os.Open(path)
+	file, err := os.Open(path) //nolint:gosec // This helper intentionally opens caller-provided filesystem paths.
 	if err != nil {
 		return nil, fmt.Errorf("opening %s: %w", path, err)
 	}

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 
 	"github.com/sensiblebit/certkit"
 	"github.com/sensiblebit/certkit/internal"
@@ -74,7 +73,7 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 	var ocspInput *certkit.CheckOCSPInput
 	switch {
 	case ocspIssuerPath != "":
-		issuerData, err := os.ReadFile(ocspIssuerPath)
+		issuerData, err := readCLIFile(ocspIssuerPath)
 		if err != nil {
 			return fmt.Errorf("reading issuer certificate: %w", err)
 		}

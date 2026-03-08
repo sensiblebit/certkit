@@ -23,6 +23,19 @@ var ErrUnknownOtherNameType = errors.New("unknown othername type")
 // SAN entries of any type.
 var ErrEmptySANExtension = errors.New("no SAN entries provided")
 
+var (
+	errSANEmailEmpty           = errors.New("marshaling email SAN: empty value")
+	errSANEmailNonASCII        = errors.New("marshaling email SAN contains non-ASCII characters")
+	errSANDNSEmpty             = errors.New("marshaling DNS SAN: empty value")
+	errSANDNSNonASCII          = errors.New("marshaling DNS SAN contains non-ASCII characters")
+	errSANInvalidIP            = errors.New("invalid IP address: must be 4 or 16 bytes")
+	errSANNilURI               = errors.New("nil URI in SAN input")
+	errSANURIEmpty             = errors.New("marshaling URI SAN: empty value")
+	errSANURINonASCII          = errors.New("marshaling URI SAN contains non-ASCII characters")
+	errSANOtherNameSRVNonASCII = errors.New("marshaling othername SRV value contains non-ASCII characters")
+	errParseDNTrailingData     = errors.New("parse DN: trailing data")
+)
+
 var extKeyUsageNames = map[x509.ExtKeyUsage]string{
 	x509.ExtKeyUsageAny:                        "Any",
 	x509.ExtKeyUsageServerAuth:                 "Server Authentication",
@@ -207,10 +220,10 @@ func MarshalSANExtension(input MarshalSANExtensionInput) (pkix.Extension, error)
 
 	for _, email := range input.EmailAddresses {
 		if email == "" {
-			return pkix.Extension{}, fmt.Errorf("marshaling email SAN: empty value")
+			return pkix.Extension{}, errSANEmailEmpty
 		}
 		if !isIA5String(email) {
-			return pkix.Extension{}, fmt.Errorf("marshaling email SAN %q: contains non-ASCII characters", email)
+			return pkix.Extension{}, fmt.Errorf("%w: %q", errSANEmailNonASCII, email)
 		}
 		b, err := asn1.Marshal(asn1.RawValue{
 			Class: asn1.ClassContextSpecific,
@@ -225,10 +238,10 @@ func MarshalSANExtension(input MarshalSANExtensionInput) (pkix.Extension, error)
 
 	for _, dns := range input.DNSNames {
 		if dns == "" {
-			return pkix.Extension{}, fmt.Errorf("marshaling DNS SAN: empty value")
+			return pkix.Extension{}, errSANDNSEmpty
 		}
 		if !isIA5String(dns) {
-			return pkix.Extension{}, fmt.Errorf("marshaling DNS SAN %q: contains non-ASCII characters", dns)
+			return pkix.Extension{}, fmt.Errorf("%w: %q", errSANDNSNonASCII, dns)
 		}
 		b, err := asn1.Marshal(asn1.RawValue{
 			Class: asn1.ClassContextSpecific,
@@ -247,7 +260,7 @@ func MarshalSANExtension(input MarshalSANExtensionInput) (pkix.Extension, error)
 			ipBytes = ip.To16()
 		}
 		if len(ipBytes) != 4 && len(ipBytes) != 16 {
-			return pkix.Extension{}, fmt.Errorf("invalid IP address %v: must be 4 or 16 bytes", ip)
+			return pkix.Extension{}, fmt.Errorf("%w: %v", errSANInvalidIP, ip)
 		}
 		b, err := asn1.Marshal(asn1.RawValue{
 			Class: asn1.ClassContextSpecific,
@@ -262,14 +275,14 @@ func MarshalSANExtension(input MarshalSANExtensionInput) (pkix.Extension, error)
 
 	for _, uri := range input.URIs {
 		if uri == nil {
-			return pkix.Extension{}, errors.New("nil URI in SAN input")
+			return pkix.Extension{}, errSANNilURI
 		}
 		uriStr := uri.String()
 		if uriStr == "" {
-			return pkix.Extension{}, fmt.Errorf("marshaling URI SAN: empty value")
+			return pkix.Extension{}, errSANURIEmpty
 		}
 		if !isIA5String(uriStr) {
-			return pkix.Extension{}, fmt.Errorf("marshaling URI SAN %q: contains non-ASCII characters", uriStr)
+			return pkix.Extension{}, fmt.Errorf("%w: %q", errSANURINonASCII, uriStr)
 		}
 		b, err := asn1.Marshal(asn1.RawValue{
 			Class: asn1.ClassContextSpecific,
@@ -352,7 +365,7 @@ func marshalOtherNameGN(on OtherNameSAN) ([]byte, error) {
 
 	tag := otherNameStringTag(on.OID)
 	if tag == asn1.TagIA5String && !isIA5String(on.Value) {
-		return nil, fmt.Errorf("marshaling othername SRV value %q: contains non-ASCII characters", on.Value)
+		return nil, fmt.Errorf("%w: %q", errSANOtherNameSRVNonASCII, on.Value)
 	}
 	var valueBytes []byte
 	if tag == asn1.TagIA5String {
@@ -673,7 +686,7 @@ func formatDERRDN(raw []byte) (string, error) {
 		return "", fmt.Errorf("parse DN: %w", err)
 	}
 	if len(rest) != 0 {
-		return "", fmt.Errorf("parse DN: trailing data")
+		return "", errParseDNTrailingData
 	}
 	return formatRDNSequence(rdns), nil
 }

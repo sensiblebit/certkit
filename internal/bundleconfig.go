@@ -2,7 +2,6 @@ package internal
 
 import (
 	"fmt"
-	"os"
 
 	"gopkg.in/yaml.v3"
 )
@@ -31,7 +30,7 @@ type BundlesYAML struct {
 
 // LoadBundleConfigs loads bundle configuration from the specified YAML file.
 func LoadBundleConfigs(path string) ([]BundleConfig, error) {
-	data, err := os.ReadFile(path)
+	data, err := readFileLimited(path, 0)
 	if err != nil {
 		return nil, fmt.Errorf("reading bundle config %s: %w", path, err)
 	}

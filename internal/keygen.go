@@ -124,7 +124,7 @@ func GenerateKeyFiles(opts KeygenOptions) (*KeygenResult, error) {
 
 	// Write files only when an output path is specified
 	if opts.OutPath != "" {
-		if err := os.MkdirAll(opts.OutPath, 0755); err != nil {
+		if err := os.MkdirAll(opts.OutPath, 0o750); err != nil {
 			return nil, fmt.Errorf("creating output directory: %w", err)
 		}
 
@@ -134,13 +134,13 @@ func GenerateKeyFiles(opts KeygenOptions) (*KeygenResult, error) {
 		}
 
 		result.PubFile = filepath.Join(opts.OutPath, "pub.pem")
-		if err := os.WriteFile(result.PubFile, []byte(pubPEM), 0644); err != nil {
+		if err := os.WriteFile(result.PubFile, []byte(pubPEM), 0o600); err != nil {
 			return nil, fmt.Errorf("writing public key: %w", err)
 		}
 
 		if result.CSRPEM != "" {
 			result.CSRFile = filepath.Join(opts.OutPath, "csr.pem")
-			if err := os.WriteFile(result.CSRFile, []byte(result.CSRPEM), 0644); err != nil {
+			if err := os.WriteFile(result.CSRFile, []byte(result.CSRPEM), 0o600); err != nil {
 				return nil, fmt.Errorf("writing CSR: %w", err)
 			}
 		}

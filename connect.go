@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -768,8 +769,10 @@ func signatureSchemeString(scheme tls.SignatureScheme) string {
 }
 
 func legacySignatureSchemeName(scheme tls.SignatureScheme) (string, bool) {
-	hashID := uint8(uint16(scheme) >> 8)
-	sigID := uint8(uint16(scheme))
+	var schemeBytes [2]byte
+	binary.BigEndian.PutUint16(schemeBytes[:], uint16(scheme))
+	hashID := schemeBytes[0]
+	sigID := schemeBytes[1]
 
 	hashName, ok := map[uint8]string{
 		1: "MD5",
@@ -1379,6 +1382,7 @@ func probeCipher(ctx context.Context, input cipherProbeInput) bool {
 	if err != nil {
 		return false
 	}
+	//nolint:gosec // This probe intentionally tests the caller-selected legacy TLS version and cipher.
 	tlsConn := tls.Client(conn, &tls.Config{
 		ServerName:           input.serverName,
 		MinVersion:           input.version,
@@ -1423,6 +1427,7 @@ func probeKeyExchangeGroupLegacy(ctx context.Context, input cipherProbeInput) bo
 	if err != nil {
 		return false
 	}
+	//nolint:gosec // This probe intentionally allows TLS 1.0-1.2 and legacy ECDHE suites to test server support.
 	tlsConn := tls.Client(conn, &tls.Config{
 		ServerName:           input.serverName,
 		MinVersion:           tls.VersionTLS10,

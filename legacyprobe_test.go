@@ -21,11 +21,19 @@ import (
 func buildCertificateMessageBody(certs ...[]byte) []byte {
 	var entries []byte
 	for _, cert := range certs {
-		entries = appendUint24(entries, uint32(len(cert)))
+		certLen, err := checkedUint24Len(len(cert), "certificate entry")
+		if err != nil {
+			panic(err)
+		}
+		entries = appendUint24(entries, certLen)
 		entries = append(entries, cert...)
 	}
 	var body []byte
-	body = appendUint24(body, uint32(len(entries)))
+	entriesLen, err := checkedUint24Len(len(entries), "certificate message entries")
+	if err != nil {
+		panic(err)
+	}
+	body = appendUint24(body, entriesLen)
 	body = append(body, entries...)
 	return body
 }
@@ -234,7 +242,11 @@ func buildMockServerHello(version, cipherSuite uint16) []byte {
 
 	// Wrap in handshake header: type 0x02 (ServerHello).
 	msg := []byte{0x02}
-	msg = appendUint24(msg, uint32(len(body)))
+	bodyLen, err := checkedUint24Len(len(body), "server hello body")
+	if err != nil {
+		panic(err)
+	}
+	msg = appendUint24(msg, bodyLen)
 	msg = append(msg, body...)
 	return msg
 }
@@ -243,7 +255,11 @@ func buildMockServerHello(version, cipherSuite uint16) []byte {
 func buildCertificateHandshakeMessage(certs ...[]byte) []byte {
 	body := buildCertificateMessageBody(certs...)
 	msg := []byte{0x0B} // Certificate
-	msg = appendUint24(msg, uint32(len(body)))
+	bodyLen, err := checkedUint24Len(len(body), "certificate handshake body")
+	if err != nil {
+		panic(err)
+	}
+	msg = appendUint24(msg, bodyLen)
 	msg = append(msg, body...)
 	return msg
 }
@@ -254,7 +270,11 @@ func buildCertificateHandshakeMessage(certs ...[]byte) []byte {
 // for negative test cases.
 func buildRawTLSRecord(contentType byte, payloadLen int) []byte {
 	record := []byte{contentType, 0x03, 0x03}
-	record = appendUint16(record, uint16(payloadLen))
+	payloadSize, err := checkedUint16Len(payloadLen, "raw TLS record payload")
+	if err != nil {
+		panic(err)
+	}
+	record = appendUint16(record, payloadSize)
 	record = append(record, make([]byte, payloadLen)...)
 	return record
 }
@@ -265,7 +285,11 @@ func buildAlertRecord() []byte {
 	payload := []byte{0x02, 0x28}
 	record := []byte{0x15} // ContentType: Alert
 	record = append(record, 0x03, 0x01)
-	record = appendUint16(record, uint16(len(payload)))
+	payloadLen, err := checkedUint16Len(len(payload), "alert payload")
+	if err != nil {
+		panic(err)
+	}
+	record = appendUint16(record, payloadLen)
 	record = append(record, payload...)
 	return record
 }

@@ -17,7 +17,7 @@ func TestProcessPasswords_FromFile(t *testing.T) {
 	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "passwords.txt")
-	if err := os.WriteFile(path, []byte("filepass1\nfilepass2\n"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("filepass1\nfilepass2\n"), 0600); err != nil {
 		t.Fatalf("write password file: %v", err)
 	}
 
@@ -51,7 +51,7 @@ func TestLoadPasswordsFromFile_BlankLines(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "passwords.txt")
 	content := "pass1\n\n  \npass2\n\n"
-	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+	if err := os.WriteFile(path, []byte(content), 0600); err != nil {
 		t.Fatalf("write password file: %v", err)
 	}
 
@@ -75,7 +75,7 @@ func TestProcessPasswordSets(t *testing.T) {
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "passwords.txt")
-	if err := os.WriteFile(path, []byte("filepass\n\nfilepass\n"), 0644); err != nil {
+	if err := os.WriteFile(path, []byte("filepass\n\nfilepass\n"), 0600); err != nil {
 		t.Fatalf("write password file: %v", err)
 	}
 
@@ -113,7 +113,7 @@ func TestProcessUserPasswords(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
 		path := filepath.Join(dir, "passwords.txt")
-		if err := os.WriteFile(path, []byte("file-a\n file-b \nfile-a\n"), 0644); err != nil {
+		if err := os.WriteFile(path, []byte("file-a\n file-b \nfile-a\n"), 0600); err != nil {
 			t.Fatalf("write password file: %v", err)
 		}
 
