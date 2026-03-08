@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Normalize `connect` verify status labels from `OK`/`FAILED` to lowercase `ok`/`failed`. ([#112])
 - Consolidate shared `connect` status-line formatting between standard and verbose text output paths. ([#121])
 - Centralize pre-commit hooks under the shared `sensiblebit/.github` hook set (including shared `markdownlint`) and run dependency update hooks first; refresh resulting indirect Go and web lockfile dependencies. ([#128])
+- Remove the arbitrary 200-file cap from WASM upload and inspect flows; rely on byte limits instead. ([#129])
 
 ### Added
 
@@ -1036,6 +1037,7 @@ Initial release.
 [#126]: https://github.com/sensiblebit/certkit/pull/126
 [#127]: https://github.com/sensiblebit/certkit/pull/127
 [#128]: https://github.com/sensiblebit/certkit/pull/128
+[#129]: https://github.com/sensiblebit/certkit/pull/129
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63

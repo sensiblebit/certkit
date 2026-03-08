@@ -20,11 +20,27 @@ import (
 	"github.com/sensiblebit/certkit/internal/certstore"
 )
 
+// Keep these as byte limits only. Do not add a file-count cap for WASM input:
+// the browser app runs on the user's machine, and folder drops may
+// legitimately contain thousands of small files.
 const (
-	wasmMaxInputFiles      = 200
 	wasmMaxInputFileBytes  = 10 * 1024 * 1024
 	wasmMaxInputTotalBytes = 50 * 1024 * 1024
 )
+
+var errWASMTotalInputBytesExceeded = errors.New("total upload size limit exceeded")
+
+func isWASMTotalInputBytesExceeded(err error) bool {
+	return errors.Is(err, errWASMTotalInputBytesExceeded)
+}
+
+func wasmTotalInputBytesExceededMessage(skipped int) string {
+	return fmt.Sprintf(
+		"skipped %d file(s) because total upload exceeds max size (%d bytes)",
+		skipped,
+		wasmMaxInputTotalBytes,
+	)
+}
 
 // version is set at build time via -ldflags "-X main.version=v0.6.1".
 var version = "dev"
@@ -69,7 +85,11 @@ func readWASMFileData(input readWASMFileDataInput) ([]byte, error) {
 
 	nextTotal := *input.TotalBytes + int64(size)
 	if nextTotal > wasmMaxInputTotalBytes {
-		return nil, fmt.Errorf("total upload exceeds max size (%d bytes)", wasmMaxInputTotalBytes)
+		return nil, fmt.Errorf(
+			"wasm total upload exceeds max size (%d bytes): %w",
+			wasmMaxInputTotalBytes,
+			errWASMTotalInputBytesExceeded,
+		)
 	}
 
 	data := make([]byte, size)
@@ -90,9 +110,6 @@ func addFiles(_ js.Value, args []js.Value) any {
 
 	filesArg := args[0]
 	length := filesArg.Length()
-	if length > wasmMaxInputFiles {
-		return jsError(fmt.Sprintf("too many files: %d (max %d)", length, wasmMaxInputFiles))
-	}
 
 	var passwords []string
 	if len(args) >= 2 && args[1].Type() == js.TypeString {
@@ -126,6 +143,7 @@ func addFiles(_ js.Value, args []js.Value) any {
 			storeMu.Lock()
 			defer storeMu.Unlock()
 			var results []map[string]any
+			var overflowSkipped int
 			var totalBytes int64
 			for i := range length {
 				select {
@@ -146,6 +164,11 @@ func addFiles(_ js.Value, args []js.Value) any {
 					TotalBytes: &totalBytes,
 				})
 				if err != nil {
+					if isWASMTotalInputBytesExceeded(err) {
+						slog.Debug("skipping file due to total upload size limit", "name", name, "index", i, "error", err)
+						overflowSkipped++
+						continue
+					}
 					slog.Debug("skipping file due to read error", "name", name, "error", err)
 					results = append(results, map[string]any{
 						"name":   name,
@@ -171,6 +194,14 @@ func addFiles(_ js.Value, args []js.Value) any {
 					"name":   name,
 					"status": status,
 					"error":  errMsg,
+				})
+			}
+			if overflowSkipped > 0 {
+				slog.Debug("skipping files due to total upload size limit", "count", overflowSkipped, "max_bytes", wasmMaxInputTotalBytes)
+				results = append(results, map[string]any{
+					"name":   "upload",
+					"status": "error",
+					"error":  wasmTotalInputBytesExceededMessage(overflowSkipped),
 				})
 			}
 

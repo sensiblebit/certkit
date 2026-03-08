@@ -15,6 +15,11 @@ import (
 	"github.com/sensiblebit/certkit/internal"
 )
 
+type inspectResponse struct {
+	Results []internal.InspectResult `json:"results"`
+	Warning string                   `json:"warning,omitempty"`
+}
+
 // inspectFiles performs stateless inspection of certificate, key, and CSR data.
 // Unlike addFiles, it does not accumulate into the global MemStore.
 // JS signature: certkitInspect(files: Array<{name: string, data: Uint8Array}>, passwords: string, allowPrivateNetwork?: boolean) → Promise<string>
@@ -25,9 +30,6 @@ func inspectFiles(_ js.Value, args []js.Value) any {
 
 	filesArg := args[0]
 	length := filesArg.Length()
-	if length > wasmMaxInputFiles {
-		return jsError(fmt.Sprintf("too many files: %d (max %d)", length, wasmMaxInputFiles))
-	}
 
 	var passwords []string
 	if len(args) >= 2 && args[1].Type() == js.TypeString {
@@ -59,6 +61,7 @@ func inspectFiles(_ js.Value, args []js.Value) any {
 			defer cancel()
 
 			var allResults []internal.InspectResult
+			var overflowSkipped int
 			var totalBytes int64
 			for i := range length {
 				select {
@@ -79,6 +82,11 @@ func inspectFiles(_ js.Value, args []js.Value) any {
 					TotalBytes: &totalBytes,
 				})
 				if err != nil {
+					if isWASMTotalInputBytesExceeded(err) {
+						slog.Debug("skipping file during inspect due to total upload size limit", "name", name, "index", i, "error", err)
+						overflowSkipped++
+						continue
+					}
 					reject.Invoke(js.Global().Get("Error").New(err.Error()))
 					return
 				}
@@ -88,8 +96,15 @@ func inspectFiles(_ js.Value, args []js.Value) any {
 			}
 
 			if len(allResults) == 0 {
+				if overflowSkipped > 0 {
+					reject.Invoke(js.Global().Get("Error").New(wasmTotalInputBytesExceededMessage(overflowSkipped)))
+					return
+				}
 				reject.Invoke(js.Global().Get("Error").New("no certificates, keys, or CSRs found"))
 				return
+			}
+			if overflowSkipped > 0 {
+				slog.Debug("skipping files during inspect due to total upload size limit", "count", overflowSkipped, "max_bytes", wasmMaxInputTotalBytes)
 			}
 
 			// Resolve missing intermediates via AIA before trust annotation.
@@ -107,7 +122,12 @@ func inspectFiles(_ js.Value, args []js.Value) any {
 				slog.Debug("trust annotation failed", "error", err)
 			}
 
-			jsonBytes, err := json.Marshal(allResults)
+			resp := inspectResponse{Results: allResults}
+			if overflowSkipped > 0 {
+				resp.Warning = wasmTotalInputBytesExceededMessage(overflowSkipped)
+			}
+
+			jsonBytes, err := json.Marshal(resp)
 			if err != nil {
 				reject.Invoke(js.Global().Get("Error").New("marshaling inspect results: " + err.Error()))
 				return
