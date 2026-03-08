@@ -28,6 +28,8 @@ const (
 	wasmMaxInputTotalBytes = 50 * 1024 * 1024
 )
 
+var errWASMTotalInputBytesExceeded = errors.New("total upload exceeds max size")
+
 // version is set at build time via -ldflags "-X main.version=v0.6.1".
 var version = "dev"
 
@@ -71,7 +73,7 @@ func readWASMFileData(input readWASMFileDataInput) ([]byte, error) {
 
 	nextTotal := *input.TotalBytes + int64(size)
 	if nextTotal > wasmMaxInputTotalBytes {
-		return nil, fmt.Errorf("total upload exceeds max size (%d bytes)", wasmMaxInputTotalBytes)
+		return nil, fmt.Errorf("%w (%d bytes)", errWASMTotalInputBytesExceeded, wasmMaxInputTotalBytes)
 	}
 
 	data := make([]byte, size)
@@ -151,6 +153,9 @@ func addFiles(_ js.Value, args []js.Value) any {
 						"status": "error",
 						"error":  err.Error(),
 					})
+					if errors.Is(err, errWASMTotalInputBytesExceeded) {
+						break
+					}
 					continue
 				}
 
