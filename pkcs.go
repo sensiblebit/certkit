@@ -34,7 +34,11 @@ func EncodePKCS12(privateKey crypto.PrivateKey, leaf *x509.Certificate, caCerts 
 	if err := validatePKCS12KeyType(privateKey); err != nil {
 		return nil, err
 	}
-	return gopkcs12.Modern.Encode(privateKey, leaf, caCerts, password)
+	data, err := gopkcs12.Modern.Encode(privateKey, leaf, caCerts, password)
+	if err != nil {
+		return nil, fmt.Errorf("encoding PKCS#12: %w", err)
+	}
+	return data, nil
 }
 
 // EncodePKCS12Legacy creates a PKCS#12/PFX bundle using the legacy RC2 cipher for
@@ -48,7 +52,11 @@ func EncodePKCS12Legacy(privateKey crypto.PrivateKey, leaf *x509.Certificate, ca
 	if err := validatePKCS12KeyType(privateKey); err != nil {
 		return nil, err
 	}
-	return gopkcs12.LegacyRC2.Encode(privateKey, leaf, caCerts, password)
+	data, err := gopkcs12.LegacyRC2.Encode(privateKey, leaf, caCerts, password)
+	if err != nil {
+		return nil, fmt.Errorf("encoding legacy PKCS#12: %w", err)
+	}
+	return data, nil
 }
 
 // DecodePKCS12 decodes a PKCS#12/PFX bundle and returns the private key, leaf certificate,
@@ -71,7 +79,11 @@ func EncodePKCS7(certs []*x509.Certificate) ([]byte, error) {
 	for _, cert := range certs {
 		derBytes = append(derBytes, cert.Raw...)
 	}
-	return pkcs7.DegenerateCertificate(derBytes)
+	data, err := pkcs7.DegenerateCertificate(derBytes)
+	if err != nil {
+		return nil, fmt.Errorf("encoding PKCS#7: %w", err)
+	}
+	return data, nil
 }
 
 // DecodePKCS7 decodes a DER-encoded PKCS#7 bundle and returns the certificates it contains.

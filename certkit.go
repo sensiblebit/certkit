@@ -330,9 +330,17 @@ func ParsePEMCertificateRequest(pemData []byte) (*x509.CertificateRequest, error
 func parsePEMPrivateKeyBlock(singlePEM []byte, block *pem.Block) (crypto.PrivateKey, error) {
 	switch block.Type {
 	case "RSA PRIVATE KEY":
-		return x509.ParsePKCS1PrivateKey(block.Bytes)
+		key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("parsing PKCS#1 private key: %w", err)
+		}
+		return key, nil
 	case "EC PRIVATE KEY":
-		return x509.ParseECPrivateKey(block.Bytes)
+		key, err := x509.ParseECPrivateKey(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("parsing EC private key: %w", err)
+		}
+		return key, nil
 	case "PRIVATE KEY":
 		if key, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
 			return normalizeKey(key), nil
@@ -547,7 +555,11 @@ func marshalDSAPublicKeyDER(pub *dsa.PublicKey) ([]byte, error) {
 		},
 	}
 
-	return asn1.Marshal(spki)
+	data, err := asn1.Marshal(spki)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling DSA subject public key info: %w", err)
+	}
+	return data, nil
 }
 
 // ComputeSKI computes a Subject Key Identifier using RFC 7093 Method 1:
@@ -733,5 +745,8 @@ func GenerateEd25519Key() (ed25519.PublicKey, ed25519.PrivateKey, error) {
 
 // VerifyCSR checks that the signature on a certificate signing request is valid.
 func VerifyCSR(csr *x509.CertificateRequest) error {
-	return csr.CheckSignature()
+	if err := csr.CheckSignature(); err != nil {
+		return fmt.Errorf("checking CSR signature: %w", err)
+	}
+	return nil
 }

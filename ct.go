@@ -30,7 +30,7 @@ type ctLogInfo struct {
 var (
 	ctLogsOnce sync.Once
 	ctLogs     map[[sha256.Size]byte]ctLogInfo
-	ctLogsErr  error
+	errCTLogs  error
 )
 
 // CheckCTInput contains parameters for Certificate Transparency verification.
@@ -347,9 +347,9 @@ func ctLogsFromInput(override []byte) (map[[sha256.Size]byte]ctLogInfo, error) {
 		return ctLogMapFromList(override)
 	}
 	ctLogsOnce.Do(func() {
-		ctLogs, ctLogsErr = ctLogMapFromList(ctLogListJSON)
+		ctLogs, errCTLogs = ctLogMapFromList(ctLogListJSON)
 	})
-	return ctLogs, ctLogsErr
+	return ctLogs, errCTLogs
 }
 
 func ctLogMapFromList(data []byte) (map[[sha256.Size]byte]ctLogInfo, error) {

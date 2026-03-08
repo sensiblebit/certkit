@@ -457,12 +457,7 @@ func probeKeyExchangeGroup(ctx context.Context, input cipherProbeInput) bool {
 
 // isPQKeyExchange reports whether the given CurveID is a post-quantum hybrid mechanism.
 func isPQKeyExchange(id tls.CurveID) bool {
-	switch id {
-	case tls.X25519MLKEM768, tls.SecP256r1MLKEM768, tls.SecP384r1MLKEM1024:
-		return true
-	default:
-		return false
-	}
+	return id == tls.X25519MLKEM768 || id == tls.SecP256r1MLKEM768 || id == tls.SecP384r1MLKEM1024
 }
 
 // ---------- byte-level helpers ----------

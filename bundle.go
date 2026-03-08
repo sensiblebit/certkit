@@ -23,7 +23,7 @@ import (
 var (
 	mozillaPoolOnce     sync.Once
 	mozillaPool         *x509.CertPool
-	mozillaPoolErr      error
+	errMozillaPool      error
 	mozillaSubjectsOnce sync.Once
 	mozillaSubjects     map[string]bool
 	mozillaRootKeysOnce sync.Once
@@ -69,12 +69,12 @@ func MozillaRootPool() (*x509.CertPool, error) {
 	mozillaPoolOnce.Do(func() {
 		pool := x509.NewCertPool()
 		if !pool.AppendCertsFromPEM([]byte(embedded.MozillaCACertificatesPEM())) {
-			mozillaPoolErr = errors.New("parsing embedded Mozilla root certificates")
+			errMozillaPool = errors.New("parsing embedded Mozilla root certificates")
 			return
 		}
 		mozillaPool = pool
 	})
-	return mozillaPool, mozillaPoolErr
+	return mozillaPool, errMozillaPool
 }
 
 // MozillaRootSubjects returns a set of raw ASN.1 subject byte strings from all
@@ -538,8 +538,7 @@ func detectAndSwapLeaf(leaf *x509.Certificate, extras []*x509.Certificate) (*x50
 func checkSHA1Signatures(chain []*x509.Certificate) []string {
 	var warnings []string
 	for _, cert := range chain {
-		switch cert.SignatureAlgorithm {
-		case x509.SHA1WithRSA, x509.ECDSAWithSHA1:
+		if cert.SignatureAlgorithm == x509.SHA1WithRSA || cert.SignatureAlgorithm == x509.ECDSAWithSHA1 {
 			warnings = append(warnings, fmt.Sprintf("certificate %q uses deprecated SHA-1 signature algorithm (%s)", cert.Subject.CommonName, cert.SignatureAlgorithm))
 		}
 	}

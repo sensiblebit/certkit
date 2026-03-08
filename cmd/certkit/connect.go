@@ -163,7 +163,10 @@ func runConnect(cmd *cobra.Command, args []string) error {
 				filtered = append(filtered, d)
 			}
 		}
-		result.Diagnostics = append(filtered, scanDiags...)
+		mergedDiagnostics := make([]certkit.ChainDiagnostic, 0, len(filtered)+len(scanDiags))
+		mergedDiagnostics = append(mergedDiagnostics, filtered...)
+		mergedDiagnostics = append(mergedDiagnostics, scanDiags...)
+		result.Diagnostics = mergedDiagnostics
 	}
 
 	spin.Stop()

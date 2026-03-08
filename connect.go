@@ -396,7 +396,7 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 			serverName: serverName,
 		})
 		if legacyErr != nil {
-			return nil, fmt.Errorf("tls handshake with %s: %w; legacy fallback: %v", addr, handshakeErr, legacyErr)
+			return nil, fmt.Errorf("tls handshake with %s: %w; legacy fallback: %w", addr, handshakeErr, legacyErr)
 		}
 		result := &ConnectResult{
 			Host:        input.Host,
@@ -549,19 +549,17 @@ func (result *ConnectResult) populate(ctx context.Context, input ConnectTLSInput
 	}
 
 	// Best-effort OCSP check on the leaf certificate.
-	if input.DisableOCSP {
-		// User explicitly disabled — no output.
-	} else if issuer == nil {
+	if !input.DisableOCSP && issuer == nil {
 		result.OCSP = &OCSPResult{
 			Status: "skipped",
 			Detail: "no issuer certificate in chain",
 		}
-	} else if len(leaf.OCSPServer) == 0 {
+	} else if !input.DisableOCSP && len(leaf.OCSPServer) == 0 {
 		result.OCSP = &OCSPResult{
 			Status: "skipped",
 			Detail: "certificate has no OCSP responder URL",
 		}
-	} else {
+	} else if !input.DisableOCSP {
 		ocspTimeout := input.OCSPTimeout
 		if ocspTimeout == 0 {
 			ocspTimeout = 5 * time.Second
@@ -946,16 +944,16 @@ func cipherSuiteName(id uint16) string {
 // keyExchangeName returns a human-readable name for a TLS named group.
 // Go's CurveID.String() returns "CurveP256" etc.; we prefer "P-256".
 func keyExchangeName(id tls.CurveID) string {
-	switch id {
-	case tls.CurveP256:
+	if id == tls.CurveP256 {
 		return "P-256"
-	case tls.CurveP384:
-		return "P-384"
-	case tls.CurveP521:
-		return "P-521"
-	default:
-		return id.String()
 	}
+	if id == tls.CurveP384 {
+		return "P-384"
+	}
+	if id == tls.CurveP521 {
+		return "P-521"
+	}
+	return id.String()
 }
 
 // cipherKeyExchange returns the key exchange mechanism for a cipher suite.
@@ -1729,11 +1727,12 @@ func FormatConnectStatusLines(r *ConnectResult) string {
 		fmt.Fprintf(&out, "ALPN:         %s\n", r.ALPN)
 	}
 
-	if r.VerifyError != "" {
+	switch {
+	case r.VerifyError != "":
 		fmt.Fprintf(&out, "Verify:       failed (%s)\n", r.VerifyError)
-	} else if r.AIAFetched {
+	case r.AIAFetched:
 		out.WriteString("Verify:       ok (intermediates fetched via AIA)\n")
-	} else {
+	default:
 		out.WriteString("Verify:       ok\n")
 	}
 

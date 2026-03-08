@@ -1,0 +1,40 @@
+version: "2"
+
+run:
+  timeout: 10m
+  tests: true
+
+issues:
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - contextcheck
+    - err113
+    - errname
+    - errorlint
+    - exhaustive
+    - gocritic
+    - gosec
+    - loggercheck
+    - misspell
+    - nilerr
+    - nilnil
+    - nolintlint
+    - predeclared
+    - revive
+    - rowserrcheck
+    - sloglint
+    - sqlclosecheck
+    - testableexamples
+    - testifylint
+    - thelper
+    - tparallel
+    - unconvert
+    - unparam
+    - usetesting
+    - wastedassign
+    - wrapcheck

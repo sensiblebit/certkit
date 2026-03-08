@@ -129,10 +129,7 @@ func runBundle(cmd *cobra.Command, args []string) error {
 
 	exportPassword := ""
 	if bundleFormat == "p12" || bundleFormat == "jks" {
-		exportPassword, err = bundlePassword(passwordSets.Export)
-		if err != nil {
-			return fmt.Errorf("determining export password for %s output: %w", bundleFormat, err)
-		}
+		exportPassword = bundlePassword(passwordSets.Export)
 	}
 
 	output, err := formatBundleOutput(formatBundleOutputInput{
@@ -159,16 +156,17 @@ func runBundle(cmd *cobra.Command, args []string) error {
 	if jsonOutput {
 		var out payloadJSON
 		isBinary := bundleFormat == "p12" || bundleFormat == "jks"
-		if bundleOutFile != "" {
+		switch {
+		case bundleOutFile != "":
 			// File was written — emit metadata only
 			out.File = bundleOutFile
 			out.Format = bundleFormat
 			out.Size = len(output)
-		} else if isBinary {
+		case isBinary:
 			out.Data = base64.StdEncoding.EncodeToString(output)
 			out.Format = bundleFormat
 			out.Encoding = "base64"
-		} else {
+		default:
 			out.Data = string(output)
 			out.Format = bundleFormat
 			out.Encoding = "pem"
@@ -192,7 +190,7 @@ func runBundle(cmd *cobra.Command, args []string) error {
 func loadBundleInput(path string, passwords []string) (*x509.Certificate, crypto.PrivateKey, []*x509.Certificate, error) {
 	contents, err := internal.LoadContainerFile(path, passwords)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, nil, fmt.Errorf("loading container file %s: %w", path, err)
 	}
 	return contents.Leaf, contents.Key, contents.ExtraCerts, nil
 }
@@ -226,13 +224,13 @@ func selectLeafByKey(key crypto.PrivateKey, currentLeaf *x509.Certificate, extra
 // A number of consumers fail or become difficult to operate with empty export
 // passwords. Do not change this to "explicit password required" without a
 // deliberate migration plan across CLI and web export flows.
-func bundlePassword(passwords []string) (string, error) {
+func bundlePassword(passwords []string) string {
 	for _, pw := range passwords {
 		if pw != "" {
-			return pw, nil
+			return pw
 		}
 	}
-	return defaultExportPassword, nil
+	return defaultExportPassword
 }
 
 // formatBundleOutputInput holds parameters for formatting bundle output.

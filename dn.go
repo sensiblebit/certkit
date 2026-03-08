@@ -749,7 +749,11 @@ func marshalDNValue(value any) ([]byte, error) {
 	if raw, ok := value.(asn1.RawValue); ok && len(raw.FullBytes) > 0 {
 		return raw.FullBytes, nil
 	}
-	return asn1.Marshal(value)
+	data, err := asn1.Marshal(value)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling DN value: %w", err)
+	}
+	return data, nil
 }
 
 // escapeDNValue escapes special characters in a DN attribute value per RFC 4514.

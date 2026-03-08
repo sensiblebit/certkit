@@ -68,7 +68,8 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 
 	// Resolve issuer: explicit flag > extra certs from container
 	var ocspInput *certkit.CheckOCSPInput
-	if ocspIssuerPath != "" {
+	switch {
+	case ocspIssuerPath != "":
 		issuerData, err := os.ReadFile(ocspIssuerPath)
 		if err != nil {
 			return fmt.Errorf("reading issuer certificate: %w", err)
@@ -82,7 +83,7 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 			Issuer:               issuerCert,
 			AllowPrivateNetworks: ocspAllowPrivateNetwork,
 		}
-	} else if len(contents.ExtraCerts) > 0 {
+	case len(contents.ExtraCerts) > 0:
 		issuerCert := certkit.SelectIssuerCertificate(contents.Leaf, contents.ExtraCerts)
 		if issuerCert == nil {
 			return fmt.Errorf("no matching issuer certificate found in input; use --issuer to provide one")
@@ -92,7 +93,7 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 			Issuer:               issuerCert,
 			AllowPrivateNetworks: ocspAllowPrivateNetwork,
 		}
-	} else {
+	default:
 		return fmt.Errorf("no issuer certificate found; use --issuer to provide one")
 	}
 
@@ -146,7 +147,15 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 
 func parseAnyCertificate(data []byte) (*x509.Certificate, error) {
 	if certkit.IsPEM(data) {
-		return certkit.ParsePEMCertificate(data)
+		cert, err := certkit.ParsePEMCertificate(data)
+		if err != nil {
+			return nil, fmt.Errorf("parsing PEM certificate: %w", err)
+		}
+		return cert, nil
 	}
-	return x509.ParseCertificate(data)
+	cert, err := x509.ParseCertificate(data)
+	if err != nil {
+		return nil, fmt.Errorf("parsing DER certificate: %w", err)
+	}
+	return cert, nil
 }

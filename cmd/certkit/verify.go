@@ -75,7 +75,11 @@ func parseDuration(s string) (time.Duration, error) {
 		}
 		return time.Duration(days) * 24 * time.Hour, nil
 	}
-	return time.ParseDuration(s)
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("parsing duration %q: %w", s, err)
+	}
+	return d, nil
 }
 
 func runVerify(cmd *cobra.Command, args []string) error {

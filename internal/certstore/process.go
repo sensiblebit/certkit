@@ -194,9 +194,7 @@ func convertObjectIdentifiers(oids []ctasn1.ObjectIdentifier) []asn1.ObjectIdent
 
 func convertObjectIdentifier(oid ctasn1.ObjectIdentifier) asn1.ObjectIdentifier {
 	converted := make(asn1.ObjectIdentifier, len(oid))
-	for i, v := range oid {
-		converted[i] = int(v)
-	}
+	copy(converted, oid)
 	return converted
 }
 

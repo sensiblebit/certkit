@@ -103,7 +103,11 @@ func hkdfExpandLabel(input hkdfExpandLabelInput) ([]byte, error) {
 	info = append(info, []byte(fullLabel)...)
 	info = append(info, 0) // empty context
 
-	return hkdf.Expand(sha256.New, input.secret, string(info), input.length)
+	key, err := hkdf.Expand(sha256.New, input.secret, string(info), input.length)
+	if err != nil {
+		return nil, fmt.Errorf("expanding HKDF label %q: %w", input.label, err)
+	}
+	return key, nil
 }
 
 // quicInitialPacketInput contains parameters for building a QUIC Initial packet.
@@ -188,7 +192,9 @@ func buildQUICInitialPacket(input quicInitialPacketInput) ([]byte, error) {
 	ciphertext := gcm.Seal(nil, nonce, cryptoFrame, header)
 
 	// Assemble the packet before header protection.
-	packet := append(header, ciphertext...)
+	packet := make([]byte, 0, len(header)+len(ciphertext))
+	packet = append(packet, header...)
+	packet = append(packet, ciphertext...)
 
 	// Apply header protection (RFC 9001 §5.4.1).
 	// Sample starts 4 bytes after the start of the packet number field.

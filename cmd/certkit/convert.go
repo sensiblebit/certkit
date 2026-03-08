@@ -78,7 +78,7 @@ type formatConvertInput struct {
 	outputPassword string
 }
 
-func runConvert(cmd *cobra.Command, args []string) error {
+func runConvert(_ *cobra.Command, args []string) error {
 	passwordSets, err := internal.ProcessPasswordSets(passwordList, passwordFile)
 	if err != nil {
 		return fmt.Errorf("loading passwords: %w", err)
@@ -140,10 +140,7 @@ func runConvert(cmd *cobra.Command, args []string) error {
 
 	exportPassword := ""
 	if convertTo == "p12" || convertTo == "jks" {
-		exportPassword, err = bundlePassword(passwordSets.Export)
-		if err != nil {
-			return fmt.Errorf("determining export password for %s output: %w", convertTo, err)
-		}
+		exportPassword = bundlePassword(passwordSets.Export)
 	}
 
 	output, err := formatConvertOutput(formatConvertInput{

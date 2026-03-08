@@ -48,7 +48,7 @@ func WalkScanFiles(input WalkScanFilesInput) error {
 		return fmt.Errorf("resolving root boundary: %w", err)
 	}
 
-	return filepath.WalkDir(input.RootPath, func(path string, d fs.DirEntry, walkErr error) error {
+	if err := filepath.WalkDir(input.RootPath, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			slog.Warn("skipping inaccessible path", "path", path, "error", walkErr)
 			if d != nil && d.IsDir() {
@@ -65,14 +65,8 @@ func WalkScanFiles(input WalkScanFilesInput) error {
 		}
 
 		if d.Type()&fs.ModeSymlink != 0 {
-			resolvedPath, resolveErr := filepath.EvalSymlinks(path)
-			if resolveErr != nil {
-				slog.Debug("skipping broken symlink", "path", path)
-				return nil
-			}
-			resolvedInfo, resolvedErr := os.Stat(resolvedPath)
-			if resolvedErr != nil {
-				slog.Debug("skipping broken symlink", "path", path)
+			resolvedPath, resolvedInfo, ok := resolveScanSymlink(path)
+			if !ok {
 				return nil
 			}
 			if resolvedInfo.IsDir() {
@@ -97,15 +91,40 @@ func WalkScanFiles(input WalkScanFilesInput) error {
 			return fmt.Errorf("handling file %s: %w", path, err)
 		}
 		return nil
-	})
+	}); err != nil {
+		return fmt.Errorf("walking scan root %s: %w", input.RootPath, err)
+	}
+	return nil
 }
 
 func scanRootBoundary(root string) (string, error) {
 	resolved, err := filepath.EvalSymlinks(root)
 	if err == nil {
-		return filepath.Abs(resolved)
+		absResolved, absErr := filepath.Abs(resolved)
+		if absErr != nil {
+			return "", fmt.Errorf("absolute path for %s: %w", resolved, absErr)
+		}
+		return absResolved, nil
 	}
-	return filepath.Abs(root)
+	absRoot, absErr := filepath.Abs(root)
+	if absErr != nil {
+		return "", fmt.Errorf("absolute path for %s: %w", root, absErr)
+	}
+	return absRoot, nil
+}
+
+func resolveScanSymlink(path string) (string, os.FileInfo, bool) {
+	resolvedPath, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		slog.Debug("skipping broken symlink", "path", path)
+		return "", nil, false
+	}
+	resolvedInfo, err := os.Stat(resolvedPath)
+	if err != nil {
+		slog.Debug("skipping broken symlink", "path", path)
+		return "", nil, false
+	}
+	return resolvedPath, resolvedInfo, true
 }
 
 func pathWithinBoundary(path, rootBoundary string) bool {
