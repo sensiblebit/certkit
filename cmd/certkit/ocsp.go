@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 
@@ -15,6 +16,9 @@ var (
 	ocspIssuerPath          string
 	ocspFormat              string
 	ocspAllowPrivateNetwork bool
+	errOCSPNoCertificate    = errors.New("no certificate found")
+	errOCSPNoMatchingIssuer = errors.New("no matching issuer certificate found in input; use --issuer to provide one")
+	errOCSPNoIssuer         = errors.New("no issuer certificate found; use --issuer to provide one")
 )
 
 var ocspCmd = &cobra.Command{
@@ -63,7 +67,7 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 	}
 
 	if contents.Leaf == nil {
-		return fmt.Errorf("no certificate found in %s", args[0])
+		return fmt.Errorf("%w in %s", errOCSPNoCertificate, args[0])
 	}
 
 	// Resolve issuer: explicit flag > extra certs from container
@@ -86,7 +90,7 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 	case len(contents.ExtraCerts) > 0:
 		issuerCert := certkit.SelectIssuerCertificate(contents.Leaf, contents.ExtraCerts)
 		if issuerCert == nil {
-			return fmt.Errorf("no matching issuer certificate found in input; use --issuer to provide one")
+			return errOCSPNoMatchingIssuer
 		}
 		ocspInput = &certkit.CheckOCSPInput{
 			Cert:                 contents.Leaf,
@@ -94,7 +98,7 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 			AllowPrivateNetworks: ocspAllowPrivateNetwork,
 		}
 	default:
-		return fmt.Errorf("no issuer certificate found; use --issuer to provide one")
+		return errOCSPNoIssuer
 	}
 
 	result, err := certkit.CheckOCSP(cmd.Context(), *ocspInput)
@@ -135,7 +139,7 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 		}
 		fmt.Print(certkit.FormatOCSPResult(result))
 	default:
-		return fmt.Errorf("unsupported output format %q (use text or json)", format)
+		return fmt.Errorf("%w %q (use text or json)", ErrUnsupportedOutputFormat, format)
 	}
 
 	if result.Status == "revoked" {

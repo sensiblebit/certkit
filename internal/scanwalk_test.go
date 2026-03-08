@@ -8,6 +8,8 @@ import (
 	"testing"
 )
 
+var errOnFileFailed = errors.New("onfile failed")
+
 func TestWalkScanFiles_SkipsSymlinkOutsideRoot(t *testing.T) {
 	// WHY: Directory scans must stay within the requested root and avoid
 	// ingesting symlink targets from unrelated paths.
@@ -145,7 +147,7 @@ func TestWalkScanFiles_PropagatesOnFileError(t *testing.T) {
 		t.Fatalf("write input file: %v", err)
 	}
 
-	wantErr := errors.New("onfile failed")
+	wantErr := errOnFileFailed
 	err := WalkScanFiles(WalkScanFilesInput{
 		RootPath: root,
 		OnFile: func(path string) error {

@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/x509/pkix"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 
@@ -49,11 +50,13 @@ Output is PEM to stdout by default.`,
 
 // sign csr flags
 var (
-	signCSRCAPath  string
-	signCSRKeyPath string
-	signCSRDays    int
-	signCSRCopySAN bool
-	signCSROutFile string
+	signCSRCAPath              string
+	signCSRKeyPath             string
+	signCSRDays                int
+	signCSRCopySAN             bool
+	signCSROutFile             string
+	errSignPrivateKeyNotSigner = errors.New("private key does not implement crypto.Signer")
+	errSignCAKeyNotSigner      = errors.New("CA private key does not implement crypto.Signer")
 )
 
 var signCSRCmd = &cobra.Command{
@@ -126,7 +129,7 @@ func runSignSelfSigned(_ *cobra.Command, _ []string) error {
 		}
 		s, ok := key.(crypto.Signer)
 		if !ok {
-			return fmt.Errorf("private key does not implement crypto.Signer")
+			return errSignPrivateKeyNotSigner
 		}
 		signer = s
 	} else {
@@ -226,7 +229,7 @@ func runSignCSR(_ *cobra.Command, args []string) error {
 	}
 	signer, ok := caKey.(crypto.Signer)
 	if !ok {
-		return fmt.Errorf("CA private key does not implement crypto.Signer")
+		return errSignCAKeyNotSigner
 	}
 
 	cert, err := certkit.SignCSR(certkit.SignCSRInput{

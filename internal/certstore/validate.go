@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rsa"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/sensiblebit/certkit"
 )
+
+var errValidationCertNotFound = errors.New("certificate with SKI not found")
 
 // ValidationResult holds the outcome of validating a single certificate.
 type ValidationResult struct {
@@ -45,7 +48,7 @@ func RunValidation(ctx context.Context, input RunValidationInput) (*ValidationRe
 	allCerts := input.Store.AllCerts()
 	rec, ok := allCerts[skiHex]
 	if !ok {
-		return nil, fmt.Errorf("certificate with SKI %s not found", input.SKIColon)
+		return nil, fmt.Errorf("%w: %s", errValidationCertNotFound, input.SKIColon)
 	}
 
 	leaf := rec.Cert

@@ -10,6 +10,7 @@ import (
 	"encoding/asn1"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
@@ -18,6 +19,11 @@ import (
 
 	"github.com/sensiblebit/certkit"
 	"github.com/sensiblebit/certkit/internal/certstore"
+)
+
+var (
+	errInspectNoObjectsFound          = errors.New("no certificates, keys, or CSRs found")
+	errInspectUnsupportedOutputFormat = errors.New("unsupported output format")
 )
 
 // InspectResult holds the inspection details for a single certificate, key, or CSR.
@@ -63,7 +69,7 @@ func InspectFile(path string, passwords []string) ([]InspectResult, error) {
 
 	results := InspectData(data, passwords)
 	if len(results) == 0 {
-		return nil, fmt.Errorf("no certificates, keys, or CSRs found in %s", path)
+		return nil, fmt.Errorf("%w in %s", errInspectNoObjectsFound, path)
 	}
 
 	return results, nil
@@ -440,7 +446,7 @@ func FormatInspectResults(results []InspectResult, format string) (string, error
 		}
 		return string(data) + "\n", nil
 	default:
-		return "", fmt.Errorf("unsupported output format %q (use text or json)", format)
+		return "", fmt.Errorf("%w %q (use text or json)", errInspectUnsupportedOutputFormat, format)
 	}
 }
 

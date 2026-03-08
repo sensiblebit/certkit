@@ -537,6 +537,7 @@ func TestParseOtherNameSANs(t *testing.T) {
 		{
 			name: "OtherName with UPN",
 			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				t.Helper()
 				sanBytes := buildSANWithOtherName(t, upnOID, "user@example.com")
 				return makeExts(sanBytes), []string{"UPN:user@example.com"}, false
 			},
@@ -544,6 +545,7 @@ func TestParseOtherNameSANs(t *testing.T) {
 		{
 			name: "OtherName with unknown OID falls back to OID string",
 			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				t.Helper()
 				sanBytes := buildSANWithOtherName(t, asn1.ObjectIdentifier{1, 2, 3, 4, 5}, "some-value")
 				return makeExts(sanBytes), []string{"1.2.3.4.5:some-value"}, false
 			},
@@ -551,6 +553,7 @@ func TestParseOtherNameSANs(t *testing.T) {
 		{
 			name: "OtherName with non-string value falls back to hex",
 			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				t.Helper()
 				value := asn1.RawValue{Class: asn1.ClassUniversal, Tag: asn1.TagOctetString, Bytes: []byte{0xde, 0xad}}
 				valueBytes, err := asn1.Marshal(value)
 				if err != nil {
@@ -564,6 +567,7 @@ func TestParseOtherNameSANs(t *testing.T) {
 		{
 			name: "DirectoryName",
 			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				t.Helper()
 				sanBytes := buildSANWithDirectoryName(t, pkix.Name{CommonName: "test-dir"})
 				return makeExts(sanBytes), []string{"DirName:CN=test-dir"}, false
 			},
@@ -571,6 +575,7 @@ func TestParseOtherNameSANs(t *testing.T) {
 		{
 			name: "RegisteredID",
 			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				t.Helper()
 				sanBytes := buildSANWithRegisteredID(t, asn1.ObjectIdentifier{1, 2, 3, 4})
 				return makeExts(sanBytes), []string{"RegisteredID:1.2.3.4"}, false
 			},
@@ -578,6 +583,7 @@ func TestParseOtherNameSANs(t *testing.T) {
 		{
 			name: "RegisteredID with invalid bytes is ignored",
 			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				t.Helper()
 				regIDGN := mustMarshalGeneralName(t, asn1.RawValue{
 					Class: asn1.ClassContextSpecific,
 					Tag:   8,
@@ -590,6 +596,7 @@ func TestParseOtherNameSANs(t *testing.T) {
 		{
 			name: "OtherName missing explicit value is ignored",
 			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				t.Helper()
 				oidBytes, err := asn1.Marshal(upnOID)
 				if err != nil {
 					t.Fatalf("marshal OID: %v", err)
@@ -611,6 +618,7 @@ func TestParseOtherNameSANs(t *testing.T) {
 		{
 			name: "OtherName with wrong explicit tag is ignored",
 			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				t.Helper()
 				oidBytes, err := asn1.Marshal(upnOID)
 				if err != nil {
 					t.Fatalf("marshal OID: %v", err)
@@ -650,6 +658,7 @@ func TestParseOtherNameSANs(t *testing.T) {
 		{
 			name: "OtherName with non-compound explicit value is ignored",
 			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				t.Helper()
 				oidBytes, err := asn1.Marshal(upnOID)
 				if err != nil {
 					t.Fatalf("marshal OID: %v", err)
@@ -689,6 +698,7 @@ func TestParseOtherNameSANs(t *testing.T) {
 		{
 			name: "malformed registeredID before valid OtherName",
 			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				t.Helper()
 				badRegID := mustMarshalGeneralName(t, asn1.RawValue{
 					Class: asn1.ClassContextSpecific,
 					Tag:   8,
@@ -702,6 +712,7 @@ func TestParseOtherNameSANs(t *testing.T) {
 		{
 			name: "malformed DirectoryName before valid OtherName",
 			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				t.Helper()
 				badDir := mustMarshalGeneralName(t, asn1.RawValue{
 					Class:      asn1.ClassContextSpecific,
 					Tag:        4,
@@ -716,6 +727,7 @@ func TestParseOtherNameSANs(t *testing.T) {
 		{
 			name: "mixed SAN entries",
 			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				t.Helper()
 				sanBytes := buildSANWithGeneralNames(t,
 					marshalOtherNameGeneralName(t, upnOID, "mix@example.com"),
 					marshalDirectoryNameGeneralName(t, pkix.Name{CommonName: "mixed-dir"}),
@@ -729,6 +741,7 @@ func TestParseOtherNameSANs(t *testing.T) {
 		{
 			name: "multiple SAN extensions",
 			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				t.Helper()
 				san1 := buildSANWithOtherName(t, upnOID, "first@example.com")
 				san2 := buildSANWithDirectoryName(t, pkix.Name{CommonName: "second-dir"})
 				exts := []pkix.Extension{{Id: sanOID, Value: san1}, {Id: sanOID, Value: san2}}
@@ -739,6 +752,7 @@ func TestParseOtherNameSANs(t *testing.T) {
 		{
 			name: "multiple SAN extensions with invalid first",
 			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				t.Helper()
 				san1 := []byte{0xff, 0xff, 0xff}
 				san2 := buildSANWithOtherName(t, upnOID, "second@example.com")
 				exts := []pkix.Extension{{Id: sanOID, Value: san1}, {Id: sanOID, Value: san2}}
@@ -748,6 +762,7 @@ func TestParseOtherNameSANs(t *testing.T) {
 		{
 			name: "duplicate OtherName entries preserve order",
 			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				t.Helper()
 				san1 := buildSANWithOtherName(t, upnOID, "first@example.com")
 				san2 := buildSANWithOtherName(t, upnOID, "second@example.com")
 				exts := []pkix.Extension{{Id: sanOID, Value: san1}, {Id: sanOID, Value: san2}}
@@ -757,6 +772,7 @@ func TestParseOtherNameSANs(t *testing.T) {
 		{
 			name: "empty SAN sequence returns nil",
 			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				t.Helper()
 				sanBytes := buildSANWithGeneralNames(t)
 				return makeExts(sanBytes), nil, true
 			},
@@ -764,6 +780,7 @@ func TestParseOtherNameSANs(t *testing.T) {
 		{
 			name: "no SAN extension returns nil",
 			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				t.Helper()
 				exts := []pkix.Extension{{
 					Id:    asn1.ObjectIdentifier{2, 5, 29, 19},
 					Value: []byte{0x30, 0x00},
@@ -774,12 +791,14 @@ func TestParseOtherNameSANs(t *testing.T) {
 		{
 			name: "nil extensions returns nil",
 			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				t.Helper()
 				return nil, nil, true
 			},
 		},
 		{
 			name: "SAN with only dNSName returns nil",
 			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				t.Helper()
 				sanBytes := buildSANWithDNSName(t, "example.com")
 				return makeExts(sanBytes), nil, true
 			},
@@ -787,6 +806,7 @@ func TestParseOtherNameSANs(t *testing.T) {
 		{
 			name: "unknown GeneralName tag is ignored",
 			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				t.Helper()
 				ipGN := mustMarshalGeneralName(t, asn1.RawValue{
 					Class: asn1.ClassContextSpecific,
 					Tag:   7,
@@ -799,6 +819,7 @@ func TestParseOtherNameSANs(t *testing.T) {
 		{
 			name: "invalid SAN bytes returns nil",
 			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				t.Helper()
 				exts := []pkix.Extension{{Id: sanOID, Value: []byte{0xFF, 0xFF, 0xFF}}}
 				return exts, nil, true
 			},
@@ -806,6 +827,7 @@ func TestParseOtherNameSANs(t *testing.T) {
 		{
 			name: "valid entry before malformed bytes",
 			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				t.Helper()
 				validGN := marshalOtherNameGeneralName(t, upnOID, "ok@example.com")
 				sanBytes := buildSANWithGeneralNames(t, validGN, []byte{0xFF})
 				return makeExts(sanBytes), []string{"UPN:ok@example.com"}, false
@@ -814,6 +836,7 @@ func TestParseOtherNameSANs(t *testing.T) {
 		{
 			name: "malformed entry before valid bytes",
 			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				t.Helper()
 				malformedGN, err := asn1.Marshal(asn1.RawValue{
 					Class:      asn1.ClassContextSpecific,
 					Tag:        0,
@@ -831,6 +854,7 @@ func TestParseOtherNameSANs(t *testing.T) {
 		{
 			name: "OtherName with IA5String",
 			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				t.Helper()
 				otherNameGN := marshalOtherNameGeneralNameWithValue(t, upnOID, asn1.RawValue{
 					Class: asn1.ClassUniversal,
 					Tag:   asn1.TagIA5String,
@@ -843,6 +867,7 @@ func TestParseOtherNameSANs(t *testing.T) {
 		{
 			name: "OtherName with PrintableString",
 			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				t.Helper()
 				otherNameGN := marshalOtherNameGeneralNameWithValue(t, upnOID, asn1.RawValue{
 					Class: asn1.ClassUniversal,
 					Tag:   asn1.TagPrintableString,
@@ -855,6 +880,7 @@ func TestParseOtherNameSANs(t *testing.T) {
 		{
 			name: "OtherName with BMPString",
 			build: func(t *testing.T) ([]pkix.Extension, []string, bool) {
+				t.Helper()
 				otherNameGN := marshalOtherNameGeneralNameWithValue(t, upnOID, asn1.RawValue{
 					Class: asn1.ClassUniversal,
 					Tag:   asn1.TagBMPString,
@@ -1004,7 +1030,8 @@ func marshalOtherNameGeneralNameWithValue(t *testing.T, oid asn1.ObjectIdentifie
 	if err != nil {
 		t.Fatalf("marshal explicit wrapper: %v", err)
 	}
-	seqContent := append(oidBytes, explicitBytes...)
+	seqContent := append([]byte{}, oidBytes...)
+	seqContent = append(seqContent, explicitBytes...)
 
 	otherNameGN := asn1.RawValue{
 		Class:      asn1.ClassContextSpecific,

@@ -20,6 +20,11 @@ import (
 
 const defaultConnectTimeout = 10 * time.Second
 
+var (
+	errConnectHostRequired    = errors.New("connecting to TLS server: host is required")
+	errCipherScanHostRequired = errors.New("scanning cipher suites: host is required")
+)
+
 // ChainDiagnostic describes a single chain configuration issue found during connection probing.
 type ChainDiagnostic struct {
 	// Check is the diagnostic identifier (e.g. "root-in-chain", "duplicate-cert", "misordered-chain", "missing-intermediate").
@@ -310,7 +315,7 @@ type ConnectResult struct {
 // the negotiated protocol, cipher suite, and peer certificate chain.
 func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, error) {
 	if input.Host == "" {
-		return nil, fmt.Errorf("connecting to TLS server: host is required")
+		return nil, errConnectHostRequired
 	}
 	port := input.Port
 	if port == "" {
@@ -549,17 +554,19 @@ func (result *ConnectResult) populate(ctx context.Context, input ConnectTLSInput
 	}
 
 	// Best-effort OCSP check on the leaf certificate.
-	if !input.DisableOCSP && issuer == nil {
+	switch {
+	case input.DisableOCSP:
+	case issuer == nil:
 		result.OCSP = &OCSPResult{
 			Status: "skipped",
 			Detail: "no issuer certificate in chain",
 		}
-	} else if !input.DisableOCSP && len(leaf.OCSPServer) == 0 {
+	case len(leaf.OCSPServer) == 0:
 		result.OCSP = &OCSPResult{
 			Status: "skipped",
 			Detail: "certificate has no OCSP responder URL",
 		}
-	} else if !input.DisableOCSP {
+	default:
 		ocspTimeout := input.OCSPTimeout
 		if ocspTimeout == 0 {
 			ocspTimeout = 5 * time.Second
@@ -1035,7 +1042,7 @@ func RateCipherSuite(cipherID uint16, tlsVersion uint16) CipherRating {
 // raw ClientHello with individual named groups. All probes run concurrently.
 func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*CipherScanResult, error) {
 	if input.Host == "" {
-		return nil, fmt.Errorf("scanning cipher suites: host is required")
+		return nil, errCipherScanHostRequired
 	}
 	port := input.Port
 	if port == "" {

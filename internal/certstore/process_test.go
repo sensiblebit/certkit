@@ -21,6 +21,11 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+var (
+	errRejectFirstCert = errors.New("reject first cert")
+	errRejectFirstKey  = errors.New("reject first key")
+)
+
 func TestProcessData_PEMCertificate(t *testing.T) {
 	// WHY: The primary ingestion path for PEM certificates; verifies the cert
 	// reaches the handler with correct source metadata.
@@ -243,18 +248,14 @@ func TestProcessData_EncryptedContainer_CorrectPassword(t *testing.T) {
 			cn:       "p12-rsa.example.com",
 			path:     "bundle.p12",
 			password: "changeit",
-			makeData: func(t *testing.T, leaf testLeaf, ca testCA, password string) []byte {
-				return newPKCS12Bundle(t, leaf, ca, password)
-			},
+			makeData: newPKCS12Bundle,
 		},
 		{
 			name:     "JKS",
 			cn:       "jks-rsa.example.com",
 			path:     "store.jks",
 			password: "changeit",
-			makeData: func(t *testing.T, leaf testLeaf, ca testCA, password string) []byte {
-				return newJKSBundle(t, leaf, ca, password)
-			},
+			makeData: newJKSBundle,
 		},
 	}
 
@@ -311,6 +312,7 @@ func TestProcessData_EncryptedContainer_WrongPassword(t *testing.T) {
 			cn:   "p12wrong.example.com",
 			path: "bundle.p12",
 			makeData: func(t *testing.T, leaf testLeaf, ca testCA) []byte {
+				t.Helper()
 				return newPKCS12Bundle(t, leaf, ca, "secretpw")
 			},
 		},
@@ -319,6 +321,7 @@ func TestProcessData_EncryptedContainer_WrongPassword(t *testing.T) {
 			cn:   "jkswrong.example.com",
 			path: "store.jks",
 			makeData: func(t *testing.T, leaf testLeaf, ca testCA) []byte {
+				t.Helper()
 				return newJKSBundle(t, leaf, ca, "correctpw")
 			},
 		},
@@ -529,7 +532,8 @@ func TestProcessData_PEMWithIgnoredBlocks(t *testing.T) {
 		Type:  "DH PARAMETERS",
 		Bytes: []byte("fake-dh-params-data"),
 	})
-	combined := append(leaf.certPEM, dhBlock...)
+	combined := append([]byte{}, leaf.certPEM...)
+	combined = append(combined, dhBlock...)
 
 	if err := ProcessData(ProcessInput{
 		Data:    combined,
@@ -580,7 +584,8 @@ func TestProcessData_MultipleCertsInPEM(t *testing.T) {
 	intermediate := newIntermediateCA(t, ca)
 	leaf := newRSALeaf(t, intermediate, "multi.example.com", []string{"multi.example.com"})
 
-	combined := append(leaf.certPEM, intermediate.certPEM...)
+	combined := append([]byte{}, leaf.certPEM...)
+	combined = append(combined, intermediate.certPEM...)
 	combined = append(combined, ca.certPEM...)
 
 	store := NewMemStore()
@@ -621,7 +626,8 @@ func TestProcessData_MalformedPEMCert(t *testing.T) {
 		Type:  "CERTIFICATE",
 		Bytes: []byte("this is not valid DER"),
 	})
-	combined := append(leaf.certPEM, malformedBlock...)
+	combined := append([]byte{}, leaf.certPEM...)
+	combined = append(combined, malformedBlock...)
 
 	store := NewMemStore()
 	if err := ProcessData(ProcessInput{
@@ -733,7 +739,7 @@ type rejectingHandler struct {
 func (h *rejectingHandler) HandleCertificate(_ *x509.Certificate, _ string) error {
 	h.certCalls++
 	if h.certCalls == 1 {
-		return errors.New("reject first cert")
+		return errRejectFirstCert
 	}
 	return nil
 }
@@ -741,7 +747,7 @@ func (h *rejectingHandler) HandleCertificate(_ *x509.Certificate, _ string) erro
 func (h *rejectingHandler) HandleKey(_ any, _ []byte, _ string) error {
 	h.keyCalls++
 	if h.keyCalls == 1 {
-		return errors.New("reject first key")
+		return errRejectFirstKey
 	}
 	return nil
 }
@@ -1151,7 +1157,8 @@ func TestProcessData_PEMMixedEncrypted_PartialPasswordMatch(t *testing.T) {
 	key3PEM := pem.EncodeToMemory(encBlock3)
 
 	// Combined file: key1 + key2 + key3
-	combined := append(key1PEM, key2PEM...)
+	combined := append([]byte{}, key1PEM...)
+	combined = append(combined, key2PEM...)
 	combined = append(combined, key3PEM...)
 
 	// Provide only pass1 and pass3 (skip pass2)

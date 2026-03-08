@@ -486,7 +486,8 @@ func TestFindAllKeyLeafPairs_ParsePEMPrivateKeysIntegration(t *testing.T) {
 
 	// Prepend a certificate PEM block — ParsePEMPrivateKeys should skip it
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
-	mixedPEM := append(certPEM, keyPEM...)
+	mixedPEM := append([]byte{}, certPEM...)
+	mixedPEM = append(mixedPEM, keyPEM...)
 
 	pairs, err := findAllKeyLeafPairs(mixedPEM, nil, []*x509.Certificate{cert})
 	if err != nil {

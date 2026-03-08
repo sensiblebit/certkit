@@ -13,6 +13,13 @@ import (
 	"github.com/pavlo-v-chernykh/keystore-go/v4"
 )
 
+var (
+	errJKSLoadFailed      = errors.New("loading JKS: none of the provided passwords worked")
+	errJKSNoUsableEntries = errors.New("JKS contains no usable certificates or keys")
+	errJKSNoEntries       = errors.New("at least one JKS entry is required")
+	errJKSLeafNil         = errors.New("leaf certificate cannot be nil")
+)
+
 // DecodedJKSKeyEntry represents one decoded JKS PrivateKeyEntry with its alias
 // and certificate chain.
 type DecodedJKSKeyEntry struct {
@@ -37,7 +44,7 @@ func DecodeJKSKeyEntries(data []byte, passwords []string) ([]DecodedJKSKeyEntry,
 		}
 	}
 	if !loaded {
-		return nil, nil, fmt.Errorf("loading JKS: none of the provided passwords worked")
+		return nil, nil, errJKSLoadFailed
 	}
 
 	var keyEntries []DecodedJKSKeyEntry
@@ -97,7 +104,7 @@ func DecodeJKSKeyEntries(data []byte, passwords []string) ([]DecodedJKSKeyEntry,
 	}
 
 	if len(trustedCerts) == 0 && len(keyEntries) == 0 {
-		return nil, nil, errors.New("JKS contains no usable certificates or keys")
+		return nil, nil, errJKSNoUsableEntries
 	}
 
 	return keyEntries, trustedCerts, nil
@@ -144,7 +151,7 @@ type JKSEntry struct {
 // store and all key entries (standard Java convention).
 func EncodeJKSEntries(entries []JKSEntry, password string) ([]byte, error) {
 	if len(entries) == 0 {
-		return nil, errors.New("at least one JKS entry is required")
+		return nil, errJKSNoEntries
 	}
 
 	ks := keystore.New()
@@ -152,7 +159,7 @@ func EncodeJKSEntries(entries []JKSEntry, password string) ([]byte, error) {
 
 	for i, entry := range entries {
 		if entry.Leaf == nil {
-			return nil, fmt.Errorf("entry %d: leaf certificate cannot be nil", i)
+			return nil, fmt.Errorf("%w for entry %d", errJKSLeafNil, i)
 		}
 		pkcs8Key, err := x509.MarshalPKCS8PrivateKey(normalizeKey(entry.PrivateKey))
 		if err != nil {

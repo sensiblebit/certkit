@@ -18,6 +18,8 @@ import (
 	"github.com/sensiblebit/certkit"
 )
 
+var errCertificateNil = errors.New("certificate is nil")
+
 // CertRecord holds a parsed certificate and its computed metadata.
 type CertRecord struct {
 	Cert       *x509.Certificate
@@ -86,7 +88,7 @@ func (s *MemStore) KeyCount() int {
 // (key reuse across renewals) are all retained.
 func (s *MemStore) HandleCertificate(cert *x509.Certificate, source string) error {
 	if cert == nil {
-		return errors.New("certificate is nil")
+		return errCertificateNil
 	}
 	rawSKI, err := certkit.ComputeSKI(cert.PublicKey)
 	if err != nil {

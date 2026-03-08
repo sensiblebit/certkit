@@ -16,6 +16,8 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+var errMockWrite = errors.New("mock write error")
+
 // Verify mockBundleWriter satisfies BundleWriter interface.
 var _ BundleWriter = (*mockBundleWriter)(nil)
 
@@ -1378,7 +1380,7 @@ type mockBundleWriter struct {
 func (w *mockBundleWriter) WriteBundleFiles(folder string, files []BundleFile) error {
 	w.callCount++
 	if w.errOnFolder != "" && folder == w.errOnFolder {
-		return fmt.Errorf("mock write error for %s", folder)
+		return fmt.Errorf("%w for %s", errMockWrite, folder)
 	}
 	*w.calls = append(*w.calls, mockWriteCall{folder: folder, files: files})
 	return nil

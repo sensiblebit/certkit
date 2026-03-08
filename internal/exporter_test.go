@@ -158,6 +158,7 @@ func TestSafeJoin(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			got, err := safeJoin(base, tt.folder)
 			if tt.wantErr {
 				if err == nil {

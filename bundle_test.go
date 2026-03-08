@@ -588,7 +588,7 @@ func TestFetchAIACertificates_duplicateURLs(t *testing.T) {
 	}
 
 	var fetchCount atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		fetchCount.Add(1)
 		_, _ = w.Write(issuerBytes)
 	}))

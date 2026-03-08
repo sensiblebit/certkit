@@ -178,6 +178,7 @@ func TestInspectFile_ContainerFormats(t *testing.T) {
 			wantKeys:  1,
 			passwords: []string{"changeit"},
 			makeData: func(t *testing.T, leaf testLeaf, ca testCA) []byte {
+				t.Helper()
 				return newPKCS12Bundle(t, leaf, ca, "changeit")
 			},
 		},
@@ -189,6 +190,7 @@ func TestInspectFile_ContainerFormats(t *testing.T) {
 			wantKeys:  1,
 			passwords: []string{"changeit"},
 			makeData: func(t *testing.T, leaf testLeaf, ca testCA) []byte {
+				t.Helper()
 				return newJKSBundle(t, leaf, ca, "changeit")
 			},
 		},
@@ -199,6 +201,7 @@ func TestInspectFile_ContainerFormats(t *testing.T) {
 			wantCerts: 2, // leaf + CA
 			wantKeys:  0, // PKCS#7 carries no keys
 			makeData: func(t *testing.T, leaf testLeaf, ca testCA) []byte {
+				t.Helper()
 				p7, err := certkit.EncodePKCS7([]*x509.Certificate{leaf.cert, ca.cert})
 				if err != nil {
 					t.Fatalf("EncodePKCS7: %v", err)

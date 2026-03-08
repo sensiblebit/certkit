@@ -32,12 +32,13 @@ func TestHasUnresolvedIssuers(t *testing.T) {
 	}{
 		{
 			name:  "empty store",
-			setup: func(t *testing.T, store *MemStore) {},
+			setup: func(_ *testing.T, _ *MemStore) {},
 			want:  false,
 		},
 		{
 			name: "only roots",
 			setup: func(t *testing.T, store *MemStore) {
+				t.Helper()
 				ca := newRSACA(t)
 				if err := store.HandleCertificate(ca.cert, "ca.pem"); err != nil {
 					t.Fatal(err)
@@ -48,6 +49,7 @@ func TestHasUnresolvedIssuers(t *testing.T) {
 		{
 			name: "leaf with issuer in store",
 			setup: func(t *testing.T, store *MemStore) {
+				t.Helper()
 				ca := newRSACA(t)
 				leaf := newRSALeaf(t, ca, "has-issuer.example.com", []string{"has-issuer.example.com"})
 				if err := store.HandleCertificate(ca.cert, "ca.pem"); err != nil {
@@ -62,6 +64,7 @@ func TestHasUnresolvedIssuers(t *testing.T) {
 		{
 			name: "leaf issued by Mozilla root returns false",
 			setup: func(t *testing.T, store *MemStore) {
+				t.Helper()
 				// Parse the first Mozilla root to get its RawSubject.
 				pemData := certkit.MozillaRootPEM()
 				block, _ := pem.Decode(pemData)
@@ -135,6 +138,7 @@ func TestHasUnresolvedIssuers(t *testing.T) {
 		{
 			name: "leaf with missing issuer",
 			setup: func(t *testing.T, store *MemStore) {
+				t.Helper()
 				ca := newRSACA(t)
 				leaf := newRSALeaf(t, ca, "orphan.example.com", []string{"orphan.example.com"})
 				// Only add the leaf, not the CA
@@ -252,6 +256,7 @@ func TestResolveAIA_SkipsResolvedAndRoots(t *testing.T) {
 		setup func(t *testing.T, store *MemStore)
 	}{
 		{"issuer_in_store", func(t *testing.T, store *MemStore) {
+			t.Helper()
 			// Leaf must have an AIA URL so the test proves the issuer-presence
 			// check prevents the fetch, not the absence of URLs.
 			ca := newRSACA(t)
@@ -284,6 +289,7 @@ func TestResolveAIA_SkipsResolvedAndRoots(t *testing.T) {
 			}
 		}},
 		{"root_cert_with_aia", func(t *testing.T, store *MemStore) {
+			t.Helper()
 			// Root has an AIA URL set — fetch must still not occur because
 			// root certs are skipped before AIA URL iteration.
 			caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -790,7 +796,7 @@ func TestResolveAIA_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
-	fetcher := func(fctx context.Context, url string) ([]byte, error) {
+	fetcher := func(fctx context.Context, _ string) ([]byte, error) {
 		return nil, fctx.Err()
 	}
 

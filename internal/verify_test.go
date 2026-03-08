@@ -10,6 +10,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
+	"fmt"
 	"math/big"
 	"net/http"
 	"net/http/httptest"
@@ -382,8 +383,11 @@ func TestVerifyCert_ValidityWindow(t *testing.T) {
 		wantErrSubstr string
 	}{
 		{
-			name:          "expired leaf",
-			cert:          func(t *testing.T) *x509.Certificate { return newExpiredLeaf(t, ca).cert },
+			name: "expired leaf",
+			cert: func(t *testing.T) *x509.Certificate {
+				t.Helper()
+				return newExpiredLeaf(t, ca).cert
+			},
 			wantErrSubstr: "expired",
 		},
 		{
@@ -1660,7 +1664,7 @@ func TestVerifyCert_RevocationBehavior(t *testing.T) {
 
 			var ocspHits int32
 			if tc.ocspSigner != nil {
-				ocspServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				ocspServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					atomic.AddInt32(&ocspHits, 1)
 					resp := ocsp.Response{
 						Status:       ocsp.Good,
@@ -1685,7 +1689,7 @@ func TestVerifyCert_RevocationBehavior(t *testing.T) {
 
 			var crlHits int32
 			if tc.crlSigner != nil {
-				crlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				crlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					atomic.AddInt32(&crlHits, 1)
 					now := time.Now()
 					crlDER, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
@@ -1813,7 +1817,7 @@ func TestVerifyCert_RevocationIssuerIntermediate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ocspServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ocspServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/ocsp-response")
 		if _, err := w.Write(respBytes); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1832,7 +1836,7 @@ func TestVerifyCert_RevocationIssuerIntermediate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	crlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	crlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/pkix-crl")
 		if _, err := w.Write(crlDER); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1946,7 +1950,7 @@ func TestVerifyCert_OCSPStatus(t *testing.T) {
 				}
 				respBytes, err := ocsp.CreateResponse(ca.cert, ca.cert, resp, ca.key.(*rsa.PrivateKey))
 				if err != nil {
-					return nil, err
+					return nil, fmt.Errorf("create OCSP good response: %w", err)
 				}
 				return respBytes, nil
 			},
@@ -1963,7 +1967,7 @@ func TestVerifyCert_OCSPStatus(t *testing.T) {
 				}
 				respBytes, err := ocsp.CreateResponse(ca.cert, ca.cert, resp, ca.key.(*rsa.PrivateKey))
 				if err != nil {
-					return nil, err
+					return nil, fmt.Errorf("create OCSP unknown response: %w", err)
 				}
 				return respBytes, nil
 			},
@@ -1982,7 +1986,7 @@ func TestVerifyCert_OCSPStatus(t *testing.T) {
 				}
 				respBytes, err := ocsp.CreateResponse(ca.cert, ca.cert, resp, ca.key.(*rsa.PrivateKey))
 				if err != nil {
-					return nil, err
+					return nil, fmt.Errorf("create OCSP revoked response: %w", err)
 				}
 				return respBytes, nil
 			},
@@ -2002,7 +2006,7 @@ func TestVerifyCert_OCSPStatus(t *testing.T) {
 				}
 				respBytes, err := ocsp.CreateResponse(ca.cert, ca.cert, resp, ca.key.(*rsa.PrivateKey))
 				if err != nil {
-					return nil, err
+					return nil, fmt.Errorf("create expired OCSP response: %w", err)
 				}
 				return respBytes, nil
 			},
@@ -2011,7 +2015,7 @@ func TestVerifyCert_OCSPStatus(t *testing.T) {
 		},
 		{
 			name: "serial mismatch",
-			makeResponse: func(ca testCA, leaf testLeaf) ([]byte, error) {
+			makeResponse: func(ca testCA, _ testLeaf) ([]byte, error) {
 				resp := ocsp.Response{
 					Status:       ocsp.Good,
 					SerialNumber: big.NewInt(9999),
@@ -2020,7 +2024,7 @@ func TestVerifyCert_OCSPStatus(t *testing.T) {
 				}
 				respBytes, err := ocsp.CreateResponse(ca.cert, ca.cert, resp, ca.key.(*rsa.PrivateKey))
 				if err != nil {
-					return nil, err
+					return nil, fmt.Errorf("create OCSP serial mismatch response: %w", err)
 				}
 				return respBytes, nil
 			},
@@ -2030,7 +2034,7 @@ func TestVerifyCert_OCSPStatus(t *testing.T) {
 		},
 		{
 			name: "http 500",
-			makeResponse: func(ca testCA, leaf testLeaf) ([]byte, error) {
+			makeResponse: func(_ testCA, _ testLeaf) ([]byte, error) {
 				return []byte("unused"), nil
 			},
 			handler: func(w http.ResponseWriter, _ []byte) {
@@ -2041,7 +2045,7 @@ func TestVerifyCert_OCSPStatus(t *testing.T) {
 		},
 		{
 			name: "http 404",
-			makeResponse: func(ca testCA, leaf testLeaf) ([]byte, error) {
+			makeResponse: func(_ testCA, _ testLeaf) ([]byte, error) {
 				return []byte("unused"), nil
 			},
 			handler: func(w http.ResponseWriter, _ []byte) {
@@ -2052,7 +2056,7 @@ func TestVerifyCert_OCSPStatus(t *testing.T) {
 		},
 		{
 			name: "context timeout",
-			makeResponse: func(ca testCA, leaf testLeaf) ([]byte, error) {
+			makeResponse: func(_ testCA, _ testLeaf) ([]byte, error) {
 				return []byte("unused"), nil
 			},
 			handler: func(w http.ResponseWriter, _ []byte) {
@@ -2065,7 +2069,7 @@ func TestVerifyCert_OCSPStatus(t *testing.T) {
 		},
 		{
 			name: "unavailable",
-			makeResponse: func(ca testCA, leaf testLeaf) ([]byte, error) {
+			makeResponse: func(_ testCA, _ testLeaf) ([]byte, error) {
 				return []byte("not-ocsp"), nil
 			},
 			wantStatus: "unavailable",
@@ -2093,7 +2097,7 @@ func TestVerifyCert_OCSPStatus(t *testing.T) {
 					}
 				}
 			}
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				handler(w, respBytes)
 			}))
 			t.Cleanup(server.Close)
@@ -2160,7 +2164,7 @@ func TestVerifyCert_OCSPStatus_ECDSA(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/ocsp-response")
 		if _, err := w.Write(respBytes); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -2217,7 +2221,7 @@ func TestVerifyCert_CRLStatus(t *testing.T) {
 					},
 				}, ca.cert, ca.key.(*rsa.PrivateKey))
 				if err != nil {
-					return nil, err
+					return nil, fmt.Errorf("create revoked CRL: %w", err)
 				}
 				return crlDER, nil
 			},
@@ -2227,7 +2231,7 @@ func TestVerifyCert_CRLStatus(t *testing.T) {
 		},
 		{
 			name: "good",
-			makeCRL: func(ca testCA, leaf testLeaf) ([]byte, error) {
+			makeCRL: func(ca testCA, _ testLeaf) ([]byte, error) {
 				now := time.Now()
 				crlDER, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
 					Number:     big.NewInt(1),
@@ -2235,7 +2239,7 @@ func TestVerifyCert_CRLStatus(t *testing.T) {
 					NextUpdate: now.Add(24 * time.Hour),
 				}, ca.cert, ca.key.(*rsa.PrivateKey))
 				if err != nil {
-					return nil, err
+					return nil, fmt.Errorf("create good CRL: %w", err)
 				}
 				return crlDER, nil
 			},
@@ -2243,7 +2247,7 @@ func TestVerifyCert_CRLStatus(t *testing.T) {
 		},
 		{
 			name: "expired",
-			makeCRL: func(ca testCA, leaf testLeaf) ([]byte, error) {
+			makeCRL: func(ca testCA, _ testLeaf) ([]byte, error) {
 				now := time.Now()
 				crlDER, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
 					Number:     big.NewInt(2),
@@ -2251,7 +2255,7 @@ func TestVerifyCert_CRLStatus(t *testing.T) {
 					NextUpdate: now.Add(-time.Hour),
 				}, ca.cert, ca.key.(*rsa.PrivateKey))
 				if err != nil {
-					return nil, err
+					return nil, fmt.Errorf("create expired CRL: %w", err)
 				}
 				return crlDER, nil
 			},
@@ -2261,7 +2265,7 @@ func TestVerifyCert_CRLStatus(t *testing.T) {
 		},
 		{
 			name: "wrong issuer",
-			makeCRL: func(ca testCA, leaf testLeaf) ([]byte, error) {
+			makeCRL: func(_ testCA, _ testLeaf) ([]byte, error) {
 				wrongCA := newRSACA(t)
 				now := time.Now()
 				crlDER, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
@@ -2270,7 +2274,7 @@ func TestVerifyCert_CRLStatus(t *testing.T) {
 					NextUpdate: now.Add(24 * time.Hour),
 				}, wrongCA.cert, wrongCA.key.(*rsa.PrivateKey))
 				if err != nil {
-					return nil, err
+					return nil, fmt.Errorf("create wrong-issuer CRL: %w", err)
 				}
 				return crlDER, nil
 			},
@@ -2280,7 +2284,7 @@ func TestVerifyCert_CRLStatus(t *testing.T) {
 		},
 		{
 			name: "http 500",
-			makeCRL: func(ca testCA, leaf testLeaf) ([]byte, error) {
+			makeCRL: func(_ testCA, _ testLeaf) ([]byte, error) {
 				return []byte("unused"), nil
 			},
 			handler: func(w http.ResponseWriter, _ []byte) {
@@ -2292,7 +2296,7 @@ func TestVerifyCert_CRLStatus(t *testing.T) {
 		},
 		{
 			name: "http 404",
-			makeCRL: func(ca testCA, leaf testLeaf) ([]byte, error) {
+			makeCRL: func(_ testCA, _ testLeaf) ([]byte, error) {
 				return []byte("unused"), nil
 			},
 			handler: func(w http.ResponseWriter, _ []byte) {
@@ -2304,7 +2308,7 @@ func TestVerifyCert_CRLStatus(t *testing.T) {
 		},
 		{
 			name: "context timeout",
-			makeCRL: func(ca testCA, leaf testLeaf) ([]byte, error) {
+			makeCRL: func(_ testCA, _ testLeaf) ([]byte, error) {
 				return []byte("unused"), nil
 			},
 			handler: func(w http.ResponseWriter, _ []byte) {
@@ -2317,7 +2321,7 @@ func TestVerifyCert_CRLStatus(t *testing.T) {
 		},
 		{
 			name: "unavailable",
-			makeCRL: func(ca testCA, leaf testLeaf) ([]byte, error) {
+			makeCRL: func(_ testCA, _ testLeaf) ([]byte, error) {
 				return []byte("not-crl"), nil
 			},
 			wantStatus: "unavailable",
@@ -2345,7 +2349,7 @@ func TestVerifyCert_CRLStatus(t *testing.T) {
 					}
 				}
 			}
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				handler(w, crlDER)
 			}))
 			t.Cleanup(server.Close)
@@ -2408,7 +2412,7 @@ func TestVerifyCert_CRLStatus_ECDSA(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/pkix-crl")
 		if _, err := w.Write(crlDER); err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -2491,7 +2495,7 @@ func TestVerifyCert_RevocationCombined(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			ocspServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ocspServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/ocsp-response")
 				if _, err := w.Write(respBytes); err != nil {
 					http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -2515,7 +2519,7 @@ func TestVerifyCert_RevocationCombined(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			crlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			crlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/pkix-crl")
 				if _, err := w.Write(crlDER); err != nil {
 					http.Error(w, err.Error(), http.StatusInternalServerError)

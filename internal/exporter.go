@@ -15,6 +15,13 @@ import (
 	"github.com/sensiblebit/certkit/internal/certstore"
 )
 
+var (
+	errExportBundleFolderEmpty     = errors.New("bundle folder name is empty")
+	errExportBundleFolderRelative  = errors.New("bundle folder name must be relative")
+	errExportBundleFolderEscapes   = errors.New("bundle folder name escapes output dir")
+	errExportBundleFolderCollision = errors.New("sanitized bundle folder collision")
+)
+
 // filesystemWriter writes bundle files to the local filesystem under outDir.
 type filesystemWriter struct {
 	outDir string
@@ -46,14 +53,14 @@ func (w *filesystemWriter) WriteBundleFiles(folder string, files []certstore.Bun
 // It rejects absolute paths, dot-path escapes, and traversal outside base.
 func safeJoin(base, folder string) (string, error) {
 	if folder == "" {
-		return "", fmt.Errorf("bundle folder name is empty")
+		return "", errExportBundleFolderEmpty
 	}
 	cleaned := filepath.Clean(folder)
 	if filepath.IsAbs(cleaned) {
-		return "", fmt.Errorf("bundle folder name %q must be relative", folder)
+		return "", fmt.Errorf("%w: %q", errExportBundleFolderRelative, folder)
 	}
 	if cleaned == "." || cleaned == ".." || strings.HasPrefix(cleaned, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("bundle folder name %q escapes output dir", folder)
+		return "", fmt.Errorf("%w: %q", errExportBundleFolderEscapes, folder)
 	}
 	baseClean := filepath.Clean(base)
 	full := filepath.Join(baseClean, cleaned)
@@ -62,7 +69,7 @@ func safeJoin(base, folder string) (string, error) {
 		return "", fmt.Errorf("resolving bundle path: %w", err)
 	}
 	if rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return "", fmt.Errorf("bundle folder name %q escapes output dir", folder)
+		return "", fmt.Errorf("%w: %q", errExportBundleFolderEscapes, folder)
 	}
 	return full, nil
 }
@@ -172,7 +179,7 @@ func exportBundleCerts(ctx context.Context, input exportBundleCertsInput) error 
 			continue
 		}
 		if previousBundle, exists := input.UsedFolders[folder]; exists && previousBundle != input.BundleName {
-			return fmt.Errorf("sanitized bundle folder collision: %q and %q both map to %q", previousBundle, input.BundleName, folder)
+			return fmt.Errorf("%w: %q and %q both map to %q", errExportBundleFolderCollision, previousBundle, input.BundleName, folder)
 		}
 		input.UsedFolders[folder] = input.BundleName
 

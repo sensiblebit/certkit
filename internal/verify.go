@@ -14,6 +14,11 @@ import (
 	"github.com/sensiblebit/certkit"
 )
 
+var (
+	errVerifyInputNil = errors.New("verify input is nil")
+	errVerifyCertNil  = errors.New("certificate is nil")
+)
+
 // VerifyInput holds the parsed certificate data and verification options.
 type VerifyInput struct {
 	Cert                 *x509.Certificate
@@ -90,10 +95,10 @@ type VerifyResult struct {
 // VerifyCert verifies a certificate with optional key matching, chain validation, and expiry checking.
 func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) {
 	if input == nil {
-		return nil, errors.New("verify input is nil")
+		return nil, errVerifyInputNil
 	}
 	if input.Cert == nil {
-		return nil, errors.New("certificate is nil")
+		return nil, errVerifyCertNil
 	}
 
 	cert := input.Cert

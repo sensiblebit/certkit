@@ -2029,7 +2029,8 @@ func TestValidateAIAURL(t *testing.T) {
 				if tt.errSub != "" && !strings.Contains(err.Error(), tt.errSub) {
 					t.Errorf("error = %v, want substring %q", err, tt.errSub)
 				}
-			} else {
+			}
+			if !tt.wantErr {
 				if err != nil {
 					t.Errorf("unexpected error for %q: %v", tt.url, err)
 				}

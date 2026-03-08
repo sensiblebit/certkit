@@ -11,6 +11,11 @@ import (
 	"github.com/sensiblebit/certkit"
 )
 
+var (
+	errCSRSourceCountInvalid = errors.New("exactly one of --template, --cert, or --from-csr must be specified")
+	errCSRKeyNotSigner       = errors.New("private key does not implement crypto.Signer")
+)
+
 // CSROptions holds parameters for CSR generation from various sources.
 type CSROptions struct {
 	TemplatePath string // JSON template file
@@ -51,7 +56,7 @@ func GenerateCSRFiles(opts CSROptions) (*CSRResult, error) {
 		sources++
 	}
 	if sources != 1 {
-		return nil, errors.New("exactly one of --template, --cert, or --from-csr must be specified")
+		return nil, errCSRSourceCountInvalid
 	}
 
 	// Load or generate key
@@ -69,7 +74,7 @@ func GenerateCSRFiles(opts CSROptions) (*CSRResult, error) {
 		var ok bool
 		signer, ok = key.(crypto.Signer)
 		if !ok {
-			return nil, errors.New("private key does not implement crypto.Signer")
+			return nil, errCSRKeyNotSigner
 		}
 	} else {
 		var err error

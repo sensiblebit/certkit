@@ -5,9 +5,15 @@ import (
 	"crypto/ed25519"
 	"crypto/rsa"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
+)
+
+var (
+	errBundleFolderNameEmpty   = errors.New("bundle folder name is empty")
+	errBundleFolderNameInvalid = errors.New("bundle folder name is invalid")
 )
 
 // derExtensions contains file extensions that may hold ASN.1/DER-encoded crypto
@@ -135,10 +141,10 @@ func SanitizeFileName(name string) string {
 func SanitizeBundleFolder(name string) (string, error) {
 	sanitized := SanitizeFileName(strings.TrimSpace(name))
 	if sanitized == "" {
-		return "", fmt.Errorf("bundle folder name is empty")
+		return "", errBundleFolderNameEmpty
 	}
 	if sanitized == "." || sanitized == ".." {
-		return "", fmt.Errorf("bundle folder name %q is invalid", sanitized)
+		return "", fmt.Errorf("%w: %q", errBundleFolderNameInvalid, sanitized)
 	}
 	return sanitized, nil
 }

@@ -24,6 +24,9 @@ var (
 	bundleForce               bool
 	bundleAllowPrivateNetwork bool
 	bundleTrustStore          string
+	errBundleExportPassword   = errors.New("PKCS#12/JKS export requires an explicit password")
+	errBundleP12RequiresKey   = errors.New("p12 output requires a private key (use --key)")
+	errBundleJKSRequiresKey   = errors.New("jks output requires a private key (use --key)")
 )
 
 const defaultExportPassword = "changeit"
@@ -266,10 +269,10 @@ func formatBundleOutput(input formatBundleOutputInput) ([]byte, error) {
 
 	case "p12":
 		if input.key == nil {
-			return nil, fmt.Errorf("p12 output requires a private key (use --key)")
+			return nil, errBundleP12RequiresKey
 		}
 		if input.exportPassword == "" {
-			return nil, errors.New("PKCS#12/JKS export requires an explicit password")
+			return nil, errBundleExportPassword
 		}
 		p12, err := certkit.EncodePKCS12(input.key, input.bundle.Leaf, input.bundle.Intermediates, input.exportPassword)
 		if err != nil {
@@ -279,10 +282,10 @@ func formatBundleOutput(input formatBundleOutputInput) ([]byte, error) {
 
 	case "jks":
 		if input.key == nil {
-			return nil, fmt.Errorf("jks output requires a private key (use --key)")
+			return nil, errBundleJKSRequiresKey
 		}
 		if input.exportPassword == "" {
-			return nil, errors.New("PKCS#12/JKS export requires an explicit password")
+			return nil, errBundleExportPassword
 		}
 		jks, err := certkit.EncodeJKS(input.key, input.bundle.Leaf, input.bundle.Intermediates, input.exportPassword)
 		if err != nil {

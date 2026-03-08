@@ -12,7 +12,13 @@ import (
 )
 
 // ErrCAKeyMismatch indicates the signing CA private key does not match the CA certificate.
-var ErrCAKeyMismatch = errors.New("CA key does not match CA certificate")
+var (
+	ErrCAKeyMismatch       = errors.New("CA key does not match CA certificate")
+	errSelfSignedSignerNil = errors.New("creating self-signed certificate: signer is required")
+	errSignCSRNilCSR       = errors.New("signing CSR: CSR is required")
+	errSignCSRNilCACert    = errors.New("signing CSR: CA certificate is required")
+	errSignCSRNilCAKey     = errors.New("signing CSR: CA key is required")
+)
 
 // SelfSignedInput contains parameters for self-signed certificate generation.
 type SelfSignedInput struct {
@@ -31,7 +37,7 @@ type SelfSignedInput struct {
 // IsCA is true, and KeyUsageDigitalSignature otherwise.
 func CreateSelfSigned(input SelfSignedInput) (*x509.Certificate, error) {
 	if input.Signer == nil {
-		return nil, fmt.Errorf("creating self-signed certificate: signer is required")
+		return nil, errSelfSignedSignerNil
 	}
 	days := input.Days
 	if days <= 0 {
@@ -91,13 +97,13 @@ type SignCSRInput struct {
 // and key. Returns the issued certificate.
 func SignCSR(input SignCSRInput) (*x509.Certificate, error) {
 	if input.CSR == nil {
-		return nil, fmt.Errorf("signing CSR: CSR is required")
+		return nil, errSignCSRNilCSR
 	}
 	if input.CACert == nil {
-		return nil, fmt.Errorf("signing CSR: CA certificate is required")
+		return nil, errSignCSRNilCACert
 	}
 	if input.CAKey == nil {
-		return nil, fmt.Errorf("signing CSR: CA key is required")
+		return nil, errSignCSRNilCAKey
 	}
 	caKeyMatches, err := KeyMatchesCert(input.CAKey, input.CACert)
 	if err != nil {

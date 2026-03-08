@@ -1,12 +1,18 @@
 package internal
 
 import (
+	"errors"
 	"fmt"
 	"io/fs"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
+)
+
+var (
+	errScanRootPathRequired = errors.New("root path is required")
+	errScanFileHandlerNil   = errors.New("file handler is required")
 )
 
 // WalkScanFilesInput configures WalkScanFiles.
@@ -19,10 +25,10 @@ type WalkScanFilesInput struct {
 // WalkScanFiles iterates scan-eligible files under RootPath.
 func WalkScanFiles(input WalkScanFilesInput) error {
 	if input.RootPath == "" {
-		return fmt.Errorf("root path is required")
+		return errScanRootPathRequired
 	}
 	if input.OnFile == nil {
-		return fmt.Errorf("file handler is required")
+		return errScanFileHandlerNil
 	}
 
 	info, err := os.Stat(input.RootPath)
