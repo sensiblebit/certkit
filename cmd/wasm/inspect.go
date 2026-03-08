@@ -15,6 +15,11 @@ import (
 	"github.com/sensiblebit/certkit/internal"
 )
 
+type inspectResponse struct {
+	Results []internal.InspectResult `json:"results"`
+	Warning string                   `json:"warning,omitempty"`
+}
+
 // inspectFiles performs stateless inspection of certificate, key, and CSR data.
 // Unlike addFiles, it does not accumulate into the global MemStore.
 // JS signature: certkitInspect(files: Array<{name: string, data: Uint8Array}>, passwords: string, allowPrivateNetwork?: boolean) → Promise<string>
@@ -78,6 +83,7 @@ func inspectFiles(_ js.Value, args []js.Value) any {
 				})
 				if err != nil {
 					if isWASMTotalInputBytesExceeded(err) {
+						slog.Debug("skipping file during inspect due to total upload size limit", "name", name, "index", i, "error", err)
 						overflowSkipped++
 						continue
 					}
@@ -116,7 +122,12 @@ func inspectFiles(_ js.Value, args []js.Value) any {
 				slog.Debug("trust annotation failed", "error", err)
 			}
 
-			jsonBytes, err := json.Marshal(allResults)
+			resp := inspectResponse{Results: allResults}
+			if overflowSkipped > 0 {
+				resp.Warning = wasmTotalInputBytesExceededMessage(overflowSkipped)
+			}
+
+			jsonBytes, err := json.Marshal(resp)
 			if err != nil {
 				reject.Invoke(js.Global().Get("Error").New("marshaling inspect results: " + err.Error()))
 				return

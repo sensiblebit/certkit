@@ -28,7 +28,7 @@ const (
 	wasmMaxInputTotalBytes = 50 * 1024 * 1024
 )
 
-var errWASMTotalInputBytesExceeded = errors.New("total upload exceeds max size")
+var errWASMTotalInputBytesExceeded = errors.New("total upload size limit exceeded")
 
 func isWASMTotalInputBytesExceeded(err error) bool {
 	return errors.Is(err, errWASMTotalInputBytesExceeded)
@@ -85,7 +85,11 @@ func readWASMFileData(input readWASMFileDataInput) ([]byte, error) {
 
 	nextTotal := *input.TotalBytes + int64(size)
 	if nextTotal > wasmMaxInputTotalBytes {
-		return nil, fmt.Errorf("%w (%d bytes)", errWASMTotalInputBytesExceeded, wasmMaxInputTotalBytes)
+		return nil, fmt.Errorf(
+			"wasm total upload exceeds max size (%d bytes): %w",
+			wasmMaxInputTotalBytes,
+			errWASMTotalInputBytesExceeded,
+		)
 	}
 
 	data := make([]byte, size)
@@ -161,6 +165,7 @@ func addFiles(_ js.Value, args []js.Value) any {
 				})
 				if err != nil {
 					if isWASMTotalInputBytesExceeded(err) {
+						slog.Debug("skipping file due to total upload size limit", "name", name, "index", i, "error", err)
 						overflowSkipped++
 						continue
 					}

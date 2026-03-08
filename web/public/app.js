@@ -437,7 +437,7 @@ async function processInspectFiles(files) {
 
 async function inspectFileObjects(fileObjects) {
   processing = true;
-  showInspectStatus("Inspecting...", false);
+  showInspectStatus("Inspecting...", false, true);
 
   try {
     const resultJSON = await certkitInspect(
@@ -445,15 +445,21 @@ async function inspectFileObjects(fileObjects) {
       inspectPasswordsInput.value.trim(),
       inspectAllowPrivateNetwork.checked,
     );
-    const results = JSON.parse(resultJSON);
+    const payload = JSON.parse(resultJSON);
+    const results = Array.isArray(payload) ? payload : payload.results || [];
+    const warning = Array.isArray(payload) ? "" : payload.warning || "";
 
     if (!results || results.length === 0) {
       showInspectStatus("No certificates, keys, or CSRs found in input.", true);
       return;
     }
 
-    hideInspectStatus();
     renderInspectResults(results);
+    if (warning) {
+      showInspectStatus(warning, false, false);
+      return;
+    }
+    hideInspectStatus();
   } catch (err) {
     showInspectStatus(`Error: ${err.message}`, true);
   } finally {
@@ -573,13 +579,15 @@ function metaRow(label, value, mono = false) {
 
 // --- Inspect Status Helpers ---
 
-function showInspectStatus(message, isError = false) {
+function showInspectStatus(message, isError = false, isProcessing = false) {
   inspectStatusBar.hidden = false;
   inspectStatusText.textContent = message;
   inspectStatusBar.className = "status-bar";
   if (isError) inspectStatusBar.style.color = "var(--danger)";
-  else {
+  else if (isProcessing) {
     inspectStatusBar.classList.add("processing");
+    inspectStatusBar.style.color = "";
+  } else {
     inspectStatusBar.style.color = "";
   }
 }

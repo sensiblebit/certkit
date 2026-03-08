@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Normalize `connect` verify status labels from `OK`/`FAILED` to lowercase `ok`/`failed`. ([#112])
 - Consolidate shared `connect` status-line formatting between standard and verbose text output paths. ([#121])
 - Centralize pre-commit hooks under the shared `sensiblebit/.github` hook set (including shared `markdownlint`) and run dependency update hooks first; refresh resulting indirect Go and web lockfile dependencies. ([#128])
+- Remove the arbitrary 200-file cap from WASM upload and inspect flows; rely on byte limits instead. ([#129])
 
 ### Added
 
@@ -30,7 +31,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Remove the arbitrary 200-file cap from WASM upload and inspect flows; rely on byte limits instead. ([#129])
 - Make `scan --bundle-path` skip untrusted/verification-failing bundle candidates instead of aborting the full export run. ([#112])
 - Improve scan summaries by adding `in <files> file(s)` and live TTY progress updates for certificates/keys/files. ([#112])
 - Send live scan progress updates to stderr so stdout remains clean for piped output. ([#112])
