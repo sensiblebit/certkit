@@ -14,65 +14,76 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-func TestRunProbeSSH_Text(t *testing.T) {
+func TestRunProbeSSH(t *testing.T) {
 	addr := startProbeSSHServer(t)
 	state := snapshotReadonlyGlobals()
 	t.Cleanup(func() { restoreReadonlyGlobals(state) })
-	jsonOutput = false
 
-	cmd := &cobra.Command{}
-	cmd.SetContext(context.Background())
-	stdout, _, err := captureOutput(t, func() error {
-		return runProbeSSH(cmd, []string{addr})
-	})
-	if err != nil {
-		t.Fatalf("runProbeSSH: %v", err)
-	}
-	for _, want := range []string{
-		"Protocol:     SSH 2.0",
-		"Banner:       SSH-2.0-certkit-cmd-test",
-		"Key Exchange",
-		"Host Keys",
-		"Ciphers (",
-	} {
-		if !strings.Contains(stdout, want) {
-			t.Fatalf("stdout missing %q:\n%s", want, stdout)
-		}
-	}
-}
+	tests := []struct {
+		name       string
+		jsonOutput bool
+		check      func(t *testing.T, stdout string)
+	}{
+		{
+			name:       "text",
+			jsonOutput: false,
+			check: func(t *testing.T, stdout string) {
+				t.Helper()
+				for _, want := range []string{
+					"Protocol:     SSH 2.0",
+					"Banner:       SSH-2.0-certkit-cmd-test",
+					"Key Exchange",
+					"Host Keys",
+					"Ciphers (",
+				} {
+					if !strings.Contains(stdout, want) {
+						t.Fatalf("stdout missing %q:\n%s", want, stdout)
+					}
+				}
+			},
+		},
+		{
+			name:       "json",
+			jsonOutput: true,
+			check: func(t *testing.T, stdout string) {
+				t.Helper()
 
-func TestRunProbeSSH_JSON(t *testing.T) {
-	addr := startProbeSSHServer(t)
-	state := snapshotReadonlyGlobals()
-	t.Cleanup(func() { restoreReadonlyGlobals(state) })
-	jsonOutput = true
-
-	cmd := &cobra.Command{}
-	cmd.SetContext(context.Background())
-	stdout, _, err := captureOutput(t, func() error {
-		return runProbeSSH(cmd, []string{addr})
-	})
-	if err != nil {
-		t.Fatalf("runProbeSSH: %v", err)
+				var payload struct {
+					Protocol              string   `json:"protocol"`
+					Banner                string   `json:"banner"`
+					HostKeyAlgorithms     []string `json:"host_key_algorithms"`
+					KeyExchangeAlgorithms []string `json:"key_exchange_algorithms"`
+				}
+				if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+					t.Fatalf("Unmarshal JSON: %v\n%s", err, stdout)
+				}
+				if payload.Protocol != "SSH 2.0" {
+					t.Fatalf("Protocol = %q, want %q", payload.Protocol, "SSH 2.0")
+				}
+				if !strings.HasPrefix(payload.Banner, "SSH-2.0-certkit-cmd-test") {
+					t.Fatalf("Banner = %q, want test SSH banner", payload.Banner)
+				}
+				if len(payload.HostKeyAlgorithms) == 0 || len(payload.KeyExchangeAlgorithms) == 0 {
+					t.Fatalf("unexpected empty algorithm lists: %+v", payload)
+				}
+			},
+		},
 	}
 
-	var payload struct {
-		Protocol              string   `json:"protocol"`
-		Banner                string   `json:"banner"`
-		HostKeyAlgorithms     []string `json:"host_key_algorithms"`
-		KeyExchangeAlgorithms []string `json:"key_exchange_algorithms"`
-	}
-	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
-		t.Fatalf("Unmarshal JSON: %v\n%s", err, stdout)
-	}
-	if payload.Protocol != "SSH 2.0" {
-		t.Fatalf("Protocol = %q, want %q", payload.Protocol, "SSH 2.0")
-	}
-	if !strings.HasPrefix(payload.Banner, "SSH-2.0-certkit-cmd-test") {
-		t.Fatalf("Banner = %q, want test SSH banner", payload.Banner)
-	}
-	if len(payload.HostKeyAlgorithms) == 0 || len(payload.KeyExchangeAlgorithms) == 0 {
-		t.Fatalf("unexpected empty algorithm lists: %+v", payload)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			jsonOutput = tt.jsonOutput
+
+			cmd := &cobra.Command{}
+			cmd.SetContext(context.Background())
+			stdout, _, err := captureOutput(t, func() error {
+				return runProbeSSH(cmd, []string{addr})
+			})
+			if err != nil {
+				t.Fatalf("runProbeSSH: %v", err)
+			}
+			tt.check(t, stdout)
+		})
 	}
 }
 
