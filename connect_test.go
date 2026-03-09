@@ -832,11 +832,14 @@ func TestScanCipherSuites_StartTLSSMTPPreflightDeadlineReset(t *testing.T) {
 
 	ca := generateTestCA(t, "SMTP Preflight Deadline Root")
 	leaf := generateTestLeafCert(t, ca)
-	port := startSMTPStartTLSServerWithFirstConnectionDelays(
+	port := startSMTPStartTLSServerWithFirstConnectionBehavior(
 		t,
-		"220 localhost ESMTP delayed\r\n",
-		900*time.Millisecond,
-		200*time.Millisecond,
+		smtpFirstConnectionBehavior{
+			bannerWrites: []smtpBannerWrite{
+				{delay: 900 * time.Millisecond, text: "220 localhost ESMTP delayed\r\n"},
+			},
+			ehloDelay: 200 * time.Millisecond,
+		},
 		[][]byte{leaf.DER, ca.CertDER},
 		leaf.Key,
 	)
@@ -854,6 +857,39 @@ func TestScanCipherSuites_StartTLSSMTPPreflightDeadlineReset(t *testing.T) {
 	}
 	if len(result.Ciphers) == 0 {
 		t.Fatal("expected SMTP STARTTLS preflight to recover after deadline reset")
+	}
+}
+
+func TestScanCipherSuites_StartTLSSMTPFragmentedBanner(t *testing.T) {
+	t.Parallel()
+
+	ca := generateTestCA(t, "SMTP Fragmented Banner Root")
+	leaf := generateTestLeafCert(t, ca)
+	port := startSMTPStartTLSServerWithFirstConnectionBehavior(
+		t,
+		smtpFirstConnectionBehavior{
+			bannerWrites: []smtpBannerWrite{
+				{text: "220"},
+				{delay: 100 * time.Millisecond, text: " localhost ESMTP fragmented\r\n"},
+			},
+		},
+		[][]byte{leaf.DER, ca.CertDER},
+		leaf.Key,
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	result, err := ScanCipherSuites(ctx, ScanCipherSuitesInput{
+		Host:       "127.0.0.1",
+		Port:       port,
+		ServerName: "localhost",
+	})
+	if err != nil {
+		t.Fatalf("ScanCipherSuites failed: %v", err)
+	}
+	if len(result.Ciphers) == 0 {
+		t.Fatal("expected SMTP STARTTLS preflight to assemble fragmented banner")
 	}
 }
 
@@ -1096,7 +1132,17 @@ func startSMTPStartTLSServer(t *testing.T, banner string, certChain [][]byte, ke
 	return port
 }
 
-func startSMTPStartTLSServerWithFirstConnectionDelays(t *testing.T, banner string, bannerDelay, ehloDelay time.Duration, certChain [][]byte, key *ecdsa.PrivateKey) string {
+type smtpBannerWrite struct {
+	delay time.Duration
+	text  string
+}
+
+type smtpFirstConnectionBehavior struct {
+	bannerWrites []smtpBannerWrite
+	ehloDelay    time.Duration
+}
+
+func startSMTPStartTLSServerWithFirstConnectionBehavior(t *testing.T, behavior smtpFirstConnectionBehavior, certChain [][]byte, key *ecdsa.PrivateKey) string {
 	t.Helper()
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -1122,10 +1168,10 @@ func startSMTPStartTLSServerWithFirstConnectionDelays(t *testing.T, banner strin
 				return
 			}
 			if connCount.Add(1) == 1 {
-				go handleDelayedCustomSMTPUpgradeConn(conn, banner, bannerDelay, ehloDelay, tlsConfig)
+				go handleBehaviorSMTPUpgradeConn(conn, behavior, tlsConfig)
 				continue
 			}
-			go handleCustomSMTPUpgradeConn(conn, banner, tlsConfig)
+			go handleCustomSMTPUpgradeConn(conn, "220 localhost ESMTP test\r\n", tlsConfig)
 		}
 	}()
 
@@ -1168,13 +1214,15 @@ func handleCustomSMTPUpgradeConn(conn net.Conn, banner string, tlsConfig *tls.Co
 	handleSMTPUpgrade(conn, reader, tlsConfig)
 }
 
-func handleDelayedCustomSMTPUpgradeConn(conn net.Conn, banner string, bannerDelay, ehloDelay time.Duration, tlsConfig *tls.Config) {
+func handleBehaviorSMTPUpgradeConn(conn net.Conn, behavior smtpFirstConnectionBehavior, tlsConfig *tls.Config) {
 	defer func() { _ = conn.Close() }()
 
 	reader := bufio.NewReader(conn)
-	time.Sleep(bannerDelay)
-	if _, err := conn.Write([]byte(banner)); err != nil {
-		return
+	for _, write := range behavior.bannerWrites {
+		time.Sleep(write.delay)
+		if _, err := conn.Write([]byte(write.text)); err != nil {
+			return
+		}
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 
@@ -1182,7 +1230,7 @@ func handleDelayedCustomSMTPUpgradeConn(conn net.Conn, banner string, bannerDela
 	if err != nil || !strings.HasPrefix(strings.ToUpper(line), "EHLO ") {
 		return
 	}
-	time.Sleep(ehloDelay)
+	time.Sleep(behavior.ehloDelay)
 	if _, err := conn.Write([]byte("250-localhost\r\n250-STARTTLS\r\n250 SIZE 35882577\r\n")); err != nil {
 		return
 	}

@@ -437,8 +437,10 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 		// rejection, which only occurs when clientAuth is non-nil.
 		_ = tlsConn.Close()
 		prefix := sniffConn.prefix()
+		startTLSCtx, startTLSCancel := startTLSFallbackContext(ctx, input.ConnectTimeout)
+		defer startTLSCancel()
 		if detectedProtocol, ok := detectStartTLSProtocol(addr, prefix); ok {
-			result, startTLSErr := connectViaStartTLS(connectCtx, connectViaStartTLSInput{
+			result, startTLSErr := connectViaStartTLS(startTLSCtx, connectViaStartTLSInput{
 				connectInput: input,
 				addr:         addr,
 				serverName:   serverName,
@@ -450,7 +452,7 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 			return result, nil
 		}
 		if matchesGenericSMTPBanner(firstBannerLine(prefix)) {
-			result, startTLSErr := connectViaStartTLS(connectCtx, connectViaStartTLSInput{
+			result, startTLSErr := connectViaStartTLS(startTLSCtx, connectViaStartTLSInput{
 				connectInput: input,
 				addr:         addr,
 				serverName:   serverName,
@@ -462,7 +464,7 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 			return nil, fmt.Errorf("STARTTLS with %s: %w", addr, startTLSErr)
 		}
 		if port == "389" && len(prefix) == 0 {
-			result, startTLSErr := connectViaStartTLS(connectCtx, connectViaStartTLSInput{
+			result, startTLSErr := connectViaStartTLS(startTLSCtx, connectViaStartTLSInput{
 				connectInput: input,
 				addr:         addr,
 				serverName:   serverName,
@@ -505,6 +507,18 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 
 	result.populate(ctx, input)
 	return result, nil
+}
+
+func startTLSFallbackContext(parent context.Context, connectTimeout time.Duration) (context.Context, context.CancelFunc) {
+	if _, hasDeadline := parent.Deadline(); hasDeadline {
+		return parent, func() {}
+	}
+	if connectTimeout == 0 {
+		connectTimeout = defaultConnectTimeout
+	}
+	//nolint:gosec // The caller receives and must invoke the returned cancel func.
+	ctx, cancel := context.WithTimeout(parent, connectTimeout)
+	return ctx, cancel
 }
 
 // populate runs chain diagnostics, verification, OCSP, and CRL checks on the
@@ -791,10 +805,8 @@ func detectScanStartTLSProtocol(ctx context.Context, addr string) startTLSProtoc
 	if err := conn.SetReadDeadline(time.Now().Add(readTimeout)); err != nil {
 		slog.Debug("detect STARTTLS protocol: setting initial read deadline", "addr", addr, "error", err)
 	}
-
-	buf := make([]byte, nonTLSPeekLimit)
-	n, err := conn.Read(buf)
-	if n <= 0 {
+	prefix, err := readBannerPrefix(conn)
+	if len(prefix) == 0 {
 		if ldapPort(addr) {
 			if err := conn.SetReadDeadline(time.Now().Add(readTimeout)); err != nil {
 				slog.Debug("detect STARTTLS protocol: resetting LDAP read deadline", "addr", addr, "error", err)
@@ -805,18 +817,18 @@ func detectScanStartTLSProtocol(ctx context.Context, addr string) startTLSProtoc
 		}
 		return ""
 	}
-	protocol, ok := detectStartTLSProtocol(addr, buf[:n])
+	protocol, ok := detectStartTLSProtocol(addr, prefix)
 	if ok {
 		if err != nil && !errors.Is(err, io.EOF) {
 			slog.Debug("detect STARTTLS protocol: ignoring trailing read error", "addr", addr, "error", err)
 		}
 		return protocol
 	}
-	if matchesGenericSMTPBanner(firstBannerLine(buf[:n])) {
+	if matchesGenericSMTPBanner(firstBannerLine(prefix)) {
 		if err := conn.SetReadDeadline(time.Now().Add(readTimeout)); err != nil {
 			slog.Debug("detect STARTTLS protocol: resetting SMTP read deadline", "addr", addr, "error", err)
 		}
-		if detectSMTPStartTLS(conn, buf[:n]) {
+		if detectSMTPStartTLS(conn, prefix) {
 			return startTLSProtocolSMTP
 		}
 	}
@@ -826,6 +838,28 @@ func detectScanStartTLSProtocol(ctx context.Context, addr string) startTLSProtoc
 func ldapPort(addr string) bool {
 	_, port, err := net.SplitHostPort(addr)
 	return err == nil && port == "389"
+}
+
+func readBannerPrefix(conn net.Conn) ([]byte, error) {
+	prefix := make([]byte, 0, nonTLSPeekLimit)
+	buf := make([]byte, 64)
+	for len(prefix) < nonTLSPeekLimit {
+		readBuf := buf[:min(len(buf), nonTLSPeekLimit-len(prefix))]
+		n, err := conn.Read(readBuf)
+		if n > 0 {
+			prefix = append(prefix, readBuf[:n]...)
+			if bytes.Contains(prefix, []byte{'\n'}) {
+				if err != nil {
+					return prefix, fmt.Errorf("reading STARTTLS banner: %w", err)
+				}
+				return prefix, nil
+			}
+		}
+		if err != nil {
+			return prefix, fmt.Errorf("reading STARTTLS banner: %w", err)
+		}
+	}
+	return prefix, nil
 }
 
 type connectViaStartTLSInput struct {
