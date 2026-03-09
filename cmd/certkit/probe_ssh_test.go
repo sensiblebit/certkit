@@ -77,7 +77,7 @@ func TestRunProbeSSH(t *testing.T) {
 			// snapshotReadonlyGlobals serializes tests that mutate package-level
 			// Cobra flag state such as jsonOutput.
 			state := snapshotReadonlyGlobals()
-			t.Cleanup(func() { restoreReadonlyGlobals(state) })
+			defer restoreReadonlyGlobals(state)
 
 			jsonOutput = tt.jsonOutput
 

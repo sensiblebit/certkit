@@ -19,6 +19,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+// readonlyGlobalsMu serializes tests that mutate package-level Cobra flag
+// globals so each command under test sees a stable flag snapshot.
 var readonlyGlobalsMu sync.Mutex
 
 type readonlyGlobals struct {
@@ -48,7 +50,13 @@ type readonlyGlobals struct {
 	connectCRL                 bool
 	connectNoOCSP              bool
 	connectCiphers             bool
+	connectFIPS1402            bool
+	connectFIPS1403            bool
 	connectAllowPrivateNetwork bool
+
+	// probe ssh flags
+	probeSSHFIPS1402 bool
+	probeSSHFIPS1403 bool
 
 	// verify flags
 	verifyKeyPath             string
@@ -92,7 +100,12 @@ func snapshotReadonlyGlobals() readonlyGlobals {
 		connectCRL:                 connectCRL,
 		connectNoOCSP:              connectNoOCSP,
 		connectCiphers:             connectCiphers,
+		connectFIPS1402:            connectFIPS1402,
+		connectFIPS1403:            connectFIPS1403,
 		connectAllowPrivateNetwork: connectAllowPrivateNetwork,
+
+		probeSSHFIPS1402: probeSSHFIPS1402,
+		probeSSHFIPS1403: probeSSHFIPS1403,
 
 		verifyKeyPath:             verifyKeyPath,
 		verifyExpiry:              verifyExpiry,
@@ -132,7 +145,12 @@ func restoreReadonlyGlobals(g readonlyGlobals) {
 	connectCRL = g.connectCRL
 	connectNoOCSP = g.connectNoOCSP
 	connectCiphers = g.connectCiphers
+	connectFIPS1402 = g.connectFIPS1402
+	connectFIPS1403 = g.connectFIPS1403
 	connectAllowPrivateNetwork = g.connectAllowPrivateNetwork
+
+	probeSSHFIPS1402 = g.probeSSHFIPS1402
+	probeSSHFIPS1403 = g.probeSSHFIPS1403
 
 	verifyKeyPath = g.verifyKeyPath
 	verifyExpiry = g.verifyExpiry
@@ -235,7 +253,9 @@ func newCommandWithContext() *cobra.Command {
 
 func TestRunScan_CommandSurface(t *testing.T) {
 	snap := snapshotReadonlyGlobals()
-	t.Cleanup(func() { restoreReadonlyGlobals(snap) })
+	// These command tests intentionally serialize the full test body because
+	// they mutate package-level Cobra flag state shared across commands.
+	defer restoreReadonlyGlobals(snap)
 
 	dir := t.TempDir()
 	_, cert := generateKeyAndCert(t, "scan.example.com", false)
@@ -296,7 +316,7 @@ func TestRunScan_CommandSurface(t *testing.T) {
 
 func TestRunInspect_CommandSurface(t *testing.T) {
 	snap := snapshotReadonlyGlobals()
-	t.Cleanup(func() { restoreReadonlyGlobals(snap) })
+	defer restoreReadonlyGlobals(snap)
 
 	dir := t.TempDir()
 	_, cert := generateKeyAndCert(t, "inspect.example.com", false)
@@ -339,7 +359,7 @@ func TestRunInspect_CommandSurface(t *testing.T) {
 
 func TestRunVerify_CommandSurfaceValidation(t *testing.T) {
 	snap := snapshotReadonlyGlobals()
-	t.Cleanup(func() { restoreReadonlyGlobals(snap) })
+	defer restoreReadonlyGlobals(snap)
 
 	dir := t.TempDir()
 	_, cert := generateKeyAndCert(t, "verify.example.com", false)
@@ -396,7 +416,7 @@ func TestRunVerify_CommandSurfaceValidation(t *testing.T) {
 
 func TestRunConnect_CommandSurfaceValidation(t *testing.T) {
 	snap := snapshotReadonlyGlobals()
-	t.Cleanup(func() { restoreReadonlyGlobals(snap) })
+	defer restoreReadonlyGlobals(snap)
 
 	server := httptest.NewTLSServer(nil)
 	t.Cleanup(server.Close)

@@ -380,6 +380,9 @@ func FormatSSHRatingLine(r *SSHProbeResult) string {
 	}
 	switch {
 	case weak == 0 && policyViolations == 0:
+		if r.Policy.Enabled() {
+			return fmt.Sprintf("Algorithms:   %s (%d weak, %d likely not authorized by %s)\n", rating, weak, policyViolations, r.Policy.DisplayName())
+		}
 		return fmt.Sprintf("Algorithms:   %s (%d weak)\n", rating, weak)
 	case !r.Policy.Enabled():
 		return fmt.Sprintf("Algorithms:   %s (%d weak)\n", rating, weak)
@@ -391,6 +394,9 @@ func FormatSSHRatingLine(r *SSHProbeResult) string {
 }
 
 func sshWeakAlgorithmCount(r *SSHProbeResult) int {
+	if r == nil {
+		return 0
+	}
 	return len(weakSSHValues(r.KeyExchangeAlgorithms, isWeakSSHKex)) +
 		len(weakSSHValues(r.HostKeyAlgorithms, isWeakSSHHostKey)) +
 		len(weakSSHValues(slices.Concat(r.CiphersClientToServer, r.CiphersServerToClient), isWeakSSHCipher)) +
@@ -801,13 +807,10 @@ type sshDisplayValuesInput struct {
 func sortSSHDisplayValues(input sshDisplayValuesInput) []string {
 	sorted := slices.Clone(input.values)
 	slices.SortStableFunc(sorted, func(a, b string) int {
-		if c := cmp.Compare(
+		return cmp.Compare(
 			sshAlgorithmStatusRank(sshAlgorithmStatusInput{value: a, config: input.config}),
 			sshAlgorithmStatusRank(sshAlgorithmStatusInput{value: b, config: input.config}),
-		); c != 0 {
-			return c
-		}
-		return 0
+		)
 	})
 	return sorted
 }

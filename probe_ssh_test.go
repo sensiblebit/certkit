@@ -221,6 +221,25 @@ func TestDiagnoseSSHProbe_FIPSPolicy(t *testing.T) {
 	}
 }
 
+func TestFormatSSHRatingLine_PolicyClean(t *testing.T) {
+	t.Parallel()
+
+	result := &SSHProbeResult{
+		Policy:                SecurityPolicyFIPS1403,
+		OverallRating:         CipherRatingGood,
+		KeyExchangeAlgorithms: []string{"ecdh-sha2-nistp256"},
+		HostKeyAlgorithms:     []string{"rsa-sha2-512"},
+		CiphersClientToServer: []string{"aes128-gcm@openssh.com"},
+		CiphersServerToClient: []string{"aes128-gcm@openssh.com"},
+		MACsClientToServer:    []string{"hmac-sha2-256"},
+		MACsServerToClient:    []string{"hmac-sha2-256"},
+	}
+
+	if got := FormatSSHRatingLine(result); !strings.Contains(got, "0 weak, 0 likely not authorized by FIPS 140-3") {
+		t.Fatalf("FormatSSHRatingLine() = %q, want explicit policy-clean summary", got)
+	}
+}
+
 func TestFormatSSHProbeResult_FIPSTags(t *testing.T) {
 	t.Parallel()
 
