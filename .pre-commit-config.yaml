@@ -1,6 +1,6 @@
 repos:
   - repo: https://github.com/sensiblebit/.github
-    rev: "ddffb3a8d3bc086e7f51cec776d94d3ef21755c7"
+    rev: "ad268a51ad8ce705d2e1d4010700a334ea3ea3f9"
     hooks:
       - id: branch-name
       - id: commit-message
@@ -13,6 +13,7 @@ repos:
       - id: prettier
       - id: markdownlint
         args: [--config, .markdownlint.yaml]
+      - id: actionlint
       - id: go-vet
       - id: golangci-lint
       - id: govulncheck
