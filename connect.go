@@ -1373,8 +1373,23 @@ func protocolDisplayName(protocol startTLSProtocol) string {
 	}
 }
 
+func startTLSCommandDisplayName(protocol startTLSProtocol) string {
+	switch protocol {
+	case startTLSProtocolSMTP:
+		return "STARTTLS"
+	case startTLSProtocolIMAP:
+		return "STARTTLS"
+	case startTLSProtocolPOP3:
+		return "STLS"
+	case startTLSProtocolLDAP:
+		return "StartTLS"
+	default:
+		return "STARTTLS"
+	}
+}
+
 func formatProtocolWithStartTLS(protocol string, startTLS startTLSProtocol) string {
-	return fmt.Sprintf("%s (%s STARTTLS)", protocol, protocolDisplayName(startTLS))
+	return fmt.Sprintf("%s (%s %s)", protocol, protocolDisplayName(startTLS), startTLSCommandDisplayName(startTLS))
 }
 
 func isMostlyPrintable(data []byte) bool {

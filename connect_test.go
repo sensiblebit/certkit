@@ -790,6 +790,30 @@ func TestConnectTLS_StartTLSProtocols(t *testing.T) {
 	}
 }
 
+func TestFormatProtocolWithStartTLS(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		protocol startTLSProtocol
+		want     string
+	}{
+		{name: "smtp", protocol: startTLSProtocolSMTP, want: "TLS 1.3 (SMTP STARTTLS)"},
+		{name: "imap", protocol: startTLSProtocolIMAP, want: "TLS 1.3 (IMAP STARTTLS)"},
+		{name: "pop3", protocol: startTLSProtocolPOP3, want: "TLS 1.3 (POP3 STLS)"},
+		{name: "ldap", protocol: startTLSProtocolLDAP, want: "TLS 1.3 (LDAP StartTLS)"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := formatProtocolWithStartTLS("TLS 1.3", tt.protocol); got != tt.want {
+				t.Fatalf("formatProtocolWithStartTLS(..., %q) = %q, want %q", tt.protocol, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestConnectTLS_StartTLSSMTPGeneric220Banner(t *testing.T) {
 	t.Parallel()
 
