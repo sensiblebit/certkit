@@ -77,6 +77,8 @@ Required push gate:
 10. Address that feedback too if needed
 11. Only then push
 
+When reporting PR comment state to the user, pull a fresh snapshot immediately before answering. Do not rely on an earlier query once more work, waiting, or other GitHub activity has happened.
+
 This audit is mandatory even if the change looks trivial. Treat it as a pre-push policy check, not an optional extra review.
 
 If the user requests a commit on a branch that already has a PR open, pushing the branch is implied after the commit and after the pre-push audit passes.
@@ -121,6 +123,8 @@ For issue-style comments (PR conversation), use `minimizeComment` with the comme
 Just replying does NOT mark the thread as resolved or minimized in the GitHub UI — all three steps are required.
 
 After resolving comments, re-query the PR. Do not assume the comment queue is empty until the API shows no unresolved review threads and no unaddressed issue-style feedback.
+
+If the user asks whether there are comments, new feedback, or whether the PR is clear, fetch a fresh PR comment snapshot right before answering. Do not answer from memory or from an older query result.
 
 ## Merging PRs
 
