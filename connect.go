@@ -778,12 +778,13 @@ func dialProbeConn(ctx context.Context, input cipherProbeInput) (net.Conn, error
 }
 
 func detectScanStartTLSProtocol(ctx context.Context, addr string) startTLSProtocol {
-	detectCtx := ctx
-	if _, ok := ctx.Deadline(); !ok {
-		var cancel context.CancelFunc
-		detectCtx, cancel = context.WithTimeout(ctx, startTLSDetectTimeout)
-		defer cancel()
-	}
+	// Bound STARTTLS preflight to a short budget even when the caller supplied
+	// a much longer context deadline; the actual probe sockets carry their own
+	// per-attempt timeouts and should not wait on this sniff connection first.
+	detectDeadline := startTLSDetectDeadline(ctx, time.Now())
+	var cancel context.CancelFunc
+	detectCtx, cancel := context.WithDeadline(ctx, detectDeadline)
+	defer cancel()
 
 	// This best-effort preflight uses a separate connection to avoid coupling
 	// protocol sniffing to the later parallel probe sockets.
@@ -845,6 +846,14 @@ func detectScanStartTLSProtocol(ctx context.Context, addr string) startTLSProtoc
 		slog.Debug("detect STARTTLS protocol: ignoring unrecognized banner read error", "addr", addr, "error", err)
 	}
 	return ""
+}
+
+func startTLSDetectDeadline(ctx context.Context, now time.Time) time.Time {
+	detectDeadline := now.Add(startTLSDetectTimeout)
+	if deadline, ok := ctx.Deadline(); ok && deadline.Before(detectDeadline) {
+		return deadline
+	}
+	return detectDeadline
 }
 
 func ldapPort(addr string) bool {
@@ -969,8 +978,7 @@ func negotiateStartTLS(input negotiateStartTLSInput) error {
 }
 
 func negotiateSMTPStartTLS(reader *bufio.Reader, conn net.Conn) error {
-	greeting, err := readSMTPResponse(reader, "220")
-	if err != nil {
+	if _, err := readSMTPResponse(reader, "220"); err != nil {
 		return fmt.Errorf("reading SMTP greeting: %w", err)
 	}
 	if _, err := io.WriteString(conn, "EHLO certkit\r\n"); err != nil {
@@ -980,7 +988,7 @@ func negotiateSMTPStartTLS(reader *bufio.Reader, conn net.Conn) error {
 	if err != nil {
 		return fmt.Errorf("reading SMTP EHLO response: %w", err)
 	}
-	if !smtpAdvertisesStartTLS(append(greeting, ehloLines...)) {
+	if !smtpAdvertisesStartTLS(ehloLines) {
 		return errStartTLSSMTPUnsupported
 	}
 	if _, err := io.WriteString(conn, "STARTTLS\r\n"); err != nil {
@@ -1014,7 +1022,7 @@ func readSMTPResponse(reader *bufio.Reader, wantCode string) ([]string, error) {
 
 func smtpAdvertisesStartTLS(lines []string) bool {
 	for _, line := range lines {
-		if len(line) < 4 {
+		if len(line) < 4 || line[:3] != "250" {
 			continue
 		}
 		if strings.EqualFold(strings.TrimSpace(line[4:]), "STARTTLS") {
@@ -1313,8 +1321,7 @@ func matchesGenericSMTPBanner(banner string) bool {
 
 func detectSMTPStartTLS(conn net.Conn, prefix []byte) (bool, error) {
 	reader := bufio.NewReader(io.MultiReader(bytes.NewReader(prefix), conn))
-	greeting, err := readSMTPResponse(reader, "220")
-	if err != nil {
+	if _, err := readSMTPResponse(reader, "220"); err != nil {
 		return false, fmt.Errorf("reading SMTP greeting: %w", err)
 	}
 	if _, err := io.WriteString(conn, "EHLO certkit\r\n"); err != nil {
@@ -1324,7 +1331,7 @@ func detectSMTPStartTLS(conn net.Conn, prefix []byte) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("reading SMTP EHLO response: %w", err)
 	}
-	return smtpAdvertisesStartTLS(append(greeting, ehloLines...)), nil
+	return smtpAdvertisesStartTLS(ehloLines), nil
 }
 
 func detectLDAPStartTLS(conn net.Conn) (bool, error) {

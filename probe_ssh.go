@@ -17,10 +17,14 @@ import (
 )
 
 const (
-	defaultSSHPort          = "22"
-	maxSSHVersionLines      = 50
-	maxSSHPacketLength      = 256 * 1024
-	sshMsgKexInit      byte = 20
+	defaultSSHPort           = "22"
+	maxSSHVersionLines       = 50
+	maxSSHPacketLength       = 256 * 1024
+	maxPreKexPackets         = 8
+	sshMsgIgnore        byte = 2
+	sshMsgUnimplemented byte = 3
+	sshMsgDebug         byte = 4
+	sshMsgKexInit       byte = 20
 )
 
 var (
@@ -105,7 +109,7 @@ func ProbeSSH(ctx context.Context, input SSHProbeInput) (*SSHProbeResult, error)
 		return nil, err
 	}
 
-	payload, err := readSSHPacket(reader)
+	payload, err := readSSHKexInitPacket(reader)
 	if err != nil {
 		return nil, err
 	}
@@ -169,6 +173,35 @@ func readSSHPacket(reader *bufio.Reader) ([]byte, error) {
 		return nil, errSSHPacketMalformed
 	}
 	return payload, nil
+}
+
+func readSSHKexInitPacket(reader *bufio.Reader) ([]byte, error) {
+	for range maxPreKexPackets {
+		payload, err := readSSHPacket(reader)
+		if err != nil {
+			return nil, err
+		}
+		if len(payload) == 0 {
+			return nil, errSSHPacketMalformed
+		}
+		if payload[0] == sshMsgKexInit {
+			return payload, nil
+		}
+		if isSkippablePreKexPacket(payload[0]) {
+			continue
+		}
+		return nil, fmt.Errorf("%w: %d", errSSHUnexpectedPacket, payload[0])
+	}
+	return nil, errSSHUnexpectedPacket
+}
+
+func isSkippablePreKexPacket(msgType byte) bool {
+	switch msgType {
+	case sshMsgIgnore, sshMsgUnimplemented, sshMsgDebug:
+		return true
+	default:
+		return false
+	}
 }
 
 func parseSSHKexInit(payload []byte) (*SSHProbeResult, error) {

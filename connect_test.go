@@ -682,6 +682,55 @@ func TestDetectStartTLSProtocol_DoesNotTreatLMTPAsSMTP(t *testing.T) {
 	}
 }
 
+func TestStartTLSDetectDeadline_CapsLongerCallerDeadline(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	now := time.Now()
+	deadline := startTLSDetectDeadline(ctx, now)
+	remaining := deadline.Sub(now)
+	if remaining > startTLSDetectTimeout+100*time.Millisecond {
+		t.Fatalf("remaining detect budget = %s, want <= %s", remaining, startTLSDetectTimeout+100*time.Millisecond)
+	}
+}
+
+func TestStartTLSDetectDeadline_UsesShorterCallerDeadline(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	parentDeadline, _ := ctx.Deadline()
+	detectDeadline := startTLSDetectDeadline(ctx, time.Now())
+	if detectDeadline.After(parentDeadline.Add(10 * time.Millisecond)) {
+		t.Fatalf("detect deadline = %s, want no later than parent deadline %s", detectDeadline, parentDeadline)
+	}
+}
+
+func TestSMTPAdvertisesStartTLS_IgnoresGreetingLines(t *testing.T) {
+	t.Parallel()
+
+	lines := []string{
+		"220 mx.example.com STARTTLS mentioned in greeting",
+		"250-localhost",
+		"250 SIZE 35882577",
+	}
+	if smtpAdvertisesStartTLS(lines) {
+		t.Fatalf("smtpAdvertisesStartTLS unexpectedly matched greeting-only lines: %v", lines)
+	}
+
+	advertised := []string{
+		"250-localhost",
+		"250-STARTTLS",
+		"250 SIZE 35882577",
+	}
+	if !smtpAdvertisesStartTLS(advertised) {
+		t.Fatalf("smtpAdvertisesStartTLS failed to detect advertised STARTTLS in: %v", advertised)
+	}
+}
+
 func TestConnectTLS_StartTLSProtocols(t *testing.T) {
 	// WHY: ConnectTLS should opportunistically upgrade known plaintext
 	// protocols after a direct TLS probe proves the endpoint is not implicit TLS.
@@ -764,6 +813,35 @@ func TestConnectTLS_StartTLSSMTPGeneric220Banner(t *testing.T) {
 	}
 	if !strings.Contains(result.Protocol, "SMTP STARTTLS") {
 		t.Fatalf("Protocol = %q, want SMTP STARTTLS", result.Protocol)
+	}
+}
+
+func TestConnectTLS_SMTPGreetingMentionsStartTLSWithoutEHLOCapability(t *testing.T) {
+	t.Parallel()
+
+	port := startSMTPServerWithEHLOResponse(
+		t,
+		"220 mx.example.com STARTTLS mentioned in greeting\r\n",
+		"250-localhost\r\n250 SIZE 35882577\r\n",
+		nil,
+		nil,
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err := ConnectTLS(ctx, ConnectTLSInput{
+		Host: "127.0.0.1",
+		Port: port,
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, errConnectNonTLSService) {
+		t.Fatalf("error = %v, want errConnectNonTLSService", err)
+	}
+	if strings.Contains(err.Error(), "STARTTLS with") {
+		t.Fatalf("error = %q, want non-TLS fallback instead of STARTTLS failure", err.Error())
 	}
 }
 
@@ -1190,6 +1268,44 @@ func startSMTPStartTLSServer(t *testing.T, banner string, certChain [][]byte, ke
 	return port
 }
 
+func startSMTPServerWithEHLOResponse(t *testing.T, banner, ehloResponse string, certChain [][]byte, key *ecdsa.PrivateKey) string {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	var tlsConfig *tls.Config
+	if len(certChain) > 0 && key != nil {
+		//nolint:gosec // Test plaintext-upgrade fixtures use the Go default test-server policy unless a test overrides it explicitly.
+		tlsConfig = &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			Certificates: []tls.Certificate{{
+				Certificate: certChain,
+				PrivateKey:  key,
+			}},
+		}
+	}
+
+	go func() {
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go handleSMTPUpgradeWithEHLOResponse(conn, banner, ehloResponse, tlsConfig)
+		}
+	}()
+
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return port
+}
+
 type smtpBannerWrite struct {
 	delay time.Duration
 	text  string
@@ -1305,6 +1421,35 @@ func handleCustomSMTPUpgradeConn(conn net.Conn, banner string, tlsConfig *tls.Co
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 	handleSMTPUpgrade(conn, reader, tlsConfig)
+}
+
+func handleSMTPUpgradeWithEHLOResponse(conn net.Conn, banner, ehloResponse string, tlsConfig *tls.Config) {
+	defer func() { _ = conn.Close() }()
+
+	reader := bufio.NewReader(conn)
+	if _, err := conn.Write([]byte(banner)); err != nil {
+		return
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+
+	line, err := readTextLine(reader)
+	if err != nil || !strings.HasPrefix(strings.ToUpper(line), "EHLO ") {
+		return
+	}
+	if _, err := conn.Write([]byte(ehloResponse)); err != nil {
+		return
+	}
+	if tlsConfig == nil {
+		return
+	}
+	line, err = readTextLine(reader)
+	if err != nil || !strings.EqualFold(line, "STARTTLS") {
+		return
+	}
+	if _, err := conn.Write([]byte("220 Ready to start TLS\r\n")); err != nil {
+		return
+	}
+	serveUpgradedTLS(conn, reader, tlsConfig)
 }
 
 func handleBehaviorSMTPUpgradeConn(conn net.Conn, behavior smtpFirstConnectionBehavior, tlsConfig *tls.Config) {
