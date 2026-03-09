@@ -163,7 +163,7 @@ func cipherSuiteAllowedByPolicy(input cipherSuitePolicyInput) bool {
 	switch input.protocol {
 	case "TLS 1.3":
 		switch input.cipherSuite {
-		case "TLS_AES_128_GCM_SHA256", "TLS_AES_256_GCM_SHA384", "TLS_AES_128_CCM_SHA256":
+		case "TLS_AES_128_GCM_SHA256", "TLS_AES_256_GCM_SHA384":
 			return true
 		default:
 			return false

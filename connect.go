@@ -541,7 +541,7 @@ func startTLSFallbackContext(parent context.Context, connectTimeout time.Duratio
 	if connectTimeout == 0 {
 		connectTimeout = defaultConnectTimeout
 	}
-	//nolint:gosec // The cancel func is intentionally returned to the caller, which immediately defers it at the call site.
+	//nolint:gosec // The caller immediately defers the returned cancel func at each call site.
 	ctx, cancel := context.WithTimeout(parent, connectTimeout)
 	return ctx, cancel
 }
@@ -1074,7 +1074,7 @@ func readSMTPResponse(reader *bufio.Reader, wantCode string) ([]string, error) {
 	for {
 		line, err := readTextLine(reader)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("reading SMTP response line: %w", err)
 		}
 		if len(line) < 4 || line[:3] != wantCode {
 			return nil, fmt.Errorf("%w %q, want %s", errStartTLSSMTPUnexpected, line, wantCode)
@@ -1119,6 +1119,7 @@ func negotiateIMAPStartTLS(reader *bufio.Reader, conn net.Conn) error {
 		}
 		upper := strings.ToUpper(line)
 		if strings.HasPrefix(upper, "* ") {
+			slog.Debug("ignoring untagged IMAP STARTTLS response line")
 			continue
 		}
 		if !strings.HasPrefix(upper, "A001 OK") {
@@ -1180,12 +1181,15 @@ func negotiateLDAPStartTLS(reader *bufio.Reader, conn net.Conn) error {
 	if _, err := io.ReadFull(reader, body); err != nil {
 		return fmt.Errorf("reading LDAP StartTLS response body: %w", err)
 	}
+	// LDAP StartTLS success response structure:
+	//   INTEGER messageID(1), [APPLICATION 24] ExtendedResponse,
+	//   then Enumerated resultCode(0) with empty matchedDN/diagnosticMessage.
 	if len(body) < 7 || body[0] != 0x02 || body[1] != 0x01 || body[2] != 0x01 || body[3] != 0x78 {
 		return fmt.Errorf("%w: unexpected LDAP StartTLS envelope %x", errStartTLSLDAPMalformed, body)
 	}
 	innerLen, innerLenBytes, err := readLDAPBERLengthBytes(body[4:])
 	if err != nil {
-		return err
+		return fmt.Errorf("reading LDAP StartTLS response length: %w", err)
 	}
 	innerStart := 4 + innerLenBytes
 	if len(body) < innerStart+innerLen {

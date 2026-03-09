@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"slices"
 	"strconv"
@@ -100,23 +101,23 @@ func ProbeSSH(ctx context.Context, input SSHProbeInput) (*SSHProbeResult, error)
 	reader := bufio.NewReader(conn)
 	banner, err := readSSHBanner(reader)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading SSH banner: %w", err)
 	}
 	if _, err := io.WriteString(conn, "SSH-2.0-certkit\r\n"); err != nil {
 		return nil, fmt.Errorf("writing SSH client banner: %w", err)
 	}
 	if err := writeSSHClientKexInit(conn); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("sending SSH client KEXINIT: %w", err)
 	}
 
 	payload, err := readSSHKexInitPacket(reader)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading SSH server KEXINIT: %w", err)
 	}
 
 	result, err := parseSSHKexInit(payload)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("parsing SSH server KEXINIT: %w", err)
 	}
 
 	protocol, software := parseSSHBanner(banner)
@@ -179,7 +180,7 @@ func readSSHKexInitPacket(reader *bufio.Reader) ([]byte, error) {
 	for range maxPreKexPackets {
 		payload, err := readSSHPacket(reader)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("reading SSH pre-KEX packet: %w", err)
 		}
 		if len(payload) == 0 {
 			return nil, errSSHPacketMalformed
@@ -188,6 +189,7 @@ func readSSHKexInitPacket(reader *bufio.Reader) ([]byte, error) {
 			return payload, nil
 		}
 		if isSkippablePreKexPacket(payload[0]) {
+			slog.Debug("ignoring SSH pre-KEX packet", "msg_type", payload[0])
 			continue
 		}
 		return nil, fmt.Errorf("%w: %d", errSSHUnexpectedPacket, payload[0])
@@ -237,34 +239,34 @@ func parseSSHKexInit(payload []byte) (*SSHProbeResult, error) {
 	result := &SSHProbeResult{}
 	var err error
 	if result.KeyExchangeAlgorithms, err = readNameLists(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading SSH key exchange algorithms: %w", err)
 	}
 	if result.HostKeyAlgorithms, err = readNameLists(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading SSH host key algorithms: %w", err)
 	}
 	if result.CiphersClientToServer, err = readNameLists(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading SSH client-to-server ciphers: %w", err)
 	}
 	if result.CiphersServerToClient, err = readNameLists(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading SSH server-to-client ciphers: %w", err)
 	}
 	if result.MACsClientToServer, err = readNameLists(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading SSH client-to-server MACs: %w", err)
 	}
 	if result.MACsServerToClient, err = readNameLists(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading SSH server-to-client MACs: %w", err)
 	}
 	if result.CompressionClientToServer, err = readNameLists(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading SSH client-to-server compression: %w", err)
 	}
 	if result.CompressionServerToClient, err = readNameLists(); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("reading SSH server-to-client compression: %w", err)
 	}
 	if _, err = readNameLists(); err != nil { // languages c->s
-		return nil, err
+		return nil, fmt.Errorf("reading SSH client-to-server languages: %w", err)
 	}
 	if _, err = readNameLists(); err != nil { // languages s->c
-		return nil, err
+		return nil, fmt.Errorf("reading SSH server-to-client languages: %w", err)
 	}
 	if pos+5 > len(payload) {
 		return nil, errSSHKexInitMalformed
@@ -354,34 +356,34 @@ func buildSSHKexInitPayload(lists sshKexInitNameLists) ([]byte, error) {
 	payload = append(payload, cookie...)
 	var err error
 	if payload, err = appendSSHNameList(payload, lists.keyExchangeAlgorithms); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("appending SSH key exchange algorithms: %w", err)
 	}
 	if payload, err = appendSSHNameList(payload, lists.hostKeyAlgorithms); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("appending SSH host key algorithms: %w", err)
 	}
 	if payload, err = appendSSHNameList(payload, lists.ciphersClientToServer); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("appending SSH client-to-server ciphers: %w", err)
 	}
 	if payload, err = appendSSHNameList(payload, lists.ciphersServerToClient); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("appending SSH server-to-client ciphers: %w", err)
 	}
 	if payload, err = appendSSHNameList(payload, lists.macsClientToServer); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("appending SSH client-to-server MACs: %w", err)
 	}
 	if payload, err = appendSSHNameList(payload, lists.macsServerToClient); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("appending SSH server-to-client MACs: %w", err)
 	}
 	if payload, err = appendSSHNameList(payload, lists.compressionClientToServer); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("appending SSH client-to-server compression: %w", err)
 	}
 	if payload, err = appendSSHNameList(payload, lists.compressionServerToClient); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("appending SSH server-to-client compression: %w", err)
 	}
 	if payload, err = appendSSHNameList(payload, lists.languagesClientToServer); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("appending SSH client-to-server languages: %w", err)
 	}
 	if payload, err = appendSSHNameList(payload, lists.languagesServerToClient); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("appending SSH server-to-client languages: %w", err)
 	}
 	payload = append(payload, 0) // first_kex_packet_follows
 	payload = binary.BigEndian.AppendUint32(payload, 0)
@@ -679,6 +681,7 @@ func sshPolicyDisallowsKex(policy SecurityPolicy) func(string) bool {
 		switch policy {
 		case SecurityPolicyFIPS1402, SecurityPolicyFIPS1403:
 		case SecurityPolicyNone:
+		default:
 			return false
 		}
 		// FIPS 140-2 and FIPS 140-3 intentionally share the same conservative
@@ -701,6 +704,7 @@ func sshPolicyDisallowsHostKey(policy SecurityPolicy) func(string) bool {
 		switch policy {
 		case SecurityPolicyFIPS1402, SecurityPolicyFIPS1403:
 		case SecurityPolicyNone:
+		default:
 			return false
 		}
 		// FIPS 140-2 and FIPS 140-3 intentionally share the same conservative
@@ -721,6 +725,7 @@ func sshPolicyDisallowsCipher(policy SecurityPolicy) func(string) bool {
 		switch policy {
 		case SecurityPolicyFIPS1402, SecurityPolicyFIPS1403:
 		case SecurityPolicyNone:
+		default:
 			return false
 		}
 		// FIPS 140-2 and FIPS 140-3 intentionally share the same conservative
@@ -741,6 +746,7 @@ func sshPolicyDisallowsMAC(policy SecurityPolicy) func(string) bool {
 		switch policy {
 		case SecurityPolicyFIPS1402, SecurityPolicyFIPS1403:
 		case SecurityPolicyNone:
+		default:
 			return false
 		}
 		// FIPS 140-2 and FIPS 140-3 intentionally share the same conservative

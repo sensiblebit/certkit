@@ -788,13 +788,10 @@ func TestConnectTLS_StartTLSSMTPGeneric220Banner(t *testing.T) {
 func TestConnectTLS_SMTPGreetingMentionsStartTLSWithoutEHLOCapability(t *testing.T) {
 	t.Parallel()
 
-	port := startSMTPServerWithEHLOResponse(
-		t,
-		"220 mx.example.com STARTTLS mentioned in greeting\r\n",
-		"250-localhost\r\n250 SIZE 35882577\r\n",
-		nil,
-		nil,
-	)
+	port := startSMTPServerWithEHLOResponse(t, smtpEHLOResponseServerInput{
+		banner:       "220 mx.example.com STARTTLS mentioned in greeting\r\n",
+		ehloResponse: "250-localhost\r\n250 SIZE 35882577\r\n",
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -913,7 +910,13 @@ func TestConnectTLS_GenericIMAPAndPOP3BannerOffPort(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			port := startGenericUpgradeServer(t, tt.banner, tt.wantLine, tt.readyLine, [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
+			port := startGenericUpgradeServer(t, genericUpgradeServerInput{
+				banner:    tt.banner,
+				wantLine:  tt.wantLine,
+				readyLine: tt.readyLine,
+				certChain: [][]byte{leaf.DER, ca.CertDER},
+				key:       leaf.Key,
+			})
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 
@@ -1103,7 +1106,13 @@ func TestScanCipherSuites_GenericIMAPAndPOP3BannerOffPort(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			port := startGenericUpgradeServer(t, tt.banner, tt.wantLine, tt.readyLine, [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
+			port := startGenericUpgradeServer(t, genericUpgradeServerInput{
+				banner:    tt.banner,
+				wantLine:  tt.wantLine,
+				readyLine: tt.readyLine,
+				certChain: [][]byte{leaf.DER, ca.CertDER},
+				key:       leaf.Key,
+			})
 			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 			defer cancel()
 
@@ -1426,7 +1435,11 @@ func TestConnectTLS_DoesNotMisclassifyUnsupportedGenericIMAPAndPOP3OffPort(t *te
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			port := startRejectedUpgradeServer(t, tt.banner, tt.wantLine, tt.response)
+			port := startRejectedUpgradeServer(t, rejectedUpgradeServerInput{
+				banner:   tt.banner,
+				wantLine: tt.wantLine,
+				response: tt.response,
+			})
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 
@@ -1581,7 +1594,13 @@ func startSMTPStartTLSServer(t *testing.T, banner string, certChain [][]byte, ke
 	return port
 }
 
-func startRejectedUpgradeServer(t *testing.T, banner, wantLine, response string) string {
+type rejectedUpgradeServerInput struct {
+	banner   string
+	wantLine string
+	response string
+}
+
+func startRejectedUpgradeServer(t *testing.T, input rejectedUpgradeServerInput) string {
 	t.Helper()
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -1596,7 +1615,7 @@ func startRejectedUpgradeServer(t *testing.T, banner, wantLine, response string)
 			if acceptErr != nil {
 				return
 			}
-			go handleRejectedUpgradeConn(conn, banner, wantLine, response)
+			go handleRejectedUpgradeConn(conn, input)
 		}
 	}()
 
@@ -1607,7 +1626,15 @@ func startRejectedUpgradeServer(t *testing.T, banner, wantLine, response string)
 	return port
 }
 
-func startGenericUpgradeServer(t *testing.T, banner, wantLine, readyLine string, certChain [][]byte, key *ecdsa.PrivateKey) string {
+type genericUpgradeServerInput struct {
+	banner    string
+	wantLine  string
+	readyLine string
+	certChain [][]byte
+	key       *ecdsa.PrivateKey
+}
+
+func startGenericUpgradeServer(t *testing.T, input genericUpgradeServerInput) string {
 	t.Helper()
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -1620,8 +1647,8 @@ func startGenericUpgradeServer(t *testing.T, banner, wantLine, readyLine string,
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		Certificates: []tls.Certificate{{
-			Certificate: certChain,
-			PrivateKey:  key,
+			Certificate: input.certChain,
+			PrivateKey:  input.key,
 		}},
 	}
 
@@ -1631,7 +1658,12 @@ func startGenericUpgradeServer(t *testing.T, banner, wantLine, readyLine string,
 			if acceptErr != nil {
 				return
 			}
-			go handleGenericUpgradeConn(conn, banner, wantLine, readyLine, tlsConfig)
+			go handleGenericUpgradeConn(conn, genericUpgradeConnInput{
+				banner:    input.banner,
+				wantLine:  input.wantLine,
+				readyLine: input.readyLine,
+				tlsConfig: tlsConfig,
+			})
 		}
 	}()
 
@@ -1684,7 +1716,14 @@ func startFakeLDAPStartTLSEnvelopeServer(t *testing.T) string {
 	return port
 }
 
-func startSMTPServerWithEHLOResponse(t *testing.T, banner, ehloResponse string, certChain [][]byte, key *ecdsa.PrivateKey) string {
+type smtpEHLOResponseServerInput struct {
+	banner       string
+	ehloResponse string
+	certChain    [][]byte
+	key          *ecdsa.PrivateKey
+}
+
+func startSMTPServerWithEHLOResponse(t *testing.T, input smtpEHLOResponseServerInput) string {
 	t.Helper()
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -1694,13 +1733,13 @@ func startSMTPServerWithEHLOResponse(t *testing.T, banner, ehloResponse string, 
 	t.Cleanup(func() { _ = listener.Close() })
 
 	var tlsConfig *tls.Config
-	if len(certChain) > 0 && key != nil {
+	if len(input.certChain) > 0 && input.key != nil {
 		//nolint:gosec // Test plaintext-upgrade fixtures use the Go default test-server policy unless a test overrides it explicitly.
 		tlsConfig = &tls.Config{
 			MinVersion: tls.VersionTLS12,
 			Certificates: []tls.Certificate{{
-				Certificate: certChain,
-				PrivateKey:  key,
+				Certificate: input.certChain,
+				PrivateKey:  input.key,
 			}},
 		}
 	}
@@ -1711,7 +1750,11 @@ func startSMTPServerWithEHLOResponse(t *testing.T, banner, ehloResponse string, 
 			if acceptErr != nil {
 				return
 			}
-			go handleSMTPUpgradeWithEHLOResponse(conn, banner, ehloResponse, tlsConfig)
+			go handleSMTPUpgradeWithEHLOResponse(conn, smtpUpgradeWithEHLOResponseInput{
+				banner:       input.banner,
+				ehloResponse: input.ehloResponse,
+				tlsConfig:    tlsConfig,
+			})
 		}
 	}()
 
@@ -1846,46 +1889,59 @@ func handleCustomSMTPUpgradeConn(conn net.Conn, banner string, tlsConfig *tls.Co
 	handleSMTPUpgrade(conn, reader, tlsConfig)
 }
 
-func handleRejectedUpgradeConn(conn net.Conn, banner, wantLine, response string) {
+func handleRejectedUpgradeConn(conn net.Conn, input rejectedUpgradeServerInput) {
 	defer func() { _ = conn.Close() }()
 
 	reader := bufio.NewReader(conn)
-	if _, err := conn.Write([]byte(banner)); err != nil {
+	if _, err := conn.Write([]byte(input.banner)); err != nil {
 		return
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 
 	line, err := readTextLine(reader)
-	if err != nil || !strings.EqualFold(line, wantLine) {
+	if err != nil || !strings.EqualFold(line, input.wantLine) {
 		return
 	}
-	_, _ = conn.Write([]byte(response))
+	_, _ = conn.Write([]byte(input.response))
 }
 
-func handleGenericUpgradeConn(conn net.Conn, banner, wantLine, readyLine string, tlsConfig *tls.Config) {
+type genericUpgradeConnInput struct {
+	banner    string
+	wantLine  string
+	readyLine string
+	tlsConfig *tls.Config
+}
+
+func handleGenericUpgradeConn(conn net.Conn, input genericUpgradeConnInput) {
 	defer func() { _ = conn.Close() }()
 
 	reader := bufio.NewReader(conn)
-	if _, err := conn.Write([]byte(banner)); err != nil {
+	if _, err := conn.Write([]byte(input.banner)); err != nil {
 		return
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
 
 	line, err := readTextLine(reader)
-	if err != nil || !strings.EqualFold(line, wantLine) {
+	if err != nil || !strings.EqualFold(line, input.wantLine) {
 		return
 	}
-	if _, err := conn.Write([]byte(readyLine)); err != nil {
+	if _, err := conn.Write([]byte(input.readyLine)); err != nil {
 		return
 	}
-	serveUpgradedTLS(conn, reader, tlsConfig)
+	serveUpgradedTLS(conn, reader, input.tlsConfig)
 }
 
-func handleSMTPUpgradeWithEHLOResponse(conn net.Conn, banner, ehloResponse string, tlsConfig *tls.Config) {
+type smtpUpgradeWithEHLOResponseInput struct {
+	banner       string
+	ehloResponse string
+	tlsConfig    *tls.Config
+}
+
+func handleSMTPUpgradeWithEHLOResponse(conn net.Conn, input smtpUpgradeWithEHLOResponseInput) {
 	defer func() { _ = conn.Close() }()
 
 	reader := bufio.NewReader(conn)
-	if _, err := conn.Write([]byte(banner)); err != nil {
+	if _, err := conn.Write([]byte(input.banner)); err != nil {
 		return
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
@@ -1894,10 +1950,10 @@ func handleSMTPUpgradeWithEHLOResponse(conn net.Conn, banner, ehloResponse strin
 	if err != nil || !strings.HasPrefix(strings.ToUpper(line), "EHLO ") {
 		return
 	}
-	if _, err := conn.Write([]byte(ehloResponse)); err != nil {
+	if _, err := conn.Write([]byte(input.ehloResponse)); err != nil {
 		return
 	}
-	if tlsConfig == nil {
+	if input.tlsConfig == nil {
 		return
 	}
 	line, err = readTextLine(reader)
@@ -1907,7 +1963,7 @@ func handleSMTPUpgradeWithEHLOResponse(conn net.Conn, banner, ehloResponse strin
 	if _, err := conn.Write([]byte("220 Ready to start TLS\r\n")); err != nil {
 		return
 	}
-	serveUpgradedTLS(conn, reader, tlsConfig)
+	serveUpgradedTLS(conn, reader, input.tlsConfig)
 }
 
 func handleBehaviorSMTPUpgradeConn(conn net.Conn, behavior smtpFirstConnectionBehavior, tlsConfig *tls.Config) {
