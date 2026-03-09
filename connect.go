@@ -788,7 +788,7 @@ func connectViaStartTLS(ctx context.Context, input ConnectTLSInput, addr, server
 			return nil, fmt.Errorf("setting %s TLS deadline: %w", protocolDisplayName(protocol), err)
 		}
 	}
-	if err := tlsConn.HandshakeContext(ctx); err != nil {
+	if err := tlsConn.HandshakeContext(ctx); err != nil && clientAuth == nil {
 		return nil, fmt.Errorf("%s STARTTLS handshake: %w", protocolDisplayName(protocol), err)
 	}
 
@@ -1084,9 +1084,7 @@ func firstBannerLine(prefix []byte) string {
 }
 
 func matchesSMTPBanner(banner string) bool {
-	upper := strings.ToUpper(banner)
-	return (strings.HasPrefix(banner, "220 ") || strings.HasPrefix(banner, "220-")) &&
-		(strings.Contains(upper, " SMTP") || strings.Contains(upper, " ESMTP"))
+	return strings.HasPrefix(banner, "220 ") || strings.HasPrefix(banner, "220-")
 }
 
 func matchesIMAPBanner(banner string) bool {

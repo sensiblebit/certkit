@@ -898,6 +898,70 @@ func TestConnectViaStartTLS_PolicyUsesRawTLSVersion(t *testing.T) {
 	}
 }
 
+func TestConnectViaStartTLS_ClientAuthRequired(t *testing.T) {
+	t.Parallel()
+
+	serverCA := generateTestCA(t, "STARTTLS mTLS Server CA")
+	clientCA := generateTestCA(t, "STARTTLS mTLS Client CA")
+	leaf := generateTestLeafCert(t, serverCA)
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(serverCA.Cert)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	//nolint:gosec // This test server intentionally pins TLS 1.2+ defaults while requiring client auth to exercise STARTTLS mTLS behavior.
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		Certificates: []tls.Certificate{{
+			Certificate: [][]byte{leaf.DER, serverCA.CertDER},
+			PrivateKey:  leaf.Key,
+		}},
+		ClientAuth: tls.RequireAndVerifyClientCert,
+		ClientCAs:  x509.NewCertPool(),
+	}
+	tlsConfig.ClientCAs.AddCert(clientCA.Cert)
+
+	go func() {
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go handlePlaintextUpgradeConn(conn, startTLSProtocolSMTP, tlsConfig)
+		}
+	}()
+
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := ConnectTLS(ctx, ConnectTLSInput{
+		Host:       "127.0.0.1",
+		Port:       port,
+		ServerName: "localhost",
+		RootCAs:    rootPool,
+	})
+	if err != nil {
+		t.Fatalf("ConnectTLS failed: %v", err)
+	}
+	if result.ClientAuth == nil || !result.ClientAuth.Requested {
+		t.Fatalf("ClientAuth = %+v, want requested client auth info", result.ClientAuth)
+	}
+	if len(result.ClientAuth.AcceptableCAs) == 0 {
+		t.Fatalf("AcceptableCAs = %v, want client CA list", result.ClientAuth.AcceptableCAs)
+	}
+	if len(result.PeerChain) == 0 {
+		t.Fatal("PeerChain is empty, want server certs despite client-auth rejection")
+	}
+}
+
 func TestProbeTLS13Cipher_LDAP(t *testing.T) {
 	t.Parallel()
 
@@ -971,6 +1035,13 @@ func TestDetectStartTLSProtocol(t *testing.T) {
 			wantOK:       true,
 		},
 		{
+			name:         "smtp generic 220",
+			prefix:       []byte("220 mx.example.com ready\r\n"),
+			wantProtocol: startTLSProtocolSMTP,
+			wantBanner:   "220 mx.example.com ready",
+			wantOK:       true,
+		},
+		{
 			name:         "imap",
 			prefix:       []byte("* OK IMAP4rev1 ready\r\n"),
 			wantProtocol: startTLSProtocolIMAP,
@@ -1029,6 +1100,13 @@ func TestDetectConnectStartTLSProtocol(t *testing.T) {
 		{
 			name:         "smtp multiline banner",
 			prefix:       []byte("220-smtp.example.com ESMTP ready\r\n220 second line\r\n"),
+			port:         "587",
+			wantProtocol: startTLSProtocolSMTP,
+			wantOK:       true,
+		},
+		{
+			name:         "smtp generic 220 banner",
+			prefix:       []byte("220 mx.example.com ready\r\n"),
 			port:         "587",
 			wantProtocol: startTLSProtocolSMTP,
 			wantOK:       true,
