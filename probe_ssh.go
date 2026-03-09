@@ -597,6 +597,8 @@ func isWeakSSHKex(value string) bool {
 }
 
 func isSSHKexExtension(value string) bool {
+	// These are the server-side SSH extension negotiation markers we surface
+	// separately from real key exchange algorithms.
 	return value == "ext-info-s" || value == "kex-strict-s-v00@openssh.com"
 }
 
@@ -682,10 +684,7 @@ func diagnoseSSHPolicy(r *SSHProbeResult) []ChainDiagnostic {
 
 func sshPolicyDisallowsKex(policy SecurityPolicy) func(string) bool {
 	return func(value string) bool {
-		switch policy {
-		case SecurityPolicyFIPS1402, SecurityPolicyFIPS1403:
-		case SecurityPolicyNone:
-		default:
+		if policy != SecurityPolicyFIPS1402 && policy != SecurityPolicyFIPS1403 {
 			return false
 		}
 		// FIPS 140-2 and FIPS 140-3 intentionally share the same conservative
@@ -705,10 +704,7 @@ func sshPolicyDisallowsKex(policy SecurityPolicy) func(string) bool {
 
 func sshPolicyDisallowsHostKey(policy SecurityPolicy) func(string) bool {
 	return func(value string) bool {
-		switch policy {
-		case SecurityPolicyFIPS1402, SecurityPolicyFIPS1403:
-		case SecurityPolicyNone:
-		default:
+		if policy != SecurityPolicyFIPS1402 && policy != SecurityPolicyFIPS1403 {
 			return false
 		}
 		// FIPS 140-2 and FIPS 140-3 intentionally share the same conservative
@@ -726,10 +722,7 @@ func sshPolicyDisallowsHostKey(policy SecurityPolicy) func(string) bool {
 
 func sshPolicyDisallowsCipher(policy SecurityPolicy) func(string) bool {
 	return func(value string) bool {
-		switch policy {
-		case SecurityPolicyFIPS1402, SecurityPolicyFIPS1403:
-		case SecurityPolicyNone:
-		default:
+		if policy != SecurityPolicyFIPS1402 && policy != SecurityPolicyFIPS1403 {
 			return false
 		}
 		// FIPS 140-2 and FIPS 140-3 intentionally share the same conservative
@@ -747,10 +740,7 @@ func sshPolicyDisallowsCipher(policy SecurityPolicy) func(string) bool {
 
 func sshPolicyDisallowsMAC(policy SecurityPolicy) func(string) bool {
 	return func(value string) bool {
-		switch policy {
-		case SecurityPolicyFIPS1402, SecurityPolicyFIPS1403:
-		case SecurityPolicyNone:
-		default:
+		if policy != SecurityPolicyFIPS1402 && policy != SecurityPolicyFIPS1403 {
 			return false
 		}
 		// FIPS 140-2 and FIPS 140-3 intentionally share the same conservative
@@ -901,8 +891,6 @@ type sshRatedDirectionalSectionInput struct {
 }
 
 func writeSSHRatedDirectionalSection(input sshRatedDirectionalSectionInput) {
-	origC2S := slices.Clone(input.c2s)
-	origS2C := slices.Clone(input.s2c)
 	preferredC2S := ""
 	if len(input.c2s) > 0 {
 		preferredC2S = input.c2s[0]
@@ -911,7 +899,7 @@ func writeSSHRatedDirectionalSection(input sshRatedDirectionalSectionInput) {
 	if len(input.s2c) > 0 {
 		preferredS2C = input.s2c[0]
 	}
-	if slices.Equal(origC2S, origS2C) {
+	if slices.Equal(input.c2s, input.s2c) {
 		writeSSHRatedListSectionWithPreferred(sshRatedListSectionInput{
 			out:    input.out,
 			title:  input.title,

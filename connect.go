@@ -489,6 +489,11 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 			slog.Debug("pop3 stls attempt failed, falling back to tls handshake error", "addr", addr, "error", startTLSErr)
 		}
 		if len(prefix) == 0 {
+			// LDAP is the one STARTTLS protocol we intentionally probe without a
+			// plaintext banner because anonymous LDAP on 389 stays silent until the
+			// client sends the extended operation. This retry stays under
+			// startTLSCtx, so silent non-LDAP services still fail within the same
+			// bounded fallback budget instead of hanging indefinitely.
 			result, startTLSErr := connectViaStartTLS(startTLSCtx, ctx, connectViaStartTLSInput{
 				connectInput: input,
 				addr:         addr,
