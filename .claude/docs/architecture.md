@@ -6,7 +6,7 @@ Stateless utility functions. No database, no file I/O. This is the public librar
 
 - `certkit.go` — PEM parsing, key generation, fingerprints, SKI computation. `DeduplicatePasswords()`, `ParseCertificatesAny()` (DER/PEM/PKCS#7).
 - `bundle.go` — Certificate chain resolution via AIA, trust store verification. `BundleResult`/`BundleOptions` types, `DefaultOptions()`, `FetchLeafFromURL()`, `FetchAIACertificates()`, `Bundle()`. `MozillaRootPool()` (`sync.Once`-cached), `MozillaRootPEM()`.
-- `connect.go` — Transport connection probing and chain diagnostics. `ConnectTLS()` handles implicit TLS plus opportunistic mail-protocol STARTTLS/STLS upgrades for SMTP, IMAP, and POP3, plus LDAP `StartTLS` on port `389`; surfaces useful non-TLS diagnostics for SSH/HTTP/plaintext services; and returns negotiated protocol, cipher suite, peer chain, mTLS info, and verification result with automatic AIA walking for missing intermediates. `ScanCipherSuites()` enumerates supported TLS suites and key exchange groups, including STARTTLS-aware scans and optional QUIC probing. `DiagnoseConnectChain()` detects root-in-chain (RFC 8446 §4.4.2), duplicate certs, and missing intermediates. `FormatConnectResult()` for text output. Types: `ConnectTLSInput`, `ConnectResult`, `ClientAuthInfo`, `ChainDiagnostic`, `ScanCipherSuitesInput`, `CipherScanResult`.
+- `connect.go` — Transport connection probing and chain diagnostics. `ConnectTLS()` handles implicit TLS plus opportunistic mail-protocol STARTTLS/STLS upgrades for SMTP, IMAP, and POP3, plus LDAP `StartTLS` on port `389`; surfaces useful non-TLS diagnostics for SSH/HTTP/plaintext services; and returns negotiated protocol, cipher suite, peer chain, mTLS info, and verification result with automatic AIA walking for missing intermediates. `ScanCipherSuites()` enumerates supported TLS suites and key exchange groups, including STARTTLS-aware scans and optional QUIC probing. `DiagnoseConnectChain()` detects root-in-chain (RFC 8446 §4.4.2), duplicate certs, and missing intermediates. `FormatConnectResult()` renders the shared text summary, while the CLI verbose formatter appends a PEM copy of the server-sent chain with metadata headers. Types: `ConnectTLSInput`, `ConnectResult`, `ClientAuthInfo`, `ChainDiagnostic`, `ScanCipherSuitesInput`, `CipherScanResult`.
 - `connect_policy.go` — Conservative policy heuristics for negotiated and scanned TLS results. Flags protocol versions, cipher suites, and leaf certificate key/signature algorithms that are likely not authorized by the selected policy profile.
 - `security_policy.go` — Shared policy type definitions. `SecurityPolicy` currently exposes `fips-140-2` and `fips-140-3` heuristic modes used by both TLS and SSH probing.
 - `probe_tls13.go` — Byte-level TLS 1.3 ClientHello construction and response parsing used by `ScanCipherSuites()` for TLS 1.3 cipher and key-exchange-group probing.
@@ -24,7 +24,7 @@ Stateless utility functions. No database, no file I/O. This is the public librar
 
 ## `internal/certstore/`
 
-Certificate/key processing, in-memory storage, and persistence. Used by both CLI and WASM builds (except `sqlite.go` which is excluded from WASM via build tag).
+Certificate/key processing, in-memory storage, and persistence. Used by both CLI and WASM builds. Native SQLite persistence stays in `sqlite.go` (`//go:build !js`), while `sqlite_js.go` is the `js/wasm` stub that returns an unsupported error for `LoadFromSQLite()` / `SaveToSQLite()`.
 
 - `certstore.go` — `CertHandler` interface (`HandleCertificate`, `HandleKey`), `ProcessInput` struct.
 - `process.go` — `ProcessData()`: format detection and parsing pipeline (PEM → DER → PKCS#7 → PKCS#8 → SEC1 → Ed25519 → JKS → PKCS#12). Calls `CertHandler` for each parsed item.
@@ -36,6 +36,7 @@ Certificate/key processing, in-memory storage, and persistence. Used by both CLI
 - `helpers.go` — `GetKeyType`, `HasBinaryExtension`, `FormatCN`, `SanitizeFileName`, `FormatIPAddresses`.
 - `container.go` — `ContainerContents` struct and `ParseContainerData()`: extracts leaf cert, key, and extra certs from PKCS#12, JKS, PKCS#7, PEM, or DER input. Shared by CLI and WASM.
 - `sqlite.go` — SQLite persistence (`//go:build !js`). `SaveToSQLite(store, path)` and `LoadFromSQLite(store, path)` for `--save-db`/`--load-db` flags. Self-contained: opens in-memory SQLite, transfers data, uses `VACUUM INTO` to write.
+- `sqlite_js.go` — `js/wasm` persistence stub. Exposes the same `SaveToSQLite()` / `LoadFromSQLite()` symbols as `sqlite.go`, but returns an unsupported error so mixed-target builds and workspace analysis stay consistent without a native SQLite driver.
 
 ## `internal/`
 
@@ -64,7 +65,7 @@ Thin CLI layer. Each file is one Cobra command. Flag variables are package-level
 - `bundle.go` — Build verified certificate chains from leaf certs; resolves intermediates via AIA; outputs PEM, chain, fullchain, PKCS#12, or JKS with `--key`, `--force`, `--trust-store` flags.
 - `inspect.go` — Display detailed certificate, key, or CSR information with text or JSON output (`--format`); filters expired items unless `--allow-expired`.
 - `verify.go` — Verify certificate chains, key matches, expiry windows, and optional OCSP/CRL status; returns exit code 2 on validation failures; `--key`, `--expiry`, `--trust-store`, `--diagnose`, `--ocsp`, `--crl`, `--format` flags.
-- `connect.go` — Test TLS connections and display certificate chain details; supports implicit TLS plus STARTTLS/STLS upgrades, optional cipher enumeration, OCSP/CRL checks, and FIPS-style policy diagnostics; `--servername`, `--ciphers`, `--no-ocsp`, `--crl`, `--fips-140-2`, `--fips-140-3`, `--format` flags.
+- `connect.go` — Test TLS connections and display certificate chain details; supports implicit TLS plus STARTTLS/STLS upgrades, optional cipher enumeration, OCSP/CRL checks, and FIPS-style policy diagnostics. In verbose text mode it also appends the server-sent certificate chain in PEM with metadata headers for direct reuse. Flags: `--servername`, `--ciphers`, `--no-ocsp`, `--crl`, `--fips-140-2`, `--fips-140-3`, `--format`.
 - `probe.go` — Parent `probe` command for transport-oriented inspection commands.
 - `probe_ssh.go` — `probe ssh` subcommand. Connects without authenticating, prints banner/algorithm details, and supports `--fips-140-2` / `--fips-140-3` policy heuristics for SSH transport algorithms.
 - `policy.go` — Shared CLI flag-to-policy selection helper used by `connect` and `probe ssh`.
