@@ -1063,6 +1063,7 @@ Initial release.
 [#127]: https://github.com/sensiblebit/certkit/pull/127
 [#128]: https://github.com/sensiblebit/certkit/pull/128
 [#129]: https://github.com/sensiblebit/certkit/pull/129
+[#132]: https://github.com/sensiblebit/certkit/pull/132
 [#131]: https://github.com/sensiblebit/certkit/pull/131
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
