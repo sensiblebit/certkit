@@ -67,14 +67,15 @@ Required push gate:
 
 1. If a PR exists, query for new review comments and issue-style PR comments first
 2. Address any newly arrived feedback before continuing
-3. Spawn one agent specifically to check this branch against `CLAUDE.md` and `.claude/rules/*`
-4. Have that agent report any rule violations, missing changelog entries, unresolved PR-thread obligations, or skipped validation
-5. When fixes are needed and can be cleanly isolated, dispatch dedicated worker agents to make the code or docs changes instead of doing all fix work in the main thread
-6. Keep the main thread focused on PR context, review triage, rule compliance, integration, and final verification
-7. Fix every violation before pushing
-8. If a PR exists, query for comments again immediately before `git push` in case new feedback arrived during the audit/fix cycle
-9. Address that feedback too if needed
-10. Only then push
+3. Before spawning new agents, close stale completed agents so the active agent budget is reserved for current work
+4. Spawn one agent specifically to check this branch against `CLAUDE.md` and `.claude/rules/*`
+5. Have that agent report any rule violations, missing changelog entries, unresolved PR-thread obligations, or skipped validation
+6. When fixes are needed and can be cleanly isolated, dispatch dedicated worker agents to make the code or docs changes instead of doing all fix work in the main thread
+7. Keep the main thread focused on PR context, review triage, rule compliance, integration, and final verification
+8. Fix every violation before pushing
+9. If a PR exists, query for comments again immediately before `git push` in case new feedback arrived during the audit/fix cycle
+10. Address that feedback too if needed
+11. Only then push
 
 This audit is mandatory even if the change looks trivial. Treat it as a pre-push policy check, not an optional extra review.
 
