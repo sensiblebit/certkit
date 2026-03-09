@@ -438,7 +438,7 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 		// rejection, which only occurs when clientAuth is non-nil.
 		_ = tlsConn.Close()
 		prefix := sniffConn.prefix()
-		startTLSCtx, startTLSCancel := startTLSFallbackContext(ctx, input.ConnectTimeout)
+		startTLSCtx, startTLSCancel := startTLSFallbackContext(connectCtx, input.ConnectTimeout)
 		defer startTLSCancel()
 		if detectedProtocol, ok := detectStartTLSProtocol(addr, prefix); ok {
 			result, startTLSErr := connectViaStartTLS(startTLSCtx, ctx, connectViaStartTLSInput{
@@ -966,16 +966,19 @@ type connectViaStartTLSInput struct {
 	protocol     startTLSProtocol
 }
 
-func connectViaStartTLS(ctx, resultCtx context.Context, input connectViaStartTLSInput) (*ConnectResult, error) {
+// connectViaStartTLS uses handshakeCtx only for the reconnect/upgrade handshake.
+// verifyCtx remains the original caller context so post-handshake verification
+// work is not truncated by the shorter STARTTLS handshake budget.
+func connectViaStartTLS(handshakeCtx, verifyCtx context.Context, input connectViaStartTLSInput) (*ConnectResult, error) {
 	dialer := &net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "tcp", input.addr)
+	conn, err := dialer.DialContext(handshakeCtx, "tcp", input.addr)
 	if err != nil {
 		return nil, fmt.Errorf("reconnecting for %s STARTTLS: %w", protocolDisplayName(input.protocol), err)
 	}
 	closeConn := conn
 	defer func() { _ = closeConn.Close() }()
 
-	if deadline, ok := ctx.Deadline(); ok {
+	if deadline, ok := handshakeCtx.Deadline(); ok {
 		if err := conn.SetDeadline(deadline); err != nil {
 			return nil, fmt.Errorf("setting %s STARTTLS deadline: %w", protocolDisplayName(input.protocol), err)
 		}
@@ -994,7 +997,7 @@ func connectViaStartTLS(ctx, resultCtx context.Context, input connectViaStartTLS
 	var clientAuth *ClientAuthInfo
 	tlsConn := tls.Client(bufferedConn, newConnectTLSConfig(input.serverName, &clientAuth))
 	closeConn = tlsConn
-	handshakeErr := tlsConn.HandshakeContext(ctx)
+	handshakeErr := tlsConn.HandshakeContext(handshakeCtx)
 	state := tlsConn.ConnectionState()
 	if handshakeErr != nil {
 		// When the server requested a client cert and rejected our empty
@@ -1013,7 +1016,7 @@ func connectViaStartTLS(ctx, resultCtx context.Context, input connectViaStartTLS
 		}
 		startTLSInput.Port = port
 	}
-	return connectResultFromTLSState(resultCtx, connectResultFromTLSStateInput{
+	return connectResultFromTLSState(verifyCtx, connectResultFromTLSStateInput{
 		connectInput: startTLSInput,
 		serverName:   input.serverName,
 		state:        state,

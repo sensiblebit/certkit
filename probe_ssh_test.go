@@ -82,8 +82,8 @@ func TestProbeSSH(t *testing.T) {
 	if !slices.Contains(result.CompressionClientToServer, "none") {
 		t.Fatalf("CompressionClientToServer = %v, want none", result.CompressionClientToServer)
 	}
-	// The overall rating is weak because the fixture still advertises ssh-rsa,
-	// not because of its curve25519/group14-sha256 key exchange options.
+	// The overall rating is weak because the fixture still advertises a weak
+	// host key algorithm, not because of its key exchange options.
 	if got := result.OverallRating; got != CipherRatingWeak {
 		t.Fatalf("OverallRating = %q, want %q", got, CipherRatingWeak)
 	}
@@ -380,7 +380,7 @@ func TestFormatSSHRatingLine_PolicyClean(t *testing.T) {
 		MACsServerToClient:    []string{"hmac-sha2-256"},
 	}
 
-	if got := FormatSSHRatingLine(result); !strings.Contains(got, "0 weak, 0 likely not authorized by FIPS 140-3") {
+	if got := FormatSSHRatingLine(result); !strings.Contains(got, "0 weak/deprecated, 0 likely not authorized by FIPS 140-3") {
 		t.Fatalf("FormatSSHRatingLine() = %q, want explicit policy-clean summary", got)
 	}
 }

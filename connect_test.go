@@ -934,6 +934,8 @@ func TestConnectTLS_GenericIMAPAndPOP3BannerOffPort(t *testing.T) {
 }
 
 func TestConnectTLS_StartTLSLDAPFallback(t *testing.T) {
+	t.Parallel()
+
 	ca := generateTestCA(t, "LDAP STARTTLS Root")
 	leaf := generateTestLeafCert(t, ca)
 	rootPool := x509.NewCertPool()
@@ -1005,6 +1007,8 @@ func TestScanCipherSuites_StartTLSProtocols(t *testing.T) {
 }
 
 func TestScanCipherSuites_StartTLSLDAPFallback(t *testing.T) {
+	t.Parallel()
+
 	ca := generateTestCA(t, "LDAP STARTTLS Scan Root")
 	leaf := generateTestLeafCert(t, ca)
 
@@ -1027,6 +1031,8 @@ func TestScanCipherSuites_StartTLSLDAPFallback(t *testing.T) {
 }
 
 func TestScanCipherSuites_DoesNotTreatLDAPEnvelopeWithoutTLSAsLDAP(t *testing.T) {
+	t.Parallel()
+
 	port := startFakeLDAPStartTLSEnvelopeServer(t)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -1351,6 +1357,8 @@ func TestConnectTLS_DoesNotTreatGenericPlusOKAsPOP3OffPort(t *testing.T) {
 }
 
 func TestConnectTLS_DoesNotMisclassifySilentNonLDAP(t *testing.T) {
+	t.Parallel()
+
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)

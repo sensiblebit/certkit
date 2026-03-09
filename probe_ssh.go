@@ -530,11 +530,11 @@ func FormatSSHRatingLine(r *SSHProbeResult) string {
 	switch {
 	case weak == 0 && policyViolations == 0:
 		if r.Policy.Enabled() {
-			return fmt.Sprintf("Algorithms:   %s (%d weak, %d likely not authorized by %s)\n", rating, weak, policyViolations, r.Policy.DisplayName())
+			return fmt.Sprintf("Algorithms:   %s (%d weak/deprecated, %d likely not authorized by %s)\n", rating, weak, policyViolations, r.Policy.DisplayName())
 		}
-		return fmt.Sprintf("Algorithms:   %s (%d weak)\n", rating, weak)
+		return fmt.Sprintf("Algorithms:   %s (%d weak/deprecated)\n", rating, weak)
 	case !r.Policy.Enabled():
-		return fmt.Sprintf("Algorithms:   %s (%d weak)\n", rating, weak)
+		return fmt.Sprintf("Algorithms:   %s (%d weak/deprecated)\n", rating, weak)
 	case weak == 0:
 		return fmt.Sprintf("Algorithms:   %s (%d likely not authorized by %s)\n", rating, policyViolations, r.Policy.DisplayName())
 	default:
@@ -672,12 +672,15 @@ func diagnoseSSHPolicy(r *SSHProbeResult) []ChainDiagnostic {
 
 func sshPolicyDisallowsKex(policy SecurityPolicy) func(string) bool {
 	return func(value string) bool {
-		if !policy.Enabled() {
+		switch policy {
+		case SecurityPolicyFIPS1402, SecurityPolicyFIPS1403:
+		case SecurityPolicyNone:
 			return false
 		}
 		// FIPS 140-2 and FIPS 140-3 intentionally share the same conservative
-		// SSH transport allowlist here. Wire-level probing cannot determine
-		// validated module state or approved-mode configuration.
+		// SSH transport allowlist here today. Wire-level probing cannot determine
+		// validated module state or approved-mode configuration, but the explicit
+		// policy switch keeps the two profiles ready to diverge later if needed.
 		switch value {
 		case "ecdh-sha2-nistp256", "ecdh-sha2-nistp384", "ecdh-sha2-nistp521",
 			"diffie-hellman-group14-sha256", "diffie-hellman-group16-sha512",
@@ -691,12 +694,15 @@ func sshPolicyDisallowsKex(policy SecurityPolicy) func(string) bool {
 
 func sshPolicyDisallowsHostKey(policy SecurityPolicy) func(string) bool {
 	return func(value string) bool {
-		if !policy.Enabled() {
+		switch policy {
+		case SecurityPolicyFIPS1402, SecurityPolicyFIPS1403:
+		case SecurityPolicyNone:
 			return false
 		}
 		// FIPS 140-2 and FIPS 140-3 intentionally share the same conservative
-		// SSH transport allowlist here. Wire-level probing cannot determine
-		// validated module state or approved-mode configuration.
+		// SSH transport allowlist here today. Wire-level probing cannot determine
+		// validated module state or approved-mode configuration, but the explicit
+		// policy switch keeps the two profiles ready to diverge later if needed.
 		switch value {
 		case "rsa-sha2-256", "rsa-sha2-512", "ecdsa-sha2-nistp256", "ecdsa-sha2-nistp384", "ecdsa-sha2-nistp521":
 			return false
@@ -708,12 +714,15 @@ func sshPolicyDisallowsHostKey(policy SecurityPolicy) func(string) bool {
 
 func sshPolicyDisallowsCipher(policy SecurityPolicy) func(string) bool {
 	return func(value string) bool {
-		if !policy.Enabled() {
+		switch policy {
+		case SecurityPolicyFIPS1402, SecurityPolicyFIPS1403:
+		case SecurityPolicyNone:
 			return false
 		}
 		// FIPS 140-2 and FIPS 140-3 intentionally share the same conservative
-		// SSH transport allowlist here. Wire-level probing cannot determine
-		// validated module state or approved-mode configuration.
+		// SSH transport allowlist here today. Wire-level probing cannot determine
+		// validated module state or approved-mode configuration, but the explicit
+		// policy switch keeps the two profiles ready to diverge later if needed.
 		switch value {
 		case "aes128-gcm@openssh.com", "aes256-gcm@openssh.com", "aes128-ctr", "aes192-ctr", "aes256-ctr":
 			return false
@@ -725,12 +734,15 @@ func sshPolicyDisallowsCipher(policy SecurityPolicy) func(string) bool {
 
 func sshPolicyDisallowsMAC(policy SecurityPolicy) func(string) bool {
 	return func(value string) bool {
-		if !policy.Enabled() {
+		switch policy {
+		case SecurityPolicyFIPS1402, SecurityPolicyFIPS1403:
+		case SecurityPolicyNone:
 			return false
 		}
 		// FIPS 140-2 and FIPS 140-3 intentionally share the same conservative
-		// SSH transport allowlist here. Wire-level probing cannot determine
-		// validated module state or approved-mode configuration.
+		// SSH transport allowlist here today. Wire-level probing cannot determine
+		// validated module state or approved-mode configuration, but the explicit
+		// policy switch keeps the two profiles ready to diverge later if needed.
 		switch value {
 		case "hmac-sha2-256", "hmac-sha2-512", "hmac-sha2-256-etm@openssh.com", "hmac-sha2-512-etm@openssh.com":
 			return false
