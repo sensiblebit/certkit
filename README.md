@@ -179,7 +179,7 @@ Chain verification is always performed. When the input contains an embedded priv
 | `--servername`            |         | Override SNI hostname (defaults to host)                                            |
 <!-- /certkit:flags -->
 
-Port defaults to 443 if not specified. OCSP revocation status is checked automatically (best-effort); use `--no-ocsp` to disable. Use `--verbose` for extended details (serial, key info, signature algorithm, key usage, EKU).
+Port defaults to 443 if not specified. OCSP revocation status is checked automatically (best-effort); use `--no-ocsp` to disable. Use `--verbose` for extended details (serial, key info, signature algorithm, key usage, EKU) plus a PEM-formatted copy of the server-sent certificate chain with `# Subject`, `# Issuer`, and validity headers.
 
 ### Probe SSH Flags
 

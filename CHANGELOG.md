@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Remove the arbitrary 200-file cap from WASM upload and inspect flows; rely on byte limits instead. ([#129])
 - Enforce a stricter repo-local `golangci-lint` policy and refactor error handling, protocol encoding helpers, file-permission behavior, and tests to satisfy the higher lint bar. ([#130])
 - Improve `connect` non-TLS diagnostics to identify SSH, HTTP, SMTP, IMAP, and POP3 banners instead of bubbling up the raw TLS handshake error. ([#131])
+- Extend verbose `connect` text output with a PEM-formatted copy of the server-sent certificate chain, including `# Subject`, `# Issuer`, and validity metadata headers. ([#132])
 
 ### Added
 
@@ -58,6 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ignore unknown security-policy strings instead of treating every non-empty value as active, and harden SSH namelist parsing against 32-bit integer overflow on malformed KEXINIT packets. ([#131])
 - Accept spec-valid untagged IMAP responses before the tagged STARTTLS completion line, so IMAP upgrades and cipher scans do not falsely reject compliant servers. ([#131])
 - Keep STARTTLS post-handshake verification and revocation checks on the caller context instead of the handshake timeout budget, tighten STARTTLS preflight timeout enforcement, log probe-time SMTP/LDAP detection failures at debug level, and fix CLI test isolation for the new FIPS flag globals. ([#131])
+- Add `js/wasm` `LoadFromSQLite()` / `SaveToSQLite()` stubs in `internal/certstore` so mixed-target builds and full-repo `gopls` analysis do not report missing SQLite persistence symbols on non-native targets. ([#132])
 
 ### Tests
 
