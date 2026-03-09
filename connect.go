@@ -461,7 +461,7 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 			if startTLSErr == nil {
 				return result, nil
 			}
-			return nil, fmt.Errorf("STARTTLS with %s: %w", addr, startTLSErr)
+			slog.Debug("smtp starttls attempt failed, falling back to tls handshake error", "addr", addr, "error", startTLSErr)
 		}
 		if port == "389" && len(prefix) == 0 {
 			result, startTLSErr := connectViaStartTLS(startTLSCtx, connectViaStartTLSInput{
@@ -896,12 +896,6 @@ func connectViaStartTLS(ctx context.Context, input connectViaStartTLSInput) (*Co
 	var clientAuth *ClientAuthInfo
 	tlsConn := tls.Client(bufferedConn, newConnectTLSConfig(input.serverName, &clientAuth))
 	conn = tlsConn
-
-	if deadline, ok := ctx.Deadline(); ok {
-		if err := tlsConn.SetDeadline(deadline); err != nil {
-			return nil, fmt.Errorf("setting %s TLS deadline: %w", protocolDisplayName(input.protocol), err)
-		}
-	}
 	handshakeErr := tlsConn.HandshakeContext(ctx)
 	state := tlsConn.ConnectionState()
 	if handshakeErr != nil {

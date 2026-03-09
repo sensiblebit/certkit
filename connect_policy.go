@@ -137,6 +137,9 @@ func tlsVersionAllowedByPolicy(version string, policy SecurityPolicy) bool {
 	if !policy.Enabled() {
 		return true
 	}
+	// FIPS 140-2 and FIPS 140-3 intentionally share the same conservative
+	// wire-level TLS version policy here. These checks are heuristic transport
+	// gates, not proof of approved-mode operation inside a validated module.
 	return version == "TLS 1.2" || version == "TLS 1.3"
 }
 
@@ -150,6 +153,9 @@ func cipherSuiteAllowedByPolicy(input cipherSuitePolicyInput) bool {
 	if !input.policy.Enabled() {
 		return true
 	}
+	// FIPS 140-2 and FIPS 140-3 intentionally share the same conservative
+	// TLS cipher allowlist here. On-the-wire observations cannot distinguish
+	// module validation state or approved-mode configuration.
 	if !tlsVersionAllowedByPolicy(input.protocol, input.policy) {
 		return false
 	}
@@ -179,6 +185,9 @@ func certificatePublicKeyAllowedByPolicy(cert *x509.Certificate, policy Security
 	if !policy.Enabled() || cert == nil {
 		return true
 	}
+	// FIPS 140-2 and FIPS 140-3 intentionally share the same conservative
+	// leaf-public-key policy here. The remote certificate alone does not prove
+	// which approved-mode profile the server is operating under.
 	switch pub := cert.PublicKey.(type) {
 	case *rsa.PublicKey:
 		return pub.N.BitLen() >= 2048
@@ -200,6 +209,9 @@ func certificateSignatureAllowedByPolicy(cert *x509.Certificate, policy Security
 	if !policy.Enabled() || cert == nil {
 		return true
 	}
+	// FIPS 140-2 and FIPS 140-3 intentionally share the same conservative
+	// leaf-signature policy here for the same reason as cipher/public-key
+	// checks: wire data is insufficient to distinguish validated deployment mode.
 	switch cert.SignatureAlgorithm {
 	case x509.SHA256WithRSA, x509.SHA384WithRSA, x509.SHA512WithRSA,
 		x509.ECDSAWithSHA256, x509.ECDSAWithSHA384, x509.ECDSAWithSHA512,

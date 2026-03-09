@@ -15,6 +15,8 @@ import (
 )
 
 func TestRunProbeSSH(t *testing.T) {
+	// This test mutates the package-level jsonOutput flag, so it must stay
+	// single-threaded even though the command behavior itself is otherwise safe.
 	addr := startProbeSSHServer(t)
 	state := snapshotReadonlyGlobals()
 	t.Cleanup(func() { restoreReadonlyGlobals(state) })

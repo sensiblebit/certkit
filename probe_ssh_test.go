@@ -131,6 +131,26 @@ func TestFormatSSHProbeResult(t *testing.T) {
 	}
 }
 
+func TestFormatSSHProbeResult_PreservesServerPreferenceMarker(t *testing.T) {
+	t.Parallel()
+
+	text := FormatSSHProbeResult(&SSHProbeResult{
+		Host:                  "example.com",
+		Port:                  "22",
+		Protocol:              "SSH 2.0",
+		Banner:                "SSH-2.0-example",
+		OverallRating:         CipherRatingWeak,
+		KeyExchangeAlgorithms: []string{"diffie-hellman-group14-sha1", "curve25519-sha256"},
+	})
+
+	if !strings.Contains(text, "  > [weak]") || !strings.Contains(text, "diffie-hellman-group14-sha1") {
+		t.Fatalf("FormatSSHProbeResult() should mark the server's actual preferred KEX:\n%s", text)
+	}
+	if !strings.Contains(text, "    [good]") || !strings.Contains(text, "curve25519-sha256") {
+		t.Fatalf("FormatSSHProbeResult() should still sort stronger KEX values first:\n%s", text)
+	}
+}
+
 func TestDiagnoseSSHProbe(t *testing.T) {
 	t.Parallel()
 
@@ -341,12 +361,7 @@ func containsAny(values []string, wants ...string) bool {
 }
 
 func containsDiag(diags []ChainDiagnostic, check string) bool {
-	for _, diag := range diags {
-		if diag.Check == check {
-			return true
-		}
-	}
-	return false
+	return containsSSHDiagDetail(diags, check, "")
 }
 
 func containsSSHDiagDetail(diags []ChainDiagnostic, check, detail string) bool {
