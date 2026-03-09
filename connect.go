@@ -546,7 +546,7 @@ func startTLSFallbackContext(parent context.Context, connectTimeout time.Duratio
 	if connectTimeout == 0 {
 		connectTimeout = defaultConnectTimeout
 	}
-	//nolint:gosec // The caller immediately defers the returned cancel func at each call site.
+	//nolint:gosec // The caller always defers the returned cancel func at the call site.
 	ctx, cancel := context.WithTimeout(parent, connectTimeout)
 	return ctx, cancel
 }
@@ -762,8 +762,12 @@ func connectResultFromTLSState(ctx context.Context, input connectResultFromTLSSt
 	if input.startTLS != "" {
 		protocol = formatProtocolWithStartTLS(protocol, input.startTLS)
 	}
+	host := input.connectInput.Host
+	if host == "" {
+		host = input.serverName
+	}
 	result := &ConnectResult{
-		Host:        input.connectInput.Host,
+		Host:        host,
 		Port:        input.connectInput.Port,
 		Protocol:    protocol,
 		tlsVersion:  rawProtocol,
@@ -870,6 +874,8 @@ func detectScanStartTLSProtocol(ctx context.Context, addr, serverName string) st
 			return protocol
 		} else if detectErr != nil {
 			slog.Debug("detect STARTTLS protocol: protocol probe failed", "addr", addr, "protocol", protocol, "error", detectErr)
+		} else {
+			slog.Debug("detect STARTTLS protocol: protocol probe did not confirm upgrade", "addr", addr, "protocol", protocol)
 		}
 		return ""
 	}
@@ -882,6 +888,8 @@ func detectScanStartTLSProtocol(ctx context.Context, addr, serverName string) st
 			return startTLSProtocolSMTP
 		} else if err != nil {
 			slog.Debug("detect STARTTLS protocol: SMTP probe failed", "addr", addr, "error", err)
+		} else {
+			slog.Debug("detect STARTTLS protocol: SMTP probe did not confirm upgrade", "addr", addr)
 		}
 	}
 	if matchesGenericIMAPBanner(firstBannerLine(prefix)) {
@@ -897,6 +905,8 @@ func detectScanStartTLSProtocol(ctx context.Context, addr, serverName string) st
 			return startTLSProtocolIMAP
 		} else if err != nil {
 			slog.Debug("detect STARTTLS protocol: IMAP probe failed", "addr", addr, "error", err)
+		} else {
+			slog.Debug("detect STARTTLS protocol: IMAP probe did not confirm upgrade", "addr", addr)
 		}
 	}
 	if matchesGenericPOP3Banner(firstBannerLine(prefix)) {
@@ -912,6 +922,8 @@ func detectScanStartTLSProtocol(ctx context.Context, addr, serverName string) st
 			return startTLSProtocolPOP3
 		} else if err != nil {
 			slog.Debug("detect STARTTLS protocol: POP3 probe failed", "addr", addr, "error", err)
+		} else {
+			slog.Debug("detect STARTTLS protocol: POP3 probe did not confirm upgrade", "addr", addr)
 		}
 	}
 	if err != nil && !errors.Is(err, io.EOF) {
@@ -1059,7 +1071,7 @@ func negotiateSMTPStartTLS(reader *bufio.Reader, conn net.Conn) error {
 	if _, err := readSMTPResponse(reader, "220"); err != nil {
 		return fmt.Errorf("reading SMTP greeting: %w", err)
 	}
-	if _, err := io.WriteString(conn, "EHLO certkit\r\n"); err != nil {
+	if _, err := io.WriteString(conn, "EHLO [127.0.0.1]\r\n"); err != nil {
 		return fmt.Errorf("writing SMTP EHLO: %w", err)
 	}
 	ehloLines, err := readSMTPResponse(reader, "250")
@@ -1161,13 +1173,7 @@ func negotiatePOP3StartTLS(reader *bufio.Reader, conn net.Conn) error {
 }
 
 func negotiateLDAPStartTLS(reader *bufio.Reader, conn net.Conn) error {
-	request := []byte{
-		0x30, 0x1d, // LDAPMessage sequence
-		0x02, 0x01, 0x01, // messageID = 1
-		0x77, 0x18, // ExtendedRequest
-		0x80, 0x16, // requestName
-		'1', '.', '3', '.', '6', '.', '1', '.', '4', '.', '1', '.', '1', '4', '6', '6', '.', '2', '0', '0', '3', '7',
-	}
+	request := buildLDAPStartTLSRequest()
 	if _, err := conn.Write(request); err != nil {
 		return fmt.Errorf("writing LDAP StartTLS request: %w", err)
 	}
@@ -1212,6 +1218,25 @@ func negotiateLDAPStartTLS(reader *bufio.Reader, conn net.Conn) error {
 		return fmt.Errorf("%w: result code %d", errStartTLSLDAPRejected, resp[2])
 	}
 	return nil
+}
+
+const ldapStartTLSRequestOID = "1.3.6.1.4.1.1466.20037"
+
+func buildLDAPStartTLSRequest() []byte {
+	requestNameLen := byte(len(ldapStartTLSRequestOID))
+	extendedRequestLen := 2 + requestNameLen
+	ldapMessageLen := 3 + 2 + extendedRequestLen
+
+	// LDAP StartTLS is an ExtendedRequest whose BER lengths are derived from the
+	// OID length here so future edits to ldapStartTLSRequestOID cannot silently
+	// leave the hardcoded envelope malformed.
+	request := []byte{
+		0x30, ldapMessageLen, // LDAPMessage sequence
+		0x02, 0x01, 0x01, // messageID = 1
+		0x77, extendedRequestLen, // ExtendedRequest
+		0x80, requestNameLen, // requestName
+	}
+	return append(request, ldapStartTLSRequestOID...)
 }
 
 func readLDAPBERLength(reader *bufio.Reader) (int, error) {
@@ -1406,7 +1431,7 @@ func detectSMTPStartTLS(conn net.Conn, prefix []byte) (bool, error) {
 	if _, err := readSMTPResponse(reader, "220"); err != nil {
 		return false, fmt.Errorf("reading SMTP greeting: %w", err)
 	}
-	if _, err := io.WriteString(conn, "EHLO certkit\r\n"); err != nil {
+	if _, err := io.WriteString(conn, "EHLO [127.0.0.1]\r\n"); err != nil {
 		return false, fmt.Errorf("writing SMTP EHLO: %w", err)
 	}
 	ehloLines, err := readSMTPResponse(reader, "250")

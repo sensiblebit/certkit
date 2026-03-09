@@ -556,6 +556,8 @@ func sshWeakAlgorithmCount(r *SSHProbeResult) int {
 	if r == nil {
 		return 0
 	}
+	// Counts intentionally deduplicate client/server overlaps so the summary
+	// line matches the unique weak algorithms called out in diagnostics.
 	return len(weakSSHValues(r.KeyExchangeAlgorithms, isWeakSSHKex)) +
 		len(weakSSHValues(r.HostKeyAlgorithms, isWeakSSHHostKey)) +
 		len(weakSSHValues(slices.Concat(r.CiphersClientToServer, r.CiphersServerToClient), isWeakSSHCipher)) +
@@ -566,6 +568,8 @@ func sshPolicyViolationCount(r *SSHProbeResult) int {
 	if r == nil || !r.Policy.Enabled() {
 		return 0
 	}
+	// Counts intentionally deduplicate client/server overlaps so the summary
+	// line matches the unique policy findings called out in diagnostics.
 	return len(weakSSHValues(r.KeyExchangeAlgorithms, sshPolicyDisallowsKex(r.Policy))) +
 		len(weakSSHValues(r.HostKeyAlgorithms, sshPolicyDisallowsHostKey(r.Policy))) +
 		len(weakSSHValues(slices.Concat(r.CiphersClientToServer, r.CiphersServerToClient), sshPolicyDisallowsCipher(r.Policy))) +

@@ -17,8 +17,6 @@ import (
 )
 
 func TestRunProbeSSH(t *testing.T) {
-	addr := startProbeSSHServer(t)
-
 	tests := []struct {
 		name       string
 		format     string
@@ -93,6 +91,8 @@ func TestRunProbeSSH(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			addr := startProbeSSHServer(t)
+
 			// snapshotReadonlyGlobals serializes tests that mutate package-level
 			// Cobra flag state such as jsonOutput.
 			state := snapshotReadonlyGlobals()
@@ -140,8 +140,6 @@ func TestRunProbeSSH_UnsupportedFormat(t *testing.T) {
 }
 
 func TestRunProbeSSH_PolicyFlags(t *testing.T) {
-	addr := startProbeSSHServer(t)
-
 	tests := []struct {
 		name       string
 		fips1402   bool
@@ -157,6 +155,8 @@ func TestRunProbeSSH_PolicyFlags(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			addr := startProbeSSHServer(t)
+
 			state := snapshotReadonlyGlobals()
 			defer restoreReadonlyGlobals(state)
 

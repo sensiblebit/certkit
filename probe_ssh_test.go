@@ -83,7 +83,7 @@ func TestProbeSSH(t *testing.T) {
 		t.Fatalf("CompressionClientToServer = %v, want none", result.CompressionClientToServer)
 	}
 	// The overall rating is weak because the fixture still advertises a weak
-	// host key algorithm, not because of its key exchange options.
+	// host key algorithm; the fixture's KEX list is not what drives the rating.
 	if got := result.OverallRating; got != CipherRatingWeak {
 		t.Fatalf("OverallRating = %q, want %q", got, CipherRatingWeak)
 	}
@@ -379,6 +379,8 @@ func TestDiagnoseSSHProbe_FIPSPolicy(t *testing.T) {
 	if containsSSHDiagDetail(diags, "policy-compression", "zlib@openssh.com") {
 		t.Fatalf("DiagnoseSSHProbe() unexpectedly reported policy-compression in %+v", diags)
 	}
+	// Policy-only findings currently still roll up to the weak overall rating;
+	// this assertion documents that behavior explicitly for future refactors.
 	if got := RateSSHAlgorithms(result); got != CipherRatingWeak {
 		t.Fatalf("RateSSHAlgorithms() = %q, want %q", got, CipherRatingWeak)
 	}
