@@ -256,7 +256,11 @@ func parseSSHBanner(banner string) (string, string) {
 		return "", ""
 	}
 	protocol := "SSH " + parts[0]
-	return protocol, parts[1]
+	software := parts[1]
+	if idx := strings.IndexByte(software, ' '); idx != -1 {
+		software = software[:idx]
+	}
+	return protocol, software
 }
 
 // FormatSSHProbeResult formats an SSHProbeResult as human-readable text.
@@ -368,7 +372,7 @@ func FormatSSHRatingLine(r *SSHProbeResult) string {
 	}
 	switch {
 	case weak == 0 && policyViolations == 0:
-		return fmt.Sprintf("Algorithms:   %s (%d weak)\n", CipherRatingGood, 0)
+		return fmt.Sprintf("Algorithms:   %s (%d weak)\n", rating, weak)
 	case !r.Policy.Enabled():
 		return fmt.Sprintf("Algorithms:   %s (%d weak)\n", rating, weak)
 	case weak == 0:

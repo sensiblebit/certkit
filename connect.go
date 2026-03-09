@@ -25,6 +25,7 @@ const defaultConnectTimeout = 10 * time.Second
 const nonTLSPeekLimit = 256
 const startTLSDetectTimeout = 1 * time.Second
 const maxLDAPStartTLSResponseBytes = 64 * 1024
+const maxTextLineBytes = 16 * 1024
 
 var (
 	errConnectHostRequired         = errors.New("connecting to TLS server: host is required")
@@ -40,6 +41,7 @@ var (
 	errStartTLSIMAPRejected        = errors.New("IMAP service rejected STARTTLS")
 	errStartTLSPOP3Greeting        = errors.New("unexpected POP3 greeting")
 	errStartTLSPOP3Rejected        = errors.New("POP3 service rejected STLS")
+	errLineTooLong                 = errors.New("line exceeds maximum length")
 )
 
 type startTLSProtocol string
@@ -435,13 +437,12 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 		// rejection, which only occurs when clientAuth is non-nil.
 		_ = tlsConn.Close()
 		prefix := sniffConn.prefix()
-		startTLSProtocol, attempted := detectConnectStartTLSProtocol(prefix)
-		if attempted {
+		if detectedProtocol, ok := detectStartTLSProtocol("", prefix); ok {
 			result, startTLSErr := connectViaStartTLS(connectCtx, connectViaStartTLSInput{
 				connectInput: input,
 				addr:         addr,
 				serverName:   serverName,
-				protocol:     startTLSProtocol,
+				protocol:     detectedProtocol,
 			})
 			if startTLSErr != nil {
 				return nil, fmt.Errorf("STARTTLS with %s: %w", addr, startTLSErr)
@@ -458,6 +459,7 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 			if startTLSErr == nil {
 				return result, nil
 			}
+			return nil, fmt.Errorf("STARTTLS with %s: %w", addr, startTLSErr)
 		}
 		if port == "389" && len(prefix) == 0 {
 			result, startTLSErr := connectViaStartTLS(connectCtx, connectViaStartTLSInput{
@@ -807,13 +809,6 @@ func detectScanStartTLSProtocol(ctx context.Context, addr string) startTLSProtoc
 	return ""
 }
 
-func detectConnectStartTLSProtocol(prefix []byte) (startTLSProtocol, bool) {
-	if protocol, ok := detectStartTLSProtocol("", prefix); ok {
-		return protocol, true
-	}
-	return "", false
-}
-
 func ldapPort(addr string) bool {
 	_, port, err := net.SplitHostPort(addr)
 	return err == nil && port == "389"
@@ -1039,7 +1034,15 @@ func negotiateLDAPStartTLS(reader *bufio.Reader, conn net.Conn) error {
 	if len(body) < 7 || body[0] != 0x02 || body[1] != 0x01 || body[2] != 0x01 || body[3] != 0x78 {
 		return fmt.Errorf("%w: unexpected LDAP StartTLS envelope %x", errStartTLSLDAPMalformed, body)
 	}
-	resp := body[5:]
+	innerLen, innerLenBytes, err := readLDAPBERLengthBytes(body[4:])
+	if err != nil {
+		return err
+	}
+	innerStart := 4 + innerLenBytes
+	if len(body) < innerStart+innerLen {
+		return fmt.Errorf("%w: truncated LDAP StartTLS response %x", errStartTLSLDAPMalformed, body)
+	}
+	resp := body[innerStart : innerStart+innerLen]
 	if len(resp) < 7 || resp[0] != 0x0a || resp[1] != 0x01 {
 		return fmt.Errorf("%w: unexpected LDAP StartTLS result %x", errStartTLSLDAPMalformed, resp)
 	}
@@ -1072,15 +1075,47 @@ func readLDAPBERLength(reader *bufio.Reader) (int, error) {
 	return bodyLen, nil
 }
 
+func readLDAPBERLengthBytes(data []byte) (int, int, error) {
+	if len(data) == 0 {
+		return 0, 0, fmt.Errorf("%w: missing LDAP length", errStartTLSLDAPMalformed)
+	}
+	if data[0]&0x80 == 0 {
+		return int(data[0]), 1, nil
+	}
+	numLenBytes := int(data[0] & 0x7f)
+	if numLenBytes == 0 || numLenBytes > 4 || len(data) < 1+numLenBytes {
+		return 0, 0, fmt.Errorf("%w: invalid LDAP message length encoding", errStartTLSLDAPMalformed)
+	}
+	bodyLen := 0
+	for _, b := range data[1 : 1+numLenBytes] {
+		bodyLen = (bodyLen << 8) | int(b)
+	}
+	return bodyLen, 1 + numLenBytes, nil
+}
+
 func readTextLine(reader *bufio.Reader) (string, error) {
-	line, err := reader.ReadString('\n')
-	if err == nil {
-		return strings.TrimRight(line, "\r\n"), nil
+	var (
+		buf []byte
+		err error
+	)
+	for {
+		var chunk []byte
+		chunk, err = reader.ReadSlice('\n')
+		buf = append(buf, chunk...)
+		if len(buf) > maxTextLineBytes {
+			return "", fmt.Errorf("reading text line: %w", errLineTooLong)
+		}
+		if err == nil {
+			return strings.TrimRight(string(buf), "\r\n"), nil
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		if len(buf) > 0 && errors.Is(err, io.EOF) {
+			return strings.TrimRight(string(buf), "\r\n"), nil
+		}
+		return "", fmt.Errorf("reading text line: %w", err)
 	}
-	if len(line) > 0 && errors.Is(err, io.EOF) {
-		return strings.TrimRight(line, "\r\n"), nil
-	}
-	return "", fmt.Errorf("reading text line: %w", err)
 }
 
 type prefixCapturingConn struct {
