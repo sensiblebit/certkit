@@ -1,6 +1,7 @@
 package certkit
 
 import (
+	"bufio"
 	"bytes"
 	"cmp"
 	"context"
@@ -11,6 +12,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"slices"
@@ -20,10 +22,32 @@ import (
 )
 
 const defaultConnectTimeout = 10 * time.Second
+const nonTLSPeekLimit = 256
+const startTLSDetectTimeout = 1 * time.Second
 
 var (
-	errConnectHostRequired    = errors.New("connecting to TLS server: host is required")
-	errCipherScanHostRequired = errors.New("scanning cipher suites: host is required")
+	errConnectHostRequired         = errors.New("connecting to TLS server: host is required")
+	errCipherScanHostRequired      = errors.New("scanning cipher suites: host is required")
+	errConnectNonTLSService        = errors.New("remote service does not appear to speak TLS")
+	errStartTLSUnsupportedProtocol = errors.New("unsupported STARTTLS protocol")
+	errStartTLSLDAPRejected        = errors.New("LDAP service rejected StartTLS")
+	errStartTLSLDAPMalformed       = errors.New("malformed LDAP StartTLS response")
+	errStartTLSSMTPUnsupported     = errors.New("SMTP service did not advertise STARTTLS")
+	errStartTLSSMTPUnexpected      = errors.New("unexpected SMTP response")
+	errStartTLSSMTPMalformed       = errors.New("malformed SMTP response")
+	errStartTLSIMAPGreeting        = errors.New("unexpected IMAP greeting")
+	errStartTLSIMAPRejected        = errors.New("IMAP service rejected STARTTLS")
+	errStartTLSPOP3Greeting        = errors.New("unexpected POP3 greeting")
+	errStartTLSPOP3Rejected        = errors.New("POP3 service rejected STLS")
+)
+
+type startTLSProtocol string
+
+const (
+	startTLSProtocolSMTP startTLSProtocol = "smtp"
+	startTLSProtocolIMAP startTLSProtocol = "imap"
+	startTLSProtocolPOP3 startTLSProtocol = "pop3"
+	startTLSProtocolLDAP startTLSProtocol = "ldap"
 )
 
 // ChainDiagnostic describes a single chain configuration issue found during connection probing.
@@ -238,6 +262,8 @@ type ConnectTLSInput struct {
 	RootCAs *x509.CertPool
 	// AllowPrivateNetworks allows AIA/OCSP/CRL fetches to private/internal endpoints.
 	AllowPrivateNetworks bool
+	// Policy enables optional strict transport/certificate diagnostics.
+	Policy SecurityPolicy
 }
 
 // ClientAuthInfo describes the server's client certificate request (mTLS).
@@ -271,6 +297,8 @@ type ConnectResult struct {
 	Port string `json:"port"`
 	// Protocol is the negotiated TLS version (e.g. "TLS 1.3").
 	Protocol string `json:"protocol"`
+	// Policy is the optional strictness profile used when rating this result.
+	Policy SecurityPolicy `json:"policy,omitempty"`
 	// CipherSuite is the negotiated cipher suite name.
 	CipherSuite string `json:"cipher_suite"`
 	// ServerName is the SNI value sent.
@@ -345,36 +373,13 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 	if err != nil {
 		return nil, fmt.Errorf("connecting to %s: %w", addr, err)
 	}
+	sniffConn := &prefixCapturingConn{Conn: conn}
 
 	var clientAuth *ClientAuthInfo
 
-	tlsConf := &tls.Config{
-		ServerName:         serverName,
-		InsecureSkipVerify: true, //nolint:gosec // We do our own verification below.
-		GetClientCertificate: func(cri *tls.CertificateRequestInfo) (*tls.Certificate, error) {
-			info := &ClientAuthInfo{Requested: true}
-			for i, rawDN := range cri.AcceptableCAs {
-				var rdnSeq pkix.RDNSequence
-				if _, err := asn1.Unmarshal(rawDN, &rdnSeq); err != nil {
-					slog.Debug("failed to unmarshal acceptable CA DN",
-						slog.Int("index", i),
-						slog.Any("error", err),
-					)
-					continue
-				}
-				var name pkix.Name
-				name.FillFromRDNSequence(&rdnSeq)
-				info.AcceptableCAs = append(info.AcceptableCAs, FormatDN(name))
-			}
-			for _, scheme := range cri.SignatureSchemes {
-				info.SignatureSchemes = append(info.SignatureSchemes, signatureSchemeString(scheme))
-			}
-			clientAuth = info
-			return &tls.Certificate{}, nil
-		},
-	}
+	tlsConf := newConnectTLSConfig(serverName, &clientAuth)
 
-	tlsConn := tls.Client(conn, tlsConf)
+	tlsConn := tls.Client(sniffConn, tlsConf)
 	defer func() { _ = tlsConn.Close() }()
 
 	if deadline, ok := connectCtx.Deadline(); ok {
@@ -408,6 +413,7 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 			Host:        input.Host,
 			Port:        port,
 			Protocol:    tlsVersionString(legacyResult.version),
+			Policy:      input.Policy,
 			CipherSuite: cipherSuiteName(legacyResult.cipherSuite),
 			ServerName:  serverName,
 			PeerChain:   legacyResult.certificates,
@@ -424,6 +430,18 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 		// Non-alert failure (network error, certificate error, etc.) — return
 		// immediately. The mTLS fallback path below is only for client auth
 		// rejection, which only occurs when clientAuth is non-nil.
+		_ = tlsConn.Close()
+		startTLSProtocol, attempted := detectConnectStartTLSProtocol(sniffConn.prefix(), port)
+		if attempted {
+			result, startTLSErr := connectViaStartTLS(connectCtx, input, addr, serverName, startTLSProtocol)
+			if startTLSErr != nil {
+				return nil, fmt.Errorf("STARTTLS with %s: %w", addr, startTLSErr)
+			}
+			return result, nil
+		}
+		if inferredErr := inferNonTLSError(handshakeErr, sniffConn.prefix()); inferredErr != nil {
+			return nil, fmt.Errorf("tls handshake with %s: %w", addr, inferredErr)
+		}
 		return nil, fmt.Errorf("tls handshake with %s: %w", addr, handshakeErr)
 	}
 
@@ -437,6 +455,7 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 		Host:        input.Host,
 		Port:        port,
 		Protocol:    tlsVersionString(state.Version),
+		Policy:      input.Policy,
 		CipherSuite: tls.CipherSuiteName(state.CipherSuite),
 		ServerName:  serverName,
 		ALPN:        state.NegotiatedProtocol,
@@ -457,6 +476,7 @@ func (result *ConnectResult) populate(ctx context.Context, input ConnectTLSInput
 
 	// Diagnose the negotiated cipher suite and protocol version.
 	result.Diagnostics = append(result.Diagnostics, DiagnoseNegotiatedCipher(result.Protocol, result.CipherSuite)...)
+	result.Diagnostics = append(result.Diagnostics, diagnoseNegotiatedCipherPolicy(result.Protocol, result.CipherSuite, input.Policy)...)
 
 	// Run chain diagnostics on the raw peer chain.
 	if len(result.PeerChain) > 0 {
@@ -535,6 +555,8 @@ func (result *ConnectResult) populate(ctx context.Context, input ConnectTLSInput
 		return
 	}
 
+	result.Diagnostics = append(result.Diagnostics, diagnosePeerChainPolicy(result.PeerChain, input.Policy)...)
+
 	// For legacy probes, certificate chain verification has been run above and
 	// the result is included in the output. However, OCSP and CRL revocation
 	// checks require a verified issuer from a real TLS channel — skipping
@@ -605,6 +627,464 @@ func (result *ConnectResult) populate(ctx context.Context, input ConnectTLSInput
 			Detail: "no issuer certificate available to verify CRL signature",
 		}
 	}
+}
+
+func newConnectTLSConfig(serverName string, clientAuth **ClientAuthInfo) *tls.Config {
+	return &tls.Config{
+		ServerName:         serverName,
+		InsecureSkipVerify: true, //nolint:gosec // We do our own verification below.
+		GetClientCertificate: func(cri *tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			info := &ClientAuthInfo{Requested: true}
+			for i, rawDN := range cri.AcceptableCAs {
+				var rdnSeq pkix.RDNSequence
+				if _, err := asn1.Unmarshal(rawDN, &rdnSeq); err != nil {
+					slog.Debug("failed to unmarshal acceptable CA DN",
+						slog.Int("index", i),
+						slog.Any("error", err),
+					)
+					continue
+				}
+				var name pkix.Name
+				name.FillFromRDNSequence(&rdnSeq)
+				info.AcceptableCAs = append(info.AcceptableCAs, FormatDN(name))
+			}
+			for _, scheme := range cri.SignatureSchemes {
+				info.SignatureSchemes = append(info.SignatureSchemes, signatureSchemeString(scheme))
+			}
+			*clientAuth = info
+			return &tls.Certificate{}, nil
+		},
+	}
+}
+
+func connectResultFromTLSState(ctx context.Context, input ConnectTLSInput, serverName string, state tls.ConnectionState, clientAuth *ClientAuthInfo, startTLS startTLSProtocol) *ConnectResult {
+	protocol := tlsVersionString(state.Version)
+	if startTLS != "" {
+		protocol = formatProtocolWithStartTLS(protocol, startTLS)
+	}
+	result := &ConnectResult{
+		Host:        input.Host,
+		Port:        input.Port,
+		Protocol:    protocol,
+		Policy:      input.Policy,
+		CipherSuite: tls.CipherSuiteName(state.CipherSuite),
+		ServerName:  serverName,
+		ALPN:        state.NegotiatedProtocol,
+		ClientAuth:  clientAuth,
+		PeerChain:   state.PeerCertificates,
+		TLSSCTs:     state.SignedCertificateTimestamps,
+	}
+	result.populate(ctx, input)
+	return result
+}
+
+func dialProbeConn(ctx context.Context, input cipherProbeInput) (net.Conn, error) {
+	dialer := &net.Dialer{}
+	conn, err := dialer.DialContext(ctx, "tcp", input.addr)
+	if err != nil {
+		return nil, fmt.Errorf("dialing probe connection: %w", err)
+	}
+	if input.startTLS == "" {
+		return conn, nil
+	}
+
+	reader := bufio.NewReader(conn)
+	if err := negotiateStartTLS(reader, conn, input.startTLS); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return &bufferedPrefixConn{Conn: conn, reader: reader}, nil
+}
+
+func detectScanStartTLSProtocol(ctx context.Context, addr string) startTLSProtocol {
+	dialer := &net.Dialer{}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = conn.Close() }()
+
+	readTimeout := startTLSDetectTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining <= 0 {
+			return ""
+		}
+		readTimeout = min(readTimeout, remaining)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(readTimeout))
+
+	buf := make([]byte, nonTLSPeekLimit)
+	n, err := conn.Read(buf)
+	if n <= 0 {
+		if ldapPort(addr) {
+			return startTLSProtocolLDAP
+		}
+		return ""
+	}
+	protocol, _, ok := detectStartTLSProtocol(buf[:n])
+	if !ok {
+		if ldapPort(addr) {
+			return startTLSProtocolLDAP
+		}
+		return ""
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		slog.Debug("detect STARTTLS protocol: ignoring trailing read error", "addr", addr, "error", err)
+	}
+	return protocol
+}
+
+func detectConnectStartTLSProtocol(prefix []byte, port string) (startTLSProtocol, bool) {
+	if protocol, _, ok := detectStartTLSProtocol(prefix); ok {
+		return protocol, true
+	}
+	if port == "389" {
+		return startTLSProtocolLDAP, true
+	}
+	return "", false
+}
+
+func ldapPort(addr string) bool {
+	_, port, err := net.SplitHostPort(addr)
+	return err == nil && port == "389"
+}
+
+func connectViaStartTLS(ctx context.Context, input ConnectTLSInput, addr, serverName string, protocol startTLSProtocol) (*ConnectResult, error) {
+	dialer := &net.Dialer{}
+	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	if err != nil {
+		return nil, fmt.Errorf("reconnecting for %s STARTTLS: %w", protocolDisplayName(protocol), err)
+	}
+	defer func() { _ = conn.Close() }()
+
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := conn.SetDeadline(deadline); err != nil {
+			return nil, fmt.Errorf("setting %s STARTTLS deadline: %w", protocolDisplayName(protocol), err)
+		}
+	}
+
+	reader := bufio.NewReader(conn)
+	if err := negotiateStartTLS(reader, conn, protocol); err != nil {
+		return nil, err
+	}
+
+	bufferedConn := &bufferedPrefixConn{Conn: conn, reader: reader}
+	var clientAuth *ClientAuthInfo
+	tlsConn := tls.Client(bufferedConn, newConnectTLSConfig(serverName, &clientAuth))
+	defer func() { _ = tlsConn.Close() }()
+
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := tlsConn.SetDeadline(deadline); err != nil {
+			return nil, fmt.Errorf("setting %s TLS deadline: %w", protocolDisplayName(protocol), err)
+		}
+	}
+	if err := tlsConn.HandshakeContext(ctx); err != nil {
+		return nil, fmt.Errorf("%s STARTTLS handshake: %w", protocolDisplayName(protocol), err)
+	}
+
+	state := tlsConn.ConnectionState()
+	startTLSInput := input
+	if startTLSInput.Port == "" {
+		startTLSInput.Port = "443"
+	}
+	return connectResultFromTLSState(ctx, startTLSInput, serverName, state, clientAuth, protocol), nil
+}
+
+func negotiateStartTLS(reader *bufio.Reader, conn net.Conn, protocol startTLSProtocol) error {
+	switch protocol {
+	case startTLSProtocolSMTP:
+		return negotiateSMTPStartTLS(reader, conn)
+	case startTLSProtocolIMAP:
+		return negotiateIMAPStartTLS(reader, conn)
+	case startTLSProtocolPOP3:
+		return negotiatePOP3StartTLS(reader, conn)
+	case startTLSProtocolLDAP:
+		return negotiateLDAPStartTLS(reader, conn)
+	default:
+		return fmt.Errorf("%w: %q", errStartTLSUnsupportedProtocol, protocol)
+	}
+}
+
+func negotiateSMTPStartTLS(reader *bufio.Reader, conn net.Conn) error {
+	greeting, err := readSMTPResponse(reader, "220")
+	if err != nil {
+		return fmt.Errorf("reading SMTP greeting: %w", err)
+	}
+	if _, err := io.WriteString(conn, "EHLO certkit\r\n"); err != nil {
+		return fmt.Errorf("writing SMTP EHLO: %w", err)
+	}
+	ehloLines, err := readSMTPResponse(reader, "250")
+	if err != nil {
+		return fmt.Errorf("reading SMTP EHLO response: %w", err)
+	}
+	if !smtpAdvertisesStartTLS(append(greeting, ehloLines...)) {
+		return errStartTLSSMTPUnsupported
+	}
+	if _, err := io.WriteString(conn, "STARTTLS\r\n"); err != nil {
+		return fmt.Errorf("writing SMTP STARTTLS: %w", err)
+	}
+	if _, err := readSMTPResponse(reader, "220"); err != nil {
+		return fmt.Errorf("reading SMTP STARTTLS response: %w", err)
+	}
+	return nil
+}
+
+func readSMTPResponse(reader *bufio.Reader, wantCode string) ([]string, error) {
+	var lines []string
+	for {
+		line, err := readTextLine(reader)
+		if err != nil {
+			return nil, err
+		}
+		if len(line) < 4 || line[:3] != wantCode {
+			return nil, fmt.Errorf("%w %q, want %s", errStartTLSSMTPUnexpected, line, wantCode)
+		}
+		lines = append(lines, line)
+		if line[3] == ' ' {
+			return lines, nil
+		}
+		if line[3] != '-' {
+			return nil, fmt.Errorf("%w %q", errStartTLSSMTPMalformed, line)
+		}
+	}
+}
+
+func smtpAdvertisesStartTLS(lines []string) bool {
+	for _, line := range lines {
+		if strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(line[4:], "250-")), "STARTTLS") ||
+			strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(line[4:], "250 ")), "STARTTLS") {
+			return true
+		}
+	}
+	return false
+}
+
+func negotiateIMAPStartTLS(reader *bufio.Reader, conn net.Conn) error {
+	greeting, err := readTextLine(reader)
+	if err != nil {
+		return fmt.Errorf("reading IMAP greeting: %w", err)
+	}
+	if !strings.HasPrefix(strings.ToUpper(greeting), "* OK") {
+		return fmt.Errorf("%w %q", errStartTLSIMAPGreeting, greeting)
+	}
+	if _, err := io.WriteString(conn, "a001 STARTTLS\r\n"); err != nil {
+		return fmt.Errorf("writing IMAP STARTTLS: %w", err)
+	}
+	line, err := readTextLine(reader)
+	if err != nil {
+		return fmt.Errorf("reading IMAP STARTTLS response: %w", err)
+	}
+	if !strings.HasPrefix(strings.ToUpper(line), "A001 OK") {
+		return fmt.Errorf("%w: %s", errStartTLSIMAPRejected, line)
+	}
+	return nil
+}
+
+func negotiatePOP3StartTLS(reader *bufio.Reader, conn net.Conn) error {
+	greeting, err := readTextLine(reader)
+	if err != nil {
+		return fmt.Errorf("reading POP3 greeting: %w", err)
+	}
+	if !strings.HasPrefix(strings.ToUpper(greeting), "+OK") {
+		return fmt.Errorf("%w %q", errStartTLSPOP3Greeting, greeting)
+	}
+	if _, err := io.WriteString(conn, "STLS\r\n"); err != nil {
+		return fmt.Errorf("writing POP3 STLS: %w", err)
+	}
+	line, err := readTextLine(reader)
+	if err != nil {
+		return fmt.Errorf("reading POP3 STLS response: %w", err)
+	}
+	if !strings.HasPrefix(strings.ToUpper(line), "+OK") {
+		return fmt.Errorf("%w: %s", errStartTLSPOP3Rejected, line)
+	}
+	return nil
+}
+
+func negotiateLDAPStartTLS(reader *bufio.Reader, conn net.Conn) error {
+	request := []byte{
+		0x30, 0x1d, // LDAPMessage sequence
+		0x02, 0x01, 0x01, // messageID = 1
+		0x77, 0x18, // ExtendedRequest
+		0x80, 0x16, // requestName
+		'1', '.', '3', '.', '6', '.', '1', '.', '4', '.', '1', '.', '1', '4', '6', '6', '.', '2', '0', '0', '3', '7',
+	}
+	if _, err := conn.Write(request); err != nil {
+		return fmt.Errorf("writing LDAP StartTLS request: %w", err)
+	}
+
+	header := make([]byte, 2)
+	if _, err := io.ReadFull(reader, header); err != nil {
+		return fmt.Errorf("reading LDAP StartTLS response header: %w", err)
+	}
+	if header[0] != 0x30 {
+		return fmt.Errorf("%w: unexpected LDAP message tag 0x%02x", errStartTLSLDAPMalformed, header[0])
+	}
+	bodyLen := int(header[1])
+	body := make([]byte, bodyLen)
+	if _, err := io.ReadFull(reader, body); err != nil {
+		return fmt.Errorf("reading LDAP StartTLS response body: %w", err)
+	}
+	if len(body) < 7 || body[0] != 0x02 || body[2] != 0x01 || body[3] != 0x78 {
+		return fmt.Errorf("%w: unexpected LDAP StartTLS envelope %x", errStartTLSLDAPMalformed, body)
+	}
+	resp := body[5:]
+	if len(resp) < 7 || resp[0] != 0x0a || resp[1] != 0x01 {
+		return fmt.Errorf("%w: unexpected LDAP StartTLS result %x", errStartTLSLDAPMalformed, resp)
+	}
+	if resp[2] != 0x00 {
+		return fmt.Errorf("%w: result code %d", errStartTLSLDAPRejected, resp[2])
+	}
+	return nil
+}
+
+func readTextLine(reader *bufio.Reader) (string, error) {
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return "", fmt.Errorf("reading text line: %w", err)
+	}
+	return strings.TrimRight(line, "\r\n"), nil
+}
+
+type prefixCapturingConn struct {
+	net.Conn
+	mu          sync.Mutex
+	prefixBytes []byte
+}
+
+//nolint:wrapcheck // net.Conn adapters must preserve underlying Read errors.
+func (conn *prefixCapturingConn) Read(p []byte) (int, error) {
+	n, err := conn.Conn.Read(p)
+	if n > 0 {
+		conn.capturePrefix(p[:n])
+	}
+	return n, err
+}
+
+func (conn *prefixCapturingConn) capturePrefix(chunk []byte) {
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+
+	remaining := nonTLSPeekLimit - len(conn.prefixBytes)
+	if remaining <= 0 {
+		return
+	}
+	if len(chunk) > remaining {
+		chunk = chunk[:remaining]
+	}
+	conn.prefixBytes = append(conn.prefixBytes, chunk...)
+}
+
+func (conn *prefixCapturingConn) prefix() []byte {
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	return append([]byte(nil), conn.prefixBytes...)
+}
+
+type bufferedPrefixConn struct {
+	net.Conn
+	reader *bufio.Reader
+}
+
+//nolint:wrapcheck // net.Conn adapters must preserve underlying Read errors.
+func (conn *bufferedPrefixConn) Read(p []byte) (int, error) {
+	return conn.reader.Read(p)
+}
+
+func inferNonTLSError(handshakeErr error, prefix []byte) error {
+	if handshakeErr == nil || !strings.Contains(handshakeErr.Error(), "first record does not look like a TLS handshake") {
+		return nil
+	}
+	if len(prefix) == 0 {
+		return nil
+	}
+
+	banner := firstBannerLine(prefix)
+
+	switch {
+	case strings.HasPrefix(banner, "SSH-"):
+		return fmt.Errorf("%w: received SSH banner %q", errConnectNonTLSService, banner)
+	case strings.HasPrefix(banner, "HTTP/"):
+		return fmt.Errorf("%w: received HTTP response %q", errConnectNonTLSService, banner)
+	case matchesSMTPBanner(banner):
+		return fmt.Errorf("%w: received SMTP banner %q", errConnectNonTLSService, banner)
+	case matchesIMAPBanner(banner):
+		return fmt.Errorf("%w: received IMAP banner %q", errConnectNonTLSService, banner)
+	case matchesPOP3Banner(banner):
+		return fmt.Errorf("%w: received POP3 banner %q", errConnectNonTLSService, banner)
+	case isMostlyPrintable(prefix):
+		return fmt.Errorf("%w: received plaintext banner %q", errConnectNonTLSService, banner)
+	default:
+		return fmt.Errorf("%w: received non-TLS bytes %x", errConnectNonTLSService, prefix[:min(len(prefix), 16)])
+	}
+}
+
+func detectStartTLSProtocol(prefix []byte) (startTLSProtocol, string, bool) {
+	banner := firstBannerLine(prefix)
+	switch {
+	case matchesSMTPBanner(banner):
+		return startTLSProtocolSMTP, banner, true
+	case matchesIMAPBanner(banner):
+		return startTLSProtocolIMAP, banner, true
+	case matchesPOP3Banner(banner):
+		return startTLSProtocolPOP3, banner, true
+	default:
+		return "", banner, false
+	}
+}
+
+func firstBannerLine(prefix []byte) string {
+	banner := strings.TrimSpace(string(prefix))
+	if line, _, _ := strings.Cut(banner, "\n"); line != "" {
+		return strings.TrimSpace(line)
+	}
+	return banner
+}
+
+func matchesSMTPBanner(banner string) bool {
+	upper := strings.ToUpper(banner)
+	return strings.HasPrefix(banner, "220 ") && (strings.Contains(upper, " SMTP") || strings.Contains(upper, " ESMTP"))
+}
+
+func matchesIMAPBanner(banner string) bool {
+	return strings.HasPrefix(strings.ToUpper(banner), "* OK")
+}
+
+func matchesPOP3Banner(banner string) bool {
+	return strings.HasPrefix(strings.ToUpper(banner), "+OK")
+}
+
+func protocolDisplayName(protocol startTLSProtocol) string {
+	switch protocol {
+	case startTLSProtocolSMTP:
+		return "SMTP"
+	case startTLSProtocolIMAP:
+		return "IMAP"
+	case startTLSProtocolPOP3:
+		return "POP3"
+	case startTLSProtocolLDAP:
+		return "LDAP"
+	default:
+		return string(protocol)
+	}
+}
+
+func formatProtocolWithStartTLS(protocol string, startTLS startTLSProtocol) string {
+	return fmt.Sprintf("%s (%s STARTTLS)", protocol, protocolDisplayName(startTLS))
+}
+
+func isMostlyPrintable(data []byte) bool {
+	if len(data) == 0 {
+		return false
+	}
+	printable := 0
+	for _, b := range data {
+		if b >= 0x20 && b <= 0x7e || b == '\r' || b == '\n' || b == '\t' {
+			printable++
+		}
+	}
+	return printable*4 >= len(data)*3
 }
 
 // CheckLeafCRLInput holds parameters for CheckLeafCRL.
@@ -900,6 +1380,8 @@ type CipherProbeResult struct {
 
 // CipherScanResult contains the results of a cipher suite enumeration.
 type CipherScanResult struct {
+	// Policy is the optional strictness profile used when rating this scan.
+	Policy SecurityPolicy `json:"policy,omitempty"`
 	// SupportedVersions lists the TLS versions the server supports (e.g. ["TLS 1.3", "TLS 1.2"]).
 	SupportedVersions []string `json:"supported_versions"`
 	// Ciphers lists all accepted cipher suites, sorted by version (descending) then rating.
@@ -927,6 +1409,8 @@ type ScanCipherSuitesInput struct {
 	Concurrency int
 	// ProbeQUIC enables QUIC/UDP cipher probing alongside TCP.
 	ProbeQUIC bool
+	// Policy enables optional strict transport diagnostics.
+	Policy SecurityPolicy
 }
 
 // cipherSuiteName returns a human-readable name for any TLS cipher suite.
@@ -1061,6 +1545,7 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 	}
 
 	addr := net.JoinHostPort(input.Host, port)
+	startTLS := detectScanStartTLSProtocol(ctx, addr)
 
 	sem := make(chan struct{}, concurrency)
 	var mu sync.Mutex
@@ -1101,7 +1586,7 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 			probeCtx, probeCancel := context.WithTimeout(ctx, probeTimeout)
 			defer probeCancel()
 
-			if probeTLS13Cipher(probeCtx, cipherProbeInput{addr: addr, serverName: serverName, cipherID: cipherID}) {
+			if probeTLS13Cipher(probeCtx, cipherProbeInput{addr: addr, serverName: serverName, cipherID: cipherID, startTLS: startTLS}) {
 				r := CipherProbeResult{
 					Name:        cipherSuiteName(cipherID),
 					ID:          cipherID,
@@ -1148,7 +1633,7 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 			probeCtx, probeCancel := context.WithTimeout(ctx, probeTimeout)
 			defer probeCancel()
 
-			if probeCipher(probeCtx, cipherProbeInput{addr: addr, serverName: serverName, cipherID: t.id, version: t.version}) {
+			if probeCipher(probeCtx, cipherProbeInput{addr: addr, serverName: serverName, cipherID: t.id, version: t.version, startTLS: startTLS}) {
 				name := cipherSuiteName(t.id)
 				r := CipherProbeResult{
 					Name:        name,
@@ -1186,6 +1671,7 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 				serverName: serverName,
 				cipherID:   d.ID,
 				version:    tls.VersionTLS12,
+				startTLS:   startTLS,
 			}); ok {
 				r := CipherProbeResult{
 					Name:        d.Name,
@@ -1222,7 +1708,7 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 			probeCtx, probeCancel := context.WithTimeout(ctx, probeTimeout)
 			defer probeCancel()
 
-			probeInput := cipherProbeInput{addr: addr, serverName: serverName, groupID: groupID}
+			probeInput := cipherProbeInput{addr: addr, serverName: serverName, groupID: groupID, startTLS: startTLS}
 			accepted := probeKeyExchangeGroup(probeCtx, probeInput)
 
 			// For classical (non-PQ) groups, also probe TLS 1.0–1.2 if TLS 1.3 didn't work.
@@ -1356,14 +1842,20 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 		results = []CipherProbeResult{}
 	}
 
-	return &CipherScanResult{
+	scan := &CipherScanResult{
+		Policy:            input.Policy,
 		SupportedVersions: versions,
 		Ciphers:           results,
 		QUICProbed:        input.ProbeQUIC && port == "443",
 		QUICCiphers:       quicCiphers,
 		KeyExchanges:      keyExchanges,
 		OverallRating:     overall,
-	}, nil
+	}
+	if scanCipherPolicyViolationCount(scan) > 0 {
+		scan.OverallRating = CipherRatingWeak
+	}
+
+	return scan, nil
 }
 
 // emptyClientCertificate is a GetClientCertificate callback that returns an empty
@@ -1377,8 +1869,7 @@ func emptyClientCertificate(_ *tls.CertificateRequestInfo) (*tls.Certificate, er
 // Returns true if the server accepted the cipher, even if the handshake
 // ultimately fails (e.g. mTLS rejection after cipher negotiation).
 func probeCipher(ctx context.Context, input cipherProbeInput) bool {
-	dialer := &net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "tcp", input.addr)
+	conn, err := dialProbeConn(ctx, input)
 	if err != nil {
 		return false
 	}
@@ -1422,8 +1913,7 @@ var ecdheOnlyCipherSuites = func() []uint16 {
 // ECDHE cipher suites are offered so the handshake fails if the server doesn't
 // support the offered curve (RSA key exchange would bypass curve negotiation).
 func probeKeyExchangeGroupLegacy(ctx context.Context, input cipherProbeInput) bool {
-	dialer := &net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "tcp", input.addr)
+	conn, err := dialProbeConn(ctx, input)
 	if err != nil {
 		return false
 	}
@@ -1604,6 +2094,9 @@ func FormatCipherRatingLine(r *CipherScanResult) string {
 		}
 	}
 
+	if violations := scanCipherPolicyViolationCount(r); violations > 0 && r.Policy.Enabled() {
+		return fmt.Sprintf("Ciphers:      %s (%d good, %d weak, %d likely not authorized by %s)\n", r.OverallRating, strong, weak, violations, r.Policy.DisplayName())
+	}
 	return fmt.Sprintf("Ciphers:      %s (%d good, %d weak)\n", r.OverallRating, strong, weak)
 }
 
@@ -1680,6 +2173,9 @@ func FormatCipherScanResult(r *CipherScanResult) string {
 func FormatConnectResult(r *ConnectResult) string {
 	var out strings.Builder
 	fmt.Fprintf(&out, "Host:         %s:%s\n", r.Host, r.Port)
+	if r.Policy.Enabled() {
+		fmt.Fprintf(&out, "Policy:       %s heuristic\n", r.Policy.DisplayName())
+	}
 	fmt.Fprintf(&out, "Protocol:     %s\n", r.Protocol)
 	fmt.Fprintf(&out, "Cipher Suite: %s\n", r.CipherSuite)
 	fmt.Fprintf(&out, "Server Name:  %s\n", r.ServerName)

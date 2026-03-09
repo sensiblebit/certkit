@@ -1,18 +1,24 @@
 package certkit
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"errors"
+	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -22,6 +28,7 @@ import (
 )
 
 var errUnknownAuthority = errors.New("x509: certificate signed by unknown authority")
+var errFirstRecordNotTLS = errors.New("tls: first record does not look like a TLS handshake")
 
 func TestConnectTLS(t *testing.T) {
 	// WHY: Covers core ConnectTLS scenarios (self-signed, expired, timeout, hostname mismatch)
@@ -622,6 +629,526 @@ func TestConnectTLS_CancelledContext(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for cancelled context")
 	}
+}
+
+func TestConnectTLS_NonTLSSHBanner(t *testing.T) {
+	// WHY: When a TCP service speaks SSH instead of TLS, ConnectTLS should
+	// report that clearly instead of surfacing the raw TLS record parser error.
+	t.Parallel()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		_, _ = conn.Write([]byte("SSH-2.0-OpenSSH_9.9\r\n"))
+	}()
+
+	_, portStr, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err = ConnectTLS(ctx, ConnectTLSInput{Host: "127.0.0.1", Port: portStr})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, errConnectNonTLSService) {
+		t.Fatalf("error = %v, want errConnectNonTLSService", err)
+	}
+	if !strings.Contains(err.Error(), "received SSH banner") {
+		t.Fatalf("error = %q, want SSH banner detail", err.Error())
+	}
+	if strings.Contains(err.Error(), "first record does not look like a TLS handshake") {
+		t.Fatalf("error = %q, want friendly non-TLS message", err.Error())
+	}
+}
+
+func TestConnectTLS_StartTLSProtocols(t *testing.T) {
+	// WHY: ConnectTLS should opportunistically upgrade known plaintext
+	// protocols after a direct TLS probe proves the endpoint is not implicit TLS.
+	t.Parallel()
+
+	ca := generateTestCA(t, "STARTTLS Root")
+	leaf := generateTestLeafCert(t, ca)
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(ca.Cert)
+
+	tests := []struct {
+		name     string
+		protocol startTLSProtocol
+	}{
+		{name: "smtp", protocol: startTLSProtocolSMTP},
+		{name: "imap", protocol: startTLSProtocolIMAP},
+		{name: "pop3", protocol: startTLSProtocolPOP3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			port := startPlaintextUpgradeServer(t, tt.protocol, [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+
+			result, err := ConnectTLS(ctx, ConnectTLSInput{
+				Host:       "127.0.0.1",
+				Port:       port,
+				ServerName: "localhost",
+				RootCAs:    rootPool,
+			})
+			if err != nil {
+				t.Fatalf("ConnectTLS failed: %v", err)
+			}
+			if result.VerifyError != "" {
+				t.Fatalf("VerifyError = %q, want empty", result.VerifyError)
+			}
+			if result.Protocol == "" {
+				t.Fatal("Protocol is empty")
+			}
+			wantProtocol := formatProtocolWithStartTLS("TLS 1.3", tt.protocol)
+			if result.Protocol != wantProtocol {
+				t.Fatalf("Protocol = %q, want %q", result.Protocol, wantProtocol)
+			}
+			if result.CipherSuite == "" {
+				t.Fatal("CipherSuite is empty")
+			}
+			if got := len(result.PeerChain); got != 2 {
+				t.Fatalf("len(PeerChain) = %d, want 2", got)
+			}
+			if got := result.PeerChain[0].Subject.CommonName; got != "localhost" {
+				t.Fatalf("leaf CN = %q, want %q", got, "localhost")
+			}
+		})
+	}
+}
+
+func TestScanCipherSuites_StartTLSProtocols(t *testing.T) {
+	// WHY: Cipher scanning should reuse the same plaintext upgrade flow as
+	// ConnectTLS, otherwise STARTTLS endpoints degrade to "none detected".
+	t.Parallel()
+
+	ca := generateTestCA(t, "STARTTLS Scan Root")
+	leaf := generateTestLeafCert(t, ca)
+
+	tests := []struct {
+		name     string
+		protocol startTLSProtocol
+	}{
+		{name: "smtp", protocol: startTLSProtocolSMTP},
+		{name: "imap", protocol: startTLSProtocolIMAP},
+		{name: "pop3", protocol: startTLSProtocolPOP3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			port := startPlaintextUpgradeServer(t, tt.protocol, [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			defer cancel()
+
+			result, err := ScanCipherSuites(ctx, ScanCipherSuitesInput{
+				Host:       "127.0.0.1",
+				Port:       port,
+				ServerName: "localhost",
+			})
+			if err != nil {
+				t.Fatalf("ScanCipherSuites failed: %v", err)
+			}
+			if len(result.Ciphers) == 0 {
+				t.Fatal("expected at least one detected cipher")
+			}
+			if len(result.SupportedVersions) == 0 {
+				t.Fatal("expected at least one supported version")
+			}
+			if !slices.Contains(result.SupportedVersions, "TLS 1.3") {
+				t.Fatalf("SupportedVersions = %v, want TLS 1.3", result.SupportedVersions)
+			}
+		})
+	}
+}
+
+func TestConnectViaStartTLS_LDAP(t *testing.T) {
+	t.Parallel()
+
+	ca := generateTestCA(t, "LDAP STARTTLS Root")
+	leaf := generateTestLeafCert(t, ca)
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(ca.Cert)
+
+	port := startPlaintextUpgradeServer(t, startTLSProtocolLDAP, [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := connectViaStartTLS(ctx, ConnectTLSInput{
+		Host:       "127.0.0.1",
+		Port:       port,
+		ServerName: "localhost",
+		RootCAs:    rootPool,
+	}, net.JoinHostPort("127.0.0.1", port), "localhost", startTLSProtocolLDAP)
+	if err != nil {
+		t.Fatalf("connectViaStartTLS failed: %v", err)
+	}
+	if got, want := result.Protocol, "TLS 1.3 (LDAP STARTTLS)"; got != want && got != "TLS 1.2 (LDAP STARTTLS)" {
+		t.Fatalf("Protocol = %q, want LDAP STARTTLS", got)
+	}
+	if result.VerifyError != "" {
+		t.Fatalf("VerifyError = %q, want empty", result.VerifyError)
+	}
+}
+
+func TestProbeTLS13Cipher_LDAP(t *testing.T) {
+	t.Parallel()
+
+	ca := generateTestCA(t, "LDAP Probe Root")
+	leaf := generateTestLeafCert(t, ca)
+	port := startPlaintextUpgradeServer(t, startTLSProtocolLDAP, [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if !probeTLS13Cipher(ctx, cipherProbeInput{
+		addr:       net.JoinHostPort("127.0.0.1", port),
+		serverName: "localhost",
+		cipherID:   tls.TLS_AES_128_GCM_SHA256,
+		startTLS:   startTLSProtocolLDAP,
+	}) {
+		t.Fatal("probeTLS13Cipher returned false for LDAP STARTTLS server")
+	}
+}
+
+func TestDetectStartTLSProtocol(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		prefix       []byte
+		wantProtocol startTLSProtocol
+		wantBanner   string
+		wantOK       bool
+	}{
+		{
+			name:         "smtp",
+			prefix:       []byte("220 smtp.example.com ESMTP ready\r\n"),
+			wantProtocol: startTLSProtocolSMTP,
+			wantBanner:   "220 smtp.example.com ESMTP ready",
+			wantOK:       true,
+		},
+		{
+			name:         "imap",
+			prefix:       []byte("* OK IMAP4rev1 ready\r\n"),
+			wantProtocol: startTLSProtocolIMAP,
+			wantBanner:   "* OK IMAP4rev1 ready",
+			wantOK:       true,
+		},
+		{
+			name:         "pop3",
+			prefix:       []byte("+OK POP3 ready\r\n"),
+			wantProtocol: startTLSProtocolPOP3,
+			wantBanner:   "+OK POP3 ready",
+			wantOK:       true,
+		},
+		{
+			name:       "ssh",
+			prefix:     []byte("SSH-2.0-OpenSSH_9.9\r\n"),
+			wantBanner: "SSH-2.0-OpenSSH_9.9",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			protocol, banner, ok := detectStartTLSProtocol(tt.prefix)
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if protocol != tt.wantProtocol {
+				t.Fatalf("protocol = %q, want %q", protocol, tt.wantProtocol)
+			}
+			if banner != tt.wantBanner {
+				t.Fatalf("banner = %q, want %q", banner, tt.wantBanner)
+			}
+		})
+	}
+}
+
+func TestDetectConnectStartTLSProtocol(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		prefix       []byte
+		port         string
+		wantProtocol startTLSProtocol
+		wantOK       bool
+	}{
+		{
+			name:         "smtp banner",
+			prefix:       []byte("220 smtp.example.com ESMTP ready\r\n"),
+			port:         "587",
+			wantProtocol: startTLSProtocolSMTP,
+			wantOK:       true,
+		},
+		{
+			name:         "ldap fallback on port 389",
+			port:         "389",
+			wantProtocol: startTLSProtocolLDAP,
+			wantOK:       true,
+		},
+		{
+			name: "no match",
+			port: "8443",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			protocol, ok := detectConnectStartTLSProtocol(tt.prefix, tt.port)
+			if ok != tt.wantOK {
+				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
+			}
+			if protocol != tt.wantProtocol {
+				t.Fatalf("protocol = %q, want %q", protocol, tt.wantProtocol)
+			}
+		})
+	}
+}
+
+func TestInferNonTLSError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		handshake  error
+		prefix     []byte
+		wantErr    error
+		wantSubstr string
+	}{
+		{
+			name:       "ssh banner",
+			handshake:  errFirstRecordNotTLS,
+			prefix:     []byte("SSH-2.0-OpenSSH_9.9\r\n"),
+			wantErr:    errConnectNonTLSService,
+			wantSubstr: `received SSH banner "SSH-2.0-OpenSSH_9.9"`,
+		},
+		{
+			name:       "http response",
+			handshake:  errFirstRecordNotTLS,
+			prefix:     []byte("HTTP/1.1 400 Bad Request\r\n"),
+			wantErr:    errConnectNonTLSService,
+			wantSubstr: `received HTTP response "HTTP/1.1 400 Bad Request"`,
+		},
+		{
+			name:       "smtp banner",
+			handshake:  errFirstRecordNotTLS,
+			prefix:     []byte("220 smtp.example.com ESMTP ready\r\n"),
+			wantErr:    errConnectNonTLSService,
+			wantSubstr: `received SMTP banner "220 smtp.example.com ESMTP ready"`,
+		},
+		{
+			name:       "generic plaintext",
+			handshake:  errFirstRecordNotTLS,
+			prefix:     []byte("smtp ready\r\n"),
+			wantErr:    errConnectNonTLSService,
+			wantSubstr: `received plaintext banner "smtp ready"`,
+		},
+		{
+			name:       "binary bytes",
+			handshake:  errFirstRecordNotTLS,
+			prefix:     []byte{0x00, 0x01, 0x02, 0x03},
+			wantErr:    errConnectNonTLSService,
+			wantSubstr: "received non-TLS bytes 00010203",
+		},
+		{
+			name:      "unrelated handshake error",
+			handshake: context.DeadlineExceeded,
+			prefix:    []byte("SSH-2.0-OpenSSH_9.9\r\n"),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := inferNonTLSError(tt.handshake, tt.prefix)
+			if tt.wantErr == nil {
+				if err != nil {
+					t.Fatalf("inferNonTLSError() = %v, want nil", err)
+				}
+				return
+			}
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("error = %v, want wrapped %v", err, tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantSubstr) {
+				t.Fatalf("error = %q, want substring %q", err.Error(), tt.wantSubstr)
+			}
+		})
+	}
+}
+
+func startPlaintextUpgradeServer(t *testing.T, protocol startTLSProtocol, certChain [][]byte, key *ecdsa.PrivateKey) string {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{{
+			Certificate: certChain,
+			PrivateKey:  key,
+		}},
+	}
+
+	go func() {
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go handlePlaintextUpgradeConn(conn, protocol, tlsConfig)
+		}
+	}()
+
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return port
+}
+
+func handlePlaintextUpgradeConn(conn net.Conn, protocol startTLSProtocol, tlsConfig *tls.Config) {
+	defer func() { _ = conn.Close() }()
+
+	reader := bufio.NewReader(conn)
+	if err := writeProtocolBanner(conn, protocol); err != nil {
+		return
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+
+	switch protocol {
+	case startTLSProtocolSMTP:
+		handleSMTPUpgrade(conn, reader, tlsConfig)
+	case startTLSProtocolIMAP:
+		handleIMAPUpgrade(conn, reader, tlsConfig)
+	case startTLSProtocolPOP3:
+		handlePOP3Upgrade(conn, reader, tlsConfig)
+	case startTLSProtocolLDAP:
+		handleLDAPUpgrade(conn, reader, tlsConfig)
+	}
+}
+
+func writeProtocolBanner(conn net.Conn, protocol startTLSProtocol) error {
+	switch protocol {
+	case startTLSProtocolSMTP:
+		_, err := conn.Write([]byte("220 localhost ESMTP test\r\n"))
+		if err != nil {
+			return fmt.Errorf("write SMTP banner: %w", err)
+		}
+		return nil
+	case startTLSProtocolIMAP:
+		_, err := conn.Write([]byte("* OK IMAP4rev1 ready\r\n"))
+		if err != nil {
+			return fmt.Errorf("write IMAP banner: %w", err)
+		}
+		return nil
+	case startTLSProtocolPOP3:
+		_, err := conn.Write([]byte("+OK POP3 ready\r\n"))
+		if err != nil {
+			return fmt.Errorf("write POP3 banner: %w", err)
+		}
+		return nil
+	case startTLSProtocolLDAP:
+		return nil
+	default:
+		return nil
+	}
+}
+
+func handleSMTPUpgrade(conn net.Conn, reader *bufio.Reader, tlsConfig *tls.Config) {
+	line, err := readTextLine(reader)
+	if err != nil || !strings.HasPrefix(strings.ToUpper(line), "EHLO ") {
+		return
+	}
+	if _, err := conn.Write([]byte("250-localhost\r\n250-STARTTLS\r\n250 SIZE 35882577\r\n")); err != nil {
+		return
+	}
+	line, err = readTextLine(reader)
+	if err != nil || !strings.EqualFold(line, "STARTTLS") {
+		return
+	}
+	if _, err := conn.Write([]byte("220 Ready to start TLS\r\n")); err != nil {
+		return
+	}
+	serveUpgradedTLS(conn, reader, tlsConfig)
+}
+
+func handleIMAPUpgrade(conn net.Conn, reader *bufio.Reader, tlsConfig *tls.Config) {
+	line, err := readTextLine(reader)
+	if err != nil || !strings.EqualFold(line, "a001 STARTTLS") {
+		return
+	}
+	if _, err := conn.Write([]byte("a001 OK Begin TLS negotiation now\r\n")); err != nil {
+		return
+	}
+	serveUpgradedTLS(conn, reader, tlsConfig)
+}
+
+func handlePOP3Upgrade(conn net.Conn, reader *bufio.Reader, tlsConfig *tls.Config) {
+	line, err := readTextLine(reader)
+	if err != nil || !strings.EqualFold(line, "STLS") {
+		return
+	}
+	if _, err := conn.Write([]byte("+OK Begin TLS negotiation\r\n")); err != nil {
+		return
+	}
+	serveUpgradedTLS(conn, reader, tlsConfig)
+}
+
+func serveUpgradedTLS(conn net.Conn, reader *bufio.Reader, tlsConfig *tls.Config) {
+	upgraded := tls.Server(&bufferedPrefixConn{Conn: conn, reader: reader}, tlsConfig)
+	defer func() { _ = upgraded.Close() }()
+	_ = upgraded.Handshake()
+}
+
+func handleLDAPUpgrade(conn net.Conn, reader *bufio.Reader, tlsConfig *tls.Config) {
+	request := make([]byte, 31)
+	if _, err := io.ReadFull(reader, request); err != nil {
+		return
+	}
+	if len(request) < 31 || request[0] != 0x30 || !bytes.Contains(request, []byte("1.3.6.1.4.1.1466.20037")) {
+		return
+	}
+
+	response := []byte{
+		0x30, 0x0c, // LDAPMessage
+		0x02, 0x01, 0x01, // messageID = 1
+		0x78, 0x07, // ExtendedResponse
+		0x0a, 0x01, 0x00, // resultCode success
+		0x04, 0x00, // matchedDN
+		0x04, 0x00, // diagnosticMessage
+	}
+	if _, err := conn.Write(response); err != nil {
+		return
+	}
+	serveUpgradedTLS(conn, reader, tlsConfig)
 }
 
 func TestConnectTLS_UsesConnectTimeoutWhenContextHasNoDeadline(t *testing.T) {
@@ -1358,6 +1885,123 @@ func TestDiagnoseNegotiatedCipher(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestDiagnoseNegotiatedCipherPolicy(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		policy      SecurityPolicy
+		protocol    string
+		cipherSuite string
+		wantCheck   string
+		wantDetail  string
+	}{
+		{
+			name:        "policy disabled",
+			policy:      SecurityPolicyNone,
+			protocol:    "TLS 1.3",
+			cipherSuite: "TLS_CHACHA20_POLY1305_SHA256",
+		},
+		{
+			name:        "FIPS disallows CHACHA20",
+			policy:      SecurityPolicyFIPS1402,
+			protocol:    "TLS 1.3",
+			cipherSuite: "TLS_CHACHA20_POLY1305_SHA256",
+			wantCheck:   "policy-cipher",
+			wantDetail:  "TLS_CHACHA20_POLY1305_SHA256",
+		},
+		{
+			name:        "FIPS allows TLS 1.3 AES GCM",
+			policy:      SecurityPolicyFIPS1403,
+			protocol:    "TLS 1.3",
+			cipherSuite: "TLS_AES_256_GCM_SHA384",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			diags := diagnoseNegotiatedCipherPolicy(tt.protocol, tt.cipherSuite, tt.policy)
+			if tt.wantCheck == "" {
+				if len(diags) != 0 {
+					t.Fatalf("got diagnostics, want none: %+v", diags)
+				}
+				return
+			}
+			if len(diags) != 1 {
+				t.Fatalf("got %d diagnostics, want 1: %+v", len(diags), diags)
+			}
+			if diags[0].Check != tt.wantCheck {
+				t.Fatalf("Check = %q, want %q", diags[0].Check, tt.wantCheck)
+			}
+			if !strings.Contains(diags[0].Detail, tt.wantDetail) {
+				t.Fatalf("Detail = %q, want substring %q", diags[0].Detail, tt.wantDetail)
+			}
+		})
+	}
+}
+
+func TestDiagnoseCipherScanPolicy(t *testing.T) {
+	t.Parallel()
+
+	scan := &CipherScanResult{
+		Policy:            SecurityPolicyFIPS1403,
+		SupportedVersions: []string{"TLS 1.3", "TLS 1.2", "TLS 1.0"},
+		Ciphers: []CipherProbeResult{
+			{Name: "TLS_AES_128_GCM_SHA256", Version: "TLS 1.3", Rating: CipherRatingGood},
+			{Name: "TLS_CHACHA20_POLY1305_SHA256", Version: "TLS 1.3", Rating: CipherRatingGood},
+			{Name: "TLS_RSA_WITH_AES_128_CBC_SHA", Version: "TLS 1.0", Rating: CipherRatingWeak},
+		},
+		OverallRating: CipherRatingGood,
+	}
+
+	diags := DiagnoseCipherScanPolicy(scan)
+	if !containsDiagDetail(diags, "policy-cipher", "TLS_CHACHA20_POLY1305_SHA256") {
+		t.Fatalf("missing policy-cipher diagnostic in %+v", diags)
+	}
+	if !containsDiagDetail(diags, "policy-protocol", "TLS 1.0") {
+		t.Fatalf("missing policy-protocol diagnostic in %+v", diags)
+	}
+	if got := scanCipherPolicyViolationCount(scan); got != 3 {
+		t.Fatalf("scanCipherPolicyViolationCount() = %d, want 3", got)
+	}
+	scan.OverallRating = CipherRatingWeak
+	if got := FormatCipherRatingLine(scan); !strings.Contains(got, "likely not authorized by FIPS 140-3") {
+		t.Fatalf("FormatCipherRatingLine() = %q, want policy summary", got)
+	}
+}
+
+func TestDiagnosePeerChainPolicy(t *testing.T) {
+	t.Parallel()
+
+	_, leafKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatalf("GenerateKey ED25519: %v", err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1),
+		Subject:      pkix.Name{CommonName: "policy.example.com"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(time.Hour),
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, leafKey.Public(), leafKey)
+	if err != nil {
+		t.Fatalf("CreateCertificate: %v", err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("ParseCertificate: %v", err)
+	}
+
+	diags := diagnosePeerChainPolicy([]*x509.Certificate{cert}, SecurityPolicyFIPS1402)
+	if !containsDiagDetail(diags, "policy-cert-key", "Ed25519") {
+		t.Fatalf("missing policy-cert-key diagnostic in %+v", diags)
+	}
+	if !containsDiagDetail(diags, "policy-cert-signature", "Ed25519") {
+		t.Fatalf("missing policy-cert-signature diagnostic in %+v", diags)
 	}
 }
 
@@ -3469,4 +4113,13 @@ func TestConnectTLS_CRL_DuplicateLeafInChain(t *testing.T) {
 	if !strings.Contains(result.CRL.Detail, FormatSerialNumber(revokedSerial)) {
 		t.Errorf("CRL.Detail = %q, want substring %q", result.CRL.Detail, FormatSerialNumber(revokedSerial))
 	}
+}
+
+func containsDiagDetail(diags []ChainDiagnostic, check, detail string) bool {
+	for _, diag := range diags {
+		if diag.Check == check && strings.Contains(diag.Detail, detail) {
+			return true
+		}
+	}
+	return false
 }

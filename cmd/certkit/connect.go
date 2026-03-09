@@ -25,6 +25,8 @@ var (
 	connectCRL                 bool
 	connectNoOCSP              bool
 	connectCiphers             bool
+	connectFIPS1402            bool
+	connectFIPS1403            bool
 	connectAllowPrivateNetwork bool
 	errConnectEmptyHost        = errors.New("empty host")
 	errConnectEmptyPort        = errors.New("empty port")
@@ -62,6 +64,8 @@ func init() {
 	connectCmd.Flags().BoolVar(&connectCRL, "crl", false, "Check CRL distribution points for revocation")
 	connectCmd.Flags().BoolVar(&connectNoOCSP, "no-ocsp", false, "Disable automatic OCSP revocation check")
 	connectCmd.Flags().BoolVar(&connectCiphers, "ciphers", false, "Enumerate all supported cipher suites with security ratings")
+	connectCmd.Flags().BoolVar(&connectFIPS1402, "fips-140-2", false, "Apply conservative FIPS 140-2 heuristic checks to negotiated/offered TLS algorithms")
+	connectCmd.Flags().BoolVar(&connectFIPS1403, "fips-140-3", false, "Apply conservative FIPS 140-3 heuristic checks to negotiated/offered TLS algorithms")
 	connectCmd.Flags().BoolVar(&connectAllowPrivateNetwork, "allow-private-network", false, "Allow AIA/OCSP/CRL fetches to private/internal endpoints")
 
 	registerCompletion(connectCmd, completionInput{"format", fixedCompletion("text", "json")})
@@ -71,6 +75,7 @@ func init() {
 type connectResultJSON struct {
 	Host        string                    `json:"host"`
 	Port        string                    `json:"port"`
+	Policy      certkit.SecurityPolicy    `json:"policy,omitempty"`
 	Protocol    string                    `json:"protocol"`
 	CipherSuite string                    `json:"cipher_suite"`
 	ServerName  string                    `json:"server_name"`
@@ -116,6 +121,10 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("parsing address %q: %w", args[0], err)
 	}
+	policy, err := selectedPolicy(connectFIPS1402, connectFIPS1403)
+	if err != nil {
+		return err
+	}
 
 	spin := newSpinner("Connecting…")
 	spin.Start(cmd.Context())
@@ -130,6 +139,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		DisableOCSP:          connectNoOCSP,
 		CheckCRL:             connectCRL,
 		AllowPrivateNetworks: connectAllowPrivateNetwork,
+		Policy:               policy,
 	})
 	if err != nil {
 		spin.Stop()
@@ -147,6 +157,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 			Port:       port,
 			ServerName: connectServerName,
 			ProbeQUIC:  true,
+			Policy:     policy,
 		})
 		if scanErr != nil {
 			spin.Stop()
@@ -154,6 +165,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		}
 		result.CipherScan = cipherScan
 		scanDiags := certkit.DiagnoseCipherScan(cipherScan)
+		scanDiags = append(scanDiags, certkit.DiagnoseCipherScanPolicy(cipherScan)...)
 		// Scan diagnostics supersede negotiated-cipher diagnostics
 		// (same check names but more comprehensive — aggregate vs. single).
 		// Remove negotiated-cipher diagnostics that the scan covers.
@@ -228,6 +240,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		jr := connectResultJSON{
 			Host:        result.Host,
 			Port:        result.Port,
+			Policy:      result.Policy,
 			Protocol:    result.Protocol,
 			CipherSuite: result.CipherSuite,
 			ServerName:  result.ServerName,
@@ -392,6 +405,12 @@ func formatSerial(serial *big.Int) string {
 // parseHostPort splits a host[:port] string, defaulting port to "443".
 // Accepts bare hosts, host:port, and URLs (https://host[:port][/path]).
 func parseHostPort(addr string) (string, string, error) {
+	return parseHostPortWithDefault(addr, "443")
+}
+
+// parseHostPortWithDefault splits a host[:port] string and defaults the port
+// when it is not explicitly provided.
+func parseHostPortWithDefault(addr, defaultPort string) (string, string, error) {
 	rawInput := addr
 
 	// Strip scheme if present (e.g., "https://host:port/path" → "host:port")
@@ -418,7 +437,7 @@ func parseHostPort(addr string) (string, string, error) {
 		}
 		// Bare host (no colon) or bare IPv6 literal are valid host-only inputs.
 		if !strings.Contains(addr, ":") || net.ParseIP(trimmed) != nil {
-			return trimmed, "443", nil
+			return trimmed, defaultPort, nil
 		}
 		return "", "", fmt.Errorf("invalid address %q: %w", rawInput, err)
 	}

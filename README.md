@@ -166,14 +166,16 @@ Chain verification is always performed. When the input contains an embedded priv
 ### Connect Flags
 
 <!-- certkit:flags:connect -->
-| Flag                      | Default | Description                                                 |
-| ------------------------- | ------- | ----------------------------------------------------------- |
-| `--allow-private-network` | `false` | Allow AIA/OCSP/CRL fetches to private/internal endpoints    |
-| `--ciphers`               | `false` | Enumerate all supported cipher suites with security ratings |
-| `--crl`                   | `false` | Check CRL distribution points for revocation                |
-| `--format`                | `text`  | Output format: text, json                                   |
-| `--no-ocsp`               | `false` | Disable automatic OCSP revocation check                     |
-| `--servername`            |         | Override SNI hostname (defaults to host)                    |
+| Flag                      | Default | Description                                                                         |
+| ------------------------- | ------- | ----------------------------------------------------------------------------------- |
+| `--allow-private-network` | `false` | Allow AIA/OCSP/CRL fetches to private/internal endpoints                            |
+| `--ciphers`               | `false` | Enumerate all supported cipher suites with security ratings                         |
+| `--crl`                   | `false` | Check CRL distribution points for revocation                                        |
+| `--fips-140-2`            | `false` | Apply conservative FIPS 140-2 heuristic checks to negotiated/offered TLS algorithms |
+| `--fips-140-3`            | `false` | Apply conservative FIPS 140-3 heuristic checks to negotiated/offered TLS algorithms |
+| `--format`                | `text`  | Output format: text, json                                                           |
+| `--no-ocsp`               | `false` | Disable automatic OCSP revocation check                                             |
+| `--servername`            |         | Override SNI hostname (defaults to host)                                            |
 <!-- /certkit:flags -->
 
 Port defaults to 443 if not specified. OCSP revocation status is checked automatically (best-effort); use `--no-ocsp` to disable. Use `--verbose` for extended details (serial, key info, signature algorithm, key usage, EKU).

@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"net"
 )
 
 // tls13CipherSuites lists all TLS 1.3 cipher suites from RFC 8446.
@@ -418,6 +417,7 @@ type cipherProbeInput struct {
 	cipherID   uint16
 	groupID    tls.CurveID
 	version    uint16 // for legacy TLS 1.0–1.2 probing
+	startTLS   startTLSProtocol
 }
 
 // probeTLS13Cipher attempts a raw TLS 1.3 ClientHello with a single cipher
@@ -429,8 +429,7 @@ type cipherProbeInput struct {
 // In practice this is extremely rare — X25519 is mandatory in modern browsers
 // and required by RFC 8446 implementations.
 func probeTLS13Cipher(ctx context.Context, input cipherProbeInput) bool {
-	dialer := &net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "tcp", input.addr)
+	conn, err := dialProbeConn(ctx, input)
 	if err != nil {
 		return false
 	}
@@ -479,8 +478,7 @@ func probeTLS13Cipher(ctx context.Context, input cipherProbeInput) bool {
 // named group and returns true if the server selects it. Uses
 // TLS_AES_128_GCM_SHA256 as the cipher since all TLS 1.3 servers must support it.
 func probeKeyExchangeGroup(ctx context.Context, input cipherProbeInput) bool {
-	dialer := &net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "tcp", input.addr)
+	conn, err := dialProbeConn(ctx, input)
 	if err != nil {
 		return false
 	}

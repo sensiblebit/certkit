@@ -2,7 +2,7 @@ package certkit
 
 // This file implements a raw TLS 1.0–1.2 ClientHello prober for legacy cipher
 // suites that Go's crypto/tls has never implemented (DHE key exchange, DHE-DSS).
-// It extends the approach from tls13probe.go — byte-level packet construction,
+// It extends the approach from probe_tls13.go — byte-level packet construction,
 // fully isolated probes, no shared state.
 //
 // The prober can:
@@ -153,8 +153,7 @@ func appendECPointFormatsExtension(b []byte) []byte {
 // legacy cipher suite. It returns the negotiated TLS version and true if the
 // server accepts the cipher suite; returns 0, false on any failure or rejection.
 func probeLegacyCipher(ctx context.Context, input cipherProbeInput) (uint16, bool) {
-	dialer := &net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "tcp", input.addr)
+	conn, err := dialProbeConn(ctx, input)
 	if err != nil {
 		return 0, false
 	}
