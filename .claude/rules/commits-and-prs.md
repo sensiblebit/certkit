@@ -69,13 +69,15 @@ Required push gate:
 2. Address any newly arrived feedback before continuing
 3. Before spawning new agents, close stale completed agents so the active agent budget is reserved for current work
 4. Spawn one agent specifically to check this branch against `CLAUDE.md` and `.claude/rules/*`
-5. Have that agent report any rule violations, missing changelog entries, unresolved PR-thread obligations, or skipped validation
-6. When fixes are needed and can be cleanly isolated, dispatch dedicated worker agents to make the code or docs changes instead of doing all fix work in the main thread
-7. Keep the main thread focused on PR context, review triage, rule compliance, integration, and final verification
-8. Fix every violation before pushing
-9. If a PR exists, query for comments again immediately before `git push` in case new feedback arrived during the audit/fix cycle
-10. Address that feedback too if needed
-11. Only then push
+5. If a PR exists, spawn a second dedicated docs-checking agent for that PR
+6. The docs-checking agent must review `README.md`, `EXAMPLES.md`, `.claude/docs/architecture.md`, generated CLI docs, and `CHANGELOG.md` for drift against the current code and command surface
+7. Have both agents report any rule violations, doc drift, missing changelog entries, unresolved PR-thread obligations, or skipped validation
+8. When fixes are needed and can be cleanly isolated, dispatch dedicated worker agents to make the code or docs changes instead of doing all fix work in the main thread
+9. Keep the main thread focused on PR context, review triage, rule compliance, integration, and final verification
+10. Fix every violation before pushing
+11. If a PR exists, query for comments again immediately before `git push` in case new feedback arrived during the audit/fix cycle
+12. Address that feedback too if needed
+13. Only then push
 
 When reporting PR comment state to the user, pull a fresh snapshot immediately before answering. Do not rely on an earlier query once more work, waiting, or other GitHub activity has happened.
 
@@ -125,6 +127,8 @@ Just replying does NOT mark the thread as resolved or minimized in the GitHub UI
 After resolving comments, re-query the PR. Do not assume the comment queue is empty until the API shows no unresolved review threads and no unaddressed issue-style feedback.
 
 If the user asks whether there are comments, new feedback, or whether the PR is clear, fetch a fresh PR comment snapshot right before answering. Do not answer from memory or from an older query result.
+
+For PRs that change behavior, flags, command output, or package structure, also run the dedicated docs-checking agent before pushing or answering "is this ready?". It must explicitly confirm whether `README.md`, `EXAMPLES.md`, `.claude/docs/architecture.md`, generated CLI docs, and `CHANGELOG.md` still match the branch.
 
 ## Merging PRs
 
