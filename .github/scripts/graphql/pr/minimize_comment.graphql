@@ -1,0 +1,7 @@
+mutation($subjectId:ID!, $classifier:ReportedContentClassifiers!) {
+  minimizeComment(input:{subjectId:$subjectId, classifier:$classifier}) {
+    minimizedComment {
+      isMinimized
+    }
+  }
+}

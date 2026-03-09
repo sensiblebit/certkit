@@ -63,6 +63,19 @@ This is especially common with `goimports` reformatting Go files.
 
 Before **every** `git push`, launch a dedicated reviewer agent whose only job is to audit the current branch for rule adherence.
 
+Use `.github/scripts/pr-comments.py` as the default PR comment tool. Do not fall back to raw `gh api graphql` one-liners or `jq` pipelines for the normal review loop unless the helper is broken and you need a temporary break-glass query.
+
+Preferred commands:
+
+```sh
+python3 .github/scripts/pr-comments.py snapshot
+python3 .github/scripts/pr-comments.py snapshot --json --unresolved-only
+python3 .github/scripts/pr-comments.py show --url <comment-url>
+python3 .github/scripts/pr-comments.py reply --url <comment-url> --body "Fixed in <sha>"
+python3 .github/scripts/pr-comments.py resolve --url <comment-url>
+python3 .github/scripts/pr-comments.py minimize --url <comment-url>
+```
+
 Required push gate:
 
 1. If a PR exists, query for new review comments and issue-style PR comments first
@@ -92,40 +105,24 @@ When working on a PR, address **both** PR review comments (on diffs) and issue-s
 
 1. **Fix the code** — make the requested change or explain why not
 2. **Prefer delegated fixes** — when the fix is more than a trivial one-line change, spawn a worker agent to make the change so the main thread preserves PR context and review state
-3. **Reply** explaining what was done: `gh api repos/OWNER/REPO/pulls/N/comments -X POST -F body="..." -F in_reply_to=COMMENT_ID`
-4. **Resolve** the thread: `gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "THREAD_ID"}) { thread { isResolved } } }'`
-5. **Minimize** addressed comments to reduce noise: `gh api graphql -f query='mutation { minimizeComment(input: {subjectId: "COMMENT_NODE_ID", classifier: RESOLVED}) { minimizedComment { isMinimized } } }'`
+3. **Reply** explaining what was done: `python3 .github/scripts/pr-comments.py reply --url <comment-url> --body "Fixed in <sha>"`
+4. **Resolve** the thread: `python3 .github/scripts/pr-comments.py resolve --url <comment-url>`
+5. **Minimize** addressed comments to reduce noise: `python3 .github/scripts/pr-comments.py minimize --url <comment-url>`
 
 If you disagree with feedback, do not silently ignore it. Reply with the technical reason, leave the thread unresolved unless the reviewer/user explicitly agrees, and do not minimize unresolved disagreement.
 
-To get thread IDs and comment node IDs, query:
+To inspect a specific thread or comment in full, use:
 
 ```sh
-gh api graphql -f query='{
-  repository(owner: "sensiblebit", name: "certkit") {
-    pullRequest(number: N) {
-      reviewThreads(first: 50) {
-        nodes {
-          id
-          isResolved
-          comments(first: 5) {
-            nodes { id databaseId body }
-          }
-        }
-      }
-      comments(first: 50) {
-        nodes { id databaseId body }
-      }
-    }
-  }
-}'
+python3 .github/scripts/pr-comments.py show --url <comment-url>
+python3 .github/scripts/pr-comments.py show --thread-id <thread-id>
 ```
 
-For issue-style comments (PR conversation), use `minimizeComment` with the comment's node `id`. For review comments, reply + resolve + minimize.
+For issue-style comments (PR conversation), use `python3 .github/scripts/pr-comments.py minimize --url <comment-url>`. For review comments, reply + resolve + minimize.
 
 Just replying does NOT mark the thread as resolved or minimized in the GitHub UI — all three steps are required.
 
-After resolving comments, re-query the PR. Do not assume the comment queue is empty until the API shows no unresolved review threads and no unaddressed issue-style feedback.
+After resolving comments, re-query the PR with `python3 .github/scripts/pr-comments.py snapshot`. Do not assume the comment queue is empty until the snapshot shows no unresolved review threads and no unaddressed issue-style feedback.
 
 If the user asks whether there are comments, new feedback, or whether the PR is clear, fetch a fresh PR comment snapshot right before answering. Do not answer from memory or from an older query result.
 
