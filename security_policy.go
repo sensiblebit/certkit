@@ -21,7 +21,14 @@ const (
 
 // Enabled reports whether a policy profile is active.
 func (p SecurityPolicy) Enabled() bool {
-	return p != SecurityPolicyNone
+	switch p {
+	case SecurityPolicyNone:
+		return false
+	case SecurityPolicyFIPS1402, SecurityPolicyFIPS1403:
+		return true
+	default:
+		return false
+	}
 }
 
 // DisplayName returns a human-readable label for the selected policy.

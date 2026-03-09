@@ -15,11 +15,9 @@ import (
 )
 
 func TestRunProbeSSH(t *testing.T) {
-	// This test mutates the package-level jsonOutput flag, so it must stay
-	// single-threaded even though the command behavior itself is otherwise safe.
+	t.Parallel()
+
 	addr := startProbeSSHServer(t)
-	state := snapshotReadonlyGlobals()
-	t.Cleanup(func() { restoreReadonlyGlobals(state) })
 
 	tests := []struct {
 		name       string
@@ -74,6 +72,13 @@ func TestRunProbeSSH(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			// snapshotReadonlyGlobals serializes tests that mutate package-level
+			// Cobra flag state such as jsonOutput.
+			state := snapshotReadonlyGlobals()
+			t.Cleanup(func() { restoreReadonlyGlobals(state) })
+
 			jsonOutput = tt.jsonOutput
 
 			cmd := &cobra.Command{}

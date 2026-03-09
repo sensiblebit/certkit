@@ -13,10 +13,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/spf13/cobra"
 )
+
+var readonlyGlobalsMu sync.Mutex
 
 type readonlyGlobals struct {
 	// root flags
@@ -63,6 +66,7 @@ type readonlyGlobals struct {
 }
 
 func snapshotReadonlyGlobals() readonlyGlobals {
+	readonlyGlobalsMu.Lock()
 	passwordCopy := append([]string(nil), passwordList...)
 	return readonlyGlobals{
 		jsonOutput:   jsonOutput,
@@ -141,6 +145,7 @@ func restoreReadonlyGlobals(g readonlyGlobals) {
 
 	inspectFormat = g.inspectFormat
 	inspectAllowPrivateNetwork = g.inspectAllowPrivateNetwork
+	readonlyGlobalsMu.Unlock()
 }
 
 func captureOutput(t *testing.T, fn func() error) (string, string, error) {

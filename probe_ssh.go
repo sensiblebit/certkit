@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -176,13 +177,17 @@ func parseSSHKexInit(payload []byte) (*SSHProbeResult, error) {
 		if pos+4 > len(payload) {
 			return nil, errSSHKexInitMalformed
 		}
-		n := int(binary.BigEndian.Uint32(payload[pos : pos+4]))
+		n := binary.BigEndian.Uint32(payload[pos : pos+4])
 		pos += 4
-		if pos+n > len(payload) {
+		if strconv.IntSize == 32 && n > 1<<31-1 {
 			return nil, errSSHKexInitMalformed
 		}
-		raw := string(payload[pos : pos+n])
-		pos += n
+		nameListLen := int(n)
+		if nameListLen > len(payload)-pos {
+			return nil, errSSHKexInitMalformed
+		}
+		raw := string(payload[pos : pos+nameListLen])
+		pos += nameListLen
 		if raw == "" {
 			return []string{}, nil
 		}
