@@ -134,6 +134,18 @@ func TestProbeSSH_IgnoresPreKexPackets(t *testing.T) {
 	}
 }
 
+func TestParseSSHBanner_NormalizesSSH199(t *testing.T) {
+	t.Parallel()
+
+	protocol, software := parseSSHBanner("SSH-1.99-OpenSSH_9.9\r\n")
+	if protocol != "SSH 2.0" {
+		t.Fatalf("Protocol = %q, want %q", protocol, "SSH 2.0")
+	}
+	if software != "OpenSSH_9.9" {
+		t.Fatalf("SoftwareVersion = %q, want %q", software, "OpenSSH_9.9")
+	}
+}
+
 func TestFormatSSHProbeResult(t *testing.T) {
 	t.Parallel()
 

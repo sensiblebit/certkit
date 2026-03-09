@@ -300,7 +300,11 @@ func parseSSHBanner(banner string) (string, string) {
 	if len(parts) != 2 || parts[0] == "" {
 		return "", ""
 	}
-	protocol := "SSH " + parts[0]
+	protocolVersion := parts[0]
+	if protocolVersion == "1.99" {
+		protocolVersion = "2.0"
+	}
+	protocol := "SSH " + protocolVersion
 	software := parts[1]
 	if idx := strings.IndexByte(software, ' '); idx != -1 {
 		software = software[:idx]
