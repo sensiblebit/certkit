@@ -56,6 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Give opportunistic LDAP StartTLS retries a fresh default timeout budget after a failed implicit-TLS attempt, and keep STARTTLS banner detection reading until the first line is complete instead of trusting a single TCP fragment. ([#131])
 - Make generic `220 ...` SMTP fallback less misleading by logging failed upgrade attempts and falling back to the original non-TLS diagnostics when the endpoint was only an ambiguous SMTP candidate. ([#131])
 - Ignore unknown security-policy strings instead of treating every non-empty value as active, and harden SSH namelist parsing against 32-bit integer overflow on malformed KEXINIT packets. ([#131])
+- Accept spec-valid untagged IMAP responses before the tagged STARTTLS completion line, so IMAP upgrades and cipher scans do not falsely reject compliant servers. ([#131])
 
 ### Tests
 

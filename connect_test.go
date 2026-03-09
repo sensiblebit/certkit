@@ -758,6 +758,32 @@ func TestConnectTLS_StartTLSSMTPGeneric220Banner(t *testing.T) {
 	}
 }
 
+func TestConnectTLS_StartTLSIMAPUntaggedResponse(t *testing.T) {
+	t.Parallel()
+
+	ca := generateTestCA(t, "IMAP Untagged Root")
+	leaf := generateTestLeafCert(t, ca)
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(ca.Cert)
+
+	port := startIMAPStartTLSServerWithUntaggedResponse(t, [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := ConnectTLS(ctx, ConnectTLSInput{
+		Host:       "127.0.0.1",
+		Port:       port,
+		ServerName: "localhost",
+		RootCAs:    rootPool,
+	})
+	if err != nil {
+		t.Fatalf("ConnectTLS failed: %v", err)
+	}
+	if !strings.Contains(result.Protocol, "IMAP STARTTLS") {
+		t.Fatalf("Protocol = %q, want IMAP STARTTLS", result.Protocol)
+	}
+}
+
 func TestScanCipherSuites_StartTLSProtocols(t *testing.T) {
 	// WHY: Cipher scanning should reuse the same plaintext upgrade flow as
 	// ConnectTLS, otherwise STARTTLS endpoints degrade to "none detected".
@@ -824,6 +850,29 @@ func TestScanCipherSuites_StartTLSSMTPGeneric220Banner(t *testing.T) {
 	}
 	if len(result.Ciphers) == 0 {
 		t.Fatal("expected at least one detected cipher")
+	}
+}
+
+func TestScanCipherSuites_StartTLSIMAPUntaggedResponse(t *testing.T) {
+	t.Parallel()
+
+	ca := generateTestCA(t, "IMAP Untagged Scan Root")
+	leaf := generateTestLeafCert(t, ca)
+	port := startIMAPStartTLSServerWithUntaggedResponse(t, [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	result, err := ScanCipherSuites(ctx, ScanCipherSuitesInput{
+		Host:       "127.0.0.1",
+		Port:       port,
+		ServerName: "localhost",
+	})
+	if err != nil {
+		t.Fatalf("ScanCipherSuites failed: %v", err)
+	}
+	if len(result.Ciphers) == 0 {
+		t.Fatal("expected IMAP STARTTLS scan to detect ciphers after untagged response")
 	}
 }
 
@@ -1182,6 +1231,41 @@ func startSMTPStartTLSServerWithFirstConnectionBehavior(t *testing.T, behavior s
 	return port
 }
 
+func startIMAPStartTLSServerWithUntaggedResponse(t *testing.T, certChain [][]byte, key *ecdsa.PrivateKey) string {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	//nolint:gosec // Test plaintext-upgrade fixtures use the Go default test-server policy unless a test overrides it explicitly.
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		Certificates: []tls.Certificate{{
+			Certificate: certChain,
+			PrivateKey:  key,
+		}},
+	}
+
+	go func() {
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go handleIMAPUpgradeWithUntaggedResponse(conn, tlsConfig)
+		}
+	}()
+
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return port
+}
+
 func handlePlaintextUpgradeConn(conn net.Conn, protocol startTLSProtocol, tlsConfig *tls.Config) {
 	defer func() { _ = conn.Close() }()
 
@@ -1292,6 +1376,28 @@ func handleSMTPUpgrade(conn net.Conn, reader *bufio.Reader, tlsConfig *tls.Confi
 func handleIMAPUpgrade(conn net.Conn, reader *bufio.Reader, tlsConfig *tls.Config) {
 	line, err := readTextLine(reader)
 	if err != nil || !strings.EqualFold(line, "a001 STARTTLS") {
+		return
+	}
+	if _, err := conn.Write([]byte("a001 OK Begin TLS negotiation now\r\n")); err != nil {
+		return
+	}
+	serveUpgradedTLS(conn, reader, tlsConfig)
+}
+
+func handleIMAPUpgradeWithUntaggedResponse(conn net.Conn, tlsConfig *tls.Config) {
+	defer func() { _ = conn.Close() }()
+
+	reader := bufio.NewReader(conn)
+	if _, err := conn.Write([]byte("* OK IMAP4rev1 ready\r\n")); err != nil {
+		return
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+
+	line, err := readTextLine(reader)
+	if err != nil || !strings.EqualFold(line, "a001 STARTTLS") {
+		return
+	}
+	if _, err := conn.Write([]byte("* OK [CAPABILITY IMAP4rev1 AUTH=PLAIN] pre-TLS notice\r\n")); err != nil {
 		return
 	}
 	if _, err := conn.Write([]byte("a001 OK Begin TLS negotiation now\r\n")); err != nil {
@@ -2095,15 +2201,15 @@ func TestDiagnoseCipherScanPolicy(t *testing.T) {
 	if !containsDiagDetail(diags, "policy-cipher", "TLS_CHACHA20_POLY1305_SHA256") {
 		t.Fatalf("missing policy-cipher diagnostic in %+v", diags)
 	}
+	if !containsDiagDetail(diags, "policy-cipher", "TLS_RSA_WITH_AES_128_CBC_SHA") {
+		t.Fatalf("missing legacy policy-cipher diagnostic in %+v", diags)
+	}
 	if !containsDiagDetail(diags, "policy-protocol", "TLS 1.0") {
 		t.Fatalf("missing policy-protocol diagnostic in %+v", diags)
 	}
-	if got := scanCipherPolicyViolationCount(scan); got != 3 {
-		t.Fatalf("scanCipherPolicyViolationCount() = %d, want 3", got)
-	}
 	scan.OverallRating = CipherRatingWeak
-	if got := FormatCipherRatingLine(scan); !strings.Contains(got, "likely not authorized by FIPS 140-3") {
-		t.Fatalf("FormatCipherRatingLine() = %q, want policy summary", got)
+	if got := FormatCipherRatingLine(scan); !strings.Contains(got, "3 likely not authorized by FIPS 140-3") {
+		t.Fatalf("FormatCipherRatingLine() = %q, want policy summary count", got)
 	}
 }
 

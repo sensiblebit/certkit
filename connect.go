@@ -1012,14 +1012,21 @@ func negotiateIMAPStartTLS(reader *bufio.Reader, conn net.Conn) error {
 	if _, err := io.WriteString(conn, "a001 STARTTLS\r\n"); err != nil {
 		return fmt.Errorf("writing IMAP STARTTLS: %w", err)
 	}
-	line, err := readTextLine(reader)
-	if err != nil {
-		return fmt.Errorf("reading IMAP STARTTLS response: %w", err)
+	for range 50 {
+		line, err := readTextLine(reader)
+		if err != nil {
+			return fmt.Errorf("reading IMAP STARTTLS response: %w", err)
+		}
+		upper := strings.ToUpper(line)
+		if strings.HasPrefix(upper, "* ") {
+			continue
+		}
+		if !strings.HasPrefix(upper, "A001 OK") {
+			return fmt.Errorf("%w: %s", errStartTLSIMAPRejected, line)
+		}
+		return nil
 	}
-	if !strings.HasPrefix(strings.ToUpper(line), "A001 OK") {
-		return fmt.Errorf("%w: %s", errStartTLSIMAPRejected, line)
-	}
-	return nil
+	return fmt.Errorf("%w: tagged completion not received", errStartTLSIMAPRejected)
 }
 
 func negotiatePOP3StartTLS(reader *bufio.Reader, conn net.Conn) error {

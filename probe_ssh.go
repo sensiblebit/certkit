@@ -34,8 +34,11 @@ var (
 
 // SSHProbeInput configures ProbeSSH.
 type SSHProbeInput struct {
-	Host   string
-	Port   string
+	// Host is the SSH server hostname or IP address to probe.
+	Host string
+	// Port is the optional TCP port to probe. When empty, ProbeSSH uses 22.
+	Port string
+	// Policy enables optional heuristic transport-policy diagnostics.
 	Policy SecurityPolicy
 }
 
