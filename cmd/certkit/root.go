@@ -44,6 +44,7 @@ func init() {
 	rootCmd.AddCommand(csrCmd)
 	rootCmd.AddCommand(convertCmd)
 	rootCmd.AddCommand(signCmd)
+	rootCmd.AddCommand(probeCmd)
 	rootCmd.AddCommand(connectCmd)
 	rootCmd.AddCommand(ocspCmd)
 	rootCmd.AddCommand(crlCmd)

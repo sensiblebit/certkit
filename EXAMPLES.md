@@ -16,6 +16,11 @@ A practical guide to common certificate tasks. No prior TLS/SSL knowledge requir
 - [Connecting](#connecting)
   - [Test a TLS connection](#test-a-tls-connection)
   - [Check a non-standard port](#check-a-non-standard-port)
+  - [Connect to STARTTLS services](#connect-to-starttls-services)
+  - [Apply FIPS-style policy checks](#apply-fips-style-policy-checks)
+- [SSH Probing](#ssh-probing)
+  - [Inspect an SSH server](#inspect-an-ssh-server)
+  - [Check SSH algorithms against a FIPS-style profile](#check-ssh-algorithms-against-a-fips-style-profile)
 - [Bundling](#bundling)
   - [Build a full chain from a leaf cert](#build-a-full-chain-from-a-leaf-cert)
   - [Extract PEM from a PKCS#12 file](#extract-pem-from-a-pkcs12-file)
@@ -186,6 +191,8 @@ certkit connect example.com --ciphers
 
 Each cipher suite is rated `good` (ECDHE + AEAD, all TLS 1.3 suites) or `weak` (CBC, static RSA, RC4, 3DES). Weak ciphers are listed with a warning recommending they be disabled.
 
+If the remote service is not TLS at all, certkit now tries to tell you what it actually is instead of bubbling up the raw Go TLS error. For example, an SSH endpoint on port 22 reports an SSH banner, and HTTP on port 80 reports an HTTP response.
+
 For machine-readable output:
 
 ```sh
@@ -203,6 +210,89 @@ Override the SNI hostname if the server expects a different name:
 ```sh
 certkit connect 10.0.0.1:443 --servername example.com
 ```
+
+### Connect to STARTTLS services
+
+Some services begin in plaintext and upgrade to TLS only after a protocol-specific command. certkit detects SMTP `STARTTLS`, IMAP `STARTTLS`, and POP3 `STLS` from the server banner, and also attempts LDAP `StartTLS` on LDAP port `389`.
+
+```sh
+# SMTP submission
+certkit connect smtp.gmail.com:587
+
+# IMAP STARTTLS
+certkit connect outlook.office365.com:143
+
+# POP3 STLS
+certkit connect outlook.office365.com:110
+
+# LDAP StartTLS
+certkit connect ldap.jumpcloud.com:389
+```
+
+When an upgrade succeeds, the displayed protocol includes the transport in parentheses, for example:
+
+```text
+Protocol:     TLS 1.3 (SMTP STARTTLS)
+```
+
+Cipher scanning follows the same upgrade path:
+
+```sh
+certkit connect smtp.gmail.com:587 --ciphers
+certkit connect ldap.jumpcloud.com:389 --ciphers
+```
+
+Implicit-TLS ports still stay implicit-TLS. certkit only attempts STARTTLS/STLS after a direct TLS attempt shows the service is speaking plaintext.
+
+### Apply FIPS-style policy checks
+
+Use `--fips-140-2` or `--fips-140-3` to highlight negotiated or advertised TLS algorithms that are likely not authorized by a conservative FIPS-style profile:
+
+```sh
+certkit connect example.com --fips-140-3
+certkit connect example.com --ciphers --fips-140-3
+```
+
+These are heuristic checks based on what can be inferred from the wire. They do **not** prove that a remote service is backed by a formally validated FIPS module.
+
+---
+
+## SSH Probing
+
+### Inspect an SSH server
+
+Use `probe ssh` to inspect an SSH banner and the advertised transport algorithms without authenticating:
+
+```sh
+certkit probe ssh github.com
+certkit probe ssh example.com:2222
+```
+
+The output shows:
+
+- server banner and software version
+- key exchange algorithms
+- host key algorithms
+- ciphers, MACs, and compression
+- diagnostics for weak or deprecated SSH algorithms
+- `>` markers for the server's preferred algorithms
+
+For machine-readable output:
+
+```sh
+certkit --json probe ssh github.com
+```
+
+### Check SSH algorithms against a FIPS-style profile
+
+`probe ssh` also supports the same conservative policy flags:
+
+```sh
+certkit probe ssh github.com --fips-140-3
+certkit probe ssh your-jump-host --fips-140-2
+```
+
+This is useful for spotting servers that still advertise algorithms which may be incompatible with strict environments, even if those algorithms are not the server's top preference.
 
 ---
 

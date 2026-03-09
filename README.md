@@ -104,6 +104,7 @@ See [EXAMPLES.md](EXAMPLES.md) for a complete walkthrough of every command with 
 | `certkit inspect <file>`    | Show what's in a cert, key, or CSR                      |
 | `certkit verify <file>`     | Check chain, key match, and expiry                      |
 | `certkit connect <host>`    | Test a TLS connection and display the certificate chain |
+| `certkit probe ssh <host>`  | Inspect SSH banner and advertised transport algorithms  |
 | `certkit bundle <file>`     | Build a certificate chain from a leaf cert              |
 | `certkit convert <file>`    | Convert between PEM, DER, PKCS#12, JKS, and PKCS#7      |
 | `certkit sign self-signed`  | Create a self-signed certificate                        |
@@ -166,17 +167,31 @@ Chain verification is always performed. When the input contains an embedded priv
 ### Connect Flags
 
 <!-- certkit:flags:connect -->
-| Flag                      | Default | Description                                                 |
-| ------------------------- | ------- | ----------------------------------------------------------- |
-| `--allow-private-network` | `false` | Allow AIA/OCSP/CRL fetches to private/internal endpoints    |
-| `--ciphers`               | `false` | Enumerate all supported cipher suites with security ratings |
-| `--crl`                   | `false` | Check CRL distribution points for revocation                |
-| `--format`                | `text`  | Output format: text, json                                   |
-| `--no-ocsp`               | `false` | Disable automatic OCSP revocation check                     |
-| `--servername`            |         | Override SNI hostname (defaults to host)                    |
+| Flag                      | Default | Description                                                                         |
+| ------------------------- | ------- | ----------------------------------------------------------------------------------- |
+| `--allow-private-network` | `false` | Allow AIA/OCSP/CRL fetches to private/internal endpoints                            |
+| `--ciphers`               | `false` | Enumerate all supported cipher suites with security ratings                         |
+| `--crl`                   | `false` | Check CRL distribution points for revocation                                        |
+| `--fips-140-2`            | `false` | Apply conservative FIPS 140-2 heuristic checks to negotiated/offered TLS algorithms |
+| `--fips-140-3`            | `false` | Apply conservative FIPS 140-3 heuristic checks to negotiated/offered TLS algorithms |
+| `--format`                | `text`  | Output format: text, json                                                           |
+| `--no-ocsp`               | `false` | Disable automatic OCSP revocation check                                             |
+| `--servername`            |         | Override SNI hostname (defaults to host)                                            |
 <!-- /certkit:flags -->
 
 Port defaults to 443 if not specified. OCSP revocation status is checked automatically (best-effort); use `--no-ocsp` to disable. Use `--verbose` for extended details (serial, key info, signature algorithm, key usage, EKU).
+
+### Probe SSH Flags
+
+<!-- certkit:flags:probe-ssh -->
+| Flag           | Default | Description                                                                 |
+| -------------- | ------- | --------------------------------------------------------------------------- |
+| `--fips-140-2` | `false` | Apply conservative FIPS 140-2 heuristic checks to advertised SSH algorithms |
+| `--fips-140-3` | `false` | Apply conservative FIPS 140-3 heuristic checks to advertised SSH algorithms |
+| `--format`     | `text`  | Output format: text, json                                                   |
+<!-- /certkit:flags -->
+
+Port defaults to 22 if not specified.
 
 ### Bundle Flags
 

@@ -1,0 +1,58 @@
+query($owner:String!, $repo:String!, $number:Int!) {
+  repository(owner:$owner, name:$repo) {
+    pullRequest(number:$number) {
+      number
+      title
+      url
+      reviewThreads(first:100) {
+        nodes {
+          id
+          isResolved
+          comments(first:20) {
+            nodes {
+              id
+              databaseId
+              url
+              path
+              isMinimized
+              author {
+                login
+              }
+              body
+            }
+          }
+        }
+      }
+      comments(first:100) {
+        nodes {
+          id
+          databaseId
+          url
+          isMinimized
+          author {
+            login
+          }
+          body
+        }
+      }
+      reviews(first:100) {
+        nodes {
+          id
+          databaseId
+          url
+          state
+          body
+          submittedAt
+          isMinimized
+          author {
+            login
+          }
+          reactionGroups {
+            content
+            viewerHasReacted
+          }
+        }
+      }
+    }
+  }
+}

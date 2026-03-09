@@ -2,7 +2,7 @@ package certkit
 
 // This file implements a raw QUIC v1 Initial packet prober for detecting
 // TLS 1.3 cipher suites over UDP (port 443). It wraps the same ClientHello
-// from tls13probe.go in an encrypted QUIC Initial packet per RFC 9001.
+// from probe_tls13.go in an encrypted QUIC Initial packet per RFC 9001.
 //
 // QUIC Initial packets are encrypted with keys derived from the client's
 // chosen Destination Connection ID using HKDF + AES-128-GCM. This is not

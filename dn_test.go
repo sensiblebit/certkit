@@ -2007,7 +2007,7 @@ func TestMarshalSANExtension_ValidationErrors(t *testing.T) {
 		},
 		{
 			name:          "invalid IP length",
-			input:         MarshalSANExtensionInput{IPAddresses: []net.IP{net.IP{1, 2, 3}}},
+			input:         MarshalSANExtensionInput{IPAddresses: []net.IP{{1, 2, 3}}},
 			wantErrSubstr: "invalid IP address",
 		},
 	}

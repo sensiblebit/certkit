@@ -1,9 +1,11 @@
 package certkit
 
 import (
+	"bufio"
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -11,6 +13,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"slices"
@@ -20,10 +23,35 @@ import (
 )
 
 const defaultConnectTimeout = 10 * time.Second
+const nonTLSPeekLimit = 256
+const startTLSDetectTimeout = 1 * time.Second
+const maxLDAPStartTLSResponseBytes = 64 * 1024
+const maxTextLineBytes = 16 * 1024
 
 var (
-	errConnectHostRequired    = errors.New("connecting to TLS server: host is required")
-	errCipherScanHostRequired = errors.New("scanning cipher suites: host is required")
+	errConnectHostRequired         = errors.New("connecting to TLS server: host is required")
+	errCipherScanHostRequired      = errors.New("scanning cipher suites: host is required")
+	errConnectNonTLSService        = errors.New("remote service does not appear to speak TLS")
+	errStartTLSUnsupportedProtocol = errors.New("unsupported STARTTLS protocol")
+	errStartTLSLDAPRejected        = errors.New("LDAP service rejected StartTLS")
+	errStartTLSLDAPMalformed       = errors.New("malformed LDAP StartTLS response")
+	errStartTLSSMTPUnsupported     = errors.New("SMTP service did not advertise STARTTLS")
+	errStartTLSSMTPUnexpected      = errors.New("unexpected SMTP response")
+	errStartTLSSMTPMalformed       = errors.New("malformed SMTP response")
+	errStartTLSIMAPGreeting        = errors.New("unexpected IMAP greeting")
+	errStartTLSIMAPRejected        = errors.New("IMAP service rejected STARTTLS")
+	errStartTLSPOP3Greeting        = errors.New("unexpected POP3 greeting")
+	errStartTLSPOP3Rejected        = errors.New("POP3 service rejected STLS")
+	errLineTooLong                 = errors.New("line exceeds maximum length")
+)
+
+type startTLSProtocol string
+
+const (
+	startTLSProtocolSMTP startTLSProtocol = "smtp"
+	startTLSProtocolIMAP startTLSProtocol = "imap"
+	startTLSProtocolPOP3 startTLSProtocol = "pop3"
+	startTLSProtocolLDAP startTLSProtocol = "ldap"
 )
 
 // ChainDiagnostic describes a single chain configuration issue found during connection probing.
@@ -238,6 +266,8 @@ type ConnectTLSInput struct {
 	RootCAs *x509.CertPool
 	// AllowPrivateNetworks allows AIA/OCSP/CRL fetches to private/internal endpoints.
 	AllowPrivateNetworks bool
+	// Policy enables optional strict transport/certificate diagnostics.
+	Policy SecurityPolicy
 }
 
 // ClientAuthInfo describes the server's client certificate request (mTLS).
@@ -270,7 +300,10 @@ type ConnectResult struct {
 	// Port is the TCP port that was connected to.
 	Port string `json:"port"`
 	// Protocol is the negotiated TLS version (e.g. "TLS 1.3").
-	Protocol string `json:"protocol"`
+	Protocol   string `json:"protocol"`
+	tlsVersion string
+	// Policy is the optional strictness profile used when rating this result.
+	Policy SecurityPolicy `json:"policy,omitempty"`
 	// CipherSuite is the negotiated cipher suite name.
 	CipherSuite string `json:"cipher_suite"`
 	// ServerName is the SNI value sent.
@@ -345,36 +378,13 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 	if err != nil {
 		return nil, fmt.Errorf("connecting to %s: %w", addr, err)
 	}
+	sniffConn := &prefixCapturingConn{Conn: conn}
 
 	var clientAuth *ClientAuthInfo
 
-	tlsConf := &tls.Config{
-		ServerName:         serverName,
-		InsecureSkipVerify: true, //nolint:gosec // We do our own verification below.
-		GetClientCertificate: func(cri *tls.CertificateRequestInfo) (*tls.Certificate, error) {
-			info := &ClientAuthInfo{Requested: true}
-			for i, rawDN := range cri.AcceptableCAs {
-				var rdnSeq pkix.RDNSequence
-				if _, err := asn1.Unmarshal(rawDN, &rdnSeq); err != nil {
-					slog.Debug("failed to unmarshal acceptable CA DN",
-						slog.Int("index", i),
-						slog.Any("error", err),
-					)
-					continue
-				}
-				var name pkix.Name
-				name.FillFromRDNSequence(&rdnSeq)
-				info.AcceptableCAs = append(info.AcceptableCAs, FormatDN(name))
-			}
-			for _, scheme := range cri.SignatureSchemes {
-				info.SignatureSchemes = append(info.SignatureSchemes, signatureSchemeString(scheme))
-			}
-			clientAuth = info
-			return &tls.Certificate{}, nil
-		},
-	}
+	tlsConf := newConnectTLSConfig(serverName, &clientAuth)
 
-	tlsConn := tls.Client(conn, tlsConf)
+	tlsConn := tls.Client(sniffConn, tlsConf)
 	defer func() { _ = tlsConn.Close() }()
 
 	if deadline, ok := connectCtx.Deadline(); ok {
@@ -408,6 +418,8 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 			Host:        input.Host,
 			Port:        port,
 			Protocol:    tlsVersionString(legacyResult.version),
+			tlsVersion:  tlsVersionString(legacyResult.version),
+			Policy:      input.Policy,
 			CipherSuite: cipherSuiteName(legacyResult.cipherSuite),
 			ServerName:  serverName,
 			PeerChain:   legacyResult.certificates,
@@ -424,6 +436,82 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 		// Non-alert failure (network error, certificate error, etc.) — return
 		// immediately. The mTLS fallback path below is only for client auth
 		// rejection, which only occurs when clientAuth is non-nil.
+		_ = tlsConn.Close()
+		prefix := sniffConn.prefix()
+		startTLSCtx, startTLSCancel := startTLSFallbackContext(connectCtx, input.ConnectTimeout)
+		defer startTLSCancel()
+		if detectedProtocol, ok := detectStartTLSProtocol(addr, prefix); ok {
+			result, startTLSErr := connectViaStartTLS(startTLSCtx, ctx, connectViaStartTLSInput{
+				connectInput: input,
+				addr:         addr,
+				serverName:   serverName,
+				protocol:     detectedProtocol,
+			})
+			if startTLSErr != nil {
+				return nil, fmt.Errorf("STARTTLS with %s: %w", addr, startTLSErr)
+			}
+			return result, nil
+		}
+		if matchesGenericSMTPBanner(firstBannerLine(prefix)) {
+			result, startTLSErr := connectViaStartTLS(startTLSCtx, ctx, connectViaStartTLSInput{
+				connectInput: input,
+				addr:         addr,
+				serverName:   serverName,
+				protocol:     startTLSProtocolSMTP,
+			})
+			if startTLSErr == nil {
+				return result, nil
+			}
+			slog.Debug("smtp starttls attempt failed, falling back to tls handshake error", "addr", addr, "error", startTLSErr)
+		}
+		if matchesGenericIMAPBanner(firstBannerLine(prefix)) {
+			result, startTLSErr := connectViaStartTLS(startTLSCtx, ctx, connectViaStartTLSInput{
+				connectInput: input,
+				addr:         addr,
+				serverName:   serverName,
+				protocol:     startTLSProtocolIMAP,
+			})
+			if startTLSErr == nil {
+				return result, nil
+			}
+			slog.Debug("imap starttls attempt failed, falling back to tls handshake error", "addr", addr, "error", startTLSErr)
+		}
+		if matchesGenericPOP3Banner(firstBannerLine(prefix)) {
+			result, startTLSErr := connectViaStartTLS(startTLSCtx, ctx, connectViaStartTLSInput{
+				connectInput: input,
+				addr:         addr,
+				serverName:   serverName,
+				protocol:     startTLSProtocolPOP3,
+			})
+			if startTLSErr == nil {
+				return result, nil
+			}
+			slog.Debug("pop3 stls attempt failed, falling back to tls handshake error", "addr", addr, "error", startTLSErr)
+		}
+		if len(prefix) == 0 {
+			// LDAP is the one STARTTLS protocol we intentionally probe without a
+			// plaintext banner because anonymous LDAP on 389 stays silent until the
+			// client sends the extended operation. This retry stays under
+			// startTLSCtx, so silent non-LDAP services still fail within the same
+			// bounded fallback budget instead of hanging indefinitely.
+			result, startTLSErr := connectViaStartTLS(startTLSCtx, ctx, connectViaStartTLSInput{
+				connectInput: input,
+				addr:         addr,
+				serverName:   serverName,
+				protocol:     startTLSProtocolLDAP,
+			})
+			if startTLSErr == nil {
+				return result, nil
+			}
+			slog.Debug("ldap starttls attempt failed, falling back to tls handshake error", "addr", addr, "error", startTLSErr)
+		}
+		if inferredErr := inferNonTLSError(inferNonTLSErrorInput{
+			handshakeErr: handshakeErr,
+			addr:         addr,
+			prefix:       prefix,
+		}); inferredErr != nil {
+			return nil, fmt.Errorf("tls handshake with %s: %w", addr, inferredErr)
+		}
 		return nil, fmt.Errorf("tls handshake with %s: %w", addr, handshakeErr)
 	}
 
@@ -437,6 +525,8 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 		Host:        input.Host,
 		Port:        port,
 		Protocol:    tlsVersionString(state.Version),
+		tlsVersion:  tlsVersionString(state.Version),
+		Policy:      input.Policy,
 		CipherSuite: tls.CipherSuiteName(state.CipherSuite),
 		ServerName:  serverName,
 		ALPN:        state.NegotiatedProtocol,
@@ -449,6 +539,18 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 	return result, nil
 }
 
+func startTLSFallbackContext(parent context.Context, connectTimeout time.Duration) (context.Context, context.CancelFunc) {
+	if _, hasDeadline := parent.Deadline(); hasDeadline {
+		return parent, func() {}
+	}
+	if connectTimeout == 0 {
+		connectTimeout = defaultConnectTimeout
+	}
+	//nolint:gosec // The caller always defers the returned cancel func at the call site.
+	ctx, cancel := context.WithTimeout(parent, connectTimeout)
+	return ctx, cancel
+}
+
 // populate runs chain diagnostics, verification, OCSP, and CRL checks on the
 // ConnectResult. It is shared between the normal handshake path and the legacy
 // fallback path.
@@ -456,7 +558,16 @@ func (result *ConnectResult) populate(ctx context.Context, input ConnectTLSInput
 	serverName := result.ServerName
 
 	// Diagnose the negotiated cipher suite and protocol version.
-	result.Diagnostics = append(result.Diagnostics, DiagnoseNegotiatedCipher(result.Protocol, result.CipherSuite)...)
+	protocolVersion := result.tlsVersion
+	if protocolVersion == "" {
+		protocolVersion = result.Protocol
+	}
+	result.Diagnostics = append(result.Diagnostics, DiagnoseNegotiatedCipher(protocolVersion, result.CipherSuite)...)
+	result.Diagnostics = append(result.Diagnostics, diagnoseNegotiatedCipherPolicy(negotiatedCipherPolicyInput{
+		protocol:    protocolVersion,
+		cipherSuite: result.CipherSuite,
+		policy:      input.Policy,
+	})...)
 
 	// Run chain diagnostics on the raw peer chain.
 	if len(result.PeerChain) > 0 {
@@ -535,6 +646,8 @@ func (result *ConnectResult) populate(ctx context.Context, input ConnectTLSInput
 		return
 	}
 
+	result.Diagnostics = append(result.Diagnostics, diagnosePeerChainPolicy(result.PeerChain, input.Policy)...)
+
 	// For legacy probes, certificate chain verification has been run above and
 	// the result is included in the output. However, OCSP and CRL revocation
 	// checks require a verified issuer from a real TLS channel — skipping
@@ -605,6 +718,988 @@ func (result *ConnectResult) populate(ctx context.Context, input ConnectTLSInput
 			Detail: "no issuer certificate available to verify CRL signature",
 		}
 	}
+}
+
+func newConnectTLSConfig(serverName string, clientAuth **ClientAuthInfo) *tls.Config {
+	return &tls.Config{
+		ServerName:         serverName,
+		InsecureSkipVerify: true, //nolint:gosec // We do our own verification below.
+		GetClientCertificate: func(cri *tls.CertificateRequestInfo) (*tls.Certificate, error) {
+			info := &ClientAuthInfo{Requested: true}
+			for i, rawDN := range cri.AcceptableCAs {
+				var rdnSeq pkix.RDNSequence
+				if _, err := asn1.Unmarshal(rawDN, &rdnSeq); err != nil {
+					slog.Debug("failed to unmarshal acceptable CA DN",
+						slog.Int("index", i),
+						slog.Any("error", err),
+					)
+					continue
+				}
+				var name pkix.Name
+				name.FillFromRDNSequence(&rdnSeq)
+				info.AcceptableCAs = append(info.AcceptableCAs, FormatDN(name))
+			}
+			for _, scheme := range cri.SignatureSchemes {
+				info.SignatureSchemes = append(info.SignatureSchemes, signatureSchemeString(scheme))
+			}
+			*clientAuth = info
+			return &tls.Certificate{}, nil
+		},
+	}
+}
+
+type connectResultFromTLSStateInput struct {
+	connectInput ConnectTLSInput
+	addr         string
+	serverName   string
+	state        tls.ConnectionState
+	clientAuth   *ClientAuthInfo
+	startTLS     startTLSProtocol
+}
+
+func connectResultFromTLSState(ctx context.Context, input connectResultFromTLSStateInput) *ConnectResult {
+	rawProtocol := tlsVersionString(input.state.Version)
+	protocol := rawProtocol
+	if input.startTLS != "" {
+		protocol = formatProtocolWithStartTLS(protocol, input.startTLS)
+	}
+	port := input.connectInput.Port
+	if _, splitPort, splitErr := net.SplitHostPort(input.addr); splitErr == nil {
+		port = splitPort
+	}
+	host := input.connectInput.Host
+	if host == "" {
+		host = input.serverName
+	}
+	result := &ConnectResult{
+		Host:        host,
+		Port:        port,
+		Protocol:    protocol,
+		tlsVersion:  rawProtocol,
+		Policy:      input.connectInput.Policy,
+		CipherSuite: tls.CipherSuiteName(input.state.CipherSuite),
+		ServerName:  input.serverName,
+		ALPN:        input.state.NegotiatedProtocol,
+		ClientAuth:  input.clientAuth,
+		PeerChain:   input.state.PeerCertificates,
+		TLSSCTs:     input.state.SignedCertificateTimestamps,
+	}
+	result.populate(ctx, input.connectInput)
+	return result
+}
+
+func dialProbeConn(ctx context.Context, input cipherProbeInput) (net.Conn, error) {
+	dialer := &net.Dialer{}
+	conn, err := dialer.DialContext(ctx, "tcp", input.addr)
+	if err != nil {
+		return nil, fmt.Errorf("dialing probe connection: %w", err)
+	}
+	if input.startTLS == "" {
+		return conn, nil
+	}
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := conn.SetDeadline(deadline); err != nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf("setting STARTTLS probe deadline: %w", err)
+		}
+	}
+
+	reader := bufio.NewReader(conn)
+	if err := negotiateStartTLS(negotiateStartTLSInput{
+		reader:   reader,
+		conn:     conn,
+		protocol: input.startTLS,
+	}); err != nil {
+		_ = conn.Close()
+		return nil, err
+	}
+	return &bufferedPrefixConn{Conn: conn, reader: reader}, nil
+}
+
+func detectScanStartTLSProtocol(ctx context.Context, addr, serverName string) startTLSProtocol {
+	serverName = detectStartTLSServerName(addr, serverName)
+
+	// Bound each STARTTLS preflight phase to a short budget even when the
+	// caller supplied a much longer context deadline; the actual probe sockets
+	// carry their own per-attempt timeouts and should not wait on this sniff
+	// connection first. Silent protocols like LDAP need a second bounded phase
+	// after the initial banner sniff.
+	dialCtx, cancel := context.WithDeadline(ctx, startTLSDetectDeadline(ctx, time.Now()))
+	defer cancel()
+
+	// This best-effort preflight uses a separate connection to avoid coupling
+	// protocol sniffing to the later parallel probe sockets.
+	dialer := &net.Dialer{}
+	conn, err := dialer.DialContext(dialCtx, "tcp", addr)
+	if err != nil {
+		return ""
+	}
+	stopOnCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer func() {
+		if !stopOnCancel() {
+			return
+		}
+		_ = conn.Close()
+	}()
+
+	if err := conn.SetDeadline(startTLSDetectDeadline(ctx, time.Now())); err != nil {
+		slog.Debug("detect STARTTLS protocol: aborting best-effort preflight after initial deadline setup failed", "addr", addr, "error", err)
+		return ""
+	}
+	prefix, err := readBannerPrefix(conn)
+	if len(prefix) == 0 {
+		if err := conn.SetDeadline(startTLSDetectDeadline(ctx, time.Now())); err != nil {
+			slog.Debug("detect STARTTLS protocol: aborting best-effort preflight after LDAP deadline reset failed", "addr", addr, "error", err)
+			return ""
+		}
+		if ok, err := detectLDAPStartTLS(detectLDAPStartTLSInput{
+			conn:       conn,
+			serverName: serverName,
+		}); ok {
+			return startTLSProtocolLDAP
+		} else if err != nil {
+			slog.Debug("detect STARTTLS protocol: LDAP probe failed", "addr", addr, "error", err)
+		}
+		return ""
+	}
+	protocol, ok := detectStartTLSProtocol(addr, prefix)
+	if ok {
+		if err := conn.SetDeadline(startTLSDetectDeadline(ctx, time.Now())); err != nil {
+			slog.Debug("detect STARTTLS protocol: aborting best-effort preflight after protocol deadline reset failed", "addr", addr, "protocol", protocol, "error", err)
+			return ""
+		}
+		if confirmed, detectErr := detectStartTLSOnBanner(detectStartTLSOnBannerInput{
+			conn:     conn,
+			prefix:   prefix,
+			protocol: protocol,
+		}); confirmed {
+			if err != nil && !errors.Is(err, io.EOF) {
+				slog.Debug("detect STARTTLS protocol: ignoring trailing read error", "addr", addr, "error", err)
+			}
+			return protocol
+		} else if detectErr != nil {
+			slog.Debug("detect STARTTLS protocol: protocol probe failed", "addr", addr, "protocol", protocol, "error", detectErr)
+		} else {
+			slog.Debug("detect STARTTLS protocol: protocol probe did not confirm upgrade", "addr", addr, "protocol", protocol)
+		}
+		return ""
+	}
+	if matchesGenericSMTPBanner(firstBannerLine(prefix)) {
+		if err := conn.SetDeadline(startTLSDetectDeadline(ctx, time.Now())); err != nil {
+			slog.Debug("detect STARTTLS protocol: aborting best-effort preflight after SMTP deadline reset failed", "addr", addr, "error", err)
+			return ""
+		}
+		if ok, err := detectSMTPStartTLS(conn, prefix); ok {
+			return startTLSProtocolSMTP
+		} else if err != nil {
+			slog.Debug("detect STARTTLS protocol: SMTP probe failed", "addr", addr, "error", err)
+		} else {
+			slog.Debug("detect STARTTLS protocol: SMTP probe did not confirm upgrade", "addr", addr)
+		}
+	}
+	if matchesGenericIMAPBanner(firstBannerLine(prefix)) {
+		if err := conn.SetDeadline(startTLSDetectDeadline(ctx, time.Now())); err != nil {
+			slog.Debug("detect STARTTLS protocol: aborting best-effort preflight after IMAP deadline reset failed", "addr", addr, "error", err)
+			return ""
+		}
+		if ok, err := detectStartTLSOnBanner(detectStartTLSOnBannerInput{
+			conn:     conn,
+			prefix:   prefix,
+			protocol: startTLSProtocolIMAP,
+		}); ok {
+			return startTLSProtocolIMAP
+		} else if err != nil {
+			slog.Debug("detect STARTTLS protocol: IMAP probe failed", "addr", addr, "error", err)
+		} else {
+			slog.Debug("detect STARTTLS protocol: IMAP probe did not confirm upgrade", "addr", addr)
+		}
+	}
+	if matchesGenericPOP3Banner(firstBannerLine(prefix)) {
+		if err := conn.SetDeadline(startTLSDetectDeadline(ctx, time.Now())); err != nil {
+			slog.Debug("detect STARTTLS protocol: aborting best-effort preflight after POP3 deadline reset failed", "addr", addr, "error", err)
+			return ""
+		}
+		if ok, err := detectStartTLSOnBanner(detectStartTLSOnBannerInput{
+			conn:     conn,
+			prefix:   prefix,
+			protocol: startTLSProtocolPOP3,
+		}); ok {
+			return startTLSProtocolPOP3
+		} else if err != nil {
+			slog.Debug("detect STARTTLS protocol: POP3 probe failed", "addr", addr, "error", err)
+		} else {
+			slog.Debug("detect STARTTLS protocol: POP3 probe did not confirm upgrade", "addr", addr)
+		}
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		slog.Debug("detect STARTTLS protocol: ignoring unrecognized banner read error", "addr", addr, "error", err)
+	}
+	return ""
+}
+
+func startTLSDetectDeadline(ctx context.Context, now time.Time) time.Time {
+	detectDeadline := now.Add(startTLSDetectTimeout)
+	if deadline, ok := ctx.Deadline(); ok && deadline.Before(detectDeadline) {
+		return deadline
+	}
+	return detectDeadline
+}
+
+func detectStartTLSServerName(addr, explicitServerName string) string {
+	if explicitServerName != "" {
+		return explicitServerName
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return ""
+	}
+	ipHost := host
+	if zoneIdx := strings.LastIndex(ipHost, "%"); zoneIdx != -1 {
+		ipHost = ipHost[:zoneIdx]
+	}
+	if net.ParseIP(ipHost) != nil {
+		return ipHost
+	}
+	return host
+}
+
+func readBannerPrefix(conn net.Conn) ([]byte, error) {
+	prefix := make([]byte, 0, nonTLSPeekLimit)
+	buf := make([]byte, 64)
+	for len(prefix) < nonTLSPeekLimit {
+		readBuf := buf[:min(len(buf), nonTLSPeekLimit-len(prefix))]
+		n, err := conn.Read(readBuf)
+		if n > 0 {
+			prefix = append(prefix, readBuf[:n]...)
+			if bytes.Contains(prefix, []byte{'\n'}) {
+				if err != nil {
+					return prefix, fmt.Errorf("reading STARTTLS banner: %w", err)
+				}
+				return prefix, nil
+			}
+		}
+		if err != nil {
+			return prefix, fmt.Errorf("reading STARTTLS banner: %w", err)
+		}
+	}
+	return prefix, nil
+}
+
+type connectViaStartTLSInput struct {
+	connectInput ConnectTLSInput
+	addr         string
+	serverName   string
+	protocol     startTLSProtocol
+}
+
+// connectViaStartTLS uses handshakeCtx only for the reconnect/upgrade handshake.
+// verifyCtx remains the original caller context so post-handshake verification
+// work is not truncated by the shorter STARTTLS handshake budget.
+func connectViaStartTLS(handshakeCtx, verifyCtx context.Context, input connectViaStartTLSInput) (*ConnectResult, error) {
+	dialer := &net.Dialer{}
+	conn, err := dialer.DialContext(handshakeCtx, "tcp", input.addr)
+	if err != nil {
+		return nil, fmt.Errorf("reconnecting for %s STARTTLS: %w", protocolDisplayName(input.protocol), err)
+	}
+	closeConn := conn
+	defer func() { _ = closeConn.Close() }()
+
+	if deadline, ok := handshakeCtx.Deadline(); ok {
+		if err := conn.SetDeadline(deadline); err != nil {
+			return nil, fmt.Errorf("setting %s STARTTLS deadline: %w", protocolDisplayName(input.protocol), err)
+		}
+	}
+
+	reader := bufio.NewReader(conn)
+	if err := negotiateStartTLS(negotiateStartTLSInput{
+		reader:   reader,
+		conn:     conn,
+		protocol: input.protocol,
+	}); err != nil {
+		return nil, err
+	}
+
+	bufferedConn := &bufferedPrefixConn{Conn: conn, reader: reader}
+	var clientAuth *ClientAuthInfo
+	tlsConn := tls.Client(bufferedConn, newConnectTLSConfig(input.serverName, &clientAuth))
+	closeConn = tlsConn
+	handshakeErr := tlsConn.HandshakeContext(handshakeCtx)
+	state := tlsConn.ConnectionState()
+	if handshakeErr != nil {
+		// When the server requested a client cert and rejected our empty
+		// response, partial state may still contain the server chain and
+		// CertificateRequest details. Keep that useful mTLS context, but
+		// reject silent zero-state fallthrough for unrelated failures.
+		if clientAuth == nil || state.Version == 0 || len(state.PeerCertificates) == 0 {
+			return nil, fmt.Errorf("%s STARTTLS handshake: %w", protocolDisplayName(input.protocol), handshakeErr)
+		}
+	}
+	startTLSInput := input.connectInput
+	if startTLSInput.Port == "" {
+		_, port, splitErr := net.SplitHostPort(input.addr)
+		if splitErr != nil {
+			return nil, fmt.Errorf("parsing %s STARTTLS address %q: %w", protocolDisplayName(input.protocol), input.addr, splitErr)
+		}
+		startTLSInput.Port = port
+	}
+	return connectResultFromTLSState(verifyCtx, connectResultFromTLSStateInput{
+		connectInput: startTLSInput,
+		addr:         input.addr,
+		serverName:   input.serverName,
+		state:        state,
+		clientAuth:   clientAuth,
+		startTLS:     input.protocol,
+	}), nil
+}
+
+type negotiateStartTLSInput struct {
+	reader   *bufio.Reader
+	conn     net.Conn
+	protocol startTLSProtocol
+}
+
+func negotiateStartTLS(input negotiateStartTLSInput) error {
+	switch input.protocol {
+	case startTLSProtocolSMTP:
+		return negotiateSMTPStartTLS(input.reader, input.conn)
+	case startTLSProtocolIMAP:
+		return negotiateIMAPStartTLS(input.reader, input.conn)
+	case startTLSProtocolPOP3:
+		return negotiatePOP3StartTLS(input.reader, input.conn)
+	case startTLSProtocolLDAP:
+		return negotiateLDAPStartTLS(input.reader, input.conn)
+	default:
+		return fmt.Errorf("%w: %q", errStartTLSUnsupportedProtocol, input.protocol)
+	}
+}
+
+func negotiateSMTPStartTLS(reader *bufio.Reader, conn net.Conn) error {
+	if _, err := readSMTPResponse(reader, "220"); err != nil {
+		return fmt.Errorf("reading SMTP greeting: %w", err)
+	}
+	if _, err := io.WriteString(conn, "EHLO [127.0.0.1]\r\n"); err != nil {
+		return fmt.Errorf("writing SMTP EHLO: %w", err)
+	}
+	ehloLines, err := readSMTPResponse(reader, "250")
+	if err != nil {
+		return fmt.Errorf("reading SMTP EHLO response: %w", err)
+	}
+	if !smtpAdvertisesStartTLS(ehloLines) {
+		return errStartTLSSMTPUnsupported
+	}
+	if _, err := io.WriteString(conn, "STARTTLS\r\n"); err != nil {
+		return fmt.Errorf("writing SMTP STARTTLS: %w", err)
+	}
+	if _, err := readSMTPResponse(reader, "220"); err != nil {
+		return fmt.Errorf("reading SMTP STARTTLS response: %w", err)
+	}
+	return nil
+}
+
+func readSMTPResponse(reader *bufio.Reader, wantCode string) ([]string, error) {
+	var lines []string
+	for {
+		line, err := readTextLine(reader)
+		if err != nil {
+			return nil, fmt.Errorf("reading SMTP response line: %w", err)
+		}
+		if len(line) < 4 || line[:3] != wantCode {
+			return nil, fmt.Errorf("%w %q, want %s", errStartTLSSMTPUnexpected, line, wantCode)
+		}
+		lines = append(lines, line)
+		if line[3] == ' ' {
+			return lines, nil
+		}
+		if line[3] != '-' {
+			return nil, fmt.Errorf("%w %q", errStartTLSSMTPMalformed, line)
+		}
+	}
+}
+
+func smtpAdvertisesStartTLS(lines []string) bool {
+	for _, line := range lines {
+		if len(line) < 4 || line[:3] != "250" {
+			continue
+		}
+		if strings.EqualFold(strings.TrimSpace(line[4:]), "STARTTLS") {
+			return true
+		}
+	}
+	return false
+}
+
+func negotiateIMAPStartTLS(reader *bufio.Reader, conn net.Conn) error {
+	greeting, err := readTextLine(reader)
+	if err != nil {
+		return fmt.Errorf("reading IMAP greeting: %w", err)
+	}
+	if !strings.HasPrefix(strings.ToUpper(greeting), "* OK") {
+		return fmt.Errorf("%w %q", errStartTLSIMAPGreeting, greeting)
+	}
+	if _, err := io.WriteString(conn, "a001 STARTTLS\r\n"); err != nil {
+		return fmt.Errorf("writing IMAP STARTTLS: %w", err)
+	}
+	for range 50 {
+		line, err := readTextLine(reader)
+		if err != nil {
+			return fmt.Errorf("reading IMAP STARTTLS response: %w", err)
+		}
+		upper := strings.ToUpper(line)
+		if strings.HasPrefix(upper, "* ") {
+			slog.Debug("ignoring untagged IMAP STARTTLS response line")
+			continue
+		}
+		if !strings.HasPrefix(upper, "A001 OK") {
+			return fmt.Errorf("%w: %s", errStartTLSIMAPRejected, line)
+		}
+		return nil
+	}
+	return fmt.Errorf("%w: tagged completion not received", errStartTLSIMAPRejected)
+}
+
+func negotiatePOP3StartTLS(reader *bufio.Reader, conn net.Conn) error {
+	greeting, err := readTextLine(reader)
+	if err != nil {
+		return fmt.Errorf("reading POP3 greeting: %w", err)
+	}
+	if !strings.HasPrefix(strings.ToUpper(greeting), "+OK") {
+		return fmt.Errorf("%w %q", errStartTLSPOP3Greeting, greeting)
+	}
+	if _, err := io.WriteString(conn, "STLS\r\n"); err != nil {
+		return fmt.Errorf("writing POP3 STLS: %w", err)
+	}
+	line, err := readTextLine(reader)
+	if err != nil {
+		return fmt.Errorf("reading POP3 STLS response: %w", err)
+	}
+	if !strings.HasPrefix(strings.ToUpper(line), "+OK") {
+		return fmt.Errorf("%w: %s", errStartTLSPOP3Rejected, line)
+	}
+	return nil
+}
+
+func negotiateLDAPStartTLS(reader *bufio.Reader, conn net.Conn) error {
+	request := buildLDAPStartTLSRequest()
+	if _, err := conn.Write(request); err != nil {
+		return fmt.Errorf("writing LDAP StartTLS request: %w", err)
+	}
+
+	tag, err := reader.ReadByte()
+	if err != nil {
+		return fmt.Errorf("reading LDAP StartTLS response header: %w", err)
+	}
+	if tag != 0x30 {
+		return fmt.Errorf("%w: unexpected LDAP message tag 0x%02x", errStartTLSLDAPMalformed, tag)
+	}
+	bodyLen, err := readLDAPBERLength(reader)
+	if err != nil {
+		return err
+	}
+	if bodyLen > maxLDAPStartTLSResponseBytes {
+		return fmt.Errorf("%w: LDAP StartTLS response too large: %d bytes", errStartTLSLDAPMalformed, bodyLen)
+	}
+	body := make([]byte, bodyLen)
+	if _, err := io.ReadFull(reader, body); err != nil {
+		return fmt.Errorf("reading LDAP StartTLS response body: %w", err)
+	}
+	// LDAP StartTLS success response structure:
+	//   INTEGER messageID(1), [APPLICATION 24] ExtendedResponse,
+	//   then Enumerated resultCode(0) with empty matchedDN/diagnosticMessage.
+	if len(body) < 7 || body[0] != 0x02 || body[1] != 0x01 || body[2] != 0x01 || body[3] != 0x78 {
+		return fmt.Errorf("%w: unexpected LDAP StartTLS envelope %x", errStartTLSLDAPMalformed, body)
+	}
+	innerLen, innerLenBytes, err := readLDAPBERLengthBytes(body[4:])
+	if err != nil {
+		return fmt.Errorf("reading LDAP StartTLS response length: %w", err)
+	}
+	innerStart := 4 + innerLenBytes
+	if len(body) < innerStart+innerLen {
+		return fmt.Errorf("%w: truncated LDAP StartTLS response %x", errStartTLSLDAPMalformed, body)
+	}
+	resp := body[innerStart : innerStart+innerLen]
+	if len(resp) < 7 || resp[0] != 0x0a || resp[1] != 0x01 {
+		return fmt.Errorf("%w: unexpected LDAP StartTLS result %x", errStartTLSLDAPMalformed, resp)
+	}
+	if resp[2] != 0x00 {
+		return fmt.Errorf("%w: result code %d", errStartTLSLDAPRejected, resp[2])
+	}
+	return nil
+}
+
+const ldapStartTLSRequestOID = "1.3.6.1.4.1.1466.20037"
+
+func buildLDAPStartTLSRequest() []byte {
+	requestNameLen := byte(len(ldapStartTLSRequestOID))
+	extendedRequestLen := 2 + requestNameLen
+	ldapMessageLen := 3 + 2 + extendedRequestLen
+
+	// LDAP StartTLS is an ExtendedRequest whose BER lengths are derived from the
+	// OID length here so future edits to ldapStartTLSRequestOID cannot silently
+	// leave the hardcoded envelope malformed.
+	request := []byte{
+		0x30, ldapMessageLen, // LDAPMessage sequence
+		0x02, 0x01, 0x01, // messageID = 1
+		0x77, extendedRequestLen, // ExtendedRequest
+		0x80, requestNameLen, // requestName
+	}
+	return append(request, ldapStartTLSRequestOID...)
+}
+
+func readLDAPBERLength(reader *bufio.Reader) (int, error) {
+	lenByte, err := reader.ReadByte()
+	if err != nil {
+		return 0, fmt.Errorf("reading LDAP StartTLS response length: %w", err)
+	}
+	if lenByte&0x80 == 0 {
+		return int(lenByte), nil
+	}
+	numLenBytes := int(lenByte & 0x7f)
+	if numLenBytes == 0 || numLenBytes > 4 {
+		return 0, fmt.Errorf("%w: invalid LDAP message length encoding", errStartTLSLDAPMalformed)
+	}
+	lenBuf := make([]byte, numLenBytes)
+	if _, err := io.ReadFull(reader, lenBuf); err != nil {
+		return 0, fmt.Errorf("reading LDAP StartTLS response length: %w", err)
+	}
+	return decodeLDAPBERLength(lenBuf)
+}
+
+func readLDAPBERLengthBytes(data []byte) (int, int, error) {
+	if len(data) == 0 {
+		return 0, 0, fmt.Errorf("%w: missing LDAP length", errStartTLSLDAPMalformed)
+	}
+	if data[0]&0x80 == 0 {
+		return int(data[0]), 1, nil
+	}
+	numLenBytes := int(data[0] & 0x7f)
+	if numLenBytes == 0 || numLenBytes > 4 || len(data) < 1+numLenBytes {
+		return 0, 0, fmt.Errorf("%w: invalid LDAP message length encoding", errStartTLSLDAPMalformed)
+	}
+	bodyLen, err := decodeLDAPBERLength(data[1 : 1+numLenBytes])
+	if err != nil {
+		return 0, 0, err
+	}
+	return bodyLen, 1 + numLenBytes, nil
+}
+
+func decodeLDAPBERLength(lengthBytes []byte) (int, error) {
+	var bodyLen uint64
+	for _, b := range lengthBytes {
+		bodyLen = (bodyLen << 8) | uint64(b)
+	}
+	if bodyLen > uint64(^uint(0)>>1) {
+		return 0, fmt.Errorf("%w: LDAP message length overflows int", errStartTLSLDAPMalformed)
+	}
+	return int(bodyLen), nil
+}
+
+func readTextLine(reader *bufio.Reader) (string, error) {
+	var (
+		buf []byte
+		err error
+	)
+	for {
+		var chunk []byte
+		chunk, err = reader.ReadSlice('\n')
+		buf = append(buf, chunk...)
+		if len(buf) > maxTextLineBytes {
+			return "", fmt.Errorf("reading text line: %w", errLineTooLong)
+		}
+		if err == nil {
+			return strings.TrimRight(string(buf), "\r\n"), nil
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		if len(buf) > 0 && errors.Is(err, io.EOF) {
+			return strings.TrimRight(string(buf), "\r\n"), nil
+		}
+		return "", fmt.Errorf("reading text line: %w", err)
+	}
+}
+
+type prefixCapturingConn struct {
+	net.Conn
+	mu          sync.Mutex
+	prefixBytes []byte
+}
+
+//nolint:wrapcheck // net.Conn adapters must preserve underlying Read errors.
+func (conn *prefixCapturingConn) Read(p []byte) (int, error) {
+	n, err := conn.Conn.Read(p)
+	if n > 0 {
+		conn.capturePrefix(p[:n])
+	}
+	return n, err
+}
+
+func (conn *prefixCapturingConn) capturePrefix(chunk []byte) {
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+
+	remaining := nonTLSPeekLimit - len(conn.prefixBytes)
+	if remaining <= 0 {
+		return
+	}
+	if len(chunk) > remaining {
+		chunk = chunk[:remaining]
+	}
+	conn.prefixBytes = append(conn.prefixBytes, chunk...)
+}
+
+func (conn *prefixCapturingConn) prefix() []byte {
+	conn.mu.Lock()
+	defer conn.mu.Unlock()
+	return append([]byte(nil), conn.prefixBytes...)
+}
+
+type bufferedPrefixConn struct {
+	net.Conn
+	reader *bufio.Reader
+}
+
+//nolint:wrapcheck // net.Conn adapters must preserve underlying Read errors.
+func (conn *bufferedPrefixConn) Read(p []byte) (int, error) {
+	return conn.reader.Read(p)
+}
+
+type inferNonTLSErrorInput struct {
+	handshakeErr error
+	addr         string
+	prefix       []byte
+}
+
+func inferNonTLSError(input inferNonTLSErrorInput) error {
+	var headerErr tls.RecordHeaderError
+	if input.handshakeErr == nil || !errors.As(input.handshakeErr, &headerErr) {
+		return nil
+	}
+	if len(input.prefix) == 0 {
+		return nil
+	}
+
+	banner := firstBannerLine(input.prefix)
+
+	switch {
+	case strings.HasPrefix(banner, "SSH-"):
+		return fmt.Errorf("%w: received SSH banner %q", errConnectNonTLSService, banner)
+	case strings.HasPrefix(banner, "HTTP/"):
+		return fmt.Errorf("%w: received HTTP response %q", errConnectNonTLSService, banner)
+	case matchesStrictSMTPBanner(banner):
+		return fmt.Errorf("%w: received SMTP banner %q", errConnectNonTLSService, banner)
+	case matchesIMAPBanner(input.addr, banner):
+		return fmt.Errorf("%w: received IMAP banner %q", errConnectNonTLSService, banner)
+	case matchesPOP3Banner(input.addr, banner):
+		return fmt.Errorf("%w: received POP3 banner %q", errConnectNonTLSService, banner)
+	case isMostlyPrintable(input.prefix):
+		return fmt.Errorf("%w: received plaintext banner %q", errConnectNonTLSService, banner)
+	default:
+		return fmt.Errorf("%w: received non-TLS bytes %x", errConnectNonTLSService, input.prefix[:min(len(input.prefix), 16)])
+	}
+}
+
+func detectStartTLSProtocol(addr string, prefix []byte) (startTLSProtocol, bool) {
+	banner := firstBannerLine(prefix)
+	switch {
+	case matchesStrictSMTPBanner(banner):
+		return startTLSProtocolSMTP, true
+	case matchesIMAPBanner(addr, banner):
+		return startTLSProtocolIMAP, true
+	case matchesPOP3Banner(addr, banner):
+		return startTLSProtocolPOP3, true
+	default:
+		return "", false
+	}
+}
+
+func firstBannerLine(prefix []byte) string {
+	banner := strings.TrimSpace(string(prefix))
+	if line, _, _ := strings.Cut(banner, "\n"); line != "" {
+		return strings.TrimSpace(line)
+	}
+	return banner
+}
+
+func matchesStrictSMTPBanner(banner string) bool {
+	if !matchesGenericSMTPBanner(banner) {
+		return false
+	}
+	upper := strings.ToUpper(banner)
+	return strings.Contains(upper, " SMTP") || strings.Contains(upper, " ESMTP")
+}
+
+func matchesGenericSMTPBanner(banner string) bool {
+	return strings.HasPrefix(banner, "220 ") || strings.HasPrefix(banner, "220-")
+}
+
+func detectSMTPStartTLS(conn net.Conn, prefix []byte) (bool, error) {
+	reader := bufio.NewReader(io.MultiReader(bytes.NewReader(prefix), conn))
+	if _, err := readSMTPResponse(reader, "220"); err != nil {
+		return false, fmt.Errorf("reading SMTP greeting: %w", err)
+	}
+	if _, err := io.WriteString(conn, "EHLO [127.0.0.1]\r\n"); err != nil {
+		return false, fmt.Errorf("writing SMTP EHLO: %w", err)
+	}
+	ehloLines, err := readSMTPResponse(reader, "250")
+	if err != nil {
+		return false, fmt.Errorf("reading SMTP EHLO response: %w", err)
+	}
+	return smtpAdvertisesStartTLS(ehloLines), nil
+}
+
+type detectStartTLSOnBannerInput struct {
+	conn     net.Conn
+	prefix   []byte
+	protocol startTLSProtocol
+}
+
+func detectStartTLSOnBanner(input detectStartTLSOnBannerInput) (bool, error) {
+	reader := bufio.NewReader(io.MultiReader(bytes.NewReader(input.prefix), input.conn))
+	if err := negotiateStartTLS(negotiateStartTLSInput{
+		reader:   reader,
+		conn:     input.conn,
+		protocol: input.protocol,
+	}); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+type detectLDAPStartTLSInput struct {
+	conn       net.Conn
+	serverName string
+}
+
+func detectLDAPStartTLS(input detectLDAPStartTLSInput) (bool, error) {
+	reader := bufio.NewReader(input.conn)
+	if err := negotiateLDAPStartTLS(reader, input.conn); err != nil {
+		return false, err
+	}
+	if !startTLSHandshakeProgressed(startTLSHandshakeProgressedInput{
+		conn:       &bufferedPrefixConn{Conn: input.conn, reader: reader},
+		serverName: input.serverName,
+	}) {
+		return false, errConnectNonTLSService
+	}
+	return true, nil
+}
+
+type startTLSHandshakeProgressedInput struct {
+	conn       net.Conn
+	serverName string
+}
+
+func startTLSHandshakeProgressed(input startTLSHandshakeProgressedInput) bool {
+	msg, err := buildStartTLSPreflightClientHello(input.serverName)
+	if err != nil {
+		return false
+	}
+	record, err := wrapTLSRecord(msg)
+	if err != nil {
+		return false
+	}
+	if _, err := input.conn.Write(record); err != nil {
+		return false
+	}
+	_, err = readServerHello(input.conn)
+	return err == nil || errors.Is(err, errAlertReceived) || errors.Is(err, errHelloRetryRequest)
+}
+
+func buildStartTLSPreflightClientHello(serverName string) ([]byte, error) {
+	keyShareData, err := generateKeyShare(tls.X25519)
+	if err != nil {
+		return nil, fmt.Errorf("generating key share for STARTTLS preflight: %w", err)
+	}
+
+	var exts []byte
+	exts, err = appendSNIExtension(exts, serverName)
+	if err != nil {
+		return nil, fmt.Errorf("building SNI extension: %w", err)
+	}
+	exts, err = appendSupportedGroupsListExtension(exts, []tls.CurveID{tls.X25519, tls.CurveP256})
+	if err != nil {
+		return nil, err
+	}
+	exts = appendSignatureAlgorithmsExtension(exts)
+	exts, err = appendKeyShareExtension(exts, appendKeyShareExtensionInput{
+		groupID: tls.X25519,
+		keyData: keyShareData,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("building key share extension: %w", err)
+	}
+	exts, err = appendSupportedVersionsListExtension(exts, []uint16{tls.VersionTLS13, tls.VersionTLS12})
+	if err != nil {
+		return nil, err
+	}
+	exts = appendPSKKeyExchangeModesExtension(exts)
+
+	randomBytes := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, randomBytes); err != nil {
+		return nil, fmt.Errorf("generating STARTTLS preflight random: %w", err)
+	}
+	sessionID := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, sessionID); err != nil {
+		return nil, fmt.Errorf("generating STARTTLS preflight session ID: %w", err)
+	}
+
+	var body []byte
+	body = append(body, 0x03, 0x03)
+	body = append(body, randomBytes...)
+	sessionIDLen, err := checkedUint8Len(len(sessionID), "STARTTLS preflight session ID")
+	if err != nil {
+		return nil, err
+	}
+	body = append(body, sessionIDLen)
+	body = append(body, sessionID...)
+
+	cipherSuites := []uint16{
+		tls.TLS_AES_128_GCM_SHA256,
+		tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+		tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+	}
+	cipherSuitesLen, err := checkedUint16Len(len(cipherSuites)*2, "STARTTLS preflight cipher suites")
+	if err != nil {
+		return nil, err
+	}
+	body = appendUint16(body, cipherSuitesLen)
+	for _, cipherSuite := range cipherSuites {
+		body = appendUint16(body, cipherSuite)
+	}
+
+	body = append(body, 1, 0)
+	extsLen, err := checkedUint16Len(len(exts), "STARTTLS preflight extensions")
+	if err != nil {
+		return nil, err
+	}
+	body = appendUint16(body, extsLen)
+	body = append(body, exts...)
+
+	msg := []byte{0x01}
+	bodyLen, err := checkedUint24Len(len(body), "STARTTLS preflight client hello body")
+	if err != nil {
+		return nil, err
+	}
+	msg = appendUint24(msg, bodyLen)
+	msg = append(msg, body...)
+	return msg, nil
+}
+
+func appendSupportedGroupsListExtension(b []byte, groups []tls.CurveID) ([]byte, error) {
+	groupsLen, err := checkedUint16Len(len(groups)*2, "STARTTLS preflight supported groups")
+	if err != nil {
+		return nil, err
+	}
+	extLen, err := checkedUint16Len(2+int(groupsLen), "STARTTLS preflight supported groups extension")
+	if err != nil {
+		return nil, err
+	}
+	b = appendUint16(b, 0x000a)
+	b = appendUint16(b, extLen)
+	b = appendUint16(b, groupsLen)
+	for _, group := range groups {
+		b = appendUint16(b, uint16(group))
+	}
+	return b, nil
+}
+
+func appendSupportedVersionsListExtension(b []byte, versions []uint16) ([]byte, error) {
+	versionsLen, err := checkedUint8Len(len(versions)*2, "STARTTLS preflight supported versions")
+	if err != nil {
+		return nil, err
+	}
+	extLen, err := checkedUint16Len(1+int(versionsLen), "STARTTLS preflight supported versions extension")
+	if err != nil {
+		return nil, err
+	}
+	b = appendUint16(b, 0x002b)
+	b = appendUint16(b, extLen)
+	b = append(b, versionsLen)
+	for _, version := range versions {
+		b = appendUint16(b, version)
+	}
+	return b, nil
+}
+
+func matchesIMAPBanner(addr, banner string) bool {
+	upper := strings.ToUpper(banner)
+	if !matchesGenericIMAPBanner(banner) {
+		return false
+	}
+	return imapPort(addr) || strings.Contains(upper, "IMAP")
+}
+
+func matchesGenericIMAPBanner(banner string) bool {
+	return strings.HasPrefix(strings.ToUpper(banner), "* OK")
+}
+
+func imapPort(addr string) bool {
+	_, port, err := net.SplitHostPort(addr)
+	return err == nil && port == "143"
+}
+
+func matchesPOP3Banner(addr, banner string) bool {
+	upper := strings.ToUpper(banner)
+	if !matchesGenericPOP3Banner(banner) {
+		return false
+	}
+	return pop3Port(addr) || strings.Contains(upper, "POP3")
+}
+
+func matchesGenericPOP3Banner(banner string) bool {
+	return strings.HasPrefix(strings.ToUpper(banner), "+OK")
+}
+
+func pop3Port(addr string) bool {
+	_, port, err := net.SplitHostPort(addr)
+	return err == nil && port == "110"
+}
+
+func protocolDisplayName(protocol startTLSProtocol) string {
+	switch protocol {
+	case startTLSProtocolSMTP:
+		return "SMTP"
+	case startTLSProtocolIMAP:
+		return "IMAP"
+	case startTLSProtocolPOP3:
+		return "POP3"
+	case startTLSProtocolLDAP:
+		return "LDAP"
+	default:
+		return string(protocol)
+	}
+}
+
+func startTLSCommandDisplayName(protocol startTLSProtocol) string {
+	switch protocol {
+	case startTLSProtocolSMTP:
+		return "STARTTLS"
+	case startTLSProtocolIMAP:
+		return "STARTTLS"
+	case startTLSProtocolPOP3:
+		return "STLS"
+	case startTLSProtocolLDAP:
+		return "StartTLS"
+	default:
+		return "STARTTLS"
+	}
+}
+
+func formatProtocolWithStartTLS(protocol string, startTLS startTLSProtocol) string {
+	return fmt.Sprintf("%s (%s %s)", protocol, protocolDisplayName(startTLS), startTLSCommandDisplayName(startTLS))
+}
+
+func isMostlyPrintable(data []byte) bool {
+	if len(data) == 0 {
+		return false
+	}
+	printable := 0
+	for _, b := range data {
+		if b >= 0x20 && b <= 0x7e || b == '\r' || b == '\n' || b == '\t' {
+			printable++
+		}
+	}
+	return printable*4 >= len(data)*3
 }
 
 // CheckLeafCRLInput holds parameters for CheckLeafCRL.
@@ -900,6 +1995,8 @@ type CipherProbeResult struct {
 
 // CipherScanResult contains the results of a cipher suite enumeration.
 type CipherScanResult struct {
+	// Policy is the optional strictness profile used when rating this scan.
+	Policy SecurityPolicy `json:"policy,omitempty"`
 	// SupportedVersions lists the TLS versions the server supports (e.g. ["TLS 1.3", "TLS 1.2"]).
 	SupportedVersions []string `json:"supported_versions"`
 	// Ciphers lists all accepted cipher suites, sorted by version (descending) then rating.
@@ -927,6 +2024,8 @@ type ScanCipherSuitesInput struct {
 	Concurrency int
 	// ProbeQUIC enables QUIC/UDP cipher probing alongside TCP.
 	ProbeQUIC bool
+	// Policy enables optional strict transport diagnostics.
+	Policy SecurityPolicy
 }
 
 // cipherSuiteName returns a human-readable name for any TLS cipher suite.
@@ -1061,6 +2160,7 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 	}
 
 	addr := net.JoinHostPort(input.Host, port)
+	startTLS := detectScanStartTLSProtocol(ctx, addr, serverName)
 
 	sem := make(chan struct{}, concurrency)
 	var mu sync.Mutex
@@ -1101,7 +2201,7 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 			probeCtx, probeCancel := context.WithTimeout(ctx, probeTimeout)
 			defer probeCancel()
 
-			if probeTLS13Cipher(probeCtx, cipherProbeInput{addr: addr, serverName: serverName, cipherID: cipherID}) {
+			if probeTLS13Cipher(probeCtx, cipherProbeInput{addr: addr, serverName: serverName, cipherID: cipherID, startTLS: startTLS}) {
 				r := CipherProbeResult{
 					Name:        cipherSuiteName(cipherID),
 					ID:          cipherID,
@@ -1148,7 +2248,7 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 			probeCtx, probeCancel := context.WithTimeout(ctx, probeTimeout)
 			defer probeCancel()
 
-			if probeCipher(probeCtx, cipherProbeInput{addr: addr, serverName: serverName, cipherID: t.id, version: t.version}) {
+			if probeCipher(probeCtx, cipherProbeInput{addr: addr, serverName: serverName, cipherID: t.id, version: t.version, startTLS: startTLS}) {
 				name := cipherSuiteName(t.id)
 				r := CipherProbeResult{
 					Name:        name,
@@ -1186,6 +2286,7 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 				serverName: serverName,
 				cipherID:   d.ID,
 				version:    tls.VersionTLS12,
+				startTLS:   startTLS,
 			}); ok {
 				r := CipherProbeResult{
 					Name:        d.Name,
@@ -1222,7 +2323,7 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 			probeCtx, probeCancel := context.WithTimeout(ctx, probeTimeout)
 			defer probeCancel()
 
-			probeInput := cipherProbeInput{addr: addr, serverName: serverName, groupID: groupID}
+			probeInput := cipherProbeInput{addr: addr, serverName: serverName, groupID: groupID, startTLS: startTLS}
 			accepted := probeKeyExchangeGroup(probeCtx, probeInput)
 
 			// For classical (non-PQ) groups, also probe TLS 1.0–1.2 if TLS 1.3 didn't work.
@@ -1356,14 +2457,20 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 		results = []CipherProbeResult{}
 	}
 
-	return &CipherScanResult{
+	scan := &CipherScanResult{
+		Policy:            input.Policy,
 		SupportedVersions: versions,
 		Ciphers:           results,
 		QUICProbed:        input.ProbeQUIC && port == "443",
 		QUICCiphers:       quicCiphers,
 		KeyExchanges:      keyExchanges,
 		OverallRating:     overall,
-	}, nil
+	}
+	if scanCipherPolicyViolationCount(scan) > 0 {
+		scan.OverallRating = CipherRatingWeak
+	}
+
+	return scan, nil
 }
 
 // emptyClientCertificate is a GetClientCertificate callback that returns an empty
@@ -1377,8 +2484,7 @@ func emptyClientCertificate(_ *tls.CertificateRequestInfo) (*tls.Certificate, er
 // Returns true if the server accepted the cipher, even if the handshake
 // ultimately fails (e.g. mTLS rejection after cipher negotiation).
 func probeCipher(ctx context.Context, input cipherProbeInput) bool {
-	dialer := &net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "tcp", input.addr)
+	conn, err := dialProbeConn(ctx, input)
 	if err != nil {
 		return false
 	}
@@ -1422,8 +2528,7 @@ var ecdheOnlyCipherSuites = func() []uint16 {
 // ECDHE cipher suites are offered so the handshake fails if the server doesn't
 // support the offered curve (RSA key exchange would bypass curve negotiation).
 func probeKeyExchangeGroupLegacy(ctx context.Context, input cipherProbeInput) bool {
-	dialer := &net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "tcp", input.addr)
+	conn, err := dialProbeConn(ctx, input)
 	if err != nil {
 		return false
 	}
@@ -1604,6 +2709,9 @@ func FormatCipherRatingLine(r *CipherScanResult) string {
 		}
 	}
 
+	if violations := scanCipherPolicyViolationCount(r); violations > 0 && r.Policy.Enabled() {
+		return fmt.Sprintf("Ciphers:      %s (%d good, %d weak, %d likely not authorized by %s)\n", r.OverallRating, strong, weak, violations, r.Policy.DisplayName())
+	}
 	return fmt.Sprintf("Ciphers:      %s (%d good, %d weak)\n", r.OverallRating, strong, weak)
 }
 
@@ -1680,6 +2788,9 @@ func FormatCipherScanResult(r *CipherScanResult) string {
 func FormatConnectResult(r *ConnectResult) string {
 	var out strings.Builder
 	fmt.Fprintf(&out, "Host:         %s:%s\n", r.Host, r.Port)
+	if r.Policy.Enabled() {
+		fmt.Fprintf(&out, "Policy:       %s heuristic\n", r.Policy.DisplayName())
+	}
 	fmt.Fprintf(&out, "Protocol:     %s\n", r.Protocol)
 	fmt.Fprintf(&out, "Cipher Suite: %s\n", r.CipherSuite)
 	fmt.Fprintf(&out, "Server Name:  %s\n", r.ServerName)

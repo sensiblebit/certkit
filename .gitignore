@@ -32,6 +32,10 @@ IMPLEMENTATION_PLAN.md
 
 node_modules/
 
+# Python cache artifacts
+__pycache__/
+*.py[cod]
+
 # WASM build artifacts
 /wasm
 *.wasm
