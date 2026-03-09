@@ -1,10 +1,12 @@
 package certkit
 
 import (
+	"bufio"
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
+	"io"
 	"net"
 	"slices"
 	"strings"
@@ -74,6 +76,27 @@ func TestProbeSSH(t *testing.T) {
 	}
 	if !containsDiag(result.Diagnostics, "weak-hostkey") {
 		t.Fatalf("Diagnostics = %+v, want weak-hostkey warning", result.Diagnostics)
+	}
+}
+
+func TestProbeSSH_StrictServerRequiresClientKexInit(t *testing.T) {
+	t.Parallel()
+
+	addr := startStrictTestSSHServer(t)
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatalf("SplitHostPort: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := ProbeSSH(ctx, SSHProbeInput{Host: host, Port: port})
+	if err != nil {
+		t.Fatalf("ProbeSSH: %v", err)
+	}
+	if !slices.Contains(result.KeyExchangeAlgorithms, "curve25519-sha256") {
+		t.Fatalf("KeyExchangeAlgorithms = %v, want curve25519-sha256", result.KeyExchangeAlgorithms)
 	}
 }
 
@@ -363,6 +386,55 @@ func startTestSSHServer(t *testing.T) string {
 			go func(c net.Conn) {
 				defer func() { _ = c.Close() }()
 				_, _, _, _ = ssh.NewServerConn(c, cfg)
+			}(conn)
+		}
+	}()
+
+	return listener.Addr().String()
+}
+
+func startStrictTestSSHServer(t *testing.T) string {
+	t.Helper()
+
+	serverPayload, err := buildSSHKexInitPayload(sshKexInitNameLists{
+		keyExchangeAlgorithms:     []string{"curve25519-sha256", "ext-info-s"},
+		hostKeyAlgorithms:         []string{"ssh-ed25519", "rsa-sha2-512"},
+		ciphersClientToServer:     []string{"aes128-gcm@openssh.com"},
+		ciphersServerToClient:     []string{"aes128-gcm@openssh.com"},
+		macsClientToServer:        []string{"hmac-sha2-256"},
+		macsServerToClient:        []string{"hmac-sha2-256"},
+		compressionClientToServer: []string{"none"},
+		compressionServerToClient: []string{"none"},
+	})
+	if err != nil {
+		t.Fatalf("buildSSHKexInitPayload: %v", err)
+	}
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	go func() {
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer func() { _ = c.Close() }()
+				reader := bufio.NewReader(c)
+				if _, err := io.WriteString(c, "SSH-2.0-strict-test\r\n"); err != nil {
+					return
+				}
+				if _, err := readSSHBanner(reader); err != nil {
+					return
+				}
+				if _, err := readSSHPacket(reader); err != nil {
+					return
+				}
+				_ = writeSSHPacket(c, serverPayload)
 			}(conn)
 		}
 	}()

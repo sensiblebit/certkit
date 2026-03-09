@@ -94,8 +94,12 @@ func TestRunProbeSSH(t *testing.T) {
 	}
 }
 
-func TestRunProbeSSH_InvalidPortInput(t *testing.T) {
-	err := runProbeSSH(&cobra.Command{}, []string{"localhost:abc"})
+func TestProbeSSHCommand_InvalidPortInput(t *testing.T) {
+	state := snapshotReadonlyGlobals()
+	defer restoreReadonlyGlobals(state)
+
+	rootCmd.SetArgs([]string{"probe", "ssh", "localhost:abc"})
+	err := rootCmd.Execute()
 	if err == nil {
 		t.Fatal("expected error")
 	}

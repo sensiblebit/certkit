@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"cmp"
 	"context"
+	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"slices"
 	"strconv"
@@ -30,6 +32,7 @@ var (
 	errSSHPacketMalformed    = errors.New("malformed SSH packet")
 	errSSHUnexpectedPacket   = errors.New("unexpected SSH packet type")
 	errSSHKexInitMalformed   = errors.New("malformed SSH KEXINIT packet")
+	errSSHPacketLengthTooBig = errors.New("SSH packet length exceeds uint32")
 )
 
 // SSHProbeInput configures ProbeSSH.
@@ -99,6 +102,9 @@ func ProbeSSH(ctx context.Context, input SSHProbeInput) (*SSHProbeResult, error)
 	}
 	if _, err := io.WriteString(conn, "SSH-2.0-certkit\r\n"); err != nil {
 		return nil, fmt.Errorf("writing SSH client banner: %w", err)
+	}
+	if err := writeSSHClientKexInit(conn); err != nil {
+		return nil, err
 	}
 
 	payload, err := readSSHPacket(reader)
@@ -269,6 +275,128 @@ func parseSSHBanner(banner string) (string, string) {
 		software = software[:idx]
 	}
 	return protocol, software
+}
+
+func writeSSHClientKexInit(conn net.Conn) error {
+	payload, err := buildSSHKexInitPayload(sshKexInitNameLists{
+		keyExchangeAlgorithms:     []string{"curve25519-sha256", "ecdh-sha2-nistp256", "diffie-hellman-group14-sha256"},
+		hostKeyAlgorithms:         []string{"ssh-ed25519", "rsa-sha2-512", "rsa-sha2-256"},
+		ciphersClientToServer:     []string{"aes128-gcm@openssh.com", "aes256-gcm@openssh.com", "aes128-ctr", "aes256-ctr"},
+		ciphersServerToClient:     []string{"aes128-gcm@openssh.com", "aes256-gcm@openssh.com", "aes128-ctr", "aes256-ctr"},
+		macsClientToServer:        []string{"hmac-sha2-256", "hmac-sha2-512"},
+		macsServerToClient:        []string{"hmac-sha2-256", "hmac-sha2-512"},
+		compressionClientToServer: []string{"none"},
+		compressionServerToClient: []string{"none"},
+	})
+	if err != nil {
+		return fmt.Errorf("building SSH client KEXINIT: %w", err)
+	}
+	if err := writeSSHPacket(conn, payload); err != nil {
+		return fmt.Errorf("writing SSH client KEXINIT: %w", err)
+	}
+	return nil
+}
+
+type sshKexInitNameLists struct {
+	keyExchangeAlgorithms     []string
+	hostKeyAlgorithms         []string
+	ciphersClientToServer     []string
+	ciphersServerToClient     []string
+	macsClientToServer        []string
+	macsServerToClient        []string
+	compressionClientToServer []string
+	compressionServerToClient []string
+	languagesClientToServer   []string
+	languagesServerToClient   []string
+}
+
+func buildSSHKexInitPayload(lists sshKexInitNameLists) ([]byte, error) {
+	payload := []byte{sshMsgKexInit}
+	cookie := make([]byte, 16)
+	if _, err := rand.Read(cookie); err != nil {
+		return nil, fmt.Errorf("reading SSH KEXINIT cookie: %w", err)
+	}
+	payload = append(payload, cookie...)
+	var err error
+	if payload, err = appendSSHNameList(payload, lists.keyExchangeAlgorithms); err != nil {
+		return nil, err
+	}
+	if payload, err = appendSSHNameList(payload, lists.hostKeyAlgorithms); err != nil {
+		return nil, err
+	}
+	if payload, err = appendSSHNameList(payload, lists.ciphersClientToServer); err != nil {
+		return nil, err
+	}
+	if payload, err = appendSSHNameList(payload, lists.ciphersServerToClient); err != nil {
+		return nil, err
+	}
+	if payload, err = appendSSHNameList(payload, lists.macsClientToServer); err != nil {
+		return nil, err
+	}
+	if payload, err = appendSSHNameList(payload, lists.macsServerToClient); err != nil {
+		return nil, err
+	}
+	if payload, err = appendSSHNameList(payload, lists.compressionClientToServer); err != nil {
+		return nil, err
+	}
+	if payload, err = appendSSHNameList(payload, lists.compressionServerToClient); err != nil {
+		return nil, err
+	}
+	if payload, err = appendSSHNameList(payload, lists.languagesClientToServer); err != nil {
+		return nil, err
+	}
+	if payload, err = appendSSHNameList(payload, lists.languagesServerToClient); err != nil {
+		return nil, err
+	}
+	payload = append(payload, 0) // first_kex_packet_follows
+	payload = binary.BigEndian.AppendUint32(payload, 0)
+	return payload, nil
+}
+
+func appendSSHNameList(dst []byte, values []string) ([]byte, error) {
+	raw := strings.Join(values, ",")
+	rawLen, err := checkedUint32(uint64(len(raw)))
+	if err != nil {
+		return nil, err
+	}
+	dst = binary.BigEndian.AppendUint32(dst, rawLen)
+	return append(dst, raw...), nil
+}
+
+func writeSSHPacket(conn net.Conn, payload []byte) error {
+	const sshPacketBlockSize = 8
+
+	paddingLen := sshPacketBlockSize - ((len(payload) + 5) % sshPacketBlockSize)
+	if paddingLen < 4 {
+		paddingLen += sshPacketBlockSize
+	}
+	packetLen := 1 + len(payload) + paddingLen
+	if uint64(packetLen) > math.MaxUint32 {
+		return errSSHPacketLengthTooBig
+	}
+
+	packet := make([]byte, 4+packetLen)
+	packetLen32, err := checkedUint32(uint64(packetLen))
+	if err != nil {
+		return err
+	}
+	binary.BigEndian.PutUint32(packet[:4], packetLen32)
+	packet[4] = byte(paddingLen)
+	copy(packet[5:], payload)
+	if _, err := rand.Read(packet[5+len(payload):]); err != nil {
+		return fmt.Errorf("reading SSH packet padding: %w", err)
+	}
+	if _, err := conn.Write(packet); err != nil {
+		return fmt.Errorf("writing SSH packet: %w", err)
+	}
+	return nil
+}
+
+func checkedUint32(v uint64) (uint32, error) {
+	if v > math.MaxUint32 {
+		return 0, errSSHPacketLengthTooBig
+	}
+	return uint32(v), nil
 }
 
 // FormatSSHProbeResult formats an SSHProbeResult as human-readable text.
