@@ -86,9 +86,13 @@ func ProbeSSH(ctx context.Context, input SSHProbeInput) (*SSHProbeResult, error)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to SSH server %s: %w", addr, err)
 	}
-	defer func() { _ = conn.Close() }()
 	stopOnCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
-	defer stopOnCancel()
+	defer func() {
+		if !stopOnCancel() {
+			return
+		}
+		_ = conn.Close()
+	}()
 
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := conn.SetDeadline(deadline); err != nil {
@@ -626,7 +630,7 @@ func diagnoseSSHPolicy(r *SSHProbeResult) []ChainDiagnostic {
 	var diags []ChainDiagnostic
 	if disallowed := weakSSHValues(r.KeyExchangeAlgorithms, sshPolicyDisallowsKex(r.Policy)); len(disallowed) > 0 {
 		diags = append(diags, ChainDiagnostic{
-			Check:  "profile-kex",
+			Check:  "policy-kex",
 			Status: "warn",
 			Detail: formatLikelyNotAuthorizedDetail(likelyNotAuthorizedDetailInput{
 				policy:   r.Policy,
@@ -638,7 +642,7 @@ func diagnoseSSHPolicy(r *SSHProbeResult) []ChainDiagnostic {
 	}
 	if disallowed := weakSSHValues(r.HostKeyAlgorithms, sshPolicyDisallowsHostKey(r.Policy)); len(disallowed) > 0 {
 		diags = append(diags, ChainDiagnostic{
-			Check:  "profile-hostkey",
+			Check:  "policy-hostkey",
 			Status: "warn",
 			Detail: formatLikelyNotAuthorizedDetail(likelyNotAuthorizedDetailInput{
 				policy:   r.Policy,
@@ -650,7 +654,7 @@ func diagnoseSSHPolicy(r *SSHProbeResult) []ChainDiagnostic {
 	}
 	if disallowed := weakSSHValues(slices.Concat(r.CiphersClientToServer, r.CiphersServerToClient), sshPolicyDisallowsCipher(r.Policy)); len(disallowed) > 0 {
 		diags = append(diags, ChainDiagnostic{
-			Check:  "profile-cipher",
+			Check:  "policy-cipher",
 			Status: "warn",
 			Detail: formatLikelyNotAuthorizedDetail(likelyNotAuthorizedDetailInput{
 				policy:   r.Policy,
@@ -662,7 +666,7 @@ func diagnoseSSHPolicy(r *SSHProbeResult) []ChainDiagnostic {
 	}
 	if disallowed := weakSSHValues(slices.Concat(r.MACsClientToServer, r.MACsServerToClient), sshPolicyDisallowsMAC(r.Policy)); len(disallowed) > 0 {
 		diags = append(diags, ChainDiagnostic{
-			Check:  "profile-mac",
+			Check:  "policy-mac",
 			Status: "warn",
 			Detail: formatLikelyNotAuthorizedDetail(likelyNotAuthorizedDetailInput{
 				policy:   r.Policy,

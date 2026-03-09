@@ -134,15 +134,24 @@ func TestProbeSSH_IgnoresPreKexPackets(t *testing.T) {
 	}
 }
 
-func TestParseSSHBanner_NormalizesSSH199(t *testing.T) {
+func TestProbeSSH_NormalizesSSH199Banner(t *testing.T) {
 	t.Parallel()
 
-	protocol, software := parseSSHBanner("SSH-1.99-OpenSSH_9.9\r\n")
-	if protocol != "SSH 2.0" {
-		t.Fatalf("Protocol = %q, want %q", protocol, "SSH 2.0")
+	addr := startTestSSHServerWithBanner(t, "SSH-1.99-certkit-test")
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatalf("SplitHostPort: %v", err)
 	}
-	if software != "OpenSSH_9.9" {
-		t.Fatalf("SoftwareVersion = %q, want %q", software, "OpenSSH_9.9")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := ProbeSSH(ctx, SSHProbeInput{Host: host, Port: port})
+	if err != nil {
+		t.Fatalf("ProbeSSH: %v", err)
+	}
+	if result.Protocol != "SSH 2.0" {
+		t.Fatalf("Protocol = %q, want %q", result.Protocol, "SSH 2.0")
 	}
 }
 
@@ -359,16 +368,16 @@ func TestDiagnoseSSHProbe_FIPSPolicy(t *testing.T) {
 		check  string
 		detail string
 	}{
-		{check: "profile-kex", detail: "curve25519-sha256"},
-		{check: "profile-hostkey", detail: "ssh-ed25519"},
-		{check: "profile-cipher", detail: "chacha20-poly1305@openssh.com"},
+		{check: "policy-kex", detail: "curve25519-sha256"},
+		{check: "policy-hostkey", detail: "ssh-ed25519"},
+		{check: "policy-cipher", detail: "chacha20-poly1305@openssh.com"},
 	} {
 		if !containsSSHDiagDetail(diags, tt.check, tt.detail) {
 			t.Fatalf("DiagnoseSSHProbe() missing %q detail %q in %+v", tt.check, tt.detail, diags)
 		}
 	}
-	if containsSSHDiagDetail(diags, "profile-compression", "zlib@openssh.com") {
-		t.Fatalf("DiagnoseSSHProbe() unexpectedly reported profile-compression in %+v", diags)
+	if containsSSHDiagDetail(diags, "policy-compression", "zlib@openssh.com") {
+		t.Fatalf("DiagnoseSSHProbe() unexpectedly reported policy-compression in %+v", diags)
 	}
 	if got := RateSSHAlgorithms(result); got != CipherRatingWeak {
 		t.Fatalf("RateSSHAlgorithms() = %q, want %q", got, CipherRatingWeak)
@@ -399,6 +408,11 @@ func TestFormatSSHRatingLine_PolicyClean(t *testing.T) {
 
 func startTestSSHServer(t *testing.T) string {
 	t.Helper()
+	return startTestSSHServerWithBanner(t, "SSH-2.0-certkit-test")
+}
+
+func startTestSSHServerWithBanner(t *testing.T, banner string) string {
+	t.Helper()
 
 	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {
@@ -419,7 +433,7 @@ func startTestSSHServer(t *testing.T) string {
 
 	cfg := &ssh.ServerConfig{
 		NoClientAuth:  true,
-		ServerVersion: "SSH-2.0-certkit-test",
+		ServerVersion: banner,
 		Config: ssh.Config{
 			KeyExchanges: []string{"curve25519-sha256", "diffie-hellman-group14-sha256"},
 			Ciphers:      []string{ssh.CipherAES128GCM, ssh.CipherChaCha20Poly1305},

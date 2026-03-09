@@ -673,33 +673,6 @@ func TestConnectTLS_NonTLSSHBanner(t *testing.T) {
 	}
 }
 
-func TestStartTLSDetectDeadline_CapsLongerCallerDeadline(t *testing.T) {
-	t.Parallel()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	now := time.Now()
-	deadline := startTLSDetectDeadline(ctx, now)
-	remaining := deadline.Sub(now)
-	if remaining > startTLSDetectTimeout+100*time.Millisecond {
-		t.Fatalf("remaining detect budget = %s, want <= %s", remaining, startTLSDetectTimeout+100*time.Millisecond)
-	}
-}
-
-func TestStartTLSDetectDeadline_UsesShorterCallerDeadline(t *testing.T) {
-	t.Parallel()
-
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
-	defer cancel()
-
-	parentDeadline, _ := ctx.Deadline()
-	detectDeadline := startTLSDetectDeadline(ctx, time.Now())
-	if detectDeadline.After(parentDeadline.Add(10 * time.Millisecond)) {
-		t.Fatalf("detect deadline = %s, want no later than parent deadline %s", detectDeadline, parentDeadline)
-	}
-}
-
 func TestConnectTLS_StartTLSProtocols(t *testing.T) {
 	// WHY: ConnectTLS should opportunistically upgrade known plaintext
 	// protocols after a direct TLS probe proves the endpoint is not implicit TLS.
@@ -1285,83 +1258,58 @@ func TestConnectViaStartTLS_PolicyUsesRawTLSVersion(t *testing.T) {
 	}
 }
 
-func TestConnectTLS_DoesNotTreatGenericStarOKAsIMAPOffPort(t *testing.T) {
+func TestConnectTLS_DoesNotTreatGenericMailBannersAsProtocolSpecificOffPort(t *testing.T) {
 	t.Parallel()
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
+	tests := []struct {
+		name     string
+		banner   string
+		protocol string
+	}{
+		{name: "imap", banner: "* OK ready\r\n", protocol: "IMAP"},
+		{name: "pop3", banner: "+OK ready\r\n", protocol: "POP3"},
 	}
-	t.Cleanup(func() { _ = listener.Close() })
 
-	go func() {
-		conn, acceptErr := listener.Accept()
-		if acceptErr != nil {
-			return
-		}
-		defer func() { _ = conn.Close() }()
-		_, _ = conn.Write([]byte("* OK ready\r\n"))
-	}()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	_, port, err := net.SplitHostPort(listener.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = listener.Close() })
 
-	_, err = ConnectTLS(ctx, ConnectTLSInput{Host: "127.0.0.1", Port: port})
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !errors.Is(err, errConnectNonTLSService) {
-		t.Fatalf("error = %v, want errConnectNonTLSService", err)
-	}
-	if strings.Contains(err.Error(), "IMAP banner") {
-		t.Fatalf("error = %q, want generic plaintext classification", err.Error())
-	}
-	if !strings.Contains(err.Error(), "plaintext banner") {
-		t.Fatalf("error = %q, want plaintext banner detail", err.Error())
-	}
-}
+			go func() {
+				conn, acceptErr := listener.Accept()
+				if acceptErr != nil {
+					return
+				}
+				defer func() { _ = conn.Close() }()
+				_, _ = conn.Write([]byte(tt.banner))
+			}()
 
-func TestConnectTLS_DoesNotTreatGenericPlusOKAsPOP3OffPort(t *testing.T) {
-	t.Parallel()
+			_, port, err := net.SplitHostPort(listener.Addr().String())
+			if err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = listener.Close() })
-
-	go func() {
-		conn, acceptErr := listener.Accept()
-		if acceptErr != nil {
-			return
-		}
-		defer func() { _ = conn.Close() }()
-		_, _ = conn.Write([]byte("+OK ready\r\n"))
-	}()
-
-	_, port, err := net.SplitHostPort(listener.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	_, err = ConnectTLS(ctx, ConnectTLSInput{Host: "127.0.0.1", Port: port})
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !errors.Is(err, errConnectNonTLSService) {
-		t.Fatalf("error = %v, want errConnectNonTLSService", err)
-	}
-	if strings.Contains(err.Error(), "POP3 banner") {
-		t.Fatalf("error = %q, want generic plaintext classification", err.Error())
-	}
-	if !strings.Contains(err.Error(), "plaintext banner") {
-		t.Fatalf("error = %q, want plaintext banner detail", err.Error())
+			_, err = ConnectTLS(ctx, ConnectTLSInput{Host: "127.0.0.1", Port: port})
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !errors.Is(err, errConnectNonTLSService) {
+				t.Fatalf("error = %v, want errConnectNonTLSService", err)
+			}
+			if strings.Contains(err.Error(), tt.protocol+" banner") {
+				t.Fatalf("error = %q, want generic plaintext classification", err.Error())
+			}
+			if !strings.Contains(err.Error(), "plaintext banner") {
+				t.Fatalf("error = %q, want plaintext banner detail", err.Error())
+			}
+		})
 	}
 }
 

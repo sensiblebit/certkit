@@ -820,9 +820,13 @@ func detectScanStartTLSProtocol(ctx context.Context, addr, serverName string) st
 	if err != nil {
 		return ""
 	}
-	defer func() { _ = conn.Close() }()
 	stopOnCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
-	defer stopOnCancel()
+	defer func() {
+		if !stopOnCancel() {
+			return
+		}
+		_ = conn.Close()
+	}()
 
 	if err := conn.SetDeadline(startTLSDetectDeadline(ctx, time.Now())); err != nil {
 		slog.Debug("detect STARTTLS protocol: aborting best-effort preflight after initial deadline setup failed", "addr", addr, "error", err)
