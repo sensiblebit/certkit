@@ -804,14 +804,14 @@ func detectScanStartTLSProtocol(ctx context.Context, addr string) startTLSProtoc
 		}
 		readTimeout = min(readTimeout, remaining)
 	}
-	if err := conn.SetReadDeadline(time.Now().Add(readTimeout)); err != nil {
-		slog.Debug("detect STARTTLS protocol: setting initial read deadline", "addr", addr, "error", err)
+	if err := conn.SetDeadline(time.Now().Add(readTimeout)); err != nil {
+		slog.Debug("detect STARTTLS protocol: setting initial deadline", "addr", addr, "error", err)
 	}
 	prefix, err := readBannerPrefix(conn)
 	if len(prefix) == 0 {
 		if ldapPort(addr) {
-			if err := conn.SetReadDeadline(time.Now().Add(readTimeout)); err != nil {
-				slog.Debug("detect STARTTLS protocol: resetting LDAP read deadline", "addr", addr, "error", err)
+			if err := conn.SetDeadline(time.Now().Add(readTimeout)); err != nil {
+				slog.Debug("detect STARTTLS protocol: resetting LDAP deadline", "addr", addr, "error", err)
 			}
 			if ok, err := detectLDAPStartTLS(conn); ok {
 				return startTLSProtocolLDAP
@@ -829,14 +829,17 @@ func detectScanStartTLSProtocol(ctx context.Context, addr string) startTLSProtoc
 		return protocol
 	}
 	if matchesGenericSMTPBanner(firstBannerLine(prefix)) {
-		if err := conn.SetReadDeadline(time.Now().Add(readTimeout)); err != nil {
-			slog.Debug("detect STARTTLS protocol: resetting SMTP read deadline", "addr", addr, "error", err)
+		if err := conn.SetDeadline(time.Now().Add(readTimeout)); err != nil {
+			slog.Debug("detect STARTTLS protocol: resetting SMTP deadline", "addr", addr, "error", err)
 		}
 		if ok, err := detectSMTPStartTLS(conn, prefix); ok {
 			return startTLSProtocolSMTP
 		} else if err != nil {
 			slog.Debug("detect STARTTLS protocol: SMTP probe failed", "addr", addr, "error", err)
 		}
+	}
+	if err != nil && !errors.Is(err, io.EOF) {
+		slog.Debug("detect STARTTLS protocol: ignoring unrecognized banner read error", "addr", addr, "error", err)
 	}
 	return ""
 }
