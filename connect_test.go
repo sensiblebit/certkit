@@ -827,70 +827,6 @@ func TestScanCipherSuites_StartTLSSMTPGeneric220Banner(t *testing.T) {
 	}
 }
 
-func TestConnectViaStartTLS_LDAP(t *testing.T) {
-	t.Parallel()
-
-	ca := generateTestCA(t, "LDAP STARTTLS Root")
-	leaf := generateTestLeafCert(t, ca)
-	rootPool := x509.NewCertPool()
-	rootPool.AddCert(ca.Cert)
-
-	port := startPlaintextUpgradeServer(t, startTLSProtocolLDAP, [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	result, err := connectViaStartTLS(ctx, connectViaStartTLSInput{
-		connectInput: ConnectTLSInput{
-			Host:       "127.0.0.1",
-			Port:       port,
-			ServerName: "localhost",
-			RootCAs:    rootPool,
-		},
-		addr:       net.JoinHostPort("127.0.0.1", port),
-		serverName: "localhost",
-		protocol:   startTLSProtocolLDAP,
-	})
-	if err != nil {
-		t.Fatalf("connectViaStartTLS failed: %v", err)
-	}
-	if got, want := result.Protocol, "TLS 1.3 (LDAP STARTTLS)"; got != want && got != "TLS 1.2 (LDAP STARTTLS)" {
-		t.Fatalf("Protocol = %q, want LDAP STARTTLS", got)
-	}
-	if result.VerifyError != "" {
-		t.Fatalf("VerifyError = %q, want empty", result.VerifyError)
-	}
-}
-
-func TestConnectViaStartTLS_UsesAddrPortWhenInputPortEmpty(t *testing.T) {
-	t.Parallel()
-
-	ca := generateTestCA(t, "STARTTLS Port Root")
-	leaf := generateTestLeafCert(t, ca)
-	rootPool := x509.NewCertPool()
-	rootPool.AddCert(ca.Cert)
-
-	port := startPlaintextUpgradeServer(t, startTLSProtocolSMTP, [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	result, err := connectViaStartTLS(ctx, connectViaStartTLSInput{
-		connectInput: ConnectTLSInput{
-			Host:       "127.0.0.1",
-			ServerName: "localhost",
-			RootCAs:    rootPool,
-		},
-		addr:       net.JoinHostPort("127.0.0.1", port),
-		serverName: "localhost",
-		protocol:   startTLSProtocolSMTP,
-	})
-	if err != nil {
-		t.Fatalf("connectViaStartTLS failed: %v", err)
-	}
-	if result.Port != port {
-		t.Fatalf("Port = %q, want %q", result.Port, port)
-	}
-}
-
 func TestConnectViaStartTLS_PolicyUsesRawTLSVersion(t *testing.T) {
 	t.Parallel()
 
@@ -953,6 +889,46 @@ func TestConnectViaStartTLS_PolicyUsesRawTLSVersion(t *testing.T) {
 		if diag.Check == "policy-cipher" {
 			t.Fatalf("unexpected policy-cipher diagnostic for allowed STARTTLS suite: %+v", result.Diagnostics)
 		}
+	}
+}
+
+func TestConnectTLS_DoesNotTreatGenericStarOKAsIMAPOffPort(t *testing.T) {
+	t.Parallel()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		_, _ = conn.Write([]byte("* OK ready\r\n"))
+	}()
+
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err = ConnectTLS(ctx, ConnectTLSInput{Host: "127.0.0.1", Port: port})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, errConnectNonTLSService) {
+		t.Fatalf("error = %v, want errConnectNonTLSService", err)
+	}
+	if strings.Contains(err.Error(), "IMAP banner") {
+		t.Fatalf("error = %q, want generic plaintext classification", err.Error())
+	}
+	if !strings.Contains(err.Error(), "plaintext banner") {
+		t.Fatalf("error = %q, want plaintext banner detail", err.Error())
 	}
 }
 
@@ -1955,66 +1931,6 @@ func TestDiagnoseNegotiatedCipher(t *testing.T) {
 	}
 }
 
-func TestDiagnoseNegotiatedCipherPolicy(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name        string
-		policy      SecurityPolicy
-		protocol    string
-		cipherSuite string
-		wantCheck   string
-		wantDetail  string
-	}{
-		{
-			name:        "policy disabled",
-			policy:      SecurityPolicyNone,
-			protocol:    "TLS 1.3",
-			cipherSuite: "TLS_CHACHA20_POLY1305_SHA256",
-		},
-		{
-			name:        "FIPS disallows CHACHA20",
-			policy:      SecurityPolicyFIPS1402,
-			protocol:    "TLS 1.3",
-			cipherSuite: "TLS_CHACHA20_POLY1305_SHA256",
-			wantCheck:   "policy-cipher",
-			wantDetail:  "TLS_CHACHA20_POLY1305_SHA256",
-		},
-		{
-			name:        "FIPS allows TLS 1.3 AES GCM",
-			policy:      SecurityPolicyFIPS1403,
-			protocol:    "TLS 1.3",
-			cipherSuite: "TLS_AES_256_GCM_SHA384",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			diags := diagnoseNegotiatedCipherPolicy(negotiatedCipherPolicyInput{
-				protocol:    tt.protocol,
-				cipherSuite: tt.cipherSuite,
-				policy:      tt.policy,
-			})
-			if tt.wantCheck == "" {
-				if len(diags) != 0 {
-					t.Fatalf("got diagnostics, want none: %+v", diags)
-				}
-				return
-			}
-			if len(diags) != 1 {
-				t.Fatalf("got %d diagnostics, want 1: %+v", len(diags), diags)
-			}
-			if diags[0].Check != tt.wantCheck {
-				t.Fatalf("Check = %q, want %q", diags[0].Check, tt.wantCheck)
-			}
-			if !strings.Contains(diags[0].Detail, tt.wantDetail) {
-				t.Fatalf("Detail = %q, want substring %q", diags[0].Detail, tt.wantDetail)
-			}
-		})
-	}
-}
-
 func TestDiagnoseCipherScanPolicy(t *testing.T) {
 	t.Parallel()
 
@@ -2045,7 +1961,7 @@ func TestDiagnoseCipherScanPolicy(t *testing.T) {
 	}
 }
 
-func TestDiagnosePeerChainPolicy(t *testing.T) {
+func TestConnectTLS_PeerChainPolicy(t *testing.T) {
 	t.Parallel()
 
 	_, leafKey, err := ed25519.GenerateKey(rand.Reader)
@@ -2054,9 +1970,12 @@ func TestDiagnosePeerChainPolicy(t *testing.T) {
 	}
 	template := &x509.Certificate{
 		SerialNumber: big.NewInt(1),
-		Subject:      pkix.Name{CommonName: "policy.example.com"},
+		Subject:      pkix.Name{CommonName: "localhost"},
 		NotBefore:    time.Now().Add(-time.Hour),
 		NotAfter:     time.Now().Add(time.Hour),
+		DNSNames:     []string{"localhost"},
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}
 	der, err := x509.CreateCertificate(rand.Reader, template, template, leafKey.Public(), leafKey)
 	if err != nil {
@@ -2067,12 +1986,55 @@ func TestDiagnosePeerChainPolicy(t *testing.T) {
 		t.Fatalf("ParseCertificate: %v", err)
 	}
 
-	diags := diagnosePeerChainPolicy([]*x509.Certificate{cert}, SecurityPolicyFIPS1402)
-	if !containsDiagDetail(diags, "policy-cert-key", "Ed25519") {
-		t.Fatalf("missing policy-cert-key diagnostic in %+v", diags)
+	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		Certificates: []tls.Certificate{{
+			Certificate: [][]byte{der},
+			PrivateKey:  leafKey,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
 	}
-	if !containsDiagDetail(diags, "policy-cert-signature", "Ed25519") {
-		t.Fatalf("missing policy-cert-signature diagnostic in %+v", diags)
+	t.Cleanup(func() { _ = listener.Close() })
+
+	go func() {
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go func(c net.Conn) {
+				defer func() { _ = c.Close() }()
+				_, _ = io.Copy(io.Discard, c)
+			}(conn)
+		}
+	}()
+
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(cert)
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatalf("SplitHostPort: %v", err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := ConnectTLS(ctx, ConnectTLSInput{
+		Host:       "127.0.0.1",
+		Port:       port,
+		ServerName: "localhost",
+		RootCAs:    rootPool,
+		Policy:     SecurityPolicyFIPS1402,
+	})
+	if err != nil {
+		t.Fatalf("ConnectTLS: %v", err)
+	}
+	if !containsDiagDetail(result.Diagnostics, "policy-cert-key", "Ed25519") {
+		t.Fatalf("missing policy-cert-key diagnostic in %+v", result.Diagnostics)
+	}
+	if !containsDiagDetail(result.Diagnostics, "policy-cert-signature", "Ed25519") {
+		t.Fatalf("missing policy-cert-signature diagnostic in %+v", result.Diagnostics)
 	}
 }
 

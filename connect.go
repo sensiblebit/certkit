@@ -470,7 +470,7 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 				return result, nil
 			}
 		}
-		if inferredErr := inferNonTLSError(handshakeErr, prefix); inferredErr != nil {
+		if inferredErr := inferNonTLSError(handshakeErr, addr, prefix); inferredErr != nil {
 			return nil, fmt.Errorf("tls handshake with %s: %w", addr, inferredErr)
 		}
 		return nil, fmt.Errorf("tls handshake with %s: %w", addr, handshakeErr)
@@ -794,7 +794,7 @@ func detectScanStartTLSProtocol(ctx context.Context, addr string) startTLSProtoc
 		}
 		return ""
 	}
-	protocol, ok := detectStartTLSProtocol(buf[:n])
+	protocol, ok := detectStartTLSProtocol(addr, buf[:n])
 	if ok {
 		if err != nil && !errors.Is(err, io.EOF) {
 			slog.Debug("detect STARTTLS protocol: ignoring trailing read error", "addr", addr, "error", err)
@@ -808,7 +808,7 @@ func detectScanStartTLSProtocol(ctx context.Context, addr string) startTLSProtoc
 }
 
 func detectConnectStartTLSProtocol(prefix []byte) (startTLSProtocol, bool) {
-	if protocol, ok := detectStartTLSProtocol(prefix); ok {
+	if protocol, ok := detectStartTLSProtocol("", prefix); ok {
 		return protocol, true
 	}
 	return "", false
@@ -1128,7 +1128,7 @@ func (conn *bufferedPrefixConn) Read(p []byte) (int, error) {
 	return conn.reader.Read(p)
 }
 
-func inferNonTLSError(handshakeErr error, prefix []byte) error {
+func inferNonTLSError(handshakeErr error, addr string, prefix []byte) error {
 	var headerErr tls.RecordHeaderError
 	if handshakeErr == nil || !errors.As(handshakeErr, &headerErr) {
 		return nil
@@ -1146,7 +1146,7 @@ func inferNonTLSError(handshakeErr error, prefix []byte) error {
 		return fmt.Errorf("%w: received HTTP response %q", errConnectNonTLSService, banner)
 	case matchesStrictSMTPBanner(banner):
 		return fmt.Errorf("%w: received SMTP banner %q", errConnectNonTLSService, banner)
-	case matchesIMAPBanner(banner):
+	case matchesIMAPBanner(addr, banner):
 		return fmt.Errorf("%w: received IMAP banner %q", errConnectNonTLSService, banner)
 	case matchesPOP3Banner(banner):
 		return fmt.Errorf("%w: received POP3 banner %q", errConnectNonTLSService, banner)
@@ -1157,12 +1157,12 @@ func inferNonTLSError(handshakeErr error, prefix []byte) error {
 	}
 }
 
-func detectStartTLSProtocol(prefix []byte) (startTLSProtocol, bool) {
+func detectStartTLSProtocol(addr string, prefix []byte) (startTLSProtocol, bool) {
 	banner := firstBannerLine(prefix)
 	switch {
 	case matchesStrictSMTPBanner(banner):
 		return startTLSProtocolSMTP, true
-	case matchesIMAPBanner(banner):
+	case matchesIMAPBanner(addr, banner):
 		return startTLSProtocolIMAP, true
 	case matchesPOP3Banner(banner):
 		return startTLSProtocolPOP3, true
@@ -1211,8 +1211,17 @@ func detectLDAPStartTLS(conn net.Conn) bool {
 	return negotiateLDAPStartTLS(bufio.NewReader(conn), conn) == nil
 }
 
-func matchesIMAPBanner(banner string) bool {
-	return strings.HasPrefix(strings.ToUpper(banner), "* OK")
+func matchesIMAPBanner(addr, banner string) bool {
+	upper := strings.ToUpper(banner)
+	if !strings.HasPrefix(upper, "* OK") {
+		return false
+	}
+	return imapPort(addr) || strings.Contains(upper, "IMAP")
+}
+
+func imapPort(addr string) bool {
+	_, port, err := net.SplitHostPort(addr)
+	return err == nil && port == "143"
 }
 
 func matchesPOP3Banner(banner string) bool {
