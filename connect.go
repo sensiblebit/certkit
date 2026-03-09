@@ -805,13 +805,15 @@ func detectScanStartTLSProtocol(ctx context.Context, addr string) startTLSProtoc
 		readTimeout = min(readTimeout, remaining)
 	}
 	if err := conn.SetDeadline(time.Now().Add(readTimeout)); err != nil {
-		slog.Debug("detect STARTTLS protocol: setting initial deadline", "addr", addr, "error", err)
+		slog.Debug("detect STARTTLS protocol: aborting best-effort preflight after initial deadline setup failed", "addr", addr, "error", err)
+		return ""
 	}
 	prefix, err := readBannerPrefix(conn)
 	if len(prefix) == 0 {
 		if ldapPort(addr) {
 			if err := conn.SetDeadline(time.Now().Add(readTimeout)); err != nil {
-				slog.Debug("detect STARTTLS protocol: resetting LDAP deadline", "addr", addr, "error", err)
+				slog.Debug("detect STARTTLS protocol: aborting best-effort preflight after LDAP deadline reset failed", "addr", addr, "error", err)
+				return ""
 			}
 			if ok, err := detectLDAPStartTLS(conn); ok {
 				return startTLSProtocolLDAP
@@ -830,7 +832,8 @@ func detectScanStartTLSProtocol(ctx context.Context, addr string) startTLSProtoc
 	}
 	if matchesGenericSMTPBanner(firstBannerLine(prefix)) {
 		if err := conn.SetDeadline(time.Now().Add(readTimeout)); err != nil {
-			slog.Debug("detect STARTTLS protocol: resetting SMTP deadline", "addr", addr, "error", err)
+			slog.Debug("detect STARTTLS protocol: aborting best-effort preflight after SMTP deadline reset failed", "addr", addr, "error", err)
+			return ""
 		}
 		if ok, err := detectSMTPStartTLS(conn, prefix); ok {
 			return startTLSProtocolSMTP
@@ -884,7 +887,8 @@ func connectViaStartTLS(ctx, resultCtx context.Context, input connectViaStartTLS
 	if err != nil {
 		return nil, fmt.Errorf("reconnecting for %s STARTTLS: %w", protocolDisplayName(input.protocol), err)
 	}
-	defer func() { _ = conn.Close() }()
+	closeConn := conn
+	defer func() { _ = closeConn.Close() }()
 
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := conn.SetDeadline(deadline); err != nil {
@@ -904,7 +908,7 @@ func connectViaStartTLS(ctx, resultCtx context.Context, input connectViaStartTLS
 	bufferedConn := &bufferedPrefixConn{Conn: conn, reader: reader}
 	var clientAuth *ClientAuthInfo
 	tlsConn := tls.Client(bufferedConn, newConnectTLSConfig(input.serverName, &clientAuth))
-	conn = tlsConn
+	closeConn = tlsConn
 	handshakeErr := tlsConn.HandshakeContext(ctx)
 	state := tlsConn.ConnectionState()
 	if handshakeErr != nil {
@@ -933,6 +937,9 @@ func connectViaStartTLS(ctx, resultCtx context.Context, input connectViaStartTLS
 	}), nil
 }
 
+// selectResultContext prefers the original caller context for post-handshake
+// work such as OCSP/CRL fetches. The shorter handshake context is only a
+// fallback when no caller context was provided.
 func selectResultContext(fallback, preferred context.Context) context.Context {
 	if preferred != nil {
 		return preferred
@@ -1297,7 +1304,7 @@ func matchesStrictSMTPBanner(banner string) bool {
 		return false
 	}
 	upper := strings.ToUpper(banner)
-	return strings.Contains(upper, " SMTP") || strings.Contains(upper, " ESMTP") || strings.Contains(upper, " LMTP")
+	return strings.Contains(upper, " SMTP") || strings.Contains(upper, " ESMTP")
 }
 
 func matchesGenericSMTPBanner(banner string) bool {

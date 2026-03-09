@@ -103,74 +103,162 @@ func TestProbeSSH_StrictServerRequiresClientKexInit(t *testing.T) {
 func TestFormatSSHProbeResult(t *testing.T) {
 	t.Parallel()
 
-	text := FormatSSHProbeResult(&SSHProbeResult{
-		Host:                      "example.com",
-		Port:                      "22",
-		Protocol:                  "SSH 2.0",
-		Banner:                    "SSH-2.0-example",
-		SoftwareVersion:           "example",
-		OverallRating:             CipherRatingWeak,
-		Diagnostics:               []ChainDiagnostic{{Check: "weak-hostkey", Status: "warn", Detail: "server advertises weak or deprecated host key algorithms: ssh-rsa"}},
-		KeyExchangeAlgorithms:     []string{"curve25519-sha256"},
-		KeyExchangeExtensions:     []string{"ext-info-s"},
-		HostKeyAlgorithms:         []string{"ssh-ed25519", "ssh-rsa"},
-		CiphersClientToServer:     []string{"aes128-gcm@openssh.com"},
-		CiphersServerToClient:     []string{"aes128-gcm@openssh.com"},
-		MACsClientToServer:        []string{"hmac-sha2-256"},
-		MACsServerToClient:        []string{"hmac-sha2-256"},
-		CompressionClientToServer: []string{"none"},
-		CompressionServerToClient: []string{"none"},
-	})
-
-	for _, want := range []string{
-		"Host:         example.com:22",
-		"Protocol:     SSH 2.0",
-		"Banner:       SSH-2.0-example",
-		"Algorithms:   weak",
-		"[WARN] weak-hostkey: server advertises weak or deprecated host key algorithms: ssh-rsa",
-		"Key Exchange (1):",
-		"> [good]",
-		"curve25519-sha256",
-		"KEX Extensions (1):",
-		"ext-info-s",
-		"Host Keys (2):",
-		"[weak]",
-		"ssh-ed25519",
-		"ssh-rsa",
-		"Ciphers (1):",
-		"aes128-gcm@openssh.com",
-		"MACs (1):",
-		"hmac-sha2-256",
-		"Compression (1):",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("FormatSSHProbeResult() missing %q in:\n%s", want, text)
-		}
+	tests := []struct {
+		name        string
+		input       *SSHProbeResult
+		contains    []string
+		notContains []string
+		validate    func(t *testing.T, text string)
+	}{
+		{
+			name: "basic",
+			input: &SSHProbeResult{
+				Host:                      "example.com",
+				Port:                      "22",
+				Protocol:                  "SSH 2.0",
+				Banner:                    "SSH-2.0-example",
+				SoftwareVersion:           "example",
+				OverallRating:             CipherRatingWeak,
+				Diagnostics:               []ChainDiagnostic{{Check: "weak-hostkey", Status: "warn", Detail: "server advertises weak or deprecated host key algorithms: ssh-rsa"}},
+				KeyExchangeAlgorithms:     []string{"curve25519-sha256"},
+				KeyExchangeExtensions:     []string{"ext-info-s"},
+				HostKeyAlgorithms:         []string{"ssh-ed25519", "ssh-rsa"},
+				CiphersClientToServer:     []string{"aes128-gcm@openssh.com"},
+				CiphersServerToClient:     []string{"aes128-gcm@openssh.com"},
+				MACsClientToServer:        []string{"hmac-sha2-256"},
+				MACsServerToClient:        []string{"hmac-sha2-256"},
+				CompressionClientToServer: []string{"none"},
+				CompressionServerToClient: []string{"none"},
+			},
+			contains: []string{
+				"Host:         example.com:22",
+				"Protocol:     SSH 2.0",
+				"Banner:       SSH-2.0-example",
+				"Algorithms:   weak",
+				"[WARN] weak-hostkey: server advertises weak or deprecated host key algorithms: ssh-rsa",
+				"Key Exchange (1):",
+				"> [good]",
+				"curve25519-sha256",
+				"KEX Extensions (1):",
+				"ext-info-s",
+				"Host Keys (2):",
+				"[weak]",
+				"ssh-ed25519",
+				"ssh-rsa",
+				"Ciphers (1):",
+				"aes128-gcm@openssh.com",
+				"MACs (1):",
+				"hmac-sha2-256",
+				"Compression (1):",
+			},
+			notContains: []string{"client->server", "server->client"},
+		},
+		{
+			name: "preserves server preference marker",
+			input: &SSHProbeResult{
+				Host:                  "example.com",
+				Port:                  "22",
+				Protocol:              "SSH 2.0",
+				Banner:                "SSH-2.0-example",
+				OverallRating:         CipherRatingWeak,
+				KeyExchangeAlgorithms: []string{"diffie-hellman-group14-sha1", "curve25519-sha256"},
+			},
+			validate: func(t *testing.T, text string) {
+				t.Helper()
+				if !strings.Contains(text, "  > [weak]") || !strings.Contains(text, "diffie-hellman-group14-sha1") {
+					t.Fatalf("FormatSSHProbeResult() should mark the server's actual preferred KEX:\n%s", text)
+				}
+				if !strings.Contains(text, "    [good]") || !strings.Contains(text, "curve25519-sha256") {
+					t.Fatalf("FormatSSHProbeResult() should still sort stronger KEX values first:\n%s", text)
+				}
+			},
+		},
+		{
+			name: "fips tags",
+			input: &SSHProbeResult{
+				Policy:                    SecurityPolicyFIPS1403,
+				OverallRating:             CipherRatingWeak,
+				Host:                      "example.com",
+				Port:                      "22",
+				Protocol:                  "SSH 2.0",
+				Banner:                    "SSH-2.0-example",
+				KeyExchangeAlgorithms:     []string{"curve25519-sha256", "ecdh-sha2-nistp256"},
+				KeyExchangeExtensions:     []string{"ext-info-s", "kex-strict-s-v00@openssh.com"},
+				HostKeyAlgorithms:         []string{"ssh-ed25519", "rsa-sha2-512", "ssh-rsa"},
+				CiphersClientToServer:     []string{"aes128-gcm@openssh.com", "chacha20-poly1305@openssh.com"},
+				CiphersServerToClient:     []string{"aes128-gcm@openssh.com", "chacha20-poly1305@openssh.com"},
+				MACsClientToServer:        []string{"hmac-sha2-256"},
+				MACsServerToClient:        []string{"hmac-sha2-256"},
+				CompressionClientToServer: []string{"none"},
+				CompressionServerToClient: []string{"none"},
+			},
+			contains: []string{
+				"> [good]",
+				"[profile]",
+				"curve25519-sha256",
+				"ecdh-sha2-nistp256",
+				"KEX Extensions (2):",
+				"ext-info-s",
+				"kex-strict-s-v00@openssh.com",
+				"ssh-ed25519",
+				"rsa-sha2-512",
+				"[weak, profile]",
+				"ssh-rsa",
+				"aes128-gcm@openssh.com",
+				"chacha20-poly1305@openssh.com",
+				"hmac-sha2-256",
+			},
+			validate: func(t *testing.T, text string) {
+				t.Helper()
+				if strings.Index(text, "ecdh-sha2-nistp256") > strings.Index(text, "curve25519-sha256") {
+					t.Fatalf("FormatSSHProbeResult() did not sort good KEX ahead of profile-only KEX:\n%s", text)
+				}
+				if strings.Index(text, "rsa-sha2-512") > strings.Index(text, "ssh-ed25519") {
+					t.Fatalf("FormatSSHProbeResult() did not sort good host keys ahead of profile-only host keys:\n%s", text)
+				}
+				if strings.Index(text, "aes128-gcm@openssh.com") > strings.Index(text, "chacha20-poly1305@openssh.com") {
+					t.Fatalf("FormatSSHProbeResult() did not sort good ciphers ahead of profile-only ciphers:\n%s", text)
+				}
+			},
+		},
+		{
+			name: "directional preferences",
+			input: &SSHProbeResult{
+				Host:                  "example.com",
+				Port:                  "22",
+				Protocol:              "SSH 2.0",
+				CiphersClientToServer: []string{"aes128-gcm@openssh.com", "aes256-gcm@openssh.com"},
+				CiphersServerToClient: []string{"aes256-gcm@openssh.com", "aes128-gcm@openssh.com"},
+			},
+			contains: []string{
+				"Ciphers:",
+				"client->server (2):",
+				"server->client (2):",
+				"> [good]           aes128-gcm@openssh.com",
+				"> [good]           aes256-gcm@openssh.com",
+			},
+		},
 	}
-	for _, unwanted := range []string{"client->server", "server->client"} {
-		if strings.Contains(text, unwanted) {
-			t.Fatalf("FormatSSHProbeResult() unexpectedly contains %q in:\n%s", unwanted, text)
-		}
-	}
-}
 
-func TestFormatSSHProbeResult_PreservesServerPreferenceMarker(t *testing.T) {
-	t.Parallel()
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	text := FormatSSHProbeResult(&SSHProbeResult{
-		Host:                  "example.com",
-		Port:                  "22",
-		Protocol:              "SSH 2.0",
-		Banner:                "SSH-2.0-example",
-		OverallRating:         CipherRatingWeak,
-		KeyExchangeAlgorithms: []string{"diffie-hellman-group14-sha1", "curve25519-sha256"},
-	})
-
-	if !strings.Contains(text, "  > [weak]") || !strings.Contains(text, "diffie-hellman-group14-sha1") {
-		t.Fatalf("FormatSSHProbeResult() should mark the server's actual preferred KEX:\n%s", text)
-	}
-	if !strings.Contains(text, "    [good]") || !strings.Contains(text, "curve25519-sha256") {
-		t.Fatalf("FormatSSHProbeResult() should still sort stronger KEX values first:\n%s", text)
+			text := FormatSSHProbeResult(tt.input)
+			for _, want := range tt.contains {
+				if !strings.Contains(text, want) {
+					t.Fatalf("FormatSSHProbeResult() missing %q in:\n%s", want, text)
+				}
+			}
+			for _, unwanted := range tt.notContains {
+				if strings.Contains(text, unwanted) {
+					t.Fatalf("FormatSSHProbeResult() unexpectedly contains %q in:\n%s", unwanted, text)
+				}
+			}
+			if tt.validate != nil {
+				tt.validate(t, text)
+			}
+		})
 	}
 }
 
@@ -260,82 +348,6 @@ func TestFormatSSHRatingLine_PolicyClean(t *testing.T) {
 
 	if got := FormatSSHRatingLine(result); !strings.Contains(got, "0 weak, 0 likely not authorized by FIPS 140-3") {
 		t.Fatalf("FormatSSHRatingLine() = %q, want explicit policy-clean summary", got)
-	}
-}
-
-func TestFormatSSHProbeResult_FIPSTags(t *testing.T) {
-	t.Parallel()
-
-	text := FormatSSHProbeResult(&SSHProbeResult{
-		Policy:                    SecurityPolicyFIPS1403,
-		OverallRating:             CipherRatingWeak,
-		Host:                      "example.com",
-		Port:                      "22",
-		Protocol:                  "SSH 2.0",
-		Banner:                    "SSH-2.0-example",
-		KeyExchangeAlgorithms:     []string{"curve25519-sha256", "ecdh-sha2-nistp256"},
-		KeyExchangeExtensions:     []string{"ext-info-s", "kex-strict-s-v00@openssh.com"},
-		HostKeyAlgorithms:         []string{"ssh-ed25519", "rsa-sha2-512", "ssh-rsa"},
-		CiphersClientToServer:     []string{"aes128-gcm@openssh.com", "chacha20-poly1305@openssh.com"},
-		CiphersServerToClient:     []string{"aes128-gcm@openssh.com", "chacha20-poly1305@openssh.com"},
-		MACsClientToServer:        []string{"hmac-sha2-256"},
-		MACsServerToClient:        []string{"hmac-sha2-256"},
-		CompressionClientToServer: []string{"none"},
-		CompressionServerToClient: []string{"none"},
-	})
-
-	for _, want := range []string{
-		"> [good]",
-		"[profile]",
-		"curve25519-sha256",
-		"ecdh-sha2-nistp256",
-		"KEX Extensions (2):",
-		"ext-info-s",
-		"kex-strict-s-v00@openssh.com",
-		"ssh-ed25519",
-		"rsa-sha2-512",
-		"[weak, profile]",
-		"ssh-rsa",
-		"aes128-gcm@openssh.com",
-		"chacha20-poly1305@openssh.com",
-		"hmac-sha2-256",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("FormatSSHProbeResult() missing %q in:\n%s", want, text)
-		}
-	}
-	if strings.Index(text, "ecdh-sha2-nistp256") > strings.Index(text, "curve25519-sha256") {
-		t.Fatalf("FormatSSHProbeResult() did not sort good KEX ahead of profile-only KEX:\n%s", text)
-	}
-	if strings.Index(text, "rsa-sha2-512") > strings.Index(text, "ssh-ed25519") {
-		t.Fatalf("FormatSSHProbeResult() did not sort good host keys ahead of profile-only host keys:\n%s", text)
-	}
-	if strings.Index(text, "aes128-gcm@openssh.com") > strings.Index(text, "chacha20-poly1305@openssh.com") {
-		t.Fatalf("FormatSSHProbeResult() did not sort good ciphers ahead of profile-only ciphers:\n%s", text)
-	}
-}
-
-func TestFormatSSHProbeResult_DirectionalPreferences(t *testing.T) {
-	t.Parallel()
-
-	text := FormatSSHProbeResult(&SSHProbeResult{
-		Host:                  "example.com",
-		Port:                  "22",
-		Protocol:              "SSH 2.0",
-		CiphersClientToServer: []string{"aes128-gcm@openssh.com", "aes256-gcm@openssh.com"},
-		CiphersServerToClient: []string{"aes256-gcm@openssh.com", "aes128-gcm@openssh.com"},
-	})
-
-	for _, want := range []string{
-		"Ciphers:",
-		"client->server (2):",
-		"server->client (2):",
-		"> [good]           aes128-gcm@openssh.com",
-		"> [good]           aes256-gcm@openssh.com",
-	} {
-		if !strings.Contains(text, want) {
-			t.Fatalf("FormatSSHProbeResult() missing %q in:\n%s", want, text)
-		}
 	}
 }
 

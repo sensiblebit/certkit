@@ -6,17 +6,17 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/json"
+	"errors"
 	"net"
 	"strings"
 	"testing"
 
+	"github.com/sensiblebit/certkit"
 	"github.com/spf13/cobra"
 	"golang.org/x/crypto/ssh"
 )
 
 func TestRunProbeSSH(t *testing.T) {
-	t.Parallel()
-
 	addr := startProbeSSHServer(t)
 
 	tests := []struct {
@@ -93,8 +93,6 @@ func TestRunProbeSSH(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
 			// snapshotReadonlyGlobals serializes tests that mutate package-level
 			// Cobra flag state such as jsonOutput.
 			state := snapshotReadonlyGlobals()
@@ -117,8 +115,6 @@ func TestRunProbeSSH(t *testing.T) {
 }
 
 func TestRunProbeSSH_UnsupportedFormat(t *testing.T) {
-	t.Parallel()
-
 	addr := startProbeSSHServer(t)
 
 	state := snapshotReadonlyGlobals()
@@ -135,8 +131,65 @@ func TestRunProbeSSH_UnsupportedFormat(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if !strings.Contains(err.Error(), `unsupported output format "yaml"`) {
-		t.Fatalf("error = %q, want unsupported output format", err.Error())
+	if !errors.Is(err, ErrUnsupportedOutputFormat) {
+		t.Fatalf("error = %v, want errors.Is(..., ErrUnsupportedOutputFormat)", err)
+	}
+	if !strings.Contains(err.Error(), `"yaml"`) {
+		t.Fatalf("error = %q, want format value", err.Error())
+	}
+}
+
+func TestRunProbeSSH_PolicyFlags(t *testing.T) {
+	addr := startProbeSSHServer(t)
+
+	tests := []struct {
+		name       string
+		fips1402   bool
+		fips1403   bool
+		wantPolicy certkit.SecurityPolicy
+		wantErr    error
+	}{
+		{name: "none", wantPolicy: certkit.SecurityPolicyNone},
+		{name: "fips 140-2", fips1402: true, wantPolicy: certkit.SecurityPolicyFIPS1402},
+		{name: "fips 140-3", fips1403: true, wantPolicy: certkit.SecurityPolicyFIPS1403},
+		{name: "conflict", fips1402: true, fips1403: true, wantErr: errConflictingFIPSPolicies},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			state := snapshotReadonlyGlobals()
+			defer restoreReadonlyGlobals(state)
+
+			probeSSHFormat = "json"
+			probeSSHFIPS1402 = tt.fips1402
+			probeSSHFIPS1403 = tt.fips1403
+
+			cmd := &cobra.Command{}
+			cmd.SetContext(context.Background())
+
+			stdout, _, err := captureOutput(t, func() error {
+				return runProbeSSH(cmd, []string{addr})
+			})
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Fatalf("error = %v, want errors.Is(..., %v)", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("runProbeSSH: %v", err)
+			}
+
+			var payload struct {
+				Policy certkit.SecurityPolicy `json:"policy,omitempty"`
+			}
+			if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+				t.Fatalf("Unmarshal JSON: %v\n%s", err, stdout)
+			}
+			if payload.Policy != tt.wantPolicy {
+				t.Fatalf("Policy = %q, want %q", payload.Policy, tt.wantPolicy)
+			}
+		})
 	}
 }
 

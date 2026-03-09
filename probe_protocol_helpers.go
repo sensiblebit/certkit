@@ -37,6 +37,13 @@ func checkedUint24Len(n int, field string) (uint32, error) {
 	return uint32(n), nil
 }
 
+func checkedUint32Len(n int, field string) (uint32, error) {
+	if n < 0 || uint64(n) > math.MaxUint32 {
+		return 0, fmt.Errorf("%w for %s: %d outside range [0, %d]", errProtocolLengthOverflow, field, n, uint64(math.MaxUint32))
+	}
+	return uint32(n), nil
+}
+
 func checkedIntFromUint64(n uint64, field string) (int, error) {
 	if n > uint64(math.MaxInt) {
 		return 0, fmt.Errorf("%w for %s: %d > %d", errProtocolValueOverflow, field, n, math.MaxInt)

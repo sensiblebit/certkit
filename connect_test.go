@@ -673,6 +673,15 @@ func TestConnectTLS_NonTLSSHBanner(t *testing.T) {
 	}
 }
 
+func TestDetectStartTLSProtocol_DoesNotTreatLMTPAsSMTP(t *testing.T) {
+	t.Parallel()
+
+	protocol, ok := detectStartTLSProtocol("mail.example:24", []byte("220 mail.example LMTP ready\r\n"))
+	if ok {
+		t.Fatalf("detectStartTLSProtocol unexpectedly matched %q", protocol)
+	}
+}
+
 func TestConnectTLS_StartTLSProtocols(t *testing.T) {
 	// WHY: ConnectTLS should opportunistically upgrade known plaintext
 	// protocols after a direct TLS probe proves the endpoint is not implicit TLS.

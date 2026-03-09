@@ -9,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"net"
 	"slices"
 	"strconv"
@@ -32,7 +31,6 @@ var (
 	errSSHPacketMalformed    = errors.New("malformed SSH packet")
 	errSSHUnexpectedPacket   = errors.New("unexpected SSH packet type")
 	errSSHKexInitMalformed   = errors.New("malformed SSH KEXINIT packet")
-	errSSHPacketLengthTooBig = errors.New("SSH packet length exceeds uint32")
 )
 
 // SSHProbeInput configures ProbeSSH.
@@ -355,7 +353,7 @@ func buildSSHKexInitPayload(lists sshKexInitNameLists) ([]byte, error) {
 
 func appendSSHNameList(dst []byte, values []string) ([]byte, error) {
 	raw := strings.Join(values, ",")
-	rawLen, err := checkedUint32(uint64(len(raw)))
+	rawLen, err := checkedUint32Len(len(raw), "SSH name-list")
 	if err != nil {
 		return nil, err
 	}
@@ -371,15 +369,12 @@ func writeSSHPacket(conn net.Conn, payload []byte) error {
 		paddingLen += sshPacketBlockSize
 	}
 	packetLen := 1 + len(payload) + paddingLen
-	if uint64(packetLen) > math.MaxUint32 {
-		return errSSHPacketLengthTooBig
-	}
-
-	packet := make([]byte, 4+packetLen)
-	packetLen32, err := checkedUint32(uint64(packetLen))
+	packetLen32, err := checkedUint32Len(packetLen, "SSH packet length")
 	if err != nil {
 		return err
 	}
+
+	packet := make([]byte, 4+packetLen)
 	binary.BigEndian.PutUint32(packet[:4], packetLen32)
 	packet[4] = byte(paddingLen)
 	copy(packet[5:], payload)
@@ -390,13 +385,6 @@ func writeSSHPacket(conn net.Conn, payload []byte) error {
 		return fmt.Errorf("writing SSH packet: %w", err)
 	}
 	return nil
-}
-
-func checkedUint32(v uint64) (uint32, error) {
-	if v > math.MaxUint32 {
-		return 0, errSSHPacketLengthTooBig
-	}
-	return uint32(v), nil
 }
 
 // FormatSSHProbeResult formats an SSHProbeResult as human-readable text.
@@ -866,6 +854,16 @@ func writeSSHRatedDirectionalSection(input sshRatedDirectionalSectionInput) {
 	if len(input.s2c) > 0 {
 		preferredS2C = input.s2c[0]
 	}
+	if slices.Equal(origC2S, origS2C) {
+		writeSSHRatedListSectionWithPreferred(sshRatedListSectionInput{
+			out:       input.out,
+			title:     input.title,
+			values:    input.c2s,
+			preferred: preferredC2S,
+			config:    input.config,
+		})
+		return
+	}
 	c2s := sortSSHDisplayValues(sshDisplayValuesInput{
 		values: input.c2s,
 		config: input.config,
@@ -874,16 +872,6 @@ func writeSSHRatedDirectionalSection(input sshRatedDirectionalSectionInput) {
 		values: input.s2c,
 		config: input.config,
 	})
-	if slices.Equal(origC2S, origS2C) {
-		writeSSHRatedListSectionWithPreferred(sshRatedListSectionInput{
-			out:       input.out,
-			title:     input.title,
-			values:    c2s,
-			preferred: preferredC2S,
-			config:    input.config,
-		})
-		return
-	}
 	fmt.Fprintf(input.out, "\n%s:\n", input.title)
 	fmt.Fprintf(input.out, "  client->server (%d):\n", len(c2s))
 	for _, value := range c2s {

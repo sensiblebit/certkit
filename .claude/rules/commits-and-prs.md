@@ -72,12 +72,13 @@ Required push gate:
 5. If a PR exists, spawn a second dedicated docs-checking agent for that PR
 6. The docs-checking agent must review `README.md`, `EXAMPLES.md`, `.claude/docs/architecture.md`, generated CLI docs, and `CHANGELOG.md` for drift against the current code and command surface
 7. Have both agents report any rule violations, doc drift, missing changelog entries, unresolved PR-thread obligations, or skipped validation
-8. When fixes are needed and can be cleanly isolated, dispatch dedicated worker agents to make the code or docs changes instead of doing all fix work in the main thread
-9. Keep the main thread focused on PR context, review triage, rule compliance, integration, and final verification
-10. Fix every violation before pushing
-11. If a PR exists, query for comments again immediately before `git push` in case new feedback arrived during the audit/fix cycle
-12. Address that feedback too if needed
-13. Only then push
+8. Run a CLI LSP pass for Go changes before pushing so editor-only diagnostics are not missed. Prefer `gopls check` on the changed Go files or a host-build Go file set; do not treat known cross-target `js/wasm` workspace false positives as blockers for host-only PRs
+9. When fixes are needed and can be cleanly isolated, dispatch dedicated worker agents to make the code or docs changes instead of doing all fix work in the main thread
+10. Keep the main thread focused on PR context, review triage, rule compliance, integration, and final verification
+11. Fix every violation before pushing
+12. If a PR exists, query for comments again immediately before `git push` in case new feedback arrived during the audit/fix cycle
+13. Address that feedback too if needed
+14. Only then push
 
 When reporting PR comment state to the user, pull a fresh snapshot immediately before answering. Do not rely on an earlier query once more work, waiting, or other GitHub activity has happened.
 
