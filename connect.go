@@ -296,7 +296,8 @@ type ConnectResult struct {
 	// Port is the TCP port that was connected to.
 	Port string `json:"port"`
 	// Protocol is the negotiated TLS version (e.g. "TLS 1.3").
-	Protocol string `json:"protocol"`
+	Protocol   string `json:"protocol"`
+	tlsVersion string
 	// Policy is the optional strictness profile used when rating this result.
 	Policy SecurityPolicy `json:"policy,omitempty"`
 	// CipherSuite is the negotiated cipher suite name.
@@ -413,6 +414,7 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 			Host:        input.Host,
 			Port:        port,
 			Protocol:    tlsVersionString(legacyResult.version),
+			tlsVersion:  tlsVersionString(legacyResult.version),
 			Policy:      input.Policy,
 			CipherSuite: cipherSuiteName(legacyResult.cipherSuite),
 			ServerName:  serverName,
@@ -455,6 +457,7 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 		Host:        input.Host,
 		Port:        port,
 		Protocol:    tlsVersionString(state.Version),
+		tlsVersion:  tlsVersionString(state.Version),
 		Policy:      input.Policy,
 		CipherSuite: tls.CipherSuiteName(state.CipherSuite),
 		ServerName:  serverName,
@@ -475,8 +478,12 @@ func (result *ConnectResult) populate(ctx context.Context, input ConnectTLSInput
 	serverName := result.ServerName
 
 	// Diagnose the negotiated cipher suite and protocol version.
-	result.Diagnostics = append(result.Diagnostics, DiagnoseNegotiatedCipher(result.Protocol, result.CipherSuite)...)
-	result.Diagnostics = append(result.Diagnostics, diagnoseNegotiatedCipherPolicy(result.Protocol, result.CipherSuite, input.Policy)...)
+	protocolVersion := result.tlsVersion
+	if protocolVersion == "" {
+		protocolVersion = result.Protocol
+	}
+	result.Diagnostics = append(result.Diagnostics, DiagnoseNegotiatedCipher(protocolVersion, result.CipherSuite)...)
+	result.Diagnostics = append(result.Diagnostics, diagnoseNegotiatedCipherPolicy(protocolVersion, result.CipherSuite, input.Policy)...)
 
 	// Run chain diagnostics on the raw peer chain.
 	if len(result.PeerChain) > 0 {
@@ -658,7 +665,8 @@ func newConnectTLSConfig(serverName string, clientAuth **ClientAuthInfo) *tls.Co
 }
 
 func connectResultFromTLSState(ctx context.Context, input ConnectTLSInput, serverName string, state tls.ConnectionState, clientAuth *ClientAuthInfo, startTLS startTLSProtocol) *ConnectResult {
-	protocol := tlsVersionString(state.Version)
+	rawProtocol := tlsVersionString(state.Version)
+	protocol := rawProtocol
 	if startTLS != "" {
 		protocol = formatProtocolWithStartTLS(protocol, startTLS)
 	}
@@ -666,6 +674,7 @@ func connectResultFromTLSState(ctx context.Context, input ConnectTLSInput, serve
 		Host:        input.Host,
 		Port:        input.Port,
 		Protocol:    protocol,
+		tlsVersion:  rawProtocol,
 		Policy:      input.Policy,
 		CipherSuite: tls.CipherSuiteName(state.CipherSuite),
 		ServerName:  serverName,
@@ -786,7 +795,11 @@ func connectViaStartTLS(ctx context.Context, input ConnectTLSInput, addr, server
 	state := tlsConn.ConnectionState()
 	startTLSInput := input
 	if startTLSInput.Port == "" {
-		startTLSInput.Port = "443"
+		_, port, splitErr := net.SplitHostPort(addr)
+		if splitErr != nil {
+			return nil, fmt.Errorf("parsing %s STARTTLS address %q: %w", protocolDisplayName(protocol), addr, splitErr)
+		}
+		startTLSInput.Port = port
 	}
 	return connectResultFromTLSState(ctx, startTLSInput, serverName, state, clientAuth, protocol), nil
 }
@@ -914,14 +927,17 @@ func negotiateLDAPStartTLS(reader *bufio.Reader, conn net.Conn) error {
 		return fmt.Errorf("writing LDAP StartTLS request: %w", err)
 	}
 
-	header := make([]byte, 2)
-	if _, err := io.ReadFull(reader, header); err != nil {
+	tag, err := reader.ReadByte()
+	if err != nil {
 		return fmt.Errorf("reading LDAP StartTLS response header: %w", err)
 	}
-	if header[0] != 0x30 {
-		return fmt.Errorf("%w: unexpected LDAP message tag 0x%02x", errStartTLSLDAPMalformed, header[0])
+	if tag != 0x30 {
+		return fmt.Errorf("%w: unexpected LDAP message tag 0x%02x", errStartTLSLDAPMalformed, tag)
 	}
-	bodyLen := int(header[1])
+	bodyLen, err := readLDAPBERLength(reader)
+	if err != nil {
+		return err
+	}
 	body := make([]byte, bodyLen)
 	if _, err := io.ReadFull(reader, body); err != nil {
 		return fmt.Errorf("reading LDAP StartTLS response body: %w", err)
@@ -937,6 +953,29 @@ func negotiateLDAPStartTLS(reader *bufio.Reader, conn net.Conn) error {
 		return fmt.Errorf("%w: result code %d", errStartTLSLDAPRejected, resp[2])
 	}
 	return nil
+}
+
+func readLDAPBERLength(reader *bufio.Reader) (int, error) {
+	lenByte, err := reader.ReadByte()
+	if err != nil {
+		return 0, fmt.Errorf("reading LDAP StartTLS response length: %w", err)
+	}
+	if lenByte&0x80 == 0 {
+		return int(lenByte), nil
+	}
+	numLenBytes := int(lenByte & 0x7f)
+	if numLenBytes == 0 || numLenBytes > 4 {
+		return 0, fmt.Errorf("%w: invalid LDAP message length encoding", errStartTLSLDAPMalformed)
+	}
+	lenBuf := make([]byte, numLenBytes)
+	if _, err := io.ReadFull(reader, lenBuf); err != nil {
+		return 0, fmt.Errorf("reading LDAP StartTLS response length: %w", err)
+	}
+	bodyLen := 0
+	for _, b := range lenBuf {
+		bodyLen = (bodyLen << 8) | int(b)
+	}
+	return bodyLen, nil
 }
 
 func readTextLine(reader *bufio.Reader) (string, error) {
@@ -993,6 +1032,8 @@ func (conn *bufferedPrefixConn) Read(p []byte) (int, error) {
 }
 
 func inferNonTLSError(handshakeErr error, prefix []byte) error {
+	// crypto/tls does not expose a sentinel for this specific non-TLS failure,
+	// so matching the library's stable error text is intentional here.
 	if handshakeErr == nil || !strings.Contains(handshakeErr.Error(), "first record does not look like a TLS handshake") {
 		return nil
 	}
@@ -1044,7 +1085,8 @@ func firstBannerLine(prefix []byte) string {
 
 func matchesSMTPBanner(banner string) bool {
 	upper := strings.ToUpper(banner)
-	return strings.HasPrefix(banner, "220 ") && (strings.Contains(upper, " SMTP") || strings.Contains(upper, " ESMTP"))
+	return (strings.HasPrefix(banner, "220 ") || strings.HasPrefix(banner, "220-")) &&
+		(strings.Contains(upper, " SMTP") || strings.Contains(upper, " ESMTP"))
 }
 
 func matchesIMAPBanner(banner string) bool {

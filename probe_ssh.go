@@ -112,7 +112,6 @@ func ProbeSSH(ctx context.Context, input SSHProbeInput) (*SSHProbeResult, error)
 	result.Diagnostics = DiagnoseSSHProbe(result)
 	SortDiagnostics(result.Diagnostics)
 	result.OverallRating = RateSSHAlgorithms(result)
-	result.normalize()
 	return result, nil
 }
 

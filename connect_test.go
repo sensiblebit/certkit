@@ -808,6 +808,96 @@ func TestConnectViaStartTLS_LDAP(t *testing.T) {
 	}
 }
 
+func TestConnectViaStartTLS_UsesAddrPortWhenInputPortEmpty(t *testing.T) {
+	t.Parallel()
+
+	ca := generateTestCA(t, "STARTTLS Port Root")
+	leaf := generateTestLeafCert(t, ca)
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(ca.Cert)
+
+	port := startPlaintextUpgradeServer(t, startTLSProtocolSMTP, [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := connectViaStartTLS(ctx, ConnectTLSInput{
+		Host:       "127.0.0.1",
+		ServerName: "localhost",
+		RootCAs:    rootPool,
+	}, net.JoinHostPort("127.0.0.1", port), "localhost", startTLSProtocolSMTP)
+	if err != nil {
+		t.Fatalf("connectViaStartTLS failed: %v", err)
+	}
+	if result.Port != port {
+		t.Fatalf("Port = %q, want %q", result.Port, port)
+	}
+}
+
+func TestConnectViaStartTLS_PolicyUsesRawTLSVersion(t *testing.T) {
+	t.Parallel()
+
+	ca := generateTestCA(t, "STARTTLS Policy Root")
+	leaf := generateTestLeafCert(t, ca)
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(ca.Cert)
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	//nolint:gosec // This test intentionally forces a single TLS 1.2 AEAD suite to cover STARTTLS policy evaluation.
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		MaxVersion: tls.VersionTLS12,
+		CipherSuites: []uint16{
+			tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+		},
+		Certificates: []tls.Certificate{{
+			Certificate: [][]byte{leaf.DER, ca.CertDER},
+			PrivateKey:  leaf.Key,
+		}},
+	}
+
+	go func() {
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go handlePlaintextUpgradeConn(conn, startTLSProtocolSMTP, tlsConfig)
+		}
+	}()
+
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := ConnectTLS(ctx, ConnectTLSInput{
+		Host:       "127.0.0.1",
+		Port:       port,
+		ServerName: "localhost",
+		RootCAs:    rootPool,
+		Policy:     SecurityPolicyFIPS1403,
+	})
+	if err != nil {
+		t.Fatalf("ConnectTLS failed: %v", err)
+	}
+	if result.Protocol != "TLS 1.2 (SMTP STARTTLS)" {
+		t.Fatalf("Protocol = %q, want %q", result.Protocol, "TLS 1.2 (SMTP STARTTLS)")
+	}
+	for _, diag := range result.Diagnostics {
+		if diag.Check == "policy-cipher" {
+			t.Fatalf("unexpected policy-cipher diagnostic for allowed STARTTLS suite: %+v", result.Diagnostics)
+		}
+	}
+}
+
 func TestProbeTLS13Cipher_LDAP(t *testing.T) {
 	t.Parallel()
 
@@ -828,6 +918,34 @@ func TestProbeTLS13Cipher_LDAP(t *testing.T) {
 	}
 }
 
+func TestNegotiateLDAPStartTLS_LongFormLength(t *testing.T) {
+	t.Parallel()
+
+	client, server := net.Pipe()
+	defer func() { _ = client.Close() }()
+
+	go func() {
+		defer func() { _ = server.Close() }()
+		request := make([]byte, 31)
+		if _, err := io.ReadFull(server, request); err != nil {
+			return
+		}
+		response := []byte{
+			0x30, 0x81, 0x0c, // LDAPMessage with long-form BER length
+			0x02, 0x01, 0x01, // messageID = 1
+			0x78, 0x07, // ExtendedResponse
+			0x0a, 0x01, 0x00, // resultCode success
+			0x04, 0x00, // matchedDN
+			0x04, 0x00, // diagnosticMessage
+		}
+		_, _ = server.Write(response)
+	}()
+
+	if err := negotiateLDAPStartTLS(bufio.NewReader(client), client); err != nil {
+		t.Fatalf("negotiateLDAPStartTLS failed: %v", err)
+	}
+}
+
 func TestDetectStartTLSProtocol(t *testing.T) {
 	t.Parallel()
 
@@ -843,6 +961,13 @@ func TestDetectStartTLSProtocol(t *testing.T) {
 			prefix:       []byte("220 smtp.example.com ESMTP ready\r\n"),
 			wantProtocol: startTLSProtocolSMTP,
 			wantBanner:   "220 smtp.example.com ESMTP ready",
+			wantOK:       true,
+		},
+		{
+			name:         "smtp multiline",
+			prefix:       []byte("220-smtp.example.com ESMTP ready\r\n220 second line\r\n"),
+			wantProtocol: startTLSProtocolSMTP,
+			wantBanner:   "220-smtp.example.com ESMTP ready",
 			wantOK:       true,
 		},
 		{
@@ -897,6 +1022,13 @@ func TestDetectConnectStartTLSProtocol(t *testing.T) {
 		{
 			name:         "smtp banner",
 			prefix:       []byte("220 smtp.example.com ESMTP ready\r\n"),
+			port:         "587",
+			wantProtocol: startTLSProtocolSMTP,
+			wantOK:       true,
+		},
+		{
+			name:         "smtp multiline banner",
+			prefix:       []byte("220-smtp.example.com ESMTP ready\r\n220 second line\r\n"),
 			port:         "587",
 			wantProtocol: startTLSProtocolSMTP,
 			wantOK:       true,
@@ -1010,7 +1142,9 @@ func startPlaintextUpgradeServer(t *testing.T, protocol startTLSProtocol, certCh
 	}
 	t.Cleanup(func() { _ = listener.Close() })
 
+	//nolint:gosec // Test plaintext-upgrade fixtures use the Go default test-server policy unless a test overrides it explicitly.
 	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
 		Certificates: []tls.Certificate{{
 			Certificate: certChain,
 			PrivateKey:  key,
