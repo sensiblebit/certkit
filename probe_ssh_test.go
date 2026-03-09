@@ -266,6 +266,30 @@ func TestFormatSSHProbeResult_FIPSTags(t *testing.T) {
 	}
 }
 
+func TestFormatSSHProbeResult_DirectionalPreferences(t *testing.T) {
+	t.Parallel()
+
+	text := FormatSSHProbeResult(&SSHProbeResult{
+		Host:                  "example.com",
+		Port:                  "22",
+		Protocol:              "SSH 2.0",
+		CiphersClientToServer: []string{"aes128-gcm@openssh.com", "aes256-gcm@openssh.com"},
+		CiphersServerToClient: []string{"aes256-gcm@openssh.com", "aes128-gcm@openssh.com"},
+	})
+
+	for _, want := range []string{
+		"Ciphers:",
+		"client->server (2):",
+		"server->client (2):",
+		"> [good]           aes128-gcm@openssh.com",
+		"> [good]           aes256-gcm@openssh.com",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("FormatSSHProbeResult() missing %q in:\n%s", want, text)
+		}
+	}
+}
+
 func startTestSSHServer(t *testing.T) string {
 	t.Helper()
 

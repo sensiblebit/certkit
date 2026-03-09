@@ -28,7 +28,7 @@ import (
 )
 
 var errUnknownAuthority = errors.New("x509: certificate signed by unknown authority")
-var errFirstRecordNotTLS = errors.New("tls: first record does not look like a TLS handshake")
+var errFirstRecordNotTLS = tls.RecordHeaderError{Msg: "first record does not look like a TLS handshake"}
 
 func TestConnectTLS(t *testing.T) {
 	// WHY: Covers core ConnectTLS scenarios (self-signed, expired, timeout, hostname mismatch)
@@ -1066,6 +1066,36 @@ func TestNegotiateLDAPStartTLS_LongFormLength(t *testing.T) {
 
 	if err := negotiateLDAPStartTLS(bufio.NewReader(client), client); err != nil {
 		t.Fatalf("negotiateLDAPStartTLS failed: %v", err)
+	}
+}
+
+func TestNegotiateLDAPStartTLS_RejectsOversizedLength(t *testing.T) {
+	t.Parallel()
+
+	client, server := net.Pipe()
+	defer func() { _ = client.Close() }()
+
+	go func() {
+		defer func() { _ = server.Close() }()
+		request := make([]byte, 31)
+		if _, err := io.ReadFull(server, request); err != nil {
+			return
+		}
+		response := []byte{
+			0x30, 0x83, 0x01, 0x00, 0x01, // LDAPMessage with 65537-byte body
+		}
+		_, _ = server.Write(response)
+	}()
+
+	err := negotiateLDAPStartTLS(bufio.NewReader(client), client)
+	if err == nil {
+		t.Fatal("expected oversized LDAP StartTLS response to fail")
+	}
+	if !errors.Is(err, errStartTLSLDAPMalformed) {
+		t.Fatalf("error = %v, want errStartTLSLDAPMalformed", err)
+	}
+	if !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("error = %q, want size detail", err.Error())
 	}
 }
 

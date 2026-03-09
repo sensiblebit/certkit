@@ -24,6 +24,7 @@ import (
 const defaultConnectTimeout = 10 * time.Second
 const nonTLSPeekLimit = 256
 const startTLSDetectTimeout = 1 * time.Second
+const maxLDAPStartTLSResponseBytes = 64 * 1024
 
 var (
 	errConnectHostRequired         = errors.New("connecting to TLS server: host is required")
@@ -742,8 +743,17 @@ func dialProbeConn(ctx context.Context, input cipherProbeInput) (net.Conn, error
 }
 
 func detectScanStartTLSProtocol(ctx context.Context, addr string) startTLSProtocol {
+	detectCtx := ctx
+	if _, ok := ctx.Deadline(); !ok {
+		var cancel context.CancelFunc
+		detectCtx, cancel = context.WithTimeout(ctx, startTLSDetectTimeout)
+		defer cancel()
+	}
+
+	// This best-effort preflight uses a separate connection to avoid coupling
+	// protocol sniffing to the later parallel probe sockets.
 	dialer := &net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	conn, err := dialer.DialContext(detectCtx, "tcp", addr)
 	if err != nil {
 		return ""
 	}
@@ -983,11 +993,14 @@ func negotiateLDAPStartTLS(reader *bufio.Reader, conn net.Conn) error {
 	if err != nil {
 		return err
 	}
+	if bodyLen > maxLDAPStartTLSResponseBytes {
+		return fmt.Errorf("%w: LDAP StartTLS response too large: %d bytes", errStartTLSLDAPMalformed, bodyLen)
+	}
 	body := make([]byte, bodyLen)
 	if _, err := io.ReadFull(reader, body); err != nil {
 		return fmt.Errorf("reading LDAP StartTLS response body: %w", err)
 	}
-	if len(body) < 7 || body[0] != 0x02 || body[2] != 0x01 || body[3] != 0x78 {
+	if len(body) < 7 || body[0] != 0x02 || body[1] != 0x01 || body[2] != 0x01 || body[3] != 0x78 {
 		return fmt.Errorf("%w: unexpected LDAP StartTLS envelope %x", errStartTLSLDAPMalformed, body)
 	}
 	resp := body[5:]
@@ -1077,9 +1090,8 @@ func (conn *bufferedPrefixConn) Read(p []byte) (int, error) {
 }
 
 func inferNonTLSError(handshakeErr error, prefix []byte) error {
-	// crypto/tls does not expose a sentinel for this specific non-TLS failure,
-	// so matching the library's stable error text is intentional here.
-	if handshakeErr == nil || !strings.Contains(handshakeErr.Error(), "first record does not look like a TLS handshake") {
+	var headerErr tls.RecordHeaderError
+	if handshakeErr == nil || !errors.As(handshakeErr, &headerErr) {
 		return nil
 	}
 	if len(prefix) == 0 {

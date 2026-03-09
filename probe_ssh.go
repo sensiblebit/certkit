@@ -399,6 +399,9 @@ func weakSSHValues(values []string, fn func(string) bool) []string {
 }
 
 func isWeakSSHKex(value string) bool {
+	// This intentionally sticks to obvious legacy SSH KEX issues: SHA-1 and
+	// the small group1 DH family. group14-sha256 is left out on purpose for
+	// compatibility; stricter environments should use Policy-based filtering.
 	return strings.Contains(value, "group1-sha1") ||
 		strings.HasSuffix(value, "-sha1") ||
 		strings.Contains(value, "group-exchange-sha1")
@@ -605,6 +608,8 @@ func writeSSHRatedListSectionWithPreferred(out *strings.Builder, title string, v
 }
 
 func writeSSHRatedDirectionalSection(out *strings.Builder, title string, c2s, s2c []string, config sshRatingConfig) {
+	origC2S := slices.Clone(c2s)
+	origS2C := slices.Clone(s2c)
 	preferredC2S := ""
 	if len(c2s) > 0 {
 		preferredC2S = c2s[0]
@@ -615,7 +620,7 @@ func writeSSHRatedDirectionalSection(out *strings.Builder, title string, c2s, s2
 	}
 	c2s = sortSSHDisplayValues(c2s, config)
 	s2c = sortSSHDisplayValues(s2c, config)
-	if slices.Equal(c2s, s2c) {
+	if slices.Equal(origC2S, origS2C) {
 		writeSSHRatedListSectionWithPreferred(out, title, c2s, preferredC2S, config)
 		return
 	}
