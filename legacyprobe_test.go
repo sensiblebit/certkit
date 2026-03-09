@@ -27,12 +27,13 @@ func mustWrapTLSRecord(t *testing.T, handshakeMsg []byte) []byte {
 
 // buildCertificateMessageBody constructs a TLS Certificate message body
 // from DER-encoded certificates.
-func buildCertificateMessageBody(certs ...[]byte) []byte {
+func buildCertificateMessageBody(t *testing.T, certs ...[]byte) []byte {
+	t.Helper()
 	var entries []byte
 	for _, cert := range certs {
 		certLen, err := checkedUint24Len(len(cert), "certificate entry")
 		if err != nil {
-			panic(err)
+			t.Fatalf("certificate entry length: %v", err)
 		}
 		entries = appendUint24(entries, certLen)
 		entries = append(entries, cert...)
@@ -40,7 +41,7 @@ func buildCertificateMessageBody(certs ...[]byte) []byte {
 	var body []byte
 	entriesLen, err := checkedUint24Len(len(entries), "certificate message entries")
 	if err != nil {
-		panic(err)
+		t.Fatalf("certificate message entries length: %v", err)
 	}
 	body = appendUint24(body, entriesLen)
 	body = append(body, entries...)
@@ -69,10 +70,10 @@ func TestReadServerCertificates(t *testing.T) {
 	}
 
 	// Build a ServerHello handshake message (cipher 0x0033, TLS 1.2).
-	serverHello := buildMockServerHello(0x0303, 0x0033)
+	serverHello := buildMockServerHello(t, 0x0303, 0x0033)
 
 	// Build a Certificate handshake message.
-	certMsg := buildCertificateHandshakeMessage(certDER)
+	certMsg := buildCertificateHandshakeMessage(t, certDER)
 
 	// Build a Certificate handshake message that spans two records by splitting
 	// mid-message. This exercises the "incomplete message, need more records"
@@ -117,7 +118,7 @@ func TestReadServerCertificates(t *testing.T) {
 		},
 		{
 			name:    "alert record",
-			records: buildAlertRecord(),
+			records: buildAlertRecord(t),
 			wantErr: errAlertReceived,
 		},
 		{
@@ -129,12 +130,12 @@ func TestReadServerCertificates(t *testing.T) {
 		},
 		{
 			name:            "oversized TLS record",
-			records:         buildRawTLSRecord(0x16, 16641),
+			records:         buildRawTLSRecord(t, 0x16, 16641),
 			wantErrContains: "tls record too large",
 		},
 		{
 			name:            "unexpected content type",
-			records:         buildRawTLSRecord(0x17, 1), // ApplicationData
+			records:         buildRawTLSRecord(t, 0x17, 1), // ApplicationData
 			wantErrContains: "unexpected tls content type",
 		},
 	}
@@ -190,8 +191,8 @@ func TestReadServerCertificates_AlertAfterServerHello(t *testing.T) {
 	// WHY: Legacy parser must return parsed ServerHello context even when a
 	// fatal alert follows, preserving diagnostic signal for callers.
 	t.Parallel()
-	serverHello := buildMockServerHello(0x0303, 0x0033)
-	records := append(mustWrapTLSRecord(t, serverHello), buildAlertRecord()...)
+	serverHello := buildMockServerHello(t, 0x0303, 0x0033)
+	records := append(mustWrapTLSRecord(t, serverHello), buildAlertRecord(t)...)
 
 	sh, certs, err := readServerCertificates(bytes.NewReader(records))
 	if !errors.Is(err, errAlertReceived) {
@@ -236,7 +237,8 @@ func TestReadServerCertificates_PayloadLimit(t *testing.T) {
 }
 
 // buildMockServerHello builds a minimal ServerHello handshake message.
-func buildMockServerHello(version, cipherSuite uint16) []byte {
+func buildMockServerHello(t *testing.T, version, cipherSuite uint16) []byte {
+	t.Helper()
 	var body []byte
 	// Version (2 bytes).
 	body = appendUint16(body, version)
@@ -253,7 +255,7 @@ func buildMockServerHello(version, cipherSuite uint16) []byte {
 	msg := []byte{0x02}
 	bodyLen, err := checkedUint24Len(len(body), "server hello body")
 	if err != nil {
-		panic(err)
+		t.Fatalf("server hello body length: %v", err)
 	}
 	msg = appendUint24(msg, bodyLen)
 	msg = append(msg, body...)
@@ -261,12 +263,13 @@ func buildMockServerHello(version, cipherSuite uint16) []byte {
 }
 
 // buildCertificateHandshakeMessage builds a TLS Certificate handshake message.
-func buildCertificateHandshakeMessage(certs ...[]byte) []byte {
-	body := buildCertificateMessageBody(certs...)
+func buildCertificateHandshakeMessage(t *testing.T, certs ...[]byte) []byte {
+	t.Helper()
+	body := buildCertificateMessageBody(t, certs...)
 	msg := []byte{0x0B} // Certificate
 	bodyLen, err := checkedUint24Len(len(body), "certificate handshake body")
 	if err != nil {
-		panic(err)
+		t.Fatalf("certificate handshake body length: %v", err)
 	}
 	msg = appendUint24(msg, bodyLen)
 	msg = append(msg, body...)
@@ -277,11 +280,12 @@ func buildCertificateHandshakeMessage(certs ...[]byte) []byte {
 // payload of payloadLen zero bytes. Unlike wrapTLSRecord it does NOT cap the
 // payload size, so it can be used to construct intentionally oversized records
 // for negative test cases.
-func buildRawTLSRecord(contentType byte, payloadLen int) []byte {
+func buildRawTLSRecord(t *testing.T, contentType byte, payloadLen int) []byte {
+	t.Helper()
 	record := []byte{contentType, 0x03, 0x03}
 	payloadSize, err := checkedUint16Len(payloadLen, "raw TLS record payload")
 	if err != nil {
-		panic(err)
+		t.Fatalf("raw TLS record payload length: %v", err)
 	}
 	record = appendUint16(record, payloadSize)
 	record = append(record, make([]byte, payloadLen)...)
@@ -289,14 +293,15 @@ func buildRawTLSRecord(contentType byte, payloadLen int) []byte {
 }
 
 // buildAlertRecord builds a TLS Alert record.
-func buildAlertRecord() []byte {
+func buildAlertRecord(t *testing.T) []byte {
+	t.Helper()
 	// Alert: handshake_failure (40), fatal (2).
 	payload := []byte{0x02, 0x28}
 	record := []byte{0x15} // ContentType: Alert
 	record = append(record, 0x03, 0x01)
 	payloadLen, err := checkedUint16Len(len(payload), "alert payload")
 	if err != nil {
-		panic(err)
+		t.Fatalf("alert payload length: %v", err)
 	}
 	record = appendUint16(record, payloadLen)
 	record = append(record, payload...)
@@ -339,8 +344,8 @@ func TestLegacyFallbackConnect(t *testing.T) {
 			}
 
 			// Send ServerHello + Certificate as raw TLS records.
-			serverHello := buildMockServerHello(0x0303, 0x0033)
-			certMsg := buildCertificateHandshakeMessage(leaf.DER)
+			serverHello := buildMockServerHello(t, 0x0303, 0x0033)
+			certMsg := buildCertificateHandshakeMessage(t, leaf.DER)
 			helloDone := []byte{0x0E, 0x00, 0x00, 0x00} // ServerHelloDone
 
 			// Pack all handshake messages into a single TLS record.

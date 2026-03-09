@@ -30,20 +30,21 @@ var (
 	mozillaRootKeys     map[string][]byte // RawSubject → marshaled PKIX public key
 
 	// ErrChainVerificationFailed indicates that certificate path validation failed.
-	ErrChainVerificationFailed = errors.New("chain verification failed")
-	errMozillaRootParse        = errors.New("parsing embedded Mozilla root certificates")
-	errAIAAddressBlocked       = errors.New("blocked address for AIA fetch")
-	errAIAPrivateAddress       = errors.New("blocked private address for AIA fetch")
-	errAIAUnsupportedScheme    = errors.New("unsupported scheme")
-	errAIAMissingHostname      = errors.New("missing hostname in URL")
-	errAIAResolveNoIPs         = errors.New("no IP addresses returned")
-	errFetchLeafHTTPSRequired  = errors.New("invalid URL scheme")
-	errFetchLeafNotTLS         = errors.New("TLS dial did not return TLS connection")
-	errFetchLeafNoCerts        = errors.New("no certificates returned by TLS server")
-	errAIAFetchRedirects       = errors.New("AIA redirect limit exceeded")
-	errAIAHTTPStatus           = errors.New("AIA server returned non-200 status")
-	errBundleLeafNil           = errors.New("leaf certificate is nil")
-	errBundleUnknownTrustStore = errors.New("unknown trust_store")
+	ErrChainVerificationFailed  = errors.New("chain verification failed")
+	errMozillaRootParse         = errors.New("parsing embedded Mozilla root certificates")
+	errAIAAddressBlocked        = errors.New("blocked address for AIA fetch")
+	errAIAPrivateAddress        = errors.New("blocked private address for AIA fetch")
+	errAIAUnsupportedScheme     = errors.New("unsupported scheme")
+	errAIAMissingHostname       = errors.New("missing hostname in URL")
+	errAIAResolveNoIPs          = errors.New("no IP addresses returned")
+	errFetchLeafHTTPSRequired   = errors.New("invalid URL scheme")
+	errFetchLeafMissingHostname = errors.New("fetch leaf URL is missing hostname")
+	errFetchLeafNotTLS          = errors.New("TLS dial did not return TLS connection")
+	errFetchLeafNoCerts         = errors.New("no certificates returned by TLS server")
+	errAIAFetchRedirects        = errors.New("AIA redirect limit exceeded")
+	errAIAHTTPStatus            = errors.New("AIA server returned non-200 status")
+	errBundleLeafNil            = errors.New("leaf certificate is nil")
+	errBundleUnknownTrustStore  = errors.New("unknown trust_store")
 )
 
 // privateNetworks contains CIDR ranges for private, reserved, and shared
@@ -384,7 +385,7 @@ func FetchLeafFromURL(ctx context.Context, input FetchLeafFromURLInput) (*x509.C
 
 	host := parsed.Hostname()
 	if host == "" {
-		return nil, errAIAMissingHostname
+		return nil, errFetchLeafMissingHostname
 	}
 	port := parsed.Port()
 	if port == "" {

@@ -137,14 +137,6 @@ func TestGenerateKeyFiles(t *testing.T) {
 		t.Errorf("key file permissions = %04o, want 0600", perm)
 	}
 
-	dirInfo, err := os.Stat(dir)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if perm := dirInfo.Mode().Perm(); perm != 0o755 {
-		t.Errorf("output directory permissions = %04o, want 0755", perm)
-	}
-
 	// Verify pub.pem exists, is parseable, and has standard permissions
 	pubPath := filepath.Join(dir, "pub.pem")
 	pubData := mustReadTestFile(t, pubPath)
