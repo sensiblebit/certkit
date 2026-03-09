@@ -6,7 +6,9 @@ import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"fmt"
 	"math/big"
@@ -379,7 +381,23 @@ func formatConnectVerbose(r *certkit.ConnectResult, now time.Time) string {
 			fmt.Fprintf(&out, "     AKI:         %s\n", aki)
 		}
 	}
+	if len(r.PeerChain) > 0 {
+		out.WriteString("\nCertificate chain PEM:\n")
+		out.WriteString(formatConnectChainPEM(r.PeerChain))
+	}
 
+	return out.String()
+}
+
+func formatConnectChainPEM(chain []*x509.Certificate) string {
+	var out strings.Builder
+	for _, cert := range chain {
+		fmt.Fprintf(&out, "# Subject: %s\n", certkit.FormatDNFromRaw(cert.RawSubject, cert.Subject))
+		fmt.Fprintf(&out, "# Issuer: %s\n", certkit.FormatDNFromRaw(cert.RawIssuer, cert.Issuer))
+		fmt.Fprintf(&out, "# Not Before: %s\n", cert.NotBefore.UTC().Format(time.RFC3339))
+		fmt.Fprintf(&out, "# Not After : %s\n", cert.NotAfter.UTC().Format(time.RFC3339))
+		out.Write(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}))
+	}
 	return out.String()
 }
 

@@ -1,6 +1,10 @@
 package main
 
 import (
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
 	"strings"
 	"testing"
 	"time"
@@ -181,5 +185,44 @@ func TestConnectTextStatusSectionConsistency(t *testing.T) {
 	}
 	if !strings.Contains(verboseHead, shared) {
 		t.Fatalf("verbose output missing shared status block\nshared:\n%s\nverbose:\n%s", shared, verboseOut)
+	}
+}
+
+func TestFormatConnectVerbose_IncludesChainPEMWithMetadata(t *testing.T) {
+	t.Parallel()
+
+	cert := &x509.Certificate{
+		Raw:          []byte{0x01, 0x02, 0x03, 0x04},
+		Subject:      pkix.Name{CommonName: "leaf.example.com"},
+		Issuer:       pkix.Name{CommonName: "Test Intermediate"},
+		SerialNumber: big.NewInt(0x2a),
+		NotBefore:    time.Date(2025, time.January, 2, 3, 4, 5, 0, time.UTC),
+		NotAfter:     time.Date(2027, time.March, 4, 5, 6, 7, 0, time.UTC),
+	}
+	result := &certkit.ConnectResult{
+		Host:        "leaf.example.com",
+		Port:        "443",
+		Protocol:    "TLS 1.3",
+		CipherSuite: "TLS_AES_128_GCM_SHA256",
+		ServerName:  "leaf.example.com",
+		PeerChain:   []*x509.Certificate{cert},
+	}
+
+	got := formatConnectVerbose(result, time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC))
+
+	wantHeader := strings.Join([]string{
+		"Certificate chain PEM:",
+		"# Subject: CN=leaf.example.com",
+		"# Issuer: CN=Test Intermediate",
+		"# Not Before: 2025-01-02T03:04:05Z",
+		"# Not After : 2027-03-04T05:06:07Z",
+	}, "\n")
+	if !strings.Contains(got, wantHeader) {
+		t.Fatalf("verbose output missing PEM metadata header:\n%s", got)
+	}
+
+	wantPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}))
+	if !strings.Contains(got, wantPEM) {
+		t.Fatalf("verbose output missing PEM certificate:\n%s", got)
 	}
 }
