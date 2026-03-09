@@ -36,7 +36,7 @@ func WalkScanFiles(input WalkScanFilesInput) error {
 		return fmt.Errorf("stat %s: %w", input.RootPath, err)
 	}
 	if !info.IsDir() {
-		exceedsLimit, err := exceedsSizeLimit(input.RootPath, input.MaxFileSize)
+		exceedsLimit, err := exceedsSizeLimitInfo(input.RootPath, info, input.MaxFileSize)
 		if err != nil {
 			return fmt.Errorf("checking file size %s: %w", input.RootPath, err)
 		}
@@ -70,6 +70,7 @@ func WalkScanFiles(input WalkScanFilesInput) error {
 			return nil
 		}
 
+		var sizeInfo os.FileInfo
 		if d.Type()&fs.ModeSymlink != 0 {
 			resolvedPath, resolvedInfo, ok := resolveScanSymlink(path)
 			if !ok {
@@ -83,9 +84,10 @@ func WalkScanFiles(input WalkScanFilesInput) error {
 				slog.Debug("skipping symlink outside scan root", "path", path, "target", resolvedPath)
 				return nil
 			}
+			sizeInfo = resolvedInfo
 		}
 
-		exceedsLimit, err := exceedsSizeLimit(path, input.MaxFileSize)
+		exceedsLimit, err := exceedsSizeLimitInfo(path, sizeInfo, input.MaxFileSize)
 		if err != nil {
 			return fmt.Errorf("checking file size %s: %w", path, err)
 		}
@@ -151,13 +153,16 @@ func pathWithinBoundary(path, rootBoundary string) bool {
 	return !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
 }
 
-func exceedsSizeLimit(path string, maxFileSize int64) (bool, error) {
+func exceedsSizeLimitInfo(path string, info os.FileInfo, maxFileSize int64) (bool, error) {
 	if maxFileSize <= 0 {
 		return false, nil
 	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return false, fmt.Errorf("stat %s: %w", path, err)
+	if info == nil {
+		statInfo, err := os.Stat(path)
+		if err != nil {
+			return false, fmt.Errorf("stat %s: %w", path, err)
+		}
+		info = statInfo
 	}
 	if info.Size() <= maxFileSize {
 		return false, nil
