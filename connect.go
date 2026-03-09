@@ -788,13 +788,17 @@ func detectScanStartTLSProtocol(ctx context.Context, addr string) startTLSProtoc
 		}
 		readTimeout = min(readTimeout, remaining)
 	}
-	_ = conn.SetReadDeadline(time.Now().Add(readTimeout))
+	if err := conn.SetReadDeadline(time.Now().Add(readTimeout)); err != nil {
+		slog.Debug("detect STARTTLS protocol: setting initial read deadline", "addr", addr, "error", err)
+	}
 
 	buf := make([]byte, nonTLSPeekLimit)
 	n, err := conn.Read(buf)
 	if n <= 0 {
 		if ldapPort(addr) {
-			_ = conn.SetReadDeadline(time.Now().Add(readTimeout))
+			if err := conn.SetReadDeadline(time.Now().Add(readTimeout)); err != nil {
+				slog.Debug("detect STARTTLS protocol: resetting LDAP read deadline", "addr", addr, "error", err)
+			}
 			if detectLDAPStartTLS(conn) {
 				return startTLSProtocolLDAP
 			}
@@ -808,8 +812,13 @@ func detectScanStartTLSProtocol(ctx context.Context, addr string) startTLSProtoc
 		}
 		return protocol
 	}
-	if matchesGenericSMTPBanner(firstBannerLine(buf[:n])) && detectSMTPStartTLS(conn, buf[:n]) {
-		return startTLSProtocolSMTP
+	if matchesGenericSMTPBanner(firstBannerLine(buf[:n])) {
+		if err := conn.SetReadDeadline(time.Now().Add(readTimeout)); err != nil {
+			slog.Debug("detect STARTTLS protocol: resetting SMTP read deadline", "addr", addr, "error", err)
+		}
+		if detectSMTPStartTLS(conn, buf[:n]) {
+			return startTLSProtocolSMTP
+		}
 	}
 	return ""
 }
@@ -1073,11 +1082,7 @@ func readLDAPBERLength(reader *bufio.Reader) (int, error) {
 	if _, err := io.ReadFull(reader, lenBuf); err != nil {
 		return 0, fmt.Errorf("reading LDAP StartTLS response length: %w", err)
 	}
-	bodyLen := 0
-	for _, b := range lenBuf {
-		bodyLen = (bodyLen << 8) | int(b)
-	}
-	return bodyLen, nil
+	return decodeLDAPBERLength(lenBuf)
 }
 
 func readLDAPBERLengthBytes(data []byte) (int, int, error) {
@@ -1091,11 +1096,22 @@ func readLDAPBERLengthBytes(data []byte) (int, int, error) {
 	if numLenBytes == 0 || numLenBytes > 4 || len(data) < 1+numLenBytes {
 		return 0, 0, fmt.Errorf("%w: invalid LDAP message length encoding", errStartTLSLDAPMalformed)
 	}
-	bodyLen := 0
-	for _, b := range data[1 : 1+numLenBytes] {
-		bodyLen = (bodyLen << 8) | int(b)
+	bodyLen, err := decodeLDAPBERLength(data[1 : 1+numLenBytes])
+	if err != nil {
+		return 0, 0, err
 	}
 	return bodyLen, 1 + numLenBytes, nil
+}
+
+func decodeLDAPBERLength(lengthBytes []byte) (int, error) {
+	var bodyLen uint64
+	for _, b := range lengthBytes {
+		bodyLen = (bodyLen << 8) | uint64(b)
+	}
+	if bodyLen > uint64(^uint(0)>>1) {
+		return 0, fmt.Errorf("%w: LDAP message length overflows int", errStartTLSLDAPMalformed)
+	}
+	return int(bodyLen), nil
 }
 
 func readTextLine(reader *bufio.Reader) (string, error) {

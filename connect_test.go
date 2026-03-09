@@ -827,6 +827,36 @@ func TestScanCipherSuites_StartTLSSMTPGeneric220Banner(t *testing.T) {
 	}
 }
 
+func TestScanCipherSuites_StartTLSSMTPPreflightDeadlineReset(t *testing.T) {
+	t.Parallel()
+
+	ca := generateTestCA(t, "SMTP Preflight Deadline Root")
+	leaf := generateTestLeafCert(t, ca)
+	port := startSMTPStartTLSServerWithFirstConnectionDelays(
+		t,
+		"220 localhost ESMTP delayed\r\n",
+		900*time.Millisecond,
+		200*time.Millisecond,
+		[][]byte{leaf.DER, ca.CertDER},
+		leaf.Key,
+	)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	result, err := ScanCipherSuites(ctx, ScanCipherSuitesInput{
+		Host:       "127.0.0.1",
+		Port:       port,
+		ServerName: "localhost",
+	})
+	if err != nil {
+		t.Fatalf("ScanCipherSuites failed: %v", err)
+	}
+	if len(result.Ciphers) == 0 {
+		t.Fatal("expected SMTP STARTTLS preflight to recover after deadline reset")
+	}
+}
+
 func TestConnectViaStartTLS_PolicyUsesRawTLSVersion(t *testing.T) {
 	t.Parallel()
 
@@ -1066,6 +1096,46 @@ func startSMTPStartTLSServer(t *testing.T, banner string, certChain [][]byte, ke
 	return port
 }
 
+func startSMTPStartTLSServerWithFirstConnectionDelays(t *testing.T, banner string, bannerDelay, ehloDelay time.Duration, certChain [][]byte, key *ecdsa.PrivateKey) string {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	//nolint:gosec // Test plaintext-upgrade fixtures use the Go default test-server policy unless a test overrides it explicitly.
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		Certificates: []tls.Certificate{{
+			Certificate: certChain,
+			PrivateKey:  key,
+		}},
+	}
+
+	var connCount atomic.Int64
+	go func() {
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			if connCount.Add(1) == 1 {
+				go handleDelayedCustomSMTPUpgradeConn(conn, banner, bannerDelay, ehloDelay, tlsConfig)
+				continue
+			}
+			go handleCustomSMTPUpgradeConn(conn, banner, tlsConfig)
+		}
+	}()
+
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return port
+}
+
 func handlePlaintextUpgradeConn(conn net.Conn, protocol startTLSProtocol, tlsConfig *tls.Config) {
 	defer func() { _ = conn.Close() }()
 
@@ -1096,6 +1166,34 @@ func handleCustomSMTPUpgradeConn(conn net.Conn, banner string, tlsConfig *tls.Co
 	}
 	_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
 	handleSMTPUpgrade(conn, reader, tlsConfig)
+}
+
+func handleDelayedCustomSMTPUpgradeConn(conn net.Conn, banner string, bannerDelay, ehloDelay time.Duration, tlsConfig *tls.Config) {
+	defer func() { _ = conn.Close() }()
+
+	reader := bufio.NewReader(conn)
+	time.Sleep(bannerDelay)
+	if _, err := conn.Write([]byte(banner)); err != nil {
+		return
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(2 * time.Second))
+
+	line, err := readTextLine(reader)
+	if err != nil || !strings.HasPrefix(strings.ToUpper(line), "EHLO ") {
+		return
+	}
+	time.Sleep(ehloDelay)
+	if _, err := conn.Write([]byte("250-localhost\r\n250-STARTTLS\r\n250 SIZE 35882577\r\n")); err != nil {
+		return
+	}
+	line, err = readTextLine(reader)
+	if err != nil || !strings.EqualFold(line, "STARTTLS") {
+		return
+	}
+	if _, err := conn.Write([]byte("220 Ready to start TLS\r\n")); err != nil {
+		return
+	}
+	serveUpgradedTLS(conn, reader, tlsConfig)
 }
 
 func writeProtocolBanner(conn net.Conn, protocol startTLSProtocol) error {

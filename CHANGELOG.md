@@ -52,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Harden STARTTLS and SSH probe edge cases by bounding scan preflight timeouts and LDAP BER lengths, using typed TLS record-header errors for non-TLS detection, and preserving distinct per-direction SSH preference markers when the offered algorithm sets match. ([#131])
 - Avoid misleading STARTTLS successes by requiring real partial handshake state before keeping mTLS diagnostics, preserve final plaintext lines that arrive without a trailing newline, and apply connection deadlines to STARTTLS cipher probes. ([#131])
 - Fix `ConnectTLS` STARTTLS autodetection to preserve port-based IMAP matching, and log failed LDAP StartTLS fallbacks at debug level instead of silently discarding that probe path. ([#131])
+- Reset SMTP STARTTLS scan preflight deadlines between banner sniffing and EHLO probing, and make LDAP BER length decoding reject integer-overflow lengths before allocation. ([#131])
 
 ### Tests
 
