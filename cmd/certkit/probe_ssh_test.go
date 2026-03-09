@@ -21,11 +21,13 @@ func TestRunProbeSSH(t *testing.T) {
 
 	tests := []struct {
 		name       string
+		format     string
 		jsonOutput bool
 		check      func(t *testing.T, stdout string)
 	}{
 		{
 			name:       "text",
+			format:     "text",
 			jsonOutput: false,
 			check: func(t *testing.T, stdout string) {
 				t.Helper()
@@ -43,7 +45,8 @@ func TestRunProbeSSH(t *testing.T) {
 			},
 		},
 		{
-			name:       "json",
+			name:       "json global",
+			format:     "text",
 			jsonOutput: true,
 			check: func(t *testing.T, stdout string) {
 				t.Helper()
@@ -68,6 +71,24 @@ func TestRunProbeSSH(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:       "json format flag",
+			format:     "json",
+			jsonOutput: false,
+			check: func(t *testing.T, stdout string) {
+				t.Helper()
+
+				var payload struct {
+					Protocol string `json:"protocol"`
+				}
+				if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+					t.Fatalf("Unmarshal JSON: %v\n%s", err, stdout)
+				}
+				if payload.Protocol != "SSH 2.0" {
+					t.Fatalf("Protocol = %q, want %q", payload.Protocol, "SSH 2.0")
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -79,6 +100,7 @@ func TestRunProbeSSH(t *testing.T) {
 			state := snapshotReadonlyGlobals()
 			defer restoreReadonlyGlobals(state)
 
+			probeSSHFormat = tt.format
 			jsonOutput = tt.jsonOutput
 
 			cmd := &cobra.Command{}
@@ -91,6 +113,30 @@ func TestRunProbeSSH(t *testing.T) {
 			}
 			tt.check(t, stdout)
 		})
+	}
+}
+
+func TestRunProbeSSH_UnsupportedFormat(t *testing.T) {
+	t.Parallel()
+
+	addr := startProbeSSHServer(t)
+
+	state := snapshotReadonlyGlobals()
+	defer restoreReadonlyGlobals(state)
+
+	probeSSHFormat = "yaml"
+
+	cmd := &cobra.Command{}
+	cmd.SetContext(context.Background())
+
+	_, _, err := captureOutput(t, func() error {
+		return runProbeSSH(cmd, []string{addr})
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), `unsupported output format "yaml"`) {
+		t.Fatalf("error = %q, want unsupported output format", err.Error())
 	}
 }
 

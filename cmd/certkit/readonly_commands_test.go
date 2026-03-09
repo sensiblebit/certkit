@@ -55,6 +55,7 @@ type readonlyGlobals struct {
 	connectAllowPrivateNetwork bool
 
 	// probe ssh flags
+	probeSSHFormat   string
 	probeSSHFIPS1402 bool
 	probeSSHFIPS1403 bool
 
@@ -104,6 +105,7 @@ func snapshotReadonlyGlobals() readonlyGlobals {
 		connectFIPS1403:            connectFIPS1403,
 		connectAllowPrivateNetwork: connectAllowPrivateNetwork,
 
+		probeSSHFormat:   probeSSHFormat,
 		probeSSHFIPS1402: probeSSHFIPS1402,
 		probeSSHFIPS1403: probeSSHFIPS1403,
 
@@ -149,6 +151,7 @@ func restoreReadonlyGlobals(g readonlyGlobals) {
 	connectFIPS1403 = g.connectFIPS1403
 	connectAllowPrivateNetwork = g.connectAllowPrivateNetwork
 
+	probeSSHFormat = g.probeSSHFormat
 	probeSSHFIPS1402 = g.probeSSHFIPS1402
 	probeSSHFIPS1403 = g.probeSSHFIPS1403
 

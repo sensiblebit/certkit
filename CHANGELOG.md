@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Centralize pre-commit hooks under the shared `sensiblebit/.github` hook set (including shared `markdownlint`) and run dependency update hooks first; refresh resulting indirect Go and web lockfile dependencies. ([#128])
 - Remove the arbitrary 200-file cap from WASM upload and inspect flows; rely on byte limits instead. ([#129])
 - Enforce a stricter repo-local `golangci-lint` policy and refactor error handling, protocol encoding helpers, file-permission behavior, and tests to satisfy the higher lint bar. ([#130])
+- Improve `connect` non-TLS diagnostics to identify SSH, HTTP, SMTP, IMAP, and POP3 banners instead of bubbling up the raw TLS handshake error. ([#131])
 
 ### Added
 
@@ -27,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add Homebrew cask conflict metadata so stable `certkit` and `certkit@nightly` are explicitly mutually exclusive installs. ([#128])
 - Add `certkit probe ssh` for SSH banner/algorithm inspection, including per-algorithm ratings, server-preference markers, and optional FIPS 140-2/140-3 heuristics. ([#131])
 - Add repo-local `SecurityPolicy` heuristics and new `connect --fips-140-2` / `--fips-140-3` flags to highlight TLS suites and certificate algorithms that are likely not authorized by current FIPS-style policies. ([#131])
+- Add response-based STARTTLS/STLS upgrades for SMTP, IMAP, and POP3 plus LDAP StartTLS support for `connect` and `connect --ciphers`, preserving meaningful protocol labels like `TLS 1.3 (SMTP STARTTLS)`. ([#131])
 
 ### Removed
 
@@ -45,8 +47,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Return an explicit error when an AIA HTTP response exceeds 1 MiB instead of silently accepting truncated data. ([#122])
 - Fix TAR archive detection to require `ustar` header bytes instead of treating every `.tar` input as valid archive content. ([#112])
 - Release reserved bundle folder names when skipping untrusted candidates to avoid false sanitized-folder collisions. ([#112])
-- Improve `connect` non-TLS diagnostics to identify SSH, HTTP, SMTP, IMAP, and POP3 banners instead of bubbling up the raw TLS handshake error. ([#131])
-- Add response-based STARTTLS/STLS upgrades for SMTP, IMAP, and POP3 plus LDAP StartTLS support for `connect` and `connect --ciphers`, preserving meaningful protocol labels like `TLS 1.3 (SMTP STARTTLS)`. ([#131])
 - Fix STARTTLS policy evaluation to use the raw negotiated TLS version instead of the display string with protocol suffixes, preventing false `policy-cipher` findings on allowed suites. ([#131])
 - Fix SSH probe display ordering by sorting advertised algorithms by status, tagging each item inline, separating KEX extensions from real KEX choices, and marking the server's preferred algorithm with `>`. ([#131])
 - Harden STARTTLS and SSH probe edge cases by bounding scan preflight timeouts and LDAP BER lengths, using typed TLS record-header errors for non-TLS detection, and preserving distinct per-direction SSH preference markers when the offered algorithm sets match. ([#131])

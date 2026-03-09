@@ -188,6 +188,7 @@ Port defaults to 443 if not specified. OCSP revocation status is checked automat
 | -------------- | ------- | --------------------------------------------------------------------------- |
 | `--fips-140-2` | `false` | Apply conservative FIPS 140-2 heuristic checks to advertised SSH algorithms |
 | `--fips-140-3` | `false` | Apply conservative FIPS 140-3 heuristic checks to advertised SSH algorithms |
+| `--format`     | `text`  | Output format: text, json                                                   |
 <!-- /certkit:flags -->
 
 Port defaults to 22 if not specified.
