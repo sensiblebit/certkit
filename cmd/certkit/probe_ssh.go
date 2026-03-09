@@ -16,6 +16,8 @@ var (
 	probeSSHFIPS1403 bool
 )
 
+const probeSSHDefaultTimeout = 10 * time.Second
+
 var probeSSHCmd = &cobra.Command{
 	Use:   "ssh <host[:port]>",
 	Short: "Probe SSH transport algorithms without authenticating",
@@ -53,7 +55,7 @@ func runProbeSSH(cmd *cobra.Command, args []string) error {
 	ctx := cmd.Context()
 	cancel := func() {}
 	if _, ok := ctx.Deadline(); !ok {
-		ctx, cancel = context.WithTimeout(ctx, 10*time.Second)
+		ctx, cancel = context.WithTimeout(ctx, probeSSHDefaultTimeout)
 	}
 	defer cancel()
 

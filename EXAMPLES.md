@@ -213,7 +213,7 @@ certkit connect 10.0.0.1:443 --servername example.com
 
 ### Connect to STARTTLS services
 
-Some services begin in plaintext and upgrade to TLS only after a protocol-specific command. certkit handles SMTP `STARTTLS`, IMAP `STARTTLS`, POP3 `STLS`, and LDAP `StartTLS` automatically when the service response matches one of those protocols.
+Some services begin in plaintext and upgrade to TLS only after a protocol-specific command. certkit detects SMTP `STARTTLS`, IMAP `STARTTLS`, and POP3 `STLS` from the server banner, and also attempts LDAP `StartTLS` on LDAP port `389`.
 
 ```sh
 # SMTP submission

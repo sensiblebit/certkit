@@ -16,6 +16,17 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+var sshStrictServerNameLists = sshKexInitNameLists{
+	keyExchangeAlgorithms:     []string{"curve25519-sha256", "ext-info-s"},
+	hostKeyAlgorithms:         []string{"ssh-ed25519", "rsa-sha2-512"},
+	ciphersClientToServer:     []string{"aes128-gcm@openssh.com"},
+	ciphersServerToClient:     []string{"aes128-gcm@openssh.com"},
+	macsClientToServer:        []string{"hmac-sha2-256"},
+	macsServerToClient:        []string{"hmac-sha2-256"},
+	compressionClientToServer: []string{"none"},
+	compressionServerToClient: []string{"none"},
+}
+
 func TestProbeSSH(t *testing.T) {
 	t.Parallel()
 
@@ -71,6 +82,8 @@ func TestProbeSSH(t *testing.T) {
 	if !slices.Contains(result.CompressionClientToServer, "none") {
 		t.Fatalf("CompressionClientToServer = %v, want none", result.CompressionClientToServer)
 	}
+	// The overall rating is weak because the fixture still advertises ssh-rsa,
+	// not because of its curve25519/group14-sha256 key exchange options.
 	if got := result.OverallRating; got != CipherRatingWeak {
 		t.Fatalf("OverallRating = %q, want %q", got, CipherRatingWeak)
 	}
@@ -429,16 +442,7 @@ func startTestSSHServer(t *testing.T) string {
 func startStrictTestSSHServer(t *testing.T) string {
 	t.Helper()
 
-	serverPayload, err := buildSSHKexInitPayload(sshKexInitNameLists{
-		keyExchangeAlgorithms:     []string{"curve25519-sha256", "ext-info-s"},
-		hostKeyAlgorithms:         []string{"ssh-ed25519", "rsa-sha2-512"},
-		ciphersClientToServer:     []string{"aes128-gcm@openssh.com"},
-		ciphersServerToClient:     []string{"aes128-gcm@openssh.com"},
-		macsClientToServer:        []string{"hmac-sha2-256"},
-		macsServerToClient:        []string{"hmac-sha2-256"},
-		compressionClientToServer: []string{"none"},
-		compressionServerToClient: []string{"none"},
-	})
+	serverPayload, err := buildSSHKexInitPayload(sshStrictServerNameLists)
 	if err != nil {
 		t.Fatalf("buildSSHKexInitPayload: %v", err)
 	}
@@ -478,16 +482,7 @@ func startStrictTestSSHServer(t *testing.T) string {
 func startNoisyTestSSHServer(t *testing.T) string {
 	t.Helper()
 
-	serverPayload, err := buildSSHKexInitPayload(sshKexInitNameLists{
-		keyExchangeAlgorithms:     []string{"curve25519-sha256", "ext-info-s"},
-		hostKeyAlgorithms:         []string{"ssh-ed25519", "rsa-sha2-512"},
-		ciphersClientToServer:     []string{"aes128-gcm@openssh.com"},
-		ciphersServerToClient:     []string{"aes128-gcm@openssh.com"},
-		macsClientToServer:        []string{"hmac-sha2-256"},
-		macsServerToClient:        []string{"hmac-sha2-256"},
-		compressionClientToServer: []string{"none"},
-		compressionServerToClient: []string{"none"},
-	})
+	serverPayload, err := buildSSHKexInitPayload(sshStrictServerNameLists)
 	if err != nil {
 		t.Fatalf("buildSSHKexInitPayload: %v", err)
 	}

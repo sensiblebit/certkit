@@ -835,11 +835,10 @@ type sshRatingConfig struct {
 }
 
 type sshRatedListSectionInput struct {
-	out       *strings.Builder
-	title     string
-	values    []string
-	preferred string
-	config    sshRatingConfig
+	out    *strings.Builder
+	title  string
+	values []string
+	config sshRatingConfig
 }
 
 func writeSSHRatedListSection(input sshRatedListSectionInput) {
@@ -847,11 +846,10 @@ func writeSSHRatedListSection(input sshRatedListSectionInput) {
 	if len(input.values) > 0 {
 		preferred = input.values[0]
 	}
-	input.preferred = preferred
-	writeSSHRatedListSectionWithPreferred(input)
+	writeSSHRatedListSectionWithPreferred(input, preferred)
 }
 
-func writeSSHRatedListSectionWithPreferred(input sshRatedListSectionInput) {
+func writeSSHRatedListSectionWithPreferred(input sshRatedListSectionInput, preferred string) {
 	values := sortSSHDisplayValues(sshDisplayValuesInput{
 		values: input.values,
 		config: input.config,
@@ -861,7 +859,7 @@ func writeSSHRatedListSectionWithPreferred(input sshRatedListSectionInput) {
 		fmt.Fprintf(
 			input.out,
 			"  %s %-16s %s\n",
-			sshPreferenceMarker(value, input.preferred),
+			sshPreferenceMarker(value, preferred),
 			sshAlgorithmTag(sshAlgorithmStatusInput{value: value, config: input.config}),
 			value,
 		)
@@ -889,12 +887,11 @@ func writeSSHRatedDirectionalSection(input sshRatedDirectionalSectionInput) {
 	}
 	if slices.Equal(origC2S, origS2C) {
 		writeSSHRatedListSectionWithPreferred(sshRatedListSectionInput{
-			out:       input.out,
-			title:     input.title,
-			values:    input.c2s,
-			preferred: preferredC2S,
-			config:    input.config,
-		})
+			out:    input.out,
+			title:  input.title,
+			values: input.c2s,
+			config: input.config,
+		}, preferredC2S)
 		return
 	}
 	c2s := sortSSHDisplayValues(sshDisplayValuesInput{

@@ -463,7 +463,31 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 			}
 			slog.Debug("smtp starttls attempt failed, falling back to tls handshake error", "addr", addr, "error", startTLSErr)
 		}
-		if port == "389" && len(prefix) == 0 {
+		if matchesGenericIMAPBanner(firstBannerLine(prefix)) {
+			result, startTLSErr := connectViaStartTLS(startTLSCtx, ctx, connectViaStartTLSInput{
+				connectInput: input,
+				addr:         addr,
+				serverName:   serverName,
+				protocol:     startTLSProtocolIMAP,
+			})
+			if startTLSErr == nil {
+				return result, nil
+			}
+			slog.Debug("imap starttls attempt failed, falling back to tls handshake error", "addr", addr, "error", startTLSErr)
+		}
+		if matchesGenericPOP3Banner(firstBannerLine(prefix)) {
+			result, startTLSErr := connectViaStartTLS(startTLSCtx, ctx, connectViaStartTLSInput{
+				connectInput: input,
+				addr:         addr,
+				serverName:   serverName,
+				protocol:     startTLSProtocolPOP3,
+			})
+			if startTLSErr == nil {
+				return result, nil
+			}
+			slog.Debug("pop3 stls attempt failed, falling back to tls handshake error", "addr", addr, "error", startTLSErr)
+		}
+		if len(prefix) == 0 {
 			result, startTLSErr := connectViaStartTLS(startTLSCtx, ctx, connectViaStartTLSInput{
 				connectInput: input,
 				addr:         addr,
@@ -516,7 +540,7 @@ func startTLSFallbackContext(parent context.Context, connectTimeout time.Duratio
 	if connectTimeout == 0 {
 		connectTimeout = defaultConnectTimeout
 	}
-	//nolint:gosec // The caller receives and must invoke the returned cancel func.
+	//nolint:gosec // The cancel func is intentionally returned to the caller, which immediately defers it at the call site.
 	ctx, cancel := context.WithTimeout(parent, connectTimeout)
 	return ctx, cancel
 }
@@ -778,61 +802,60 @@ func dialProbeConn(ctx context.Context, input cipherProbeInput) (net.Conn, error
 }
 
 func detectScanStartTLSProtocol(ctx context.Context, addr string) startTLSProtocol {
-	// Bound STARTTLS preflight to a short budget even when the caller supplied
-	// a much longer context deadline; the actual probe sockets carry their own
-	// per-attempt timeouts and should not wait on this sniff connection first.
-	detectDeadline := startTLSDetectDeadline(ctx, time.Now())
-	var cancel context.CancelFunc
-	detectCtx, cancel := context.WithDeadline(ctx, detectDeadline)
+	// Bound each STARTTLS preflight phase to a short budget even when the
+	// caller supplied a much longer context deadline; the actual probe sockets
+	// carry their own per-attempt timeouts and should not wait on this sniff
+	// connection first. Silent protocols like LDAP need a second bounded phase
+	// after the initial banner sniff.
+	dialCtx, cancel := context.WithDeadline(ctx, startTLSDetectDeadline(ctx, time.Now()))
 	defer cancel()
 
 	// This best-effort preflight uses a separate connection to avoid coupling
 	// protocol sniffing to the later parallel probe sockets.
 	dialer := &net.Dialer{}
-	conn, err := dialer.DialContext(detectCtx, "tcp", addr)
+	conn, err := dialer.DialContext(dialCtx, "tcp", addr)
 	if err != nil {
 		return ""
 	}
 	defer func() { _ = conn.Close() }()
-	stopOnCancel := context.AfterFunc(detectCtx, func() { _ = conn.Close() })
+	stopOnCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
 	defer stopOnCancel()
 
-	readTimeout := startTLSDetectTimeout
-	if deadline, ok := detectCtx.Deadline(); ok {
-		remaining := time.Until(deadline)
-		if remaining <= 0 {
-			return ""
-		}
-		readTimeout = min(readTimeout, remaining)
-	}
-	if err := conn.SetDeadline(time.Now().Add(readTimeout)); err != nil {
+	if err := conn.SetDeadline(startTLSDetectDeadline(ctx, time.Now())); err != nil {
 		slog.Debug("detect STARTTLS protocol: aborting best-effort preflight after initial deadline setup failed", "addr", addr, "error", err)
 		return ""
 	}
 	prefix, err := readBannerPrefix(conn)
 	if len(prefix) == 0 {
-		if ldapPort(addr) {
-			if err := conn.SetDeadline(time.Now().Add(readTimeout)); err != nil {
-				slog.Debug("detect STARTTLS protocol: aborting best-effort preflight after LDAP deadline reset failed", "addr", addr, "error", err)
-				return ""
-			}
-			if ok, err := detectLDAPStartTLS(conn); ok {
-				return startTLSProtocolLDAP
-			} else if err != nil {
-				slog.Debug("detect STARTTLS protocol: LDAP probe failed", "addr", addr, "error", err)
-			}
+		if err := conn.SetDeadline(startTLSDetectDeadline(ctx, time.Now())); err != nil {
+			slog.Debug("detect STARTTLS protocol: aborting best-effort preflight after LDAP deadline reset failed", "addr", addr, "error", err)
+			return ""
+		}
+		if ok, err := detectLDAPStartTLS(conn); ok {
+			return startTLSProtocolLDAP
+		} else if err != nil {
+			slog.Debug("detect STARTTLS protocol: LDAP probe failed", "addr", addr, "error", err)
 		}
 		return ""
 	}
 	protocol, ok := detectStartTLSProtocol(addr, prefix)
 	if ok {
-		if err != nil && !errors.Is(err, io.EOF) {
-			slog.Debug("detect STARTTLS protocol: ignoring trailing read error", "addr", addr, "error", err)
+		if err := conn.SetDeadline(startTLSDetectDeadline(ctx, time.Now())); err != nil {
+			slog.Debug("detect STARTTLS protocol: aborting best-effort preflight after protocol deadline reset failed", "addr", addr, "protocol", protocol, "error", err)
+			return ""
 		}
-		return protocol
+		if confirmed, detectErr := detectStartTLSOnBanner(conn, prefix, protocol); confirmed {
+			if err != nil && !errors.Is(err, io.EOF) {
+				slog.Debug("detect STARTTLS protocol: ignoring trailing read error", "addr", addr, "error", err)
+			}
+			return protocol
+		} else if detectErr != nil {
+			slog.Debug("detect STARTTLS protocol: protocol probe failed", "addr", addr, "protocol", protocol, "error", detectErr)
+		}
+		return ""
 	}
 	if matchesGenericSMTPBanner(firstBannerLine(prefix)) {
-		if err := conn.SetDeadline(time.Now().Add(readTimeout)); err != nil {
+		if err := conn.SetDeadline(startTLSDetectDeadline(ctx, time.Now())); err != nil {
 			slog.Debug("detect STARTTLS protocol: aborting best-effort preflight after SMTP deadline reset failed", "addr", addr, "error", err)
 			return ""
 		}
@@ -840,6 +863,28 @@ func detectScanStartTLSProtocol(ctx context.Context, addr string) startTLSProtoc
 			return startTLSProtocolSMTP
 		} else if err != nil {
 			slog.Debug("detect STARTTLS protocol: SMTP probe failed", "addr", addr, "error", err)
+		}
+	}
+	if matchesGenericIMAPBanner(firstBannerLine(prefix)) {
+		if err := conn.SetDeadline(startTLSDetectDeadline(ctx, time.Now())); err != nil {
+			slog.Debug("detect STARTTLS protocol: aborting best-effort preflight after IMAP deadline reset failed", "addr", addr, "error", err)
+			return ""
+		}
+		if ok, err := detectStartTLSOnBanner(conn, prefix, startTLSProtocolIMAP); ok {
+			return startTLSProtocolIMAP
+		} else if err != nil {
+			slog.Debug("detect STARTTLS protocol: IMAP probe failed", "addr", addr, "error", err)
+		}
+	}
+	if matchesGenericPOP3Banner(firstBannerLine(prefix)) {
+		if err := conn.SetDeadline(startTLSDetectDeadline(ctx, time.Now())); err != nil {
+			slog.Debug("detect STARTTLS protocol: aborting best-effort preflight after POP3 deadline reset failed", "addr", addr, "error", err)
+			return ""
+		}
+		if ok, err := detectStartTLSOnBanner(conn, prefix, startTLSProtocolPOP3); ok {
+			return startTLSProtocolPOP3
+		} else if err != nil {
+			slog.Debug("detect STARTTLS protocol: POP3 probe failed", "addr", addr, "error", err)
 		}
 	}
 	if err != nil && !errors.Is(err, io.EOF) {
@@ -854,11 +899,6 @@ func startTLSDetectDeadline(ctx context.Context, now time.Time) time.Time {
 		return deadline
 	}
 	return detectDeadline
-}
-
-func ldapPort(addr string) bool {
-	_, port, err := net.SplitHostPort(addr)
-	return err == nil && port == "389"
 }
 
 func readBannerPrefix(conn net.Conn) ([]byte, error) {
@@ -937,23 +977,13 @@ func connectViaStartTLS(ctx, resultCtx context.Context, input connectViaStartTLS
 		}
 		startTLSInput.Port = port
 	}
-	return connectResultFromTLSState(selectResultContext(ctx, resultCtx), connectResultFromTLSStateInput{
+	return connectResultFromTLSState(resultCtx, connectResultFromTLSStateInput{
 		connectInput: startTLSInput,
 		serverName:   input.serverName,
 		state:        state,
 		clientAuth:   clientAuth,
 		startTLS:     input.protocol,
 	}), nil
-}
-
-// selectResultContext prefers the original caller context for post-handshake
-// work such as OCSP/CRL fetches. The shorter handshake context is only a
-// fallback when no caller context was provided.
-func selectResultContext(fallback, preferred context.Context) context.Context {
-	if preferred != nil {
-		return preferred
-	}
-	return fallback
 }
 
 type negotiateStartTLSInput struct {
@@ -1276,7 +1306,7 @@ func inferNonTLSError(input inferNonTLSErrorInput) error {
 		return fmt.Errorf("%w: received SMTP banner %q", errConnectNonTLSService, banner)
 	case matchesIMAPBanner(input.addr, banner):
 		return fmt.Errorf("%w: received IMAP banner %q", errConnectNonTLSService, banner)
-	case matchesPOP3Banner(banner):
+	case matchesPOP3Banner(input.addr, banner):
 		return fmt.Errorf("%w: received POP3 banner %q", errConnectNonTLSService, banner)
 	case isMostlyPrintable(input.prefix):
 		return fmt.Errorf("%w: received plaintext banner %q", errConnectNonTLSService, banner)
@@ -1292,7 +1322,7 @@ func detectStartTLSProtocol(addr string, prefix []byte) (startTLSProtocol, bool)
 		return startTLSProtocolSMTP, true
 	case matchesIMAPBanner(addr, banner):
 		return startTLSProtocolIMAP, true
-	case matchesPOP3Banner(banner):
+	case matchesPOP3Banner(addr, banner):
 		return startTLSProtocolPOP3, true
 	default:
 		return "", false
@@ -1334,19 +1364,53 @@ func detectSMTPStartTLS(conn net.Conn, prefix []byte) (bool, error) {
 	return smtpAdvertisesStartTLS(ehloLines), nil
 }
 
-func detectLDAPStartTLS(conn net.Conn) (bool, error) {
-	if err := negotiateLDAPStartTLS(bufio.NewReader(conn), conn); err != nil {
+func detectStartTLSOnBanner(conn net.Conn, prefix []byte, protocol startTLSProtocol) (bool, error) {
+	reader := bufio.NewReader(io.MultiReader(bytes.NewReader(prefix), conn))
+	if err := negotiateStartTLS(negotiateStartTLSInput{
+		reader:   reader,
+		conn:     conn,
+		protocol: protocol,
+	}); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
+func detectLDAPStartTLS(conn net.Conn) (bool, error) {
+	reader := bufio.NewReader(conn)
+	if err := negotiateLDAPStartTLS(reader, conn); err != nil {
+		return false, err
+	}
+	if !startTLSHandshakeProgressed(&bufferedPrefixConn{Conn: conn, reader: reader}) {
+		return false, errConnectNonTLSService
+	}
+	return true, nil
+}
+
+func startTLSHandshakeProgressed(conn net.Conn) bool {
+	tlsConn := tls.Client(conn, &tls.Config{
+		InsecureSkipVerify:   true, //nolint:gosec // Preflight only confirms that TLS starts; certificate verification is not the goal here.
+		GetClientCertificate: emptyClientCertificate,
+	})
+	defer func() { _ = tlsConn.Close() }()
+
+	if tlsConn.Handshake() == nil {
+		return true
+	}
+	state := tlsConn.ConnectionState()
+	return state.Version != 0 && len(state.PeerCertificates) > 0
+}
+
 func matchesIMAPBanner(addr, banner string) bool {
 	upper := strings.ToUpper(banner)
-	if !strings.HasPrefix(upper, "* OK") {
+	if !matchesGenericIMAPBanner(banner) {
 		return false
 	}
 	return imapPort(addr) || strings.Contains(upper, "IMAP")
+}
+
+func matchesGenericIMAPBanner(banner string) bool {
+	return strings.HasPrefix(strings.ToUpper(banner), "* OK")
 }
 
 func imapPort(addr string) bool {
@@ -1354,8 +1418,21 @@ func imapPort(addr string) bool {
 	return err == nil && port == "143"
 }
 
-func matchesPOP3Banner(banner string) bool {
+func matchesPOP3Banner(addr, banner string) bool {
+	upper := strings.ToUpper(banner)
+	if !matchesGenericPOP3Banner(banner) {
+		return false
+	}
+	return pop3Port(addr) || strings.Contains(upper, "POP3")
+}
+
+func matchesGenericPOP3Banner(banner string) bool {
 	return strings.HasPrefix(strings.ToUpper(banner), "+OK")
+}
+
+func pop3Port(addr string) bool {
+	_, port, err := net.SplitHostPort(addr)
+	return err == nil && port == "110"
 }
 
 func protocolDisplayName(protocol startTLSProtocol) string {
