@@ -733,6 +733,32 @@ func TestConnectTLS_StartTLSProtocols(t *testing.T) {
 	}
 }
 
+func TestConnectTLS_StartTLSSMTPGeneric220Banner(t *testing.T) {
+	t.Parallel()
+
+	ca := generateTestCA(t, "Generic SMTP Root")
+	leaf := generateTestLeafCert(t, ca)
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(ca.Cert)
+
+	port := startSMTPStartTLSServer(t, "220 mx.example.com ready\r\n", [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := ConnectTLS(ctx, ConnectTLSInput{
+		Host:       "127.0.0.1",
+		Port:       port,
+		ServerName: "localhost",
+		RootCAs:    rootPool,
+	})
+	if err != nil {
+		t.Fatalf("ConnectTLS failed: %v", err)
+	}
+	if !strings.Contains(result.Protocol, "SMTP STARTTLS") {
+		t.Fatalf("Protocol = %q, want SMTP STARTTLS", result.Protocol)
+	}
+}
+
 func TestScanCipherSuites_StartTLSProtocols(t *testing.T) {
 	// WHY: Cipher scanning should reuse the same plaintext upgrade flow as
 	// ConnectTLS, otherwise STARTTLS endpoints degrade to "none detected".
@@ -776,6 +802,29 @@ func TestScanCipherSuites_StartTLSProtocols(t *testing.T) {
 				t.Fatalf("SupportedVersions = %v, want TLS 1.3", result.SupportedVersions)
 			}
 		})
+	}
+}
+
+func TestScanCipherSuites_StartTLSSMTPGeneric220Banner(t *testing.T) {
+	t.Parallel()
+
+	ca := generateTestCA(t, "Generic SMTP Scan Root")
+	leaf := generateTestLeafCert(t, ca)
+	port := startSMTPStartTLSServer(t, "220 mx.example.com ready\r\n", [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	result, err := ScanCipherSuites(ctx, ScanCipherSuitesInput{
+		Host:       "127.0.0.1",
+		Port:       port,
+		ServerName: "localhost",
+	})
+	if err != nil {
+		t.Fatalf("ScanCipherSuites failed: %v", err)
+	}
+	if len(result.Ciphers) == 0 {
+		t.Fatal("expected at least one detected cipher")
 	}
 }
 
@@ -1045,11 +1094,9 @@ func TestDetectStartTLSProtocol(t *testing.T) {
 			wantOK:       true,
 		},
 		{
-			name:         "smtp generic 220",
-			prefix:       []byte("220 mx.example.com ready\r\n"),
-			wantProtocol: startTLSProtocolSMTP,
-			wantBanner:   "220 mx.example.com ready",
-			wantOK:       true,
+			name:       "smtp generic 220",
+			prefix:     []byte("220 mx.example.com ready\r\n"),
+			wantBanner: "220 mx.example.com ready",
 		},
 		{
 			name:         "imap",
@@ -1096,40 +1143,27 @@ func TestDetectConnectStartTLSProtocol(t *testing.T) {
 	tests := []struct {
 		name         string
 		prefix       []byte
-		port         string
 		wantProtocol startTLSProtocol
 		wantOK       bool
 	}{
 		{
 			name:         "smtp banner",
 			prefix:       []byte("220 smtp.example.com ESMTP ready\r\n"),
-			port:         "587",
 			wantProtocol: startTLSProtocolSMTP,
 			wantOK:       true,
 		},
 		{
 			name:         "smtp multiline banner",
 			prefix:       []byte("220-smtp.example.com ESMTP ready\r\n220 second line\r\n"),
-			port:         "587",
 			wantProtocol: startTLSProtocolSMTP,
 			wantOK:       true,
 		},
 		{
-			name:         "smtp generic 220 banner",
-			prefix:       []byte("220 mx.example.com ready\r\n"),
-			port:         "587",
-			wantProtocol: startTLSProtocolSMTP,
-			wantOK:       true,
-		},
-		{
-			name:         "ldap fallback on port 389",
-			port:         "389",
-			wantProtocol: startTLSProtocolLDAP,
-			wantOK:       true,
+			name:   "smtp generic 220 banner",
+			prefix: []byte("220 mx.example.com ready\r\n"),
 		},
 		{
 			name: "no match",
-			port: "8443",
 		},
 	}
 
@@ -1137,7 +1171,7 @@ func TestDetectConnectStartTLSProtocol(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			protocol, ok := detectConnectStartTLSProtocol(tt.prefix, tt.port)
+			protocol, ok := detectConnectStartTLSProtocol(tt.prefix)
 			if ok != tt.wantOK {
 				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
 			}
@@ -1178,6 +1212,13 @@ func TestInferNonTLSError(t *testing.T) {
 			prefix:     []byte("220 smtp.example.com ESMTP ready\r\n"),
 			wantErr:    errConnectNonTLSService,
 			wantSubstr: `received SMTP banner "220 smtp.example.com ESMTP ready"`,
+		},
+		{
+			name:       "generic 220 banner is plaintext",
+			handshake:  errFirstRecordNotTLS,
+			prefix:     []byte("220 ftp.example.com ready\r\n"),
+			wantErr:    errConnectNonTLSService,
+			wantSubstr: `received plaintext banner "220 ftp.example.com ready"`,
 		},
 		{
 			name:       "generic plaintext",
@@ -1256,6 +1297,41 @@ func startPlaintextUpgradeServer(t *testing.T, protocol startTLSProtocol, certCh
 	return port
 }
 
+func startSMTPStartTLSServer(t *testing.T, banner string, certChain [][]byte, key *ecdsa.PrivateKey) string {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	//nolint:gosec // Test plaintext-upgrade fixtures use the Go default test-server policy unless a test overrides it explicitly.
+	tlsConfig := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		Certificates: []tls.Certificate{{
+			Certificate: certChain,
+			PrivateKey:  key,
+		}},
+	}
+
+	go func() {
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			go handleCustomSMTPUpgradeConn(conn, banner, tlsConfig)
+		}
+	}()
+
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return port
+}
+
 func handlePlaintextUpgradeConn(conn net.Conn, protocol startTLSProtocol, tlsConfig *tls.Config) {
 	defer func() { _ = conn.Close() }()
 
@@ -1275,6 +1351,17 @@ func handlePlaintextUpgradeConn(conn net.Conn, protocol startTLSProtocol, tlsCon
 	case startTLSProtocolLDAP:
 		handleLDAPUpgrade(conn, reader, tlsConfig)
 	}
+}
+
+func handleCustomSMTPUpgradeConn(conn net.Conn, banner string, tlsConfig *tls.Config) {
+	defer func() { _ = conn.Close() }()
+
+	reader := bufio.NewReader(conn)
+	if _, err := conn.Write([]byte(banner)); err != nil {
+		return
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(500 * time.Millisecond))
+	handleSMTPUpgrade(conn, reader, tlsConfig)
 }
 
 func writeProtocolBanner(conn net.Conn, protocol startTLSProtocol) error {

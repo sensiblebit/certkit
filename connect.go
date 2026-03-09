@@ -433,7 +433,8 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 		// immediately. The mTLS fallback path below is only for client auth
 		// rejection, which only occurs when clientAuth is non-nil.
 		_ = tlsConn.Close()
-		startTLSProtocol, attempted := detectConnectStartTLSProtocol(sniffConn.prefix(), port)
+		prefix := sniffConn.prefix()
+		startTLSProtocol, attempted := detectConnectStartTLSProtocol(prefix)
 		if attempted {
 			result, startTLSErr := connectViaStartTLS(connectCtx, connectViaStartTLSInput{
 				connectInput: input,
@@ -446,7 +447,29 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 			}
 			return result, nil
 		}
-		if inferredErr := inferNonTLSError(handshakeErr, sniffConn.prefix()); inferredErr != nil {
+		if matchesGenericSMTPBanner(firstBannerLine(prefix)) {
+			result, startTLSErr := connectViaStartTLS(connectCtx, connectViaStartTLSInput{
+				connectInput: input,
+				addr:         addr,
+				serverName:   serverName,
+				protocol:     startTLSProtocolSMTP,
+			})
+			if startTLSErr == nil {
+				return result, nil
+			}
+		}
+		if port == "389" && len(prefix) == 0 {
+			result, startTLSErr := connectViaStartTLS(connectCtx, connectViaStartTLSInput{
+				connectInput: input,
+				addr:         addr,
+				serverName:   serverName,
+				protocol:     startTLSProtocolLDAP,
+			})
+			if startTLSErr == nil {
+				return result, nil
+			}
+		}
+		if inferredErr := inferNonTLSError(handshakeErr, prefix); inferredErr != nil {
 			return nil, fmt.Errorf("tls handshake with %s: %w", addr, inferredErr)
 		}
 		return nil, fmt.Errorf("tls handshake with %s: %w", addr, handshakeErr)
@@ -739,30 +762,27 @@ func detectScanStartTLSProtocol(ctx context.Context, addr string) startTLSProtoc
 	buf := make([]byte, nonTLSPeekLimit)
 	n, err := conn.Read(buf)
 	if n <= 0 {
-		if ldapPort(addr) {
+		if ldapPort(addr) && detectLDAPStartTLS(conn) {
 			return startTLSProtocolLDAP
 		}
 		return ""
 	}
 	protocol, _, ok := detectStartTLSProtocol(buf[:n])
-	if !ok {
-		if ldapPort(addr) {
-			return startTLSProtocolLDAP
+	if ok {
+		if err != nil && !errors.Is(err, io.EOF) {
+			slog.Debug("detect STARTTLS protocol: ignoring trailing read error", "addr", addr, "error", err)
 		}
-		return ""
+		return protocol
 	}
-	if err != nil && !errors.Is(err, io.EOF) {
-		slog.Debug("detect STARTTLS protocol: ignoring trailing read error", "addr", addr, "error", err)
+	if matchesGenericSMTPBanner(firstBannerLine(buf[:n])) && detectSMTPStartTLS(conn, buf[:n]) {
+		return startTLSProtocolSMTP
 	}
-	return protocol
+	return ""
 }
 
-func detectConnectStartTLSProtocol(prefix []byte, port string) (startTLSProtocol, bool) {
+func detectConnectStartTLSProtocol(prefix []byte) (startTLSProtocol, bool) {
 	if protocol, _, ok := detectStartTLSProtocol(prefix); ok {
 		return protocol, true
-	}
-	if port == "389" {
-		return startTLSProtocolLDAP, true
 	}
 	return "", false
 }
@@ -1073,7 +1093,7 @@ func inferNonTLSError(handshakeErr error, prefix []byte) error {
 		return fmt.Errorf("%w: received SSH banner %q", errConnectNonTLSService, banner)
 	case strings.HasPrefix(banner, "HTTP/"):
 		return fmt.Errorf("%w: received HTTP response %q", errConnectNonTLSService, banner)
-	case matchesSMTPBanner(banner):
+	case matchesStrictSMTPBanner(banner):
 		return fmt.Errorf("%w: received SMTP banner %q", errConnectNonTLSService, banner)
 	case matchesIMAPBanner(banner):
 		return fmt.Errorf("%w: received IMAP banner %q", errConnectNonTLSService, banner)
@@ -1089,7 +1109,7 @@ func inferNonTLSError(handshakeErr error, prefix []byte) error {
 func detectStartTLSProtocol(prefix []byte) (startTLSProtocol, string, bool) {
 	banner := firstBannerLine(prefix)
 	switch {
-	case matchesSMTPBanner(banner):
+	case matchesStrictSMTPBanner(banner):
 		return startTLSProtocolSMTP, banner, true
 	case matchesIMAPBanner(banner):
 		return startTLSProtocolIMAP, banner, true
@@ -1108,8 +1128,36 @@ func firstBannerLine(prefix []byte) string {
 	return banner
 }
 
-func matchesSMTPBanner(banner string) bool {
+func matchesStrictSMTPBanner(banner string) bool {
+	if !matchesGenericSMTPBanner(banner) {
+		return false
+	}
+	upper := strings.ToUpper(banner)
+	return strings.Contains(upper, " SMTP") || strings.Contains(upper, " ESMTP") || strings.Contains(upper, " LMTP")
+}
+
+func matchesGenericSMTPBanner(banner string) bool {
 	return strings.HasPrefix(banner, "220 ") || strings.HasPrefix(banner, "220-")
+}
+
+func detectSMTPStartTLS(conn net.Conn, prefix []byte) bool {
+	reader := bufio.NewReader(io.MultiReader(bytes.NewReader(prefix), conn))
+	greeting, err := readSMTPResponse(reader, "220")
+	if err != nil {
+		return false
+	}
+	if _, err := io.WriteString(conn, "EHLO certkit\r\n"); err != nil {
+		return false
+	}
+	ehloLines, err := readSMTPResponse(reader, "250")
+	if err != nil {
+		return false
+	}
+	return smtpAdvertisesStartTLS(append(greeting, ehloLines...))
+}
+
+func detectLDAPStartTLS(conn net.Conn) bool {
+	return negotiateLDAPStartTLS(bufio.NewReader(conn), conn) == nil
 }
 
 func matchesIMAPBanner(banner string) bool {
