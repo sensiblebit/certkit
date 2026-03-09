@@ -9,17 +9,23 @@ import (
 	"slices"
 )
 
-func diagnoseNegotiatedCipherPolicy(protocol, cipherSuite string, policy SecurityPolicy) []ChainDiagnostic {
-	if !policy.Enabled() {
+type negotiatedCipherPolicyInput struct {
+	protocol    string
+	cipherSuite string
+	policy      SecurityPolicy
+}
+
+func diagnoseNegotiatedCipherPolicy(input negotiatedCipherPolicyInput) []ChainDiagnostic {
+	if !input.policy.Enabled() {
 		return nil
 	}
-	if cipherSuiteAllowedByPolicy(protocol, cipherSuite, policy) {
+	if cipherSuiteAllowedByPolicy(cipherSuitePolicyInput(input)) {
 		return nil
 	}
 	return []ChainDiagnostic{{
 		Check:  "policy-cipher",
 		Status: "warn",
-		Detail: fmt.Sprintf("negotiated cipher suite %s under %s is likely not authorized by %s", cipherSuite, protocol, policy.DisplayName()),
+		Detail: fmt.Sprintf("negotiated cipher suite %s under %s is likely not authorized by %s", input.cipherSuite, input.protocol, input.policy.DisplayName()),
 	}}
 }
 
@@ -65,14 +71,24 @@ func DiagnoseCipherScanPolicy(r *CipherScanResult) []ChainDiagnostic {
 		diags = append(diags, ChainDiagnostic{
 			Check:  "policy-cipher",
 			Status: "warn",
-			Detail: formatLikelyNotAuthorizedDetail(r.Policy, "advertised cipher suite", "advertised cipher suites", disallowed),
+			Detail: formatLikelyNotAuthorizedDetail(likelyNotAuthorizedDetailInput{
+				policy:   r.Policy,
+				singular: "advertised cipher suite",
+				plural:   "advertised cipher suites",
+				items:    disallowed,
+			}),
 		})
 	}
 	if disallowed := disallowedProtocolVersions(r); len(disallowed) > 0 {
 		diags = append(diags, ChainDiagnostic{
 			Check:  "policy-protocol",
 			Status: "warn",
-			Detail: formatLikelyNotAuthorizedDetail(r.Policy, "protocol version", "protocol versions", disallowed),
+			Detail: formatLikelyNotAuthorizedDetail(likelyNotAuthorizedDetailInput{
+				policy:   r.Policy,
+				singular: "protocol version",
+				plural:   "protocol versions",
+				items:    disallowed,
+			}),
 		})
 	}
 	return diags
@@ -95,7 +111,11 @@ func disallowedCipherScanEntries(r *CipherScanResult) []string {
 			continue
 		}
 		seen[key] = true
-		if !cipherSuiteAllowedByPolicy(c.Version, c.Name, r.Policy) {
+		if !cipherSuiteAllowedByPolicy(cipherSuitePolicyInput{
+			protocol:    c.Version,
+			cipherSuite: c.Name,
+			policy:      r.Policy,
+		}) {
 			disallowed = append(disallowed, c.Version+" "+c.Name)
 		}
 	}
@@ -120,24 +140,30 @@ func tlsVersionAllowedByPolicy(version string, policy SecurityPolicy) bool {
 	return version == "TLS 1.2" || version == "TLS 1.3"
 }
 
-func cipherSuiteAllowedByPolicy(protocol, cipherSuite string, policy SecurityPolicy) bool {
-	if !policy.Enabled() {
+type cipherSuitePolicyInput struct {
+	protocol    string
+	cipherSuite string
+	policy      SecurityPolicy
+}
+
+func cipherSuiteAllowedByPolicy(input cipherSuitePolicyInput) bool {
+	if !input.policy.Enabled() {
 		return true
 	}
-	if !tlsVersionAllowedByPolicy(protocol, policy) {
+	if !tlsVersionAllowedByPolicy(input.protocol, input.policy) {
 		return false
 	}
 
-	switch protocol {
+	switch input.protocol {
 	case "TLS 1.3":
-		switch cipherSuite {
+		switch input.cipherSuite {
 		case "TLS_AES_128_GCM_SHA256", "TLS_AES_256_GCM_SHA384", "TLS_AES_128_CCM_SHA256":
 			return true
 		default:
 			return false
 		}
 	case "TLS 1.2":
-		switch cipherSuite {
+		switch input.cipherSuite {
 		case "TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256", "TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384",
 			"TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256", "TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384":
 			return true

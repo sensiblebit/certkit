@@ -43,6 +43,14 @@ func TestProbeSSH(t *testing.T) {
 	if !slices.Contains(result.KeyExchangeAlgorithms, "curve25519-sha256") {
 		t.Fatalf("KeyExchangeAlgorithms = %v, want curve25519-sha256", result.KeyExchangeAlgorithms)
 	}
+	if len(result.KeyExchangeExtensions) == 0 {
+		t.Fatal("KeyExchangeExtensions is empty, want SSH extension signaling entries")
+	}
+	for _, extension := range result.KeyExchangeExtensions {
+		if slices.Contains(result.KeyExchangeAlgorithms, extension) {
+			t.Fatalf("KeyExchangeAlgorithms unexpectedly still contains extension %q in %v", extension, result.KeyExchangeAlgorithms)
+		}
+	}
 	if !slices.Contains(result.HostKeyAlgorithms, ssh.KeyAlgoED25519) {
 		t.Fatalf("HostKeyAlgorithms = %v, want ssh-ed25519", result.HostKeyAlgorithms)
 	}
@@ -190,27 +198,6 @@ func TestDiagnoseSSHProbe_FIPSPolicy(t *testing.T) {
 	}
 	if got := FormatSSHRatingLine(result); !strings.Contains(got, "likely not authorized by FIPS 140-3") {
 		t.Fatalf("FormatSSHRatingLine() = %q, want policy summary", got)
-	}
-}
-
-func TestSSHProbeNormalize(t *testing.T) {
-	t.Parallel()
-
-	result := &SSHProbeResult{
-		KeyExchangeAlgorithms: []string{
-			"curve25519-sha256@libssh.org",
-			"ext-info-s",
-			"kex-strict-s-v00@openssh.com",
-		},
-	}
-
-	result.normalize()
-
-	if got, want := result.KeyExchangeAlgorithms, []string{"curve25519-sha256@libssh.org"}; !slices.Equal(got, want) {
-		t.Fatalf("KeyExchangeAlgorithms = %v, want %v", got, want)
-	}
-	if got, want := result.KeyExchangeExtensions, []string{"ext-info-s", "kex-strict-s-v00@openssh.com"}; !slices.Equal(got, want) {
-		t.Fatalf("KeyExchangeExtensions = %v, want %v", got, want)
 	}
 }
 

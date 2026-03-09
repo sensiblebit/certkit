@@ -11,6 +11,7 @@ import (
 	"net"
 	"slices"
 	"strings"
+	"time"
 )
 
 const (
@@ -76,11 +77,15 @@ func ProbeSSH(ctx context.Context, input SSHProbeInput) (*SSHProbeResult, error)
 		return nil, fmt.Errorf("connecting to SSH server %s: %w", addr, err)
 	}
 	defer func() { _ = conn.Close() }()
+	stopOnCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
+	defer stopOnCancel()
 
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := conn.SetDeadline(deadline); err != nil {
 			return nil, fmt.Errorf("setting SSH probe deadline: %w", err)
 		}
+	} else if err := conn.SetDeadline(time.Now().Add(defaultConnectTimeout)); err != nil {
+		return nil, fmt.Errorf("setting SSH probe deadline: %w", err)
 	}
 
 	reader := bufio.NewReader(conn)
@@ -281,12 +286,19 @@ func FormatSSHProbeResult(r *SSHProbeResult) string {
 	}
 	writeSSHKexSection(&out, r)
 	if len(r.KeyExchangeExtensions) > 0 {
-		writeSSHListSection(&out, "KEX Extensions", r.KeyExchangeExtensions)
+		writeSSHListSection(&out, sshListSectionInput{
+			title:  "KEX Extensions",
+			values: r.KeyExchangeExtensions,
+		})
 	}
 	writeSSHHostKeySection(&out, r)
 	writeSSHCipherSection(&out, r)
 	writeSSHMACSection(&out, r)
-	writeSSHDirectionalSection(&out, "Compression", r.CompressionClientToServer, r.CompressionServerToClient)
+	writeSSHDirectionalSection(&out, sshDirectionalSectionInput{
+		title: "Compression",
+		c2s:   r.CompressionClientToServer,
+		s2c:   r.CompressionServerToClient,
+	})
 	return out.String()
 }
 
@@ -443,28 +455,48 @@ func diagnoseSSHPolicy(r *SSHProbeResult) []ChainDiagnostic {
 		diags = append(diags, ChainDiagnostic{
 			Check:  "profile-kex",
 			Status: "warn",
-			Detail: formatLikelyNotAuthorizedDetail(r.Policy, "key exchange algorithm", "key exchange algorithms", disallowed),
+			Detail: formatLikelyNotAuthorizedDetail(likelyNotAuthorizedDetailInput{
+				policy:   r.Policy,
+				singular: "key exchange algorithm",
+				plural:   "key exchange algorithms",
+				items:    disallowed,
+			}),
 		})
 	}
 	if disallowed := weakSSHValues(r.HostKeyAlgorithms, sshPolicyDisallowsHostKey(r.Policy)); len(disallowed) > 0 {
 		diags = append(diags, ChainDiagnostic{
 			Check:  "profile-hostkey",
 			Status: "warn",
-			Detail: formatLikelyNotAuthorizedDetail(r.Policy, "host key algorithm", "host key algorithms", disallowed),
+			Detail: formatLikelyNotAuthorizedDetail(likelyNotAuthorizedDetailInput{
+				policy:   r.Policy,
+				singular: "host key algorithm",
+				plural:   "host key algorithms",
+				items:    disallowed,
+			}),
 		})
 	}
 	if disallowed := weakSSHValues(slices.Concat(r.CiphersClientToServer, r.CiphersServerToClient), sshPolicyDisallowsCipher(r.Policy)); len(disallowed) > 0 {
 		diags = append(diags, ChainDiagnostic{
 			Check:  "profile-cipher",
 			Status: "warn",
-			Detail: formatLikelyNotAuthorizedDetail(r.Policy, "cipher", "ciphers", disallowed),
+			Detail: formatLikelyNotAuthorizedDetail(likelyNotAuthorizedDetailInput{
+				policy:   r.Policy,
+				singular: "cipher",
+				plural:   "ciphers",
+				items:    disallowed,
+			}),
 		})
 	}
 	if disallowed := weakSSHValues(slices.Concat(r.MACsClientToServer, r.MACsServerToClient), sshPolicyDisallowsMAC(r.Policy)); len(disallowed) > 0 {
 		diags = append(diags, ChainDiagnostic{
 			Check:  "profile-mac",
 			Status: "warn",
-			Detail: formatLikelyNotAuthorizedDetail(r.Policy, "MAC", "MACs", disallowed),
+			Detail: formatLikelyNotAuthorizedDetail(likelyNotAuthorizedDetailInput{
+				policy:   r.Policy,
+				singular: "MAC",
+				plural:   "MACs",
+				items:    disallowed,
+			}),
 		})
 	}
 
@@ -530,25 +562,36 @@ func sshPolicyDisallowsMAC(policy SecurityPolicy) func(string) bool {
 	}
 }
 
-func writeSSHListSection(out *strings.Builder, title string, values []string) {
-	fmt.Fprintf(out, "\n%s (%d):\n", title, len(values))
-	for _, value := range values {
+type sshListSectionInput struct {
+	title  string
+	values []string
+}
+
+func writeSSHListSection(out *strings.Builder, input sshListSectionInput) {
+	fmt.Fprintf(out, "\n%s (%d):\n", input.title, len(input.values))
+	for _, value := range input.values {
 		fmt.Fprintf(out, "  %s\n", value)
 	}
 }
 
-func writeSSHDirectionalSection(out *strings.Builder, title string, c2s, s2c []string) {
-	if slices.Equal(c2s, s2c) {
-		writeSSHListSection(out, title, c2s)
+type sshDirectionalSectionInput struct {
+	title string
+	c2s   []string
+	s2c   []string
+}
+
+func writeSSHDirectionalSection(out *strings.Builder, input sshDirectionalSectionInput) {
+	if slices.Equal(input.c2s, input.s2c) {
+		writeSSHListSection(out, sshListSectionInput{title: input.title, values: input.c2s})
 		return
 	}
-	fmt.Fprintf(out, "\n%s:\n", title)
-	fmt.Fprintf(out, "  client->server (%d):\n", len(c2s))
-	for _, value := range c2s {
+	fmt.Fprintf(out, "\n%s:\n", input.title)
+	fmt.Fprintf(out, "  client->server (%d):\n", len(input.c2s))
+	for _, value := range input.c2s {
 		fmt.Fprintf(out, "    %s\n", value)
 	}
-	fmt.Fprintf(out, "  server->client (%d):\n", len(s2c))
-	for _, value := range s2c {
+	fmt.Fprintf(out, "  server->client (%d):\n", len(input.s2c))
+	for _, value := range input.s2c {
 		fmt.Fprintf(out, "    %s\n", value)
 	}
 }

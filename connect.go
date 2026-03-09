@@ -512,7 +512,11 @@ func (result *ConnectResult) populate(ctx context.Context, input ConnectTLSInput
 		protocolVersion = result.Protocol
 	}
 	result.Diagnostics = append(result.Diagnostics, DiagnoseNegotiatedCipher(protocolVersion, result.CipherSuite)...)
-	result.Diagnostics = append(result.Diagnostics, diagnoseNegotiatedCipherPolicy(protocolVersion, result.CipherSuite, input.Policy)...)
+	result.Diagnostics = append(result.Diagnostics, diagnoseNegotiatedCipherPolicy(negotiatedCipherPolicyInput{
+		protocol:    protocolVersion,
+		cipherSuite: result.CipherSuite,
+		policy:      input.Policy,
+	})...)
 
 	// Run chain diagnostics on the raw peer chain.
 	if len(result.PeerChain) > 0 {
@@ -733,9 +737,19 @@ func dialProbeConn(ctx context.Context, input cipherProbeInput) (net.Conn, error
 	if input.startTLS == "" {
 		return conn, nil
 	}
+	if deadline, ok := ctx.Deadline(); ok {
+		if err := conn.SetDeadline(deadline); err != nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf("setting STARTTLS probe deadline: %w", err)
+		}
+	}
 
 	reader := bufio.NewReader(conn)
-	if err := negotiateStartTLS(reader, conn, input.startTLS); err != nil {
+	if err := negotiateStartTLS(negotiateStartTLSInput{
+		reader:   reader,
+		conn:     conn,
+		protocol: input.startTLS,
+	}); err != nil {
 		_ = conn.Close()
 		return nil, err
 	}
@@ -772,12 +786,15 @@ func detectScanStartTLSProtocol(ctx context.Context, addr string) startTLSProtoc
 	buf := make([]byte, nonTLSPeekLimit)
 	n, err := conn.Read(buf)
 	if n <= 0 {
-		if ldapPort(addr) && detectLDAPStartTLS(conn) {
-			return startTLSProtocolLDAP
+		if ldapPort(addr) {
+			_ = conn.SetReadDeadline(time.Now().Add(readTimeout))
+			if detectLDAPStartTLS(conn) {
+				return startTLSProtocolLDAP
+			}
 		}
 		return ""
 	}
-	protocol, _, ok := detectStartTLSProtocol(buf[:n])
+	protocol, ok := detectStartTLSProtocol(buf[:n])
 	if ok {
 		if err != nil && !errors.Is(err, io.EOF) {
 			slog.Debug("detect STARTTLS protocol: ignoring trailing read error", "addr", addr, "error", err)
@@ -791,7 +808,7 @@ func detectScanStartTLSProtocol(ctx context.Context, addr string) startTLSProtoc
 }
 
 func detectConnectStartTLSProtocol(prefix []byte) (startTLSProtocol, bool) {
-	if protocol, _, ok := detectStartTLSProtocol(prefix); ok {
+	if protocol, ok := detectStartTLSProtocol(prefix); ok {
 		return protocol, true
 	}
 	return "", false
@@ -824,25 +841,35 @@ func connectViaStartTLS(ctx context.Context, input connectViaStartTLSInput) (*Co
 	}
 
 	reader := bufio.NewReader(conn)
-	if err := negotiateStartTLS(reader, conn, input.protocol); err != nil {
+	if err := negotiateStartTLS(negotiateStartTLSInput{
+		reader:   reader,
+		conn:     conn,
+		protocol: input.protocol,
+	}); err != nil {
 		return nil, err
 	}
 
 	bufferedConn := &bufferedPrefixConn{Conn: conn, reader: reader}
 	var clientAuth *ClientAuthInfo
 	tlsConn := tls.Client(bufferedConn, newConnectTLSConfig(input.serverName, &clientAuth))
-	defer func() { _ = tlsConn.Close() }()
+	conn = tlsConn
 
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := tlsConn.SetDeadline(deadline); err != nil {
 			return nil, fmt.Errorf("setting %s TLS deadline: %w", protocolDisplayName(input.protocol), err)
 		}
 	}
-	if err := tlsConn.HandshakeContext(ctx); err != nil && clientAuth == nil {
-		return nil, fmt.Errorf("%s STARTTLS handshake: %w", protocolDisplayName(input.protocol), err)
-	}
-
+	handshakeErr := tlsConn.HandshakeContext(ctx)
 	state := tlsConn.ConnectionState()
+	if handshakeErr != nil {
+		// When the server requested a client cert and rejected our empty
+		// response, partial state may still contain the server chain and
+		// CertificateRequest details. Keep that useful mTLS context, but
+		// reject silent zero-state fallthrough for unrelated failures.
+		if clientAuth == nil || state.Version == 0 || len(state.PeerCertificates) == 0 {
+			return nil, fmt.Errorf("%s STARTTLS handshake: %w", protocolDisplayName(input.protocol), handshakeErr)
+		}
+	}
 	startTLSInput := input.connectInput
 	if startTLSInput.Port == "" {
 		_, port, splitErr := net.SplitHostPort(input.addr)
@@ -860,18 +887,24 @@ func connectViaStartTLS(ctx context.Context, input connectViaStartTLSInput) (*Co
 	}), nil
 }
 
-func negotiateStartTLS(reader *bufio.Reader, conn net.Conn, protocol startTLSProtocol) error {
-	switch protocol {
+type negotiateStartTLSInput struct {
+	reader   *bufio.Reader
+	conn     net.Conn
+	protocol startTLSProtocol
+}
+
+func negotiateStartTLS(input negotiateStartTLSInput) error {
+	switch input.protocol {
 	case startTLSProtocolSMTP:
-		return negotiateSMTPStartTLS(reader, conn)
+		return negotiateSMTPStartTLS(input.reader, input.conn)
 	case startTLSProtocolIMAP:
-		return negotiateIMAPStartTLS(reader, conn)
+		return negotiateIMAPStartTLS(input.reader, input.conn)
 	case startTLSProtocolPOP3:
-		return negotiatePOP3StartTLS(reader, conn)
+		return negotiatePOP3StartTLS(input.reader, input.conn)
 	case startTLSProtocolLDAP:
-		return negotiateLDAPStartTLS(reader, conn)
+		return negotiateLDAPStartTLS(input.reader, input.conn)
 	default:
-		return fmt.Errorf("%w: %q", errStartTLSUnsupportedProtocol, protocol)
+		return fmt.Errorf("%w: %q", errStartTLSUnsupportedProtocol, input.protocol)
 	}
 }
 
@@ -921,6 +954,9 @@ func readSMTPResponse(reader *bufio.Reader, wantCode string) ([]string, error) {
 
 func smtpAdvertisesStartTLS(lines []string) bool {
 	for _, line := range lines {
+		if len(line) < 4 {
+			continue
+		}
 		if strings.EqualFold(strings.TrimSpace(line[4:]), "STARTTLS") {
 			return true
 		}
@@ -1038,10 +1074,13 @@ func readLDAPBERLength(reader *bufio.Reader) (int, error) {
 
 func readTextLine(reader *bufio.Reader) (string, error) {
 	line, err := reader.ReadString('\n')
-	if err != nil {
-		return "", fmt.Errorf("reading text line: %w", err)
+	if err == nil {
+		return strings.TrimRight(line, "\r\n"), nil
 	}
-	return strings.TrimRight(line, "\r\n"), nil
+	if len(line) > 0 && errors.Is(err, io.EOF) {
+		return strings.TrimRight(line, "\r\n"), nil
+	}
+	return "", fmt.Errorf("reading text line: %w", err)
 }
 
 type prefixCapturingConn struct {
@@ -1118,17 +1157,17 @@ func inferNonTLSError(handshakeErr error, prefix []byte) error {
 	}
 }
 
-func detectStartTLSProtocol(prefix []byte) (startTLSProtocol, string, bool) {
+func detectStartTLSProtocol(prefix []byte) (startTLSProtocol, bool) {
 	banner := firstBannerLine(prefix)
 	switch {
 	case matchesStrictSMTPBanner(banner):
-		return startTLSProtocolSMTP, banner, true
+		return startTLSProtocolSMTP, true
 	case matchesIMAPBanner(banner):
-		return startTLSProtocolIMAP, banner, true
+		return startTLSProtocolIMAP, true
 	case matchesPOP3Banner(banner):
-		return startTLSProtocolPOP3, banner, true
+		return startTLSProtocolPOP3, true
 	default:
-		return "", banner, false
+		return "", false
 	}
 }
 

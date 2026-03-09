@@ -38,10 +38,17 @@ func (p SecurityPolicy) DisplayName() string {
 	}
 }
 
-func formatLikelyNotAuthorizedDetail(policy SecurityPolicy, singular, plural string, items []string) string {
-	noun := plural
-	if len(items) == 1 {
-		noun = singular
+type likelyNotAuthorizedDetailInput struct {
+	policy   SecurityPolicy
+	singular string
+	plural   string
+	items    []string
+}
+
+func formatLikelyNotAuthorizedDetail(input likelyNotAuthorizedDetailInput) string {
+	noun := input.plural
+	if len(input.items) == 1 {
+		noun = input.singular
 	}
-	return fmt.Sprintf("%d %s likely not authorized by %s: %s", len(items), noun, policy.DisplayName(), strings.Join(items, ", "))
+	return fmt.Sprintf("%d %s likely not authorized by %s: %s", len(input.items), noun, input.policy.DisplayName(), strings.Join(input.items, ", "))
 }

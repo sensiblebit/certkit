@@ -27,7 +27,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add Homebrew cask conflict metadata so stable `certkit` and `certkit@nightly` are explicitly mutually exclusive installs. ([#128])
 - Add `certkit probe ssh` for SSH banner/algorithm inspection, including per-algorithm ratings, server-preference markers, and optional FIPS 140-2/140-3 heuristics. ([#131])
 - Add repo-local `SecurityPolicy` heuristics and new `connect --fips-140-2` / `--fips-140-3` flags to highlight TLS suites and certificate algorithms that are likely not authorized by current FIPS-style policies. ([#131])
-- Add direct TLS 1.3 probe unit coverage in `probe_tls13_test.go` to lock in ClientHello building, parsing, and error handling behavior. ([#131])
 
 ### Removed
 
@@ -51,6 +50,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fix STARTTLS policy evaluation to use the raw negotiated TLS version instead of the display string with protocol suffixes, preventing false `policy-cipher` findings on allowed suites. ([#131])
 - Fix SSH probe display ordering by sorting advertised algorithms by status, tagging each item inline, separating KEX extensions from real KEX choices, and marking the server's preferred algorithm with `>`. ([#131])
 - Harden STARTTLS and SSH probe edge cases by bounding scan preflight timeouts and LDAP BER lengths, using typed TLS record-header errors for non-TLS detection, and preserving distinct per-direction SSH preference markers when the offered algorithm sets match. ([#131])
+- Avoid misleading STARTTLS successes by requiring real partial handshake state before keeping mTLS diagnostics, preserve final plaintext lines that arrive without a trailing newline, and apply connection deadlines to STARTTLS cipher probes. ([#131])
+
+### Tests
+
+- Expand transport-probing behavioral coverage through `ConnectTLS`, `ScanCipherSuites`, and `ProbeSSH` without relying on direct tests of internal helper functions. ([#131])
 
 ## [0.8.2] - 2026-03-02
 
