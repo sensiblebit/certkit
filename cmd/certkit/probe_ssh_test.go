@@ -91,6 +91,8 @@ func TestRunProbeSSH(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			// These subtests intentionally stay serial because they mutate
+			// package-level Cobra flag globals guarded only by snapshot/restore.
 			addr := startProbeSSHServer(t)
 
 			// snapshotReadonlyGlobals serializes tests that mutate package-level

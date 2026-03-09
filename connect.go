@@ -750,6 +750,7 @@ func newConnectTLSConfig(serverName string, clientAuth **ClientAuthInfo) *tls.Co
 
 type connectResultFromTLSStateInput struct {
 	connectInput ConnectTLSInput
+	addr         string
 	serverName   string
 	state        tls.ConnectionState
 	clientAuth   *ClientAuthInfo
@@ -762,13 +763,17 @@ func connectResultFromTLSState(ctx context.Context, input connectResultFromTLSSt
 	if input.startTLS != "" {
 		protocol = formatProtocolWithStartTLS(protocol, input.startTLS)
 	}
+	port := input.connectInput.Port
+	if _, splitPort, splitErr := net.SplitHostPort(input.addr); splitErr == nil {
+		port = splitPort
+	}
 	host := input.connectInput.Host
 	if host == "" {
 		host = input.serverName
 	}
 	result := &ConnectResult{
 		Host:        host,
-		Port:        input.connectInput.Port,
+		Port:        port,
 		Protocol:    protocol,
 		tlsVersion:  rawProtocol,
 		Policy:      input.connectInput.Policy,
@@ -1039,6 +1044,7 @@ func connectViaStartTLS(handshakeCtx, verifyCtx context.Context, input connectVi
 	}
 	return connectResultFromTLSState(verifyCtx, connectResultFromTLSStateInput{
 		connectInput: startTLSInput,
+		addr:         input.addr,
 		serverName:   input.serverName,
 		state:        state,
 		clientAuth:   clientAuth,
