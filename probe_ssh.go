@@ -597,34 +597,56 @@ func writeSSHDirectionalSection(out *strings.Builder, input sshDirectionalSectio
 }
 
 func writeSSHKexSection(out *strings.Builder, r *SSHProbeResult) {
-	writeSSHRatedListSection(out, "Key Exchange", r.KeyExchangeAlgorithms, sshRatingConfig{
-		policy:   r.Policy,
-		weakFn:   isWeakSSHKex,
-		policyFn: sshPolicyDisallowsKex,
+	writeSSHRatedListSection(sshRatedListSectionInput{
+		out:    out,
+		title:  "Key Exchange",
+		values: r.KeyExchangeAlgorithms,
+		config: sshRatingConfig{
+			policy:   r.Policy,
+			weakFn:   isWeakSSHKex,
+			policyFn: sshPolicyDisallowsKex,
+		},
 	})
 }
 
 func writeSSHHostKeySection(out *strings.Builder, r *SSHProbeResult) {
-	writeSSHRatedListSection(out, "Host Keys", r.HostKeyAlgorithms, sshRatingConfig{
-		policy:   r.Policy,
-		weakFn:   isWeakSSHHostKey,
-		policyFn: sshPolicyDisallowsHostKey,
+	writeSSHRatedListSection(sshRatedListSectionInput{
+		out:    out,
+		title:  "Host Keys",
+		values: r.HostKeyAlgorithms,
+		config: sshRatingConfig{
+			policy:   r.Policy,
+			weakFn:   isWeakSSHHostKey,
+			policyFn: sshPolicyDisallowsHostKey,
+		},
 	})
 }
 
 func writeSSHCipherSection(out *strings.Builder, r *SSHProbeResult) {
-	writeSSHRatedDirectionalSection(out, "Ciphers", r.CiphersClientToServer, r.CiphersServerToClient, sshRatingConfig{
-		policy:   r.Policy,
-		weakFn:   isWeakSSHCipher,
-		policyFn: sshPolicyDisallowsCipher,
+	writeSSHRatedDirectionalSection(sshRatedDirectionalSectionInput{
+		out:   out,
+		title: "Ciphers",
+		c2s:   r.CiphersClientToServer,
+		s2c:   r.CiphersServerToClient,
+		config: sshRatingConfig{
+			policy:   r.Policy,
+			weakFn:   isWeakSSHCipher,
+			policyFn: sshPolicyDisallowsCipher,
+		},
 	})
 }
 
 func writeSSHMACSection(out *strings.Builder, r *SSHProbeResult) {
-	writeSSHRatedDirectionalSection(out, "MACs", r.MACsClientToServer, r.MACsServerToClient, sshRatingConfig{
-		policy:   r.Policy,
-		weakFn:   isWeakSSHMAC,
-		policyFn: sshPolicyDisallowsMAC,
+	writeSSHRatedDirectionalSection(sshRatedDirectionalSectionInput{
+		out:   out,
+		title: "MACs",
+		c2s:   r.MACsClientToServer,
+		s2c:   r.MACsServerToClient,
+		config: sshRatingConfig{
+			policy:   r.Policy,
+			weakFn:   isWeakSSHMAC,
+			policyFn: sshPolicyDisallowsMAC,
+		},
 	})
 }
 
@@ -634,53 +656,108 @@ type sshRatingConfig struct {
 	policyFn func(SecurityPolicy) func(string) bool
 }
 
-func writeSSHRatedListSection(out *strings.Builder, title string, values []string, config sshRatingConfig) {
+type sshRatedListSectionInput struct {
+	out       *strings.Builder
+	title     string
+	values    []string
+	preferred string
+	config    sshRatingConfig
+}
+
+func writeSSHRatedListSection(input sshRatedListSectionInput) {
 	preferred := ""
-	if len(values) > 0 {
-		preferred = values[0]
+	if len(input.values) > 0 {
+		preferred = input.values[0]
 	}
-	writeSSHRatedListSectionWithPreferred(out, title, values, preferred, config)
+	input.preferred = preferred
+	writeSSHRatedListSectionWithPreferred(input)
 }
 
-func writeSSHRatedListSectionWithPreferred(out *strings.Builder, title string, values []string, preferred string, config sshRatingConfig) {
-	values = sortSSHDisplayValues(values, config)
-	fmt.Fprintf(out, "\n%s (%d):\n", title, len(values))
+func writeSSHRatedListSectionWithPreferred(input sshRatedListSectionInput) {
+	values := sortSSHDisplayValues(sshDisplayValuesInput{
+		values: input.values,
+		config: input.config,
+	})
+	fmt.Fprintf(input.out, "\n%s (%d):\n", input.title, len(values))
 	for _, value := range values {
-		fmt.Fprintf(out, "  %s %-16s %s\n", sshPreferenceMarker(value, preferred), sshAlgorithmTag(value, config), value)
+		fmt.Fprintf(
+			input.out,
+			"  %s %-16s %s\n",
+			sshPreferenceMarker(value, input.preferred),
+			sshAlgorithmTag(sshAlgorithmStatusInput{value: value, config: input.config}),
+			value,
+		)
 	}
 }
 
-func writeSSHRatedDirectionalSection(out *strings.Builder, title string, c2s, s2c []string, config sshRatingConfig) {
-	origC2S := slices.Clone(c2s)
-	origS2C := slices.Clone(s2c)
+type sshRatedDirectionalSectionInput struct {
+	out    *strings.Builder
+	title  string
+	c2s    []string
+	s2c    []string
+	config sshRatingConfig
+}
+
+func writeSSHRatedDirectionalSection(input sshRatedDirectionalSectionInput) {
+	origC2S := slices.Clone(input.c2s)
+	origS2C := slices.Clone(input.s2c)
 	preferredC2S := ""
-	if len(c2s) > 0 {
-		preferredC2S = c2s[0]
+	if len(input.c2s) > 0 {
+		preferredC2S = input.c2s[0]
 	}
 	preferredS2C := ""
-	if len(s2c) > 0 {
-		preferredS2C = s2c[0]
+	if len(input.s2c) > 0 {
+		preferredS2C = input.s2c[0]
 	}
-	c2s = sortSSHDisplayValues(c2s, config)
-	s2c = sortSSHDisplayValues(s2c, config)
+	c2s := sortSSHDisplayValues(sshDisplayValuesInput{
+		values: input.c2s,
+		config: input.config,
+	})
+	s2c := sortSSHDisplayValues(sshDisplayValuesInput{
+		values: input.s2c,
+		config: input.config,
+	})
 	if slices.Equal(origC2S, origS2C) {
-		writeSSHRatedListSectionWithPreferred(out, title, c2s, preferredC2S, config)
+		writeSSHRatedListSectionWithPreferred(sshRatedListSectionInput{
+			out:       input.out,
+			title:     input.title,
+			values:    c2s,
+			preferred: preferredC2S,
+			config:    input.config,
+		})
 		return
 	}
-	fmt.Fprintf(out, "\n%s:\n", title)
-	fmt.Fprintf(out, "  client->server (%d):\n", len(c2s))
+	fmt.Fprintf(input.out, "\n%s:\n", input.title)
+	fmt.Fprintf(input.out, "  client->server (%d):\n", len(c2s))
 	for _, value := range c2s {
-		fmt.Fprintf(out, "    %s %-16s %s\n", sshPreferenceMarker(value, preferredC2S), sshAlgorithmTag(value, config), value)
+		fmt.Fprintf(
+			input.out,
+			"    %s %-16s %s\n",
+			sshPreferenceMarker(value, preferredC2S),
+			sshAlgorithmTag(sshAlgorithmStatusInput{value: value, config: input.config}),
+			value,
+		)
 	}
-	fmt.Fprintf(out, "  server->client (%d):\n", len(s2c))
+	fmt.Fprintf(input.out, "  server->client (%d):\n", len(s2c))
 	for _, value := range s2c {
-		fmt.Fprintf(out, "    %s %-16s %s\n", sshPreferenceMarker(value, preferredS2C), sshAlgorithmTag(value, config), value)
+		fmt.Fprintf(
+			input.out,
+			"    %s %-16s %s\n",
+			sshPreferenceMarker(value, preferredS2C),
+			sshAlgorithmTag(sshAlgorithmStatusInput{value: value, config: input.config}),
+			value,
+		)
 	}
 }
 
-func sshAlgorithmTag(value string, config sshRatingConfig) string {
-	isWeak := config.weakFn(value)
-	isPolicy := config.policy.Enabled() && config.policyFn(config.policy)(value)
+type sshAlgorithmStatusInput struct {
+	value  string
+	config sshRatingConfig
+}
+
+func sshAlgorithmTag(input sshAlgorithmStatusInput) string {
+	isWeak := input.config.weakFn(input.value)
+	isPolicy := input.config.policy.Enabled() && input.config.policyFn(input.config.policy)(input.value)
 	switch {
 	case isWeak && isPolicy:
 		return "[weak, profile]"
@@ -693,10 +770,18 @@ func sshAlgorithmTag(value string, config sshRatingConfig) string {
 	}
 }
 
-func sortSSHDisplayValues(values []string, config sshRatingConfig) []string {
-	sorted := slices.Clone(values)
+type sshDisplayValuesInput struct {
+	values []string
+	config sshRatingConfig
+}
+
+func sortSSHDisplayValues(input sshDisplayValuesInput) []string {
+	sorted := slices.Clone(input.values)
 	slices.SortStableFunc(sorted, func(a, b string) int {
-		if c := cmp.Compare(sshAlgorithmStatusRank(a, config), sshAlgorithmStatusRank(b, config)); c != 0 {
+		if c := cmp.Compare(
+			sshAlgorithmStatusRank(sshAlgorithmStatusInput{value: a, config: input.config}),
+			sshAlgorithmStatusRank(sshAlgorithmStatusInput{value: b, config: input.config}),
+		); c != 0 {
 			return c
 		}
 		return 0
@@ -704,9 +789,9 @@ func sortSSHDisplayValues(values []string, config sshRatingConfig) []string {
 	return sorted
 }
 
-func sshAlgorithmStatusRank(value string, config sshRatingConfig) int {
-	isWeak := config.weakFn(value)
-	isPolicy := config.policy.Enabled() && config.policyFn(config.policy)(value)
+func sshAlgorithmStatusRank(input sshAlgorithmStatusInput) int {
+	isWeak := input.config.weakFn(input.value)
+	isPolicy := input.config.policy.Enabled() && input.config.policyFn(input.config.policy)(input.value)
 	switch {
 	case !isWeak && !isPolicy:
 		return 0
