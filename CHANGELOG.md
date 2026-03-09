@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-03-09
+
 ### Changed
 
 - Reduce `scan` runtime verbosity by moving ingestion/archive/export progress logs to debug level while keeping final summaries on stdout. ([#112])
@@ -934,7 +936,8 @@ Initial release.
 - PKCS#12, PKCS#7, and JKS encode/decode support
 - Homebrew distribution via GoReleaser
 
-[Unreleased]: https://github.com/sensiblebit/certkit/compare/v0.8.2...HEAD
+[Unreleased]: https://github.com/sensiblebit/certkit/compare/v0.8.3...HEAD
+[0.8.3]: https://github.com/sensiblebit/certkit/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/sensiblebit/certkit/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/sensiblebit/certkit/compare/v0.8.0...v0.8.1
 [0.8.0]: https://github.com/sensiblebit/certkit/compare/v0.7.7...v0.8.0
@@ -1060,6 +1063,7 @@ Initial release.
 [#127]: https://github.com/sensiblebit/certkit/pull/127
 [#128]: https://github.com/sensiblebit/certkit/pull/128
 [#129]: https://github.com/sensiblebit/certkit/pull/129
+[#132]: https://github.com/sensiblebit/certkit/pull/132
 [#131]: https://github.com/sensiblebit/certkit/pull/131
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
