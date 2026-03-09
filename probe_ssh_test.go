@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/rsa"
+	"errors"
 	"io"
 	"net"
 	"slices"
@@ -152,6 +153,29 @@ func TestProbeSSH_NormalizesSSH199Banner(t *testing.T) {
 	}
 	if result.Protocol != "SSH 2.0" {
 		t.Fatalf("Protocol = %q, want %q", result.Protocol, "SSH 2.0")
+	}
+}
+
+func TestParseSSHKexInit_RejectsEmptyMandatoryNameList(t *testing.T) {
+	t.Parallel()
+
+	payload, err := buildSSHKexInitPayload(sshKexInitNameLists{
+		keyExchangeAlgorithms:     []string{},
+		hostKeyAlgorithms:         []string{ssh.KeyAlgoED25519},
+		ciphersClientToServer:     []string{ssh.CipherAES128GCM},
+		ciphersServerToClient:     []string{ssh.CipherAES128GCM},
+		macsClientToServer:        []string{ssh.HMACSHA256},
+		macsServerToClient:        []string{ssh.HMACSHA256},
+		compressionClientToServer: []string{"none"},
+		compressionServerToClient: []string{"none"},
+	})
+	if err != nil {
+		t.Fatalf("buildSSHKexInitPayload: %v", err)
+	}
+
+	_, err = parseSSHKexInit(payload)
+	if !errors.Is(err, errSSHKexInitMalformed) {
+		t.Fatalf("err = %v, want errSSHKexInitMalformed", err)
 	}
 }
 

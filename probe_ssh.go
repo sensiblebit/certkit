@@ -219,7 +219,7 @@ func parseSSHKexInit(payload []byte) (*SSHProbeResult, error) {
 	}
 
 	pos := 1 + 16 // msg code + cookie
-	readNameLists := func() ([]string, error) {
+	readNameLists := func(allowEmpty bool) ([]string, error) {
 		if pos+4 > len(payload) {
 			return nil, errSSHKexInitMalformed
 		}
@@ -235,6 +235,9 @@ func parseSSHKexInit(payload []byte) (*SSHProbeResult, error) {
 		raw := string(payload[pos : pos+nameListLen])
 		pos += nameListLen
 		if raw == "" {
+			if !allowEmpty {
+				return nil, errSSHKexInitMalformed
+			}
 			return []string{}, nil
 		}
 		return strings.Split(raw, ","), nil
@@ -242,34 +245,34 @@ func parseSSHKexInit(payload []byte) (*SSHProbeResult, error) {
 
 	result := &SSHProbeResult{}
 	var err error
-	if result.KeyExchangeAlgorithms, err = readNameLists(); err != nil {
+	if result.KeyExchangeAlgorithms, err = readNameLists(false); err != nil {
 		return nil, fmt.Errorf("reading SSH key exchange algorithms: %w", err)
 	}
-	if result.HostKeyAlgorithms, err = readNameLists(); err != nil {
+	if result.HostKeyAlgorithms, err = readNameLists(false); err != nil {
 		return nil, fmt.Errorf("reading SSH host key algorithms: %w", err)
 	}
-	if result.CiphersClientToServer, err = readNameLists(); err != nil {
+	if result.CiphersClientToServer, err = readNameLists(false); err != nil {
 		return nil, fmt.Errorf("reading SSH client-to-server ciphers: %w", err)
 	}
-	if result.CiphersServerToClient, err = readNameLists(); err != nil {
+	if result.CiphersServerToClient, err = readNameLists(false); err != nil {
 		return nil, fmt.Errorf("reading SSH server-to-client ciphers: %w", err)
 	}
-	if result.MACsClientToServer, err = readNameLists(); err != nil {
+	if result.MACsClientToServer, err = readNameLists(false); err != nil {
 		return nil, fmt.Errorf("reading SSH client-to-server MACs: %w", err)
 	}
-	if result.MACsServerToClient, err = readNameLists(); err != nil {
+	if result.MACsServerToClient, err = readNameLists(false); err != nil {
 		return nil, fmt.Errorf("reading SSH server-to-client MACs: %w", err)
 	}
-	if result.CompressionClientToServer, err = readNameLists(); err != nil {
+	if result.CompressionClientToServer, err = readNameLists(false); err != nil {
 		return nil, fmt.Errorf("reading SSH client-to-server compression: %w", err)
 	}
-	if result.CompressionServerToClient, err = readNameLists(); err != nil {
+	if result.CompressionServerToClient, err = readNameLists(false); err != nil {
 		return nil, fmt.Errorf("reading SSH server-to-client compression: %w", err)
 	}
-	if _, err = readNameLists(); err != nil { // languages c->s
+	if _, err = readNameLists(true); err != nil { // languages c->s
 		return nil, fmt.Errorf("reading SSH client-to-server languages: %w", err)
 	}
-	if _, err = readNameLists(); err != nil { // languages s->c
+	if _, err = readNameLists(true); err != nil { // languages s->c
 		return nil, fmt.Errorf("reading SSH server-to-client languages: %w", err)
 	}
 	if pos+5 > len(payload) {

@@ -117,6 +117,8 @@ def resolve_repo_and_pr(args: argparse.Namespace) -> tuple[str, str, int]:
         if "/" not in args.repo:
             raise CommandError(f"invalid --repo value {args.repo!r}; expected owner/name")
         owner, repo = args.repo.split("/", 1)
+        if args.pr is None:
+            raise CommandError("--pr is required when --repo is set")
     else:
         owner, repo = current_repo()
 
