@@ -69,10 +69,12 @@ Required push gate:
 2. Address any newly arrived feedback before continuing
 3. Spawn one agent specifically to check this branch against `CLAUDE.md` and `.claude/rules/*`
 4. Have that agent report any rule violations, missing changelog entries, unresolved PR-thread obligations, or skipped validation
-5. Fix every violation before pushing
-6. If a PR exists, query for comments again immediately before `git push` in case new feedback arrived during the audit/fix cycle
-7. Address that feedback too if needed
-8. Only then push
+5. When fixes are needed and can be cleanly isolated, dispatch dedicated worker agents to make the code or docs changes instead of doing all fix work in the main thread
+6. Keep the main thread focused on PR context, review triage, rule compliance, integration, and final verification
+7. Fix every violation before pushing
+8. If a PR exists, query for comments again immediately before `git push` in case new feedback arrived during the audit/fix cycle
+9. Address that feedback too if needed
+10. Only then push
 
 This audit is mandatory even if the change looks trivial. Treat it as a pre-push policy check, not an optional extra review.
 
@@ -83,9 +85,10 @@ If the user requests a commit on a branch that already has a PR open, pushing th
 When working on a PR, address **both** PR review comments (on diffs) and issue-style comments (on the PR conversation). For each piece of feedback:
 
 1. **Fix the code** — make the requested change or explain why not
-2. **Reply** explaining what was done: `gh api repos/OWNER/REPO/pulls/N/comments -X POST -F body="..." -F in_reply_to=COMMENT_ID`
-3. **Resolve** the thread: `gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "THREAD_ID"}) { thread { isResolved } } }'`
-4. **Minimize** addressed comments to reduce noise: `gh api graphql -f query='mutation { minimizeComment(input: {subjectId: "COMMENT_NODE_ID", classifier: RESOLVED}) { minimizedComment { isMinimized } } }'`
+2. **Prefer delegated fixes** — when the fix is more than a trivial one-line change, spawn a worker agent to make the change so the main thread preserves PR context and review state
+3. **Reply** explaining what was done: `gh api repos/OWNER/REPO/pulls/N/comments -X POST -F body="..." -F in_reply_to=COMMENT_ID`
+4. **Resolve** the thread: `gh api graphql -f query='mutation { resolveReviewThread(input: {threadId: "THREAD_ID"}) { thread { isResolved } } }'`
+5. **Minimize** addressed comments to reduce noise: `gh api graphql -f query='mutation { minimizeComment(input: {subjectId: "COMMENT_NODE_ID", classifier: RESOLVED}) { minimizedComment { isMinimized } } }'`
 
 If you disagree with feedback, do not silently ignore it. Reply with the technical reason, leave the thread unresolved unless the reviewer/user explicitly agrees, and do not minimize unresolved disagreement.
 
