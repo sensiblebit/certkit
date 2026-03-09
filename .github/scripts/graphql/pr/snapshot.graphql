@@ -35,6 +35,24 @@ query($owner:String!, $repo:String!, $number:Int!) {
           body
         }
       }
+      reviews(first:100) {
+        nodes {
+          id
+          databaseId
+          url
+          state
+          body
+          submittedAt
+          isMinimized
+          author {
+            login
+          }
+          reactionGroups {
+            content
+            viewerHasReacted
+          }
+        }
+      }
     }
   }
 }

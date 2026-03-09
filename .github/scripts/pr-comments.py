@@ -32,6 +32,14 @@ sys.dont_write_bytecode = True
 SCRIPT_DIR = Path(__file__).resolve().parent
 GRAPHQL_DIR = SCRIPT_DIR / "graphql" / "pr"
 DEFAULT_MINIMIZE_CLASSIFIER = "RESOLVED"
+REVIEW_REACTION_SEEN = "EYES"
+REVIEW_REACTION_DONE = "THUMBS_UP"
+REVIEW_REACTION_WONTFIX = "THUMBS_DOWN"
+TRIAGE_REACTION_CONTENTS = {
+    REVIEW_REACTION_SEEN,
+    REVIEW_REACTION_DONE,
+    REVIEW_REACTION_WONTFIX,
+}
 
 
 class CommandError(RuntimeError):
@@ -187,6 +195,32 @@ def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
     ]
     visible_comments = [comment for comment in all_top_level_comments if not comment["is_minimized"]]
 
+    all_reviews = []
+    for review in pr["reviews"]["nodes"]:
+        body = review["body"] or ""
+        if not body.strip():
+            continue
+        all_reviews.append(
+            {
+                "id": review["id"],
+                "database_id": review["databaseId"],
+                "url": review["url"],
+                "state": review["state"],
+                "submitted_at": review["submittedAt"],
+                "is_minimized": review["isMinimized"],
+                "author": (review.get("author") or {}).get("login", ""),
+                "body": body,
+                "reaction_groups": [
+                    {
+                        "content": group["content"],
+                        "viewer_has_reacted": group["viewerHasReacted"],
+                    }
+                    for group in review.get("reactionGroups", [])
+                ],
+            }
+        )
+    visible_reviews = [review for review in all_reviews if not review["is_minimized"]]
+
     return {
         "repo": {"owner": owner, "name": repo},
         "pull_request": {
@@ -197,7 +231,9 @@ def build_snapshot(args: argparse.Namespace) -> dict[str, Any]:
         "unresolved_threads": unresolved_threads,
         "resolved_threads": resolved_threads,
         "visible_comments": visible_comments,
+        "visible_reviews": visible_reviews,
         "all_top_level_comments": all_top_level_comments,
+        "all_reviews": all_reviews,
         "all_thread_comments": all_thread_comments,
     }
 
@@ -228,6 +264,54 @@ def compact_comment_entry(comment: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def compact_review_entry(review: dict[str, Any]) -> dict[str, Any]:
+    """Return a compact PR review summary shape."""
+    return {
+        "id": review["id"],
+        "database_id": review["database_id"],
+        "url": review["url"],
+        "author": review["author"],
+        "state": review["state"],
+        "submitted_at": review["submitted_at"],
+        "triage_state": review_triage_state(review),
+        "body": review["body"],
+        "preview": ellipsize(first_line(review["body"])),
+    }
+
+
+def review_reaction_map(review: dict[str, Any]) -> dict[str, bool]:
+    """Return viewer reaction state keyed by reaction content."""
+    return {
+        group["content"]: group["viewer_has_reacted"]
+        for group in review.get("reaction_groups", [])
+    }
+
+
+def review_triage_state(review: dict[str, Any]) -> str:
+    """Return triage state for a PR review summary."""
+    reactions = review_reaction_map(review)
+    if reactions.get(REVIEW_REACTION_DONE, False):
+        return "done"
+    if reactions.get(REVIEW_REACTION_WONTFIX, False):
+        return "wontfix"
+    if reactions.get(REVIEW_REACTION_SEEN, False):
+        return "seen"
+    return "untriaged"
+
+
+def review_is_actionable(review: dict[str, Any]) -> bool:
+    """Return whether a PR review body appears to contain actionable feedback."""
+    body = review["body"]
+    stripped = body.strip()
+    if not stripped:
+        return False
+    if stripped.startswith("## Pull request overview"):
+        return False
+    if stripped.startswith("### 💡 Codex Review"):
+        return "https://github.com/" in body and "/blob/" in body
+    return True
+
+
 def filtered_snapshot(snapshot: dict[str, Any], args: argparse.Namespace) -> dict[str, Any]:
     """Apply snapshot filters and compact shaping."""
     include_unresolved = not args.visible_only
@@ -247,6 +331,15 @@ def filtered_snapshot(snapshot: dict[str, Any], args: argparse.Namespace) -> dic
         visible = [compact_comment_entry(comment) for comment in snapshot["visible_comments"]]
         result["visible_comments"] = visible
         result["visible_count"] = len(visible)
+        reviews = []
+        for review in snapshot["visible_reviews"]:
+            if not args.include_all_reviews and not review_is_actionable(review):
+                continue
+            if not args.include_triaged_reviews and review_triage_state(review) != "untriaged":
+                continue
+            reviews.append(compact_review_entry(review))
+        result["visible_reviews"] = reviews
+        result["review_count"] = len(reviews)
 
     return result
 
@@ -278,6 +371,21 @@ def print_snapshot_summary(snapshot: dict[str, Any]) -> None:
             print(f"- [{comment['author'] or '?'}] {comment['url']}")
             print(f"  node_id={comment['id']} database_id={comment['database_id']}")
             preview = comment.get("preview", "")
+            if preview:
+                print(f"  {preview}")
+
+    if "visible_reviews" in snapshot:
+        if "unresolved_threads" in snapshot or "visible_comments" in snapshot:
+            print()
+        print(f"Visible PR reviews with bodies: {len(snapshot['visible_reviews'])}")
+        for review in snapshot["visible_reviews"]:
+            print(f"- [{review['author'] or '?'}] {review['url']}")
+            print(
+                "  "
+                f"node_id={review['id']} database_id={review['database_id']} "
+                f"state={review.get('state', '')} triage={review.get('triage_state', 'untriaged')}"
+            )
+            preview = review.get("preview", "")
             if preview:
                 print(f"  {preview}")
 
@@ -330,6 +438,22 @@ def find_comment_by_node_id(snapshot: dict[str, Any], node_id: str) -> dict[str,
         if comment["id"] == node_id:
             return {**comment, "kind": "issue_comment"}
     raise CommandError(f"no PR comment found for node ID: {node_id}")
+
+
+def find_review_by_url(snapshot: dict[str, Any], url: str) -> dict[str, Any]:
+    """Find a PR review by URL."""
+    for review in snapshot["all_reviews"]:
+        if review["url"] == url:
+            return review
+    raise CommandError(f"no PR review found for URL: {url}")
+
+
+def find_review_by_node_id(snapshot: dict[str, Any], node_id: str) -> dict[str, Any]:
+    """Find a PR review by node ID."""
+    for review in snapshot["all_reviews"]:
+        if review["id"] == node_id:
+            return review
+    raise CommandError(f"no PR review found for node ID: {node_id}")
 
 
 def find_thread_by_id(snapshot: dict[str, Any], thread_id: str) -> dict[str, Any]:
@@ -510,6 +634,24 @@ def command_minimize(args: argparse.Namespace) -> int:
     return 0
 
 
+def command_react(args: argparse.Namespace) -> int:
+    """Add a reaction to a PR review summary."""
+    if bool(args.url) == bool(args.node_id):
+        raise CommandError("react requires exactly one of --url or --node-id")
+
+    if args.url:
+        snapshot = build_snapshot(args)
+        node_id = find_review_by_url(snapshot, args.url)["id"]
+    else:
+        snapshot = build_snapshot(args)
+        node_id = find_review_by_node_id(snapshot, args.node_id)["id"]
+
+    payload = gh_graphql("add_reaction.graphql", subjectId=node_id, content=args.content)
+    reaction = payload["data"]["addReaction"]["reaction"]["content"]
+    print(json.dumps({"node_id": node_id, "reaction": reaction}, indent=2))
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Create the CLI parser."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -523,6 +665,16 @@ def build_parser() -> argparse.ArgumentParser:
     snapshot_group = snapshot_parser.add_mutually_exclusive_group()
     snapshot_group.add_argument("--unresolved-only", action="store_true", help="Show only unresolved review threads")
     snapshot_group.add_argument("--visible-only", action="store_true", help="Show only visible top-level comments")
+    snapshot_parser.add_argument(
+        "--include-triaged-reviews",
+        action="store_true",
+        help="Include PR review summaries already marked with eyes / thumbs-up / thumbs-down",
+    )
+    snapshot_parser.add_argument(
+        "--include-all-reviews",
+        action="store_true",
+        help="Include boilerplate PR review summaries instead of only actionable review bodies",
+    )
     snapshot_parser.add_argument("--raw", action="store_true", help="With --json, print the full raw snapshot instead of the compact filtered shape")
     snapshot_parser.set_defaults(func=command_snapshot)
 
@@ -556,6 +708,32 @@ def build_parser() -> argparse.ArgumentParser:
         help=f"ReportedContentClassifiers value (default: {DEFAULT_MINIMIZE_CLASSIFIER})",
     )
     minimize_parser.set_defaults(func=command_minimize)
+
+    react_parser = subparsers.add_parser("react", help="React to a PR review summary")
+    react_parser.add_argument("--url", help="PR review URL to react to")
+    react_parser.add_argument("--node-id", help="PR review node ID")
+    react_parser.add_argument(
+        "--content",
+        required=True,
+        choices=sorted(TRIAGE_REACTION_CONTENTS),
+        help="ReactionContent value",
+    )
+    react_parser.set_defaults(func=command_react)
+
+    mark_seen_parser = subparsers.add_parser("mark-seen", help="Mark a PR review summary as seen with :eyes:")
+    mark_seen_parser.add_argument("--url", help="PR review URL to react to")
+    mark_seen_parser.add_argument("--node-id", help="PR review node ID")
+    mark_seen_parser.set_defaults(func=command_react, content=REVIEW_REACTION_SEEN)
+
+    mark_done_parser = subparsers.add_parser("mark-done", help="Mark a PR review summary as fully addressed with :thumbsup:")
+    mark_done_parser.add_argument("--url", help="PR review URL to react to")
+    mark_done_parser.add_argument("--node-id", help="PR review node ID")
+    mark_done_parser.set_defaults(func=command_react, content=REVIEW_REACTION_DONE)
+
+    mark_wontfix_parser = subparsers.add_parser("mark-wontfix", help="Mark a PR review summary as intentionally not actioned with :thumbsdown:")
+    mark_wontfix_parser.add_argument("--url", help="PR review URL to react to")
+    mark_wontfix_parser.add_argument("--node-id", help="PR review node ID")
+    mark_wontfix_parser.set_defaults(func=command_react, content=REVIEW_REACTION_WONTFIX)
 
     return parser
 

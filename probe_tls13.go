@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"strings"
 )
 
 // tls13CipherSuites lists all TLS 1.3 cipher suites from RFC 8446.
@@ -425,9 +427,9 @@ type cipherProbeInput struct {
 // with no shared state — safe for concurrent use from multiple goroutines.
 //
 // The key share uses X25519 only. Servers that support TLS 1.3 but reject
-// X25519 will trigger a HelloRetryRequest, causing this probe to return false.
-// In practice this is extremely rare — X25519 is mandatory in modern browsers
-// and required by RFC 8446 implementations.
+// X25519 may respond with a HelloRetryRequest asking for a different group.
+// That still proves TLS 1.3 and the offered cipher suite were accepted, so the
+// probe counts HRR as cipher support.
 func probeTLS13Cipher(ctx context.Context, input cipherProbeInput) bool {
 	conn, err := dialProbeConn(ctx, input)
 	if err != nil {
@@ -468,10 +470,21 @@ func probeTLS13Cipher(ctx context.Context, input cipherProbeInput) bool {
 
 	result, err := readServerHello(conn)
 	if err != nil {
-		return false
+		return errors.Is(err, errHelloRetryRequest)
 	}
 
 	return result.version == tls.VersionTLS13 && result.cipherSuite == input.cipherID
+}
+
+func isIPLiteralServerName(serverName string) bool {
+	if serverName == "" {
+		return false
+	}
+	ipHost := serverName
+	if zoneIdx := strings.LastIndex(ipHost, "%"); zoneIdx != -1 {
+		ipHost = ipHost[:zoneIdx]
+	}
+	return net.ParseIP(ipHost) != nil
 }
 
 // probeKeyExchangeGroup attempts a raw TLS 1.3 ClientHello offering a single
@@ -530,7 +543,7 @@ func isPQKeyExchange(id tls.CurveID) bool {
 
 // appendSNIExtension appends a server_name extension (0x0000).
 func appendSNIExtension(b []byte, serverName string) ([]byte, error) {
-	if serverName == "" {
+	if serverName == "" || isIPLiteralServerName(serverName) {
 		return b, nil
 	}
 	name := []byte(serverName)
