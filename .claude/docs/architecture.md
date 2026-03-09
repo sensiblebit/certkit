@@ -6,7 +6,14 @@ Stateless utility functions. No database, no file I/O. This is the public librar
 
 - `certkit.go` — PEM parsing, key generation, fingerprints, SKI computation. `DeduplicatePasswords()`, `ParseCertificatesAny()` (DER/PEM/PKCS#7).
 - `bundle.go` — Certificate chain resolution via AIA, trust store verification. `BundleResult`/`BundleOptions` types, `DefaultOptions()`, `FetchLeafFromURL()`, `FetchAIACertificates()`, `Bundle()`. `MozillaRootPool()` (`sync.Once`-cached), `MozillaRootPEM()`.
-- `connect.go` — TLS connection probing and chain diagnostics. `ConnectTLS()` connects to a server and returns negotiated protocol, cipher suite, peer chain, mTLS info, and verification result with automatic AIA walking for missing intermediates. `DiagnoseConnectChain()` detects root-in-chain (RFC 8446 §4.4.2), duplicate certs, and missing intermediates. `FormatConnectResult()` for text output. Types: `ConnectTLSInput`, `ConnectResult`, `ClientAuthInfo`, `ChainDiagnostic`.
+- `connect.go` — Transport connection probing and chain diagnostics. `ConnectTLS()` handles implicit TLS plus opportunistic STARTTLS/STLS upgrades for SMTP, IMAP, POP3, and LDAP; surfaces useful non-TLS diagnostics for SSH/HTTP/plaintext services; and returns negotiated protocol, cipher suite, peer chain, mTLS info, and verification result with automatic AIA walking for missing intermediates. `ScanCipherSuites()` enumerates supported TLS suites and key exchange groups, including STARTTLS-aware scans and optional QUIC probing. `DiagnoseConnectChain()` detects root-in-chain (RFC 8446 §4.4.2), duplicate certs, and missing intermediates. `FormatConnectResult()` for text output. Types: `ConnectTLSInput`, `ConnectResult`, `ClientAuthInfo`, `ChainDiagnostic`, `ScanCipherSuitesInput`, `CipherScanResult`.
+- `connect_policy.go` — Conservative policy heuristics for negotiated and scanned TLS results. Flags protocol versions, cipher suites, and leaf certificate key/signature algorithms that are likely not authorized by the selected policy profile.
+- `security_policy.go` — Shared policy type definitions. `SecurityPolicy` currently exposes `fips-140-2` and `fips-140-3` heuristic modes used by both TLS and SSH probing.
+- `probe_tls13.go` — Byte-level TLS 1.3 ClientHello construction and response parsing used by `ScanCipherSuites()` for TLS 1.3 cipher and key-exchange-group probing.
+- `probe_legacy.go` — Raw legacy TLS probing for cipher suites not supported by Go's standard TLS stack, including DHE/static-RSA compatibility paths.
+- `probe_quic.go` — QUIC/TLS probing helpers used for optional UDP/QUIC cipher discovery alongside TCP scans.
+- `probe_protocol_helpers.go` — Shared low-level protocol framing, bounds checks, and encoding helpers for the raw probe implementations.
+- `probe_ssh.go` — SSH banner and KEXINIT parsing. `ProbeSSH()` returns advertised key exchange algorithms, host keys, ciphers, MACs, compression, diagnostics, and overall rating. `FormatSSHProbeResult()` renders text output for the CLI.
 - `sign.go` — Certificate signing. `CreateSelfSigned()` generates self-signed certificates. `SignCSR()` signs a CSR with a CA certificate and key. Types: `SelfSignedInput`, `SignCSRInput`.
 - `ocsp.go` — OCSP revocation checking. `CheckOCSP()` queries an OCSP responder. `FormatOCSPResult()` for text output. Types: `CheckOCSPInput`, `OCSPResult`.
 - `crl.go` — CRL parsing and inspection. `ParseCRL()` parses PEM/DER CRLs. `CRLContainsCertificate()` checks revocation. `CRLInfoFromList()` extracts display info. `FormatCRLInfo()` for text output. Type: `CRLInfo`.
@@ -56,8 +63,11 @@ Thin CLI layer. Each file is one Cobra command. Flag variables are package-level
 - `scan.go` — Main scanning command with `--dump-keys`, `--dump-certs`, `--max-file-size`, `--bundle-path` flags.
 - `bundle.go` — Build verified certificate chains from leaf certs; resolves intermediates via AIA; outputs PEM, chain, fullchain, PKCS#12, or JKS with `--key`, `--force`, `--trust-store` flags.
 - `inspect.go` — Display detailed certificate, key, or CSR information with text or JSON output (`--format`); filters expired items unless `--allow-expired`.
-- `verify.go` — Verify certificate chains, key matches, and expiry windows; returns exit code 2 on validation failures; `--key`, `--expiry`, `--trust-store`, `--diagnose`, `--format` flags.
-- `connect.go` — Test TLS connections and display certificate chain details; chain diagnostics (root-in-chain, duplicate-cert) and AIA walking for missing intermediates; `--servername`, `--format` flags.
+- `verify.go` — Verify certificate chains, key matches, expiry windows, and optional OCSP/CRL status; returns exit code 2 on validation failures; `--key`, `--expiry`, `--trust-store`, `--diagnose`, `--ocsp`, `--crl`, `--format` flags.
+- `connect.go` — Test TLS connections and display certificate chain details; supports implicit TLS plus STARTTLS/STLS upgrades, optional cipher enumeration, OCSP/CRL checks, and FIPS-style policy diagnostics; `--servername`, `--ciphers`, `--no-ocsp`, `--crl`, `--fips-140-2`, `--fips-140-3`, `--format` flags.
+- `probe.go` — Parent `probe` command for transport-oriented inspection commands.
+- `probe_ssh.go` — `probe ssh` subcommand. Connects without authenticating, prints banner/algorithm details, and supports `--fips-140-2` / `--fips-140-3` policy heuristics for SSH transport algorithms.
+- `policy.go` — Shared CLI flag-to-policy selection helper used by `connect` and `probe ssh`.
 - `sign.go` — Sign certificates. Parent command with `self-signed` and `csr` subcommands for creating self-signed certs and signing CSRs with a CA.
 - `ocsp.go` — Check certificate revocation status via OCSP; `--format` flag.
 - `crl.go` — Parse and inspect Certificate Revocation Lists; `--check` to verify a cert against the CRL; `--format` flag.
@@ -65,6 +75,7 @@ Thin CLI layer. Each file is one Cobra command. Flag variables are package-level
 - `keygen.go` — Generate RSA, ECDSA, or Ed25519 key pairs with optional CSR and SANs; outputs to stdout or directory with `-o`.
 - `csr.go` — Generate CSRs from JSON templates, existing certificates, or existing CSRs with configurable algorithms; outputs to stdout or directory with `-o`.
 - `completions.go` — Shell tab completion helpers. `completionInput` type and `registerCompletion()` for enum flags, directory flags, and file flags.
+- `gendocs.go` — README flag-table generator used by `go generate` and the `gendocs` hook to keep CLI docs synchronized with Cobra definitions.
 
 ## `cmd/wasm/`
 
