@@ -607,11 +607,7 @@ func probeQUICCipher(ctx context.Context, input cipherProbeInput) bool {
 func appendQUICVarint(b []byte, v uint64) []byte {
 	switch {
 	case v < 64:
-		vByte, err := checkedUint8Len(int(v), "QUIC varint")
-		if err != nil {
-			panic(err)
-		}
-		return append(b, vByte)
+		return append(b, byte(v))
 	case v < 16384:
 		var buf [2]byte
 		binary.BigEndian.PutUint16(buf[:], uint16(v)|0x4000)
