@@ -19,7 +19,7 @@ import (
 	"github.com/jmoiron/sqlx"
 	"github.com/jmoiron/sqlx/types"
 	"github.com/sensiblebit/certkit"
-	_ "modernc.org/sqlite"
+	_ "modernc.org/sqlite" // Register the SQLite driver for sqlx.Open.
 )
 
 // sqliteCertRow maps a row in the SQLite certificates table.

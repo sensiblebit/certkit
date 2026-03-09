@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -19,6 +20,11 @@ import (
 )
 
 const defaultConnectTimeout = 10 * time.Second
+
+var (
+	errConnectHostRequired    = errors.New("connecting to TLS server: host is required")
+	errCipherScanHostRequired = errors.New("scanning cipher suites: host is required")
+)
 
 // ChainDiagnostic describes a single chain configuration issue found during connection probing.
 type ChainDiagnostic struct {
@@ -310,7 +316,7 @@ type ConnectResult struct {
 // the negotiated protocol, cipher suite, and peer certificate chain.
 func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, error) {
 	if input.Host == "" {
-		return nil, fmt.Errorf("connecting to TLS server: host is required")
+		return nil, errConnectHostRequired
 	}
 	port := input.Port
 	if port == "" {
@@ -396,7 +402,7 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 			serverName: serverName,
 		})
 		if legacyErr != nil {
-			return nil, fmt.Errorf("tls handshake with %s: %w; legacy fallback: %v", addr, handshakeErr, legacyErr)
+			return nil, fmt.Errorf("tls handshake with %s: %w; legacy fallback: %w", addr, handshakeErr, legacyErr)
 		}
 		result := &ConnectResult{
 			Host:        input.Host,
@@ -549,19 +555,19 @@ func (result *ConnectResult) populate(ctx context.Context, input ConnectTLSInput
 	}
 
 	// Best-effort OCSP check on the leaf certificate.
-	if input.DisableOCSP {
-		// User explicitly disabled — no output.
-	} else if issuer == nil {
+	switch {
+	case input.DisableOCSP:
+	case issuer == nil:
 		result.OCSP = &OCSPResult{
 			Status: "skipped",
 			Detail: "no issuer certificate in chain",
 		}
-	} else if len(leaf.OCSPServer) == 0 {
+	case len(leaf.OCSPServer) == 0:
 		result.OCSP = &OCSPResult{
 			Status: "skipped",
 			Detail: "certificate has no OCSP responder URL",
 		}
-	} else {
+	default:
 		ocspTimeout := input.OCSPTimeout
 		if ocspTimeout == 0 {
 			ocspTimeout = 5 * time.Second
@@ -692,7 +698,7 @@ func CheckLeafCRL(ctx context.Context, input CheckLeafCRLInput) *CRLCheckResult 
 		return &CRLCheckResult{
 			Status: "unavailable",
 			URL:    cdpURL,
-			Detail: fmt.Sprintf("CRL expired at %s", crl.NextUpdate.UTC().Format(time.RFC3339)),
+			Detail: "CRL expired at " + crl.NextUpdate.UTC().Format(time.RFC3339),
 		}
 	}
 
@@ -763,8 +769,10 @@ func signatureSchemeString(scheme tls.SignatureScheme) string {
 }
 
 func legacySignatureSchemeName(scheme tls.SignatureScheme) (string, bool) {
-	hashID := uint8(uint16(scheme) >> 8)
-	sigID := uint8(uint16(scheme))
+	var schemeBytes [2]byte
+	binary.BigEndian.PutUint16(schemeBytes[:], uint16(scheme))
+	hashID := schemeBytes[0]
+	sigID := schemeBytes[1]
 
 	hashName, ok := map[uint8]string{
 		1: "MD5",
@@ -831,7 +839,7 @@ func FormatOCSPStatusLine(prefix string, r *OCSPResult) string {
 	case "skipped":
 		return fmt.Sprintf("%sskipped (%s)\n", prefix, r.Detail)
 	case "unknown":
-		return fmt.Sprintf("%sunknown (responder does not recognize this certificate)\n", prefix)
+		return prefix + "unknown (responder does not recognize this certificate)\n"
 	default:
 		return fmt.Sprintf("%s%s\n", prefix, r.Status)
 	}
@@ -946,16 +954,16 @@ func cipherSuiteName(id uint16) string {
 // keyExchangeName returns a human-readable name for a TLS named group.
 // Go's CurveID.String() returns "CurveP256" etc.; we prefer "P-256".
 func keyExchangeName(id tls.CurveID) string {
-	switch id {
-	case tls.CurveP256:
+	if id == tls.CurveP256 {
 		return "P-256"
-	case tls.CurveP384:
-		return "P-384"
-	case tls.CurveP521:
-		return "P-521"
-	default:
-		return id.String()
 	}
+	if id == tls.CurveP384 {
+		return "P-384"
+	}
+	if id == tls.CurveP521 {
+		return "P-521"
+	}
+	return id.String()
 }
 
 // cipherKeyExchange returns the key exchange mechanism for a cipher suite.
@@ -1037,7 +1045,7 @@ func RateCipherSuite(cipherID uint16, tlsVersion uint16) CipherRating {
 // raw ClientHello with individual named groups. All probes run concurrently.
 func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*CipherScanResult, error) {
 	if input.Host == "" {
-		return nil, fmt.Errorf("scanning cipher suites: host is required")
+		return nil, errCipherScanHostRequired
 	}
 	port := input.Port
 	if port == "" {
@@ -1374,6 +1382,7 @@ func probeCipher(ctx context.Context, input cipherProbeInput) bool {
 	if err != nil {
 		return false
 	}
+	//nolint:gosec // This probe intentionally tests the caller-selected legacy TLS version and cipher.
 	tlsConn := tls.Client(conn, &tls.Config{
 		ServerName:           input.serverName,
 		MinVersion:           input.version,
@@ -1418,6 +1427,7 @@ func probeKeyExchangeGroupLegacy(ctx context.Context, input cipherProbeInput) bo
 	if err != nil {
 		return false
 	}
+	//nolint:gosec // This probe intentionally allows TLS 1.0-1.2 and legacy ECDHE suites to test server support.
 	tlsConn := tls.Client(conn, &tls.Config{
 		ServerName:           input.serverName,
 		MinVersion:           tls.VersionTLS10,
@@ -1729,11 +1739,12 @@ func FormatConnectStatusLines(r *ConnectResult) string {
 		fmt.Fprintf(&out, "ALPN:         %s\n", r.ALPN)
 	}
 
-	if r.VerifyError != "" {
+	switch {
+	case r.VerifyError != "":
 		fmt.Fprintf(&out, "Verify:       failed (%s)\n", r.VerifyError)
-	} else if r.AIAFetched {
+	case r.AIAFetched:
 		out.WriteString("Verify:       ok (intermediates fetched via AIA)\n")
-	} else {
+	default:
 		out.WriteString("Verify:       ok\n")
 	}
 

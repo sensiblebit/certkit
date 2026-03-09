@@ -16,16 +16,34 @@ import (
 	"time"
 )
 
+func mustWrapTLSRecord(t *testing.T, handshakeMsg []byte) []byte {
+	t.Helper()
+	record, err := wrapTLSRecord(handshakeMsg)
+	if err != nil {
+		t.Fatalf("wrap TLS record: %v", err)
+	}
+	return record
+}
+
 // buildCertificateMessageBody constructs a TLS Certificate message body
 // from DER-encoded certificates.
-func buildCertificateMessageBody(certs ...[]byte) []byte {
+func buildCertificateMessageBody(t *testing.T, certs ...[]byte) []byte {
+	t.Helper()
 	var entries []byte
 	for _, cert := range certs {
-		entries = appendUint24(entries, uint32(len(cert)))
+		certLen, err := checkedUint24Len(len(cert), "certificate entry")
+		if err != nil {
+			t.Fatalf("certificate entry length: %v", err)
+		}
+		entries = appendUint24(entries, certLen)
 		entries = append(entries, cert...)
 	}
 	var body []byte
-	body = appendUint24(body, uint32(len(entries)))
+	entriesLen, err := checkedUint24Len(len(entries), "certificate message entries")
+	if err != nil {
+		t.Fatalf("certificate message entries length: %v", err)
+	}
+	body = appendUint24(body, entriesLen)
 	body = append(body, entries...)
 	return body
 }
@@ -52,10 +70,10 @@ func TestReadServerCertificates(t *testing.T) {
 	}
 
 	// Build a ServerHello handshake message (cipher 0x0033, TLS 1.2).
-	serverHello := buildMockServerHello(0x0303, 0x0033)
+	serverHello := buildMockServerHello(t, 0x0303, 0x0033)
 
 	// Build a Certificate handshake message.
-	certMsg := buildCertificateHandshakeMessage(certDER)
+	certMsg := buildCertificateHandshakeMessage(t, certDER)
 
 	// Build a Certificate handshake message that spans two records by splitting
 	// mid-message. This exercises the "incomplete message, need more records"
@@ -76,14 +94,14 @@ func TestReadServerCertificates(t *testing.T) {
 	}{
 		{
 			name:      "single record with ServerHello + Certificate",
-			records:   wrapTLSRecord(append(serverHello, certMsg...)),
+			records:   mustWrapTLSRecord(t, append(serverHello, certMsg...)),
 			wantCS:    0x0033,
 			wantVer:   0x0303,
 			wantCerts: 1,
 		},
 		{
 			name:      "separate records for ServerHello and Certificate",
-			records:   append(wrapTLSRecord(serverHello), wrapTLSRecord(certMsg)...),
+			records:   append(mustWrapTLSRecord(t, serverHello), mustWrapTLSRecord(t, certMsg)...),
 			wantCS:    0x0033,
 			wantVer:   0x0303,
 			wantCerts: 1,
@@ -91,8 +109,8 @@ func TestReadServerCertificates(t *testing.T) {
 		{
 			name: "Certificate message spanning two records",
 			records: append(
-				wrapTLSRecord(serverHello),
-				append(wrapTLSRecord(certMsgSplit1), wrapTLSRecord(certMsgSplit2)...)...,
+				mustWrapTLSRecord(t, serverHello),
+				append(mustWrapTLSRecord(t, certMsgSplit1), mustWrapTLSRecord(t, certMsgSplit2)...)...,
 			),
 			wantCS:    0x0033,
 			wantVer:   0x0303,
@@ -100,24 +118,24 @@ func TestReadServerCertificates(t *testing.T) {
 		},
 		{
 			name:    "alert record",
-			records: buildAlertRecord(),
+			records: buildAlertRecord(t),
 			wantErr: errAlertReceived,
 		},
 		{
 			name:      "ServerHelloDone without Certificate",
-			records:   wrapTLSRecord(append(serverHello, serverHelloDone...)),
+			records:   mustWrapTLSRecord(t, append(serverHello, serverHelloDone...)),
 			wantCS:    0x0033,
 			wantVer:   0x0303,
 			wantCerts: 0,
 		},
 		{
 			name:            "oversized TLS record",
-			records:         buildRawTLSRecord(0x16, 16641),
+			records:         buildRawTLSRecord(t, 0x16, 16641),
 			wantErrContains: "tls record too large",
 		},
 		{
 			name:            "unexpected content type",
-			records:         buildRawTLSRecord(0x17, 1), // ApplicationData
+			records:         buildRawTLSRecord(t, 0x17, 1), // ApplicationData
 			wantErrContains: "unexpected tls content type",
 		},
 	}
@@ -173,8 +191,8 @@ func TestReadServerCertificates_AlertAfterServerHello(t *testing.T) {
 	// WHY: Legacy parser must return parsed ServerHello context even when a
 	// fatal alert follows, preserving diagnostic signal for callers.
 	t.Parallel()
-	serverHello := buildMockServerHello(0x0303, 0x0033)
-	records := append(wrapTLSRecord(serverHello), buildAlertRecord()...)
+	serverHello := buildMockServerHello(t, 0x0303, 0x0033)
+	records := append(mustWrapTLSRecord(t, serverHello), buildAlertRecord(t)...)
 
 	sh, certs, err := readServerCertificates(bytes.NewReader(records))
 	if !errors.Is(err, errAlertReceived) {
@@ -206,7 +224,7 @@ func TestReadServerCertificates_PayloadLimit(t *testing.T) {
 
 	var records []byte
 	for len(records) <= maxCertificatePayload {
-		records = append(records, wrapTLSRecord(chunkMsg)...)
+		records = append(records, mustWrapTLSRecord(t, chunkMsg)...)
 	}
 
 	_, _, err := readServerCertificates(bytes.NewReader(records))
@@ -219,7 +237,8 @@ func TestReadServerCertificates_PayloadLimit(t *testing.T) {
 }
 
 // buildMockServerHello builds a minimal ServerHello handshake message.
-func buildMockServerHello(version, cipherSuite uint16) []byte {
+func buildMockServerHello(t *testing.T, version, cipherSuite uint16) []byte {
+	t.Helper()
 	var body []byte
 	// Version (2 bytes).
 	body = appendUint16(body, version)
@@ -234,16 +253,25 @@ func buildMockServerHello(version, cipherSuite uint16) []byte {
 
 	// Wrap in handshake header: type 0x02 (ServerHello).
 	msg := []byte{0x02}
-	msg = appendUint24(msg, uint32(len(body)))
+	bodyLen, err := checkedUint24Len(len(body), "server hello body")
+	if err != nil {
+		t.Fatalf("server hello body length: %v", err)
+	}
+	msg = appendUint24(msg, bodyLen)
 	msg = append(msg, body...)
 	return msg
 }
 
 // buildCertificateHandshakeMessage builds a TLS Certificate handshake message.
-func buildCertificateHandshakeMessage(certs ...[]byte) []byte {
-	body := buildCertificateMessageBody(certs...)
+func buildCertificateHandshakeMessage(t *testing.T, certs ...[]byte) []byte {
+	t.Helper()
+	body := buildCertificateMessageBody(t, certs...)
 	msg := []byte{0x0B} // Certificate
-	msg = appendUint24(msg, uint32(len(body)))
+	bodyLen, err := checkedUint24Len(len(body), "certificate handshake body")
+	if err != nil {
+		t.Fatalf("certificate handshake body length: %v", err)
+	}
+	msg = appendUint24(msg, bodyLen)
 	msg = append(msg, body...)
 	return msg
 }
@@ -252,20 +280,30 @@ func buildCertificateHandshakeMessage(certs ...[]byte) []byte {
 // payload of payloadLen zero bytes. Unlike wrapTLSRecord it does NOT cap the
 // payload size, so it can be used to construct intentionally oversized records
 // for negative test cases.
-func buildRawTLSRecord(contentType byte, payloadLen int) []byte {
+func buildRawTLSRecord(t *testing.T, contentType byte, payloadLen int) []byte {
+	t.Helper()
 	record := []byte{contentType, 0x03, 0x03}
-	record = appendUint16(record, uint16(payloadLen))
+	payloadSize, err := checkedUint16Len(payloadLen, "raw TLS record payload")
+	if err != nil {
+		t.Fatalf("raw TLS record payload length: %v", err)
+	}
+	record = appendUint16(record, payloadSize)
 	record = append(record, make([]byte, payloadLen)...)
 	return record
 }
 
 // buildAlertRecord builds a TLS Alert record.
-func buildAlertRecord() []byte {
+func buildAlertRecord(t *testing.T) []byte {
+	t.Helper()
 	// Alert: handshake_failure (40), fatal (2).
 	payload := []byte{0x02, 0x28}
 	record := []byte{0x15} // ContentType: Alert
 	record = append(record, 0x03, 0x01)
-	record = appendUint16(record, uint16(len(payload)))
+	payloadLen, err := checkedUint16Len(len(payload), "alert payload")
+	if err != nil {
+		t.Fatalf("alert payload length: %v", err)
+	}
+	record = appendUint16(record, payloadLen)
 	record = append(record, payload...)
 	return record
 }
@@ -306,8 +344,8 @@ func TestLegacyFallbackConnect(t *testing.T) {
 			}
 
 			// Send ServerHello + Certificate as raw TLS records.
-			serverHello := buildMockServerHello(0x0303, 0x0033)
-			certMsg := buildCertificateHandshakeMessage(leaf.DER)
+			serverHello := buildMockServerHello(t, 0x0303, 0x0033)
+			certMsg := buildCertificateHandshakeMessage(t, leaf.DER)
 			helloDone := []byte{0x0E, 0x00, 0x00, 0x00} // ServerHelloDone
 
 			// Pack all handshake messages into a single TLS record.
@@ -316,7 +354,8 @@ func TestLegacyFallbackConnect(t *testing.T) {
 			handshake = append(handshake, certMsg...)
 			handshake = append(handshake, helloDone...)
 
-			if _, err := conn.Write(wrapTLSRecord(handshake)); err != nil {
+			record := mustWrapTLSRecord(t, handshake)
+			if _, err := conn.Write(record); err != nil {
 				slog.Debug("TestLegacyFallbackConnect: writing server response", "error", err)
 			}
 			_ = conn.Close()

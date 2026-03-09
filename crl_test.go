@@ -216,7 +216,7 @@ func TestFetchCRL(t *testing.T) {
 	}{
 		{
 			name: "success",
-			handler: func(w http.ResponseWriter, r *http.Request) {
+			handler: func(w http.ResponseWriter, _ *http.Request) {
 				_, _ = w.Write(crlDER)
 			},
 			allowPrivate: true,
@@ -224,7 +224,7 @@ func TestFetchCRL(t *testing.T) {
 		},
 		{
 			name: "non-200 status",
-			handler: func(w http.ResponseWriter, r *http.Request) {
+			handler: func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusNotFound)
 			},
 			allowPrivate: true,
@@ -303,7 +303,7 @@ func TestFetchCRL_AllowPrivateNetworks(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write(crlDER)
 	}))
 	t.Cleanup(srv.Close)
@@ -400,6 +400,7 @@ func TestCheckLeafCRL(t *testing.T) {
 		{
 			name: "revoked",
 			crlFunc: func(t *testing.T, _ *httptest.Server) []byte {
+				t.Helper()
 				der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
 					Number:     big.NewInt(1),
 					ThisUpdate: now,
@@ -420,6 +421,7 @@ func TestCheckLeafCRL(t *testing.T) {
 		{
 			name: "good",
 			crlFunc: func(t *testing.T, _ *httptest.Server) []byte {
+				t.Helper()
 				der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
 					Number:     big.NewInt(1),
 					ThisUpdate: now,
@@ -439,6 +441,7 @@ func TestCheckLeafCRL(t *testing.T) {
 		{
 			name: "expired CRL",
 			crlFunc: func(t *testing.T, _ *httptest.Server) []byte {
+				t.Helper()
 				der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
 					Number:     big.NewInt(1),
 					ThisUpdate: now.Add(-48 * time.Hour),
@@ -456,6 +459,7 @@ func TestCheckLeafCRL(t *testing.T) {
 		{
 			name: "wrong issuer signature",
 			crlFunc: func(t *testing.T, _ *httptest.Server) []byte {
+				t.Helper()
 				wrongCA := generateTestCA(t, "Wrong CA")
 				der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
 					Number:     big.NewInt(1),
@@ -498,7 +502,7 @@ func TestCheckLeafCRL(t *testing.T) {
 				// race between the handler goroutine reading crlData and the
 				// test goroutine writing it.
 				crlData := tc.crlFunc(t, nil)
-				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					_, _ = w.Write(crlData)
 				}))
 				t.Cleanup(srv.Close)

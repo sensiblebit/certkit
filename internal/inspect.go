@@ -10,14 +10,21 @@ import (
 	"encoding/asn1"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log/slog"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/sensiblebit/certkit"
 	"github.com/sensiblebit/certkit/internal/certstore"
+)
+
+var (
+	errInspectNoObjectsFound          = errors.New("no certificates, keys, or CSRs found")
+	errInspectUnsupportedOutputFormat = errors.New("unsupported output format")
 )
 
 // InspectResult holds the inspection details for a single certificate, key, or CSR.
@@ -63,7 +70,7 @@ func InspectFile(path string, passwords []string) ([]InspectResult, error) {
 
 	results := InspectData(data, passwords)
 	if len(results) == 0 {
-		return nil, fmt.Errorf("no certificates, keys, or CSRs found in %s", path)
+		return nil, fmt.Errorf("%w in %s", errInspectNoObjectsFound, path)
 	}
 
 	return results, nil
@@ -321,7 +328,7 @@ func boolYesNo(v bool) string {
 func publicKeySize(pub any) string {
 	switch k := pub.(type) {
 	case *rsa.PublicKey:
-		return fmt.Sprintf("%d", k.N.BitLen())
+		return strconv.Itoa(k.N.BitLen())
 	case *ecdsa.PublicKey:
 		return k.Curve.Params().Name
 	case ed25519.PublicKey:
@@ -334,7 +341,7 @@ func publicKeySize(pub any) string {
 func privateKeySize(key any) string {
 	switch k := key.(type) {
 	case *rsa.PrivateKey:
-		return fmt.Sprintf("%d", k.N.BitLen())
+		return strconv.Itoa(k.N.BitLen())
 	case *ecdsa.PrivateKey:
 		return k.Curve.Params().Name
 	case ed25519.PrivateKey, *ed25519.PrivateKey:
@@ -440,7 +447,7 @@ func FormatInspectResults(results []InspectResult, format string) (string, error
 		}
 		return string(data) + "\n", nil
 	default:
-		return "", fmt.Errorf("unsupported output format %q (use text or json)", format)
+		return "", fmt.Errorf("%w %q (use text or json)", errInspectUnsupportedOutputFormat, format)
 	}
 }
 

@@ -727,7 +727,7 @@ func TestProcessArchive_TarPartialCorruption(t *testing.T) {
 	}
 	// Don't close the writer cleanly — append garbage instead
 	validTar := buf.Bytes()
-	corruptedTar := append(validTar, []byte("CORRUPT_GARBAGE_DATA_THAT_BREAKS_TAR_PARSING")...)
+	corruptedTar := append(bytes.Clone(validTar), []byte("CORRUPT_GARBAGE_DATA_THAT_BREAKS_TAR_PARSING")...)
 
 	cfg := newTestConfig(t)
 	n, err := ProcessArchive(ProcessArchiveInput{

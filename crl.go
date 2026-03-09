@@ -18,6 +18,10 @@ const maxCRLBytes int64 = 10 << 20
 
 // ErrCRLTooLarge indicates that CRL input exceeded the maximum allowed size.
 var ErrCRLTooLarge = errors.New("CRL data exceeds max size")
+var (
+	errCRLRedirectLimit = errors.New("CRL redirect limit exceeded")
+	errCRLHTTPStatus    = errors.New("CRL server returned non-200 status")
+)
 
 // CRLInfo contains parsed CRL details for display.
 type CRLInfo struct {
@@ -65,7 +69,7 @@ func FetchCRL(ctx context.Context, input FetchCRLInput) ([]byte, error) {
 		Timeout: 10 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= maxRedirects {
-				return fmt.Errorf("stopped after %d redirects", maxRedirects)
+				return fmt.Errorf("%w: stopped after %d redirects", errCRLRedirectLimit, maxRedirects)
 			}
 			if !input.AllowPrivateNetworks {
 				if err := ValidateAIAURLWithOptions(req.Context(), ValidateAIAURLInput{URL: req.URL.String(), AllowPrivateNetworks: input.AllowPrivateNetworks}); err != nil {
@@ -86,7 +90,7 @@ func FetchCRL(ctx context.Context, input FetchCRLInput) ([]byte, error) {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("CRL server returned HTTP %d from %s", resp.StatusCode, input.URL)
+		return nil, fmt.Errorf("%w: HTTP %d from %s", errCRLHTTPStatus, resp.StatusCode, input.URL)
 	}
 
 	if contentLength := resp.Header.Get("Content-Length"); contentLength != "" {
@@ -105,6 +109,7 @@ func FetchCRL(ctx context.Context, input FetchCRLInput) ([]byte, error) {
 
 // ReadCRLFile reads a local CRL file with the same hard size cap as FetchCRL.
 func ReadCRLFile(path string) ([]byte, error) {
+	//nolint:gosec // CLI/API callers intentionally provide the local CRL path to inspect.
 	f, err := os.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("opening CRL file: %w", err)

@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,6 +14,11 @@ import (
 	"strings"
 
 	"github.com/sensiblebit/certkit/internal/certstore"
+)
+
+var (
+	errArchiveFormatUnsupported = errors.New("unsupported archive format")
+	errZIPEntryTooLarge         = errors.New("ZIP entry exceeds max size")
 )
 
 // ArchiveLimits controls zip bomb protection thresholds.
@@ -109,7 +115,7 @@ func ProcessArchive(input ProcessArchiveInput) (int, error) {
 	case "tar.gz":
 		return processTarArchive(input, true)
 	default:
-		return 0, fmt.Errorf("unsupported archive format: %q", input.Format)
+		return 0, fmt.Errorf("%w: %q", errArchiveFormatUnsupported, input.Format)
 	}
 }
 
@@ -224,7 +230,7 @@ func processTarArchive(input ProcessArchiveInput, gzipped bool) (int, error) {
 
 	for {
 		header, err := tr.Next()
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
@@ -331,7 +337,7 @@ func readZipEntry(f *zip.File, maxSize int64) ([]byte, error) {
 	}
 
 	if int64(len(data)) > maxSize {
-		return nil, fmt.Errorf("ZIP entry %s exceeds max size (%d bytes)", f.Name, maxSize)
+		return nil, fmt.Errorf("%w: %s (%d bytes)", errZIPEntryTooLarge, f.Name, maxSize)
 	}
 
 	return data, nil

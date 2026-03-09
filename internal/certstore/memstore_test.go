@@ -10,6 +10,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/hex"
 	"encoding/pem"
+	"fmt"
 	"math/big"
 	"strings"
 	"testing"
@@ -600,7 +601,10 @@ func TestMemStore_HandleKey_AllKeyTypes(t *testing.T) {
 			name: "Ed25519",
 			genKey: func() (any, error) {
 				_, priv, err := ed25519.GenerateKey(rand.Reader)
-				return priv, err
+				if err != nil {
+					return nil, fmt.Errorf("generate Ed25519 key: %w", err)
+				}
+				return priv, nil
 			},
 			wantType: "Ed25519",
 			wantBits: 256,

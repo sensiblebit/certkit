@@ -20,7 +20,7 @@ var rootCmd = &cobra.Command{
 	Long:          "Inspect, bundle, verify, and manage TLS/SSL certificates and keys.",
 	SilenceUsage:  true,
 	SilenceErrors: true,
-	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
+	PersistentPreRunE: func(_ *cobra.Command, _ []string) error {
 		internal.SetupLogger(logLevel)
 		return nil
 	},

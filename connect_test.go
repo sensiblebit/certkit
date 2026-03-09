@@ -21,6 +21,8 @@ import (
 	"golang.org/x/crypto/ocsp"
 )
 
+var errUnknownAuthority = errors.New("x509: certificate signed by unknown authority")
+
 func TestConnectTLS(t *testing.T) {
 	// WHY: Covers core ConnectTLS scenarios (self-signed, expired, timeout, hostname mismatch)
 	// to ensure diagnostics and verify fields are populated consistently.
@@ -33,6 +35,7 @@ func TestConnectTLS(t *testing.T) {
 		{
 			name: "basic self-signed",
 			run: func(t *testing.T) {
+				t.Helper()
 				key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 				if err != nil {
 					t.Fatal(err)
@@ -58,6 +61,8 @@ func TestConnectTLS(t *testing.T) {
 				}
 
 				listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+					MinVersion:   tls.VersionTLS12,
+					MaxVersion:   tls.VersionTLS13,
 					Certificates: []tls.Certificate{tlsCert},
 				})
 				if err != nil {
@@ -123,6 +128,7 @@ func TestConnectTLS(t *testing.T) {
 		{
 			name: "valid chain with intermediate",
 			run: func(t *testing.T) {
+				t.Helper()
 				root := generateTestCA(t, "Valid Chain Root")
 				intermediate := generateIntermediateCA(t, root, "Valid Chain Intermediate")
 				leaf := generateTestLeafCert(t, intermediate)
@@ -154,6 +160,7 @@ func TestConnectTLS(t *testing.T) {
 		{
 			name: "expired leaf",
 			run: func(t *testing.T) {
+				t.Helper()
 				key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 				if err != nil {
 					t.Fatal(err)
@@ -185,6 +192,8 @@ func TestConnectTLS(t *testing.T) {
 					PrivateKey:  key,
 				}
 				listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+					MinVersion:   tls.VersionTLS12,
+					MaxVersion:   tls.VersionTLS13,
 					Certificates: []tls.Certificate{tlsCert},
 				})
 				if err != nil {
@@ -229,6 +238,7 @@ func TestConnectTLS(t *testing.T) {
 		{
 			name: "context timeout",
 			run: func(t *testing.T) {
+				t.Helper()
 				listener, err := net.Listen("tcp", "127.0.0.1:0")
 				if err != nil {
 					t.Fatal(err)
@@ -268,6 +278,7 @@ func TestConnectTLS(t *testing.T) {
 		{
 			name: "hostname mismatch",
 			run: func(t *testing.T) {
+				t.Helper()
 				ca := generateTestCA(t, "Mismatch CA")
 				leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 				if err != nil {
@@ -413,6 +424,8 @@ func TestConnectTLS_ClientAuth(t *testing.T) {
 			// WHY: Ensures mTLS detection handles acceptable CA lists correctly.
 			t.Parallel()
 			listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+				MinVersion:   tls.VersionTLS12,
+				MaxVersion:   tls.VersionTLS13,
 				Certificates: []tls.Certificate{tlsCert},
 				ClientAuth:   tls.RequestClientCert,
 				ClientCAs:    tt.clientCAs,
@@ -510,6 +523,8 @@ func TestConnectTLS_ClientAuth_Required(t *testing.T) {
 	rootPool.AddCert(serverCA.Cert)
 
 	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		MaxVersion: tls.VersionTLS13,
 		Certificates: []tls.Certificate{{
 			Certificate: [][]byte{leaf.DER, serverCA.CertDER},
 			PrivateKey:  leaf.Key,
@@ -683,6 +698,8 @@ func TestConnectTLS_IPv6Loopback(t *testing.T) {
 	}
 
 	listener, err := tls.Listen("tcp", "[::1]:0", &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		MaxVersion:   tls.VersionTLS13,
 		Certificates: []tls.Certificate{tlsCert},
 	})
 	if err != nil {
@@ -1225,7 +1242,7 @@ func TestDiagnoseVerifyError(t *testing.T) {
 		},
 		{
 			name:       "non-hostname error",
-			err:        errors.New("x509: certificate signed by unknown authority"),
+			err:        errUnknownAuthority,
 			wantChecks: nil,
 		},
 		{
@@ -1392,7 +1409,7 @@ func TestConnectTLS_AIAFetch(t *testing.T) {
 
 	// Serve the intermediate cert over HTTP for AIA fetching.
 	var aiaRequests atomic.Int64
-	aiaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	aiaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		aiaRequests.Add(1)
 		w.Header().Set("Content-Type", "application/pkix-cert")
 		if _, err := w.Write(intDER); err != nil {
@@ -1435,6 +1452,8 @@ func TestConnectTLS_AIAFetch(t *testing.T) {
 		PrivateKey:  leafKey,
 	}
 	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		MaxVersion:   tls.VersionTLS13,
 		Certificates: []tls.Certificate{tlsCert},
 	})
 	if err != nil {
@@ -1517,7 +1536,7 @@ func TestConnectTLS_AIAFetch_LoopbackRejected(t *testing.T) {
 	intermediate := generateIntermediateCA(t, root, "AIA Loopback Intermediate CA")
 
 	var hits atomic.Int64
-	aiaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	aiaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
 		w.Header().Set("Content-Type", "application/pkix-cert")
 		if _, err := w.Write(intermediate.CertDER); err != nil {
@@ -1645,14 +1664,14 @@ func TestConnectTLS_AIAFetch_FallbackURL(t *testing.T) {
 	intermediate := generateIntermediateCA(t, root, "AIA Fallback Intermediate CA")
 
 	var badHits atomic.Int64
-	badServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	badServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		badHits.Add(1)
 		http.Error(w, "broken", http.StatusInternalServerError)
 	}))
 	t.Cleanup(badServer.Close)
 
 	var goodHits atomic.Int64
-	goodServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	goodServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		goodHits.Add(1)
 		w.Header().Set("Content-Type", "application/pkix-cert")
 		if _, err := w.Write(intermediate.CertDER); err != nil {
@@ -1753,7 +1772,7 @@ func TestConnectTLS_AIAFetch_Failure(t *testing.T) {
 	}{
 		{
 			name: "invalid DER",
-			handler: func(w http.ResponseWriter, r *http.Request) {
+			handler: func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/pkix-cert")
 				if _, err := w.Write([]byte("not-a-cert")); err != nil {
 					http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -1765,7 +1784,7 @@ func TestConnectTLS_AIAFetch_Failure(t *testing.T) {
 		},
 		{
 			name: "http 500",
-			handler: func(w http.ResponseWriter, r *http.Request) {
+			handler: func(w http.ResponseWriter, _ *http.Request) {
 				http.Error(w, "broken", http.StatusInternalServerError)
 			},
 			aiaTimeout:    5 * time.Second,
@@ -1773,7 +1792,7 @@ func TestConnectTLS_AIAFetch_Failure(t *testing.T) {
 		},
 		{
 			name: "timeout",
-			handler: func(w http.ResponseWriter, r *http.Request) {
+			handler: func(w http.ResponseWriter, _ *http.Request) {
 				time.Sleep(200 * time.Millisecond)
 				w.Header().Set("Content-Type", "application/pkix-cert")
 				if _, err := w.Write(intDER); err != nil {
@@ -1819,6 +1838,8 @@ func TestConnectTLS_AIAFetch_Failure(t *testing.T) {
 			}
 
 			listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+				MinVersion:   tls.VersionTLS12,
+				MaxVersion:   tls.VersionTLS13,
 				Certificates: []tls.Certificate{{Certificate: [][]byte{leafDER}, PrivateKey: leafKey}},
 			})
 			if err != nil {
@@ -1894,7 +1915,7 @@ func TestConnectTLS_AIAFetch_WrongIssuer(t *testing.T) {
 	wrongIntermediate := generateIntermediateCA(t, wrongRoot, "AIA Wrong Intermediate")
 
 	var hits atomic.Int64
-	wrongServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	wrongServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
 		w.Header().Set("Content-Type", "application/pkix-cert")
 		if _, err := w.Write(wrongIntermediate.CertDER); err != nil {
@@ -1960,8 +1981,11 @@ func TestConnectTLS_NoCertificates(t *testing.T) {
 				return
 			}
 			tlsConn := tls.Server(conn, &tls.Config{
+				MinVersion: tls.VersionTLS12,
+				MaxVersion: tls.VersionTLS13,
 				GetCertificate: func(*tls.ClientHelloInfo) (*tls.Certificate, error) {
-					return nil, nil
+					var cert *tls.Certificate
+					return cert, nil
 				},
 			})
 			_ = tlsConn.Handshake()
@@ -1983,7 +2007,7 @@ func TestConnectTLS_AIAFetch_DisableAIA(t *testing.T) {
 	t.Parallel()
 
 	var hits atomic.Int64
-	aiaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	aiaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -2058,6 +2082,8 @@ func TestConnectTLS_AIAFetch_DisableAIA(t *testing.T) {
 		PrivateKey:  leafKey,
 	}
 	listener, err := tls.Listen("tcp", "127.0.0.1:0", &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		MaxVersion:   tls.VersionTLS13,
 		Certificates: []tls.Certificate{tlsCert},
 	})
 	if err != nil {
@@ -2157,7 +2183,7 @@ func TestConnectTLS_OCSP(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			ocspServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ocspServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/ocsp-response")
 				if _, err := w.Write(ocspRespBytes); err != nil {
 					http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -2258,7 +2284,7 @@ func TestConnectTLS_OCSP_SkipAndFailure(t *testing.T) {
 			var hits atomic.Int64
 			var ocspURL string
 			if tc.withResponder {
-				ocspServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				ocspServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 					hits.Add(1)
 					http.Error(w, "broken", http.StatusInternalServerError)
 				}))
@@ -2328,7 +2354,7 @@ func TestConnectTLS_OCSP_InvalidResponses(t *testing.T) {
 	}{
 		{
 			name: "invalid DER",
-			makeResp: func(serial *big.Int) ([]byte, error) {
+			makeResp: func(_ *big.Int) ([]byte, error) {
 				return []byte("not-ocsp"), nil
 			},
 			wantDetail: "parsing OCSP response",
@@ -2360,7 +2386,7 @@ func TestConnectTLS_OCSP_InvalidResponses(t *testing.T) {
 			}
 
 			var hits atomic.Int64
-			ocspServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			ocspServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				hits.Add(1)
 				w.Header().Set("Content-Type", "application/ocsp-response")
 				if _, err := w.Write(respBytes); err != nil {
@@ -2427,6 +2453,7 @@ func TestConnectTLS_CRL(t *testing.T) {
 		{
 			name: "revoked",
 			setupCRL: func(t *testing.T, ca *testCA) ([]byte, *testCA) {
+				t.Helper()
 				der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
 					Number:     big.NewInt(1),
 					ThisUpdate: now.Add(-time.Hour),
@@ -2447,6 +2474,7 @@ func TestConnectTLS_CRL(t *testing.T) {
 		{
 			name: "good",
 			setupCRL: func(t *testing.T, ca *testCA) ([]byte, *testCA) {
+				t.Helper()
 				der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
 					Number:     big.NewInt(1),
 					ThisUpdate: now.Add(-time.Hour),
@@ -2465,7 +2493,8 @@ func TestConnectTLS_CRL(t *testing.T) {
 		},
 		{
 			name: "wrong issuer",
-			setupCRL: func(t *testing.T, ca *testCA) ([]byte, *testCA) {
+			setupCRL: func(t *testing.T, _ *testCA) ([]byte, *testCA) {
+				t.Helper()
 				wrongCA := generateTestCA(t, "CRL Wrong CA")
 				der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
 					Number:     big.NewInt(1),
@@ -2486,7 +2515,7 @@ func TestConnectTLS_CRL(t *testing.T) {
 		},
 		{
 			name: "invalid DER",
-			setupCRL: func(t *testing.T, ca *testCA) ([]byte, *testCA) {
+			setupCRL: func(_ *testing.T, ca *testCA) ([]byte, *testCA) {
 				return []byte("not-crl"), ca
 			},
 			leafSerial:   big.NewInt(100),
@@ -2496,6 +2525,7 @@ func TestConnectTLS_CRL(t *testing.T) {
 		{
 			name: "expired CRL",
 			setupCRL: func(t *testing.T, ca *testCA) ([]byte, *testCA) {
+				t.Helper()
 				der, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
 					Number:     big.NewInt(1),
 					ThisUpdate: now.Add(-48 * time.Hour),
@@ -2520,7 +2550,7 @@ func TestConnectTLS_CRL(t *testing.T) {
 			ca := generateTestCA(t, "CRL Connect CA")
 			crlDER, _ := tc.setupCRL(t, ca)
 
-			crlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			crlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.Header().Set("Content-Type", "application/pkix-crl")
 				_, _ = w.Write(crlDER)
 			}))
@@ -2571,7 +2601,7 @@ func TestConnectTLS_CRL_Disabled(t *testing.T) {
 	ca := generateTestCA(t, "CRL Disabled CA")
 
 	var hits atomic.Int64
-	crlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	crlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		hits.Add(1)
 		http.Error(w, "unexpected", http.StatusInternalServerError)
 	}))
@@ -2714,14 +2744,14 @@ func TestConnectTLS_CRL_AIAFetchedIssuer(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	crlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	crlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/pkix-crl")
 		_, _ = w.Write(crlDER)
 	}))
 	t.Cleanup(crlServer.Close)
 
 	// AIA server serves the intermediate cert.
-	aiaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	aiaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/pkix-cert")
 		_, _ = w.Write(intermediate.CertDER)
 	}))
@@ -3352,7 +3382,7 @@ func TestConnectTLS_CRL_DuplicateLeafInChain(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	crlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	crlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/pkix-crl")
 		_, _ = w.Write(crlDER)
 	}))
@@ -3369,7 +3399,7 @@ func TestConnectTLS_CRL_DuplicateLeafInChain(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ocspServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	ocspServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", "application/ocsp-response")
 		_, _ = w.Write(ocspRespBytes)
 	}))

@@ -5,9 +5,15 @@ import (
 	"crypto/ed25519"
 	"crypto/rsa"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
+)
+
+var (
+	errBundleFolderNameEmpty   = errors.New("bundle folder name is empty")
+	errBundleFolderNameInvalid = errors.New("bundle folder name is invalid")
 )
 
 // derExtensions contains file extensions that may hold ASN.1/DER-encoded crypto
@@ -86,7 +92,7 @@ func GetKeyType(cert *x509.Certificate) string {
 	case *rsa.PublicKey:
 		return fmt.Sprintf("RSA %d bits", pub.N.BitLen())
 	case *ecdsa.PublicKey:
-		return fmt.Sprintf("ECDSA %s", pub.Curve.Params().Name)
+		return "ECDSA " + pub.Curve.Params().Name
 	case ed25519.PublicKey:
 		return "Ed25519"
 	default:
@@ -105,7 +111,7 @@ func FormatCN(cert *x509.Certificate) string {
 		return cert.DNSNames[0]
 	}
 	if cert.SerialNumber != nil {
-		return fmt.Sprintf("serial:%s", cert.SerialNumber.String())
+		return "serial:" + cert.SerialNumber.String()
 	}
 	return "unknown"
 }
@@ -135,10 +141,10 @@ func SanitizeFileName(name string) string {
 func SanitizeBundleFolder(name string) (string, error) {
 	sanitized := SanitizeFileName(strings.TrimSpace(name))
 	if sanitized == "" {
-		return "", fmt.Errorf("bundle folder name is empty")
+		return "", errBundleFolderNameEmpty
 	}
 	if sanitized == "." || sanitized == ".." {
-		return "", fmt.Errorf("bundle folder name %q is invalid", sanitized)
+		return "", fmt.Errorf("%w: %q", errBundleFolderNameInvalid, sanitized)
 	}
 	return sanitized, nil
 }

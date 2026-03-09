@@ -3,8 +3,8 @@ package main
 import (
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
 
 	"github.com/sensiblebit/certkit"
 	"github.com/sensiblebit/certkit/internal"
@@ -15,6 +15,9 @@ var (
 	ocspIssuerPath          string
 	ocspFormat              string
 	ocspAllowPrivateNetwork bool
+	errOCSPNoCertificate    = errors.New("no certificate found")
+	errOCSPNoMatchingIssuer = errors.New("no matching issuer certificate found in input; use --issuer to provide one")
+	errOCSPNoIssuer         = errors.New("no issuer certificate found; use --issuer to provide one")
 )
 
 var ocspCmd = &cobra.Command{
@@ -63,13 +66,14 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 	}
 
 	if contents.Leaf == nil {
-		return fmt.Errorf("no certificate found in %s", args[0])
+		return fmt.Errorf("%w in %s", errOCSPNoCertificate, args[0])
 	}
 
 	// Resolve issuer: explicit flag > extra certs from container
 	var ocspInput *certkit.CheckOCSPInput
-	if ocspIssuerPath != "" {
-		issuerData, err := os.ReadFile(ocspIssuerPath)
+	switch {
+	case ocspIssuerPath != "":
+		issuerData, err := readCLIFile(ocspIssuerPath)
 		if err != nil {
 			return fmt.Errorf("reading issuer certificate: %w", err)
 		}
@@ -82,18 +86,18 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 			Issuer:               issuerCert,
 			AllowPrivateNetworks: ocspAllowPrivateNetwork,
 		}
-	} else if len(contents.ExtraCerts) > 0 {
+	case len(contents.ExtraCerts) > 0:
 		issuerCert := certkit.SelectIssuerCertificate(contents.Leaf, contents.ExtraCerts)
 		if issuerCert == nil {
-			return fmt.Errorf("no matching issuer certificate found in input; use --issuer to provide one")
+			return errOCSPNoMatchingIssuer
 		}
 		ocspInput = &certkit.CheckOCSPInput{
 			Cert:                 contents.Leaf,
 			Issuer:               issuerCert,
 			AllowPrivateNetworks: ocspAllowPrivateNetwork,
 		}
-	} else {
-		return fmt.Errorf("no issuer certificate found; use --issuer to provide one")
+	default:
+		return errOCSPNoIssuer
 	}
 
 	result, err := certkit.CheckOCSP(cmd.Context(), *ocspInput)
@@ -134,7 +138,7 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 		}
 		fmt.Print(certkit.FormatOCSPResult(result))
 	default:
-		return fmt.Errorf("unsupported output format %q (use text or json)", format)
+		return fmt.Errorf("%w %q (use text or json)", ErrUnsupportedOutputFormat, format)
 	}
 
 	if result.Status == "revoked" {
@@ -146,7 +150,15 @@ func runOCSP(cmd *cobra.Command, args []string) error {
 
 func parseAnyCertificate(data []byte) (*x509.Certificate, error) {
 	if certkit.IsPEM(data) {
-		return certkit.ParsePEMCertificate(data)
+		cert, err := certkit.ParsePEMCertificate(data)
+		if err != nil {
+			return nil, fmt.Errorf("parsing PEM certificate: %w", err)
+		}
+		return cert, nil
 	}
-	return x509.ParseCertificate(data)
+	cert, err := x509.ParseCertificate(data)
+	if err != nil {
+		return nil, fmt.Errorf("parsing DER certificate: %w", err)
+	}
+	return cert, nil
 }

@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Consolidate shared `connect` status-line formatting between standard and verbose text output paths. ([#121])
 - Centralize pre-commit hooks under the shared `sensiblebit/.github` hook set (including shared `markdownlint`) and run dependency update hooks first; refresh resulting indirect Go and web lockfile dependencies. ([#128])
 - Remove the arbitrary 200-file cap from WASM upload and inspect flows; rely on byte limits instead. ([#129])
+- Enforce a stricter repo-local `golangci-lint` policy and refactor error handling, protocol encoding helpers, file-permission behavior, and tests to satisfy the higher lint bar. ([#130])
 
 ### Added
 

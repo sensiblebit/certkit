@@ -16,6 +16,8 @@ import (
 	"net/url"
 )
 
+var errCSRPrivateKeyNotSigner = errors.New("private key does not implement crypto.Signer")
+
 // GenerateCSR creates a Certificate Signing Request that copies Subject, DNSNames,
 // IPAddresses, and URIs from the given leaf certificate. If privateKey is nil,
 // a new EC P-256 key is generated. Returns the PEM-encoded CSR and, if a key was
@@ -28,7 +30,7 @@ func GenerateCSR(leaf *x509.Certificate, privateKey crypto.PrivateKey) (csrPEM s
 		var ok bool
 		signer, ok = privateKey.(crypto.Signer)
 		if !ok {
-			return "", "", errors.New("private key does not implement crypto.Signer")
+			return "", "", errCSRPrivateKeyNotSigner
 		}
 	} else {
 		key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

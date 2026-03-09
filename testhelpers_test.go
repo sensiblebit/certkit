@@ -223,7 +223,7 @@ func buildEmptyPKCS7DER() ([]byte, error) {
 	}
 	sdBytes, err := asn1.Marshal(sd)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("marshal PKCS#7 signed data: %w", err)
 	}
 
 	type outerContentInfo struct {
@@ -234,7 +234,11 @@ func buildEmptyPKCS7DER() ([]byte, error) {
 		ContentType: oidSignedData,
 		Content:     asn1.RawValue{FullBytes: sdBytes},
 	}
-	return asn1.Marshal(outer)
+	outerBytes, err := asn1.Marshal(outer)
+	if err != nil {
+		return nil, fmt.Errorf("marshal PKCS#7 outer content info: %w", err)
+	}
+	return outerBytes, nil
 }
 
 // generateLeafWithSANs creates a self-signed leaf certificate with Subject, DNS SANs,

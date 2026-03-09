@@ -7,6 +7,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rsa"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"net"
@@ -25,6 +26,9 @@ var (
 	connectNoOCSP              bool
 	connectCiphers             bool
 	connectAllowPrivateNetwork bool
+	errConnectEmptyHost        = errors.New("empty host")
+	errConnectEmptyPort        = errors.New("empty port")
+	errConnectInvalidPort      = errors.New("invalid port")
 )
 
 var connectCmd = &cobra.Command{
@@ -163,7 +167,10 @@ func runConnect(cmd *cobra.Command, args []string) error {
 				filtered = append(filtered, d)
 			}
 		}
-		result.Diagnostics = append(filtered, scanDiags...)
+		mergedDiagnostics := make([]certkit.ChainDiagnostic, 0, len(filtered)+len(scanDiags))
+		mergedDiagnostics = append(mergedDiagnostics, filtered...)
+		mergedDiagnostics = append(mergedDiagnostics, scanDiags...)
+		result.Diagnostics = mergedDiagnostics
 	}
 
 	spin.Stop()
@@ -277,7 +284,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 			fmt.Print(certkit.FormatCipherScanResult(result.CipherScan))
 		}
 	default:
-		return fmt.Errorf("unsupported output format %q (use text or json)", format)
+		return fmt.Errorf("%w %q (use text or json)", ErrUnsupportedOutputFormat, format)
 	}
 
 	if hasValidationError {
@@ -367,7 +374,7 @@ func formatConnectVerbose(r *certkit.ConnectResult, now time.Time) string {
 func publicKeySize(pub crypto.PublicKey) string {
 	switch k := pub.(type) {
 	case *rsa.PublicKey:
-		return fmt.Sprintf("%d", k.N.BitLen())
+		return strconv.Itoa(k.N.BitLen())
 	case *ecdsa.PublicKey:
 		return k.Curve.Params().Name
 	case ed25519.PublicKey:
@@ -404,10 +411,10 @@ func parseHostPort(addr string) (string, string, error) {
 		// Trim brackets from bare IPv6 like "[::1]" and default to port 443.
 		trimmed := strings.TrimPrefix(strings.TrimSuffix(addr, "]"), "[")
 		if trimmed == "" {
-			return "", "", fmt.Errorf("empty host in %q", addr)
+			return "", "", fmt.Errorf("%w in %q", errConnectEmptyHost, addr)
 		}
 		if strings.HasSuffix(addr, ":") && net.ParseIP(trimmed) == nil {
-			return "", "", fmt.Errorf("empty port in %q", rawInput)
+			return "", "", fmt.Errorf("%w in %q", errConnectEmptyPort, rawInput)
 		}
 		// Bare host (no colon) or bare IPv6 literal are valid host-only inputs.
 		if !strings.Contains(addr, ":") || net.ParseIP(trimmed) != nil {
@@ -419,25 +426,25 @@ func parseHostPort(addr string) (string, string, error) {
 		return "", "", err
 	}
 	if host == "" {
-		return "", "", fmt.Errorf("empty host in %q", addr)
+		return "", "", fmt.Errorf("%w in %q", errConnectEmptyHost, addr)
 	}
 	if port == "" {
-		return "", "", fmt.Errorf("empty port in %q", addr)
+		return "", "", fmt.Errorf("%w in %q", errConnectEmptyPort, addr)
 	}
 	return host, port, nil
 }
 
 func validatePort(port, rawInput string) error {
 	if port == "" {
-		return fmt.Errorf("empty port in %q", rawInput)
+		return fmt.Errorf("%w in %q", errConnectEmptyPort, rawInput)
 	}
 
 	n, err := strconv.Atoi(port)
 	if err != nil {
-		return fmt.Errorf("invalid port %q in %q: must be numeric", port, rawInput)
+		return fmt.Errorf("%w %q in %q: must be numeric", errConnectInvalidPort, port, rawInput)
 	}
 	if n < 1 || n > 65535 {
-		return fmt.Errorf("invalid port %q in %q: must be between 1 and 65535", port, rawInput)
+		return fmt.Errorf("%w %q in %q: must be between 1 and 65535", errConnectInvalidPort, port, rawInput)
 	}
 	return nil
 }

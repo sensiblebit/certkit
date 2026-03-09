@@ -5,13 +5,13 @@ package certkit
 import (
 	"bytes"
 	"crypto"
-	"crypto/dsa" //nolint:staticcheck // needed for legacy DSA certificate key identification
+	"crypto/dsa" //nolint:staticcheck // DSA remains needed to identify and parse legacy certificate/key material.
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha1"
+	"crypto/sha1" //nolint:gosec // SHA-1 is required for legacy certificate fingerprints and RFC 5280 SKI compatibility.
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/asn1"
@@ -25,6 +25,20 @@ import (
 	"time"
 
 	"golang.org/x/crypto/ssh"
+)
+
+var (
+	errNoPEMCertificates          = errors.New("no certificates found in PEM data")
+	errParseCertificatesAny       = errors.New("unable to parse certificates as DER, PEM, or PKCS#7")
+	errNoPEMPrivateKeys           = errors.New("no private keys found in PEM data")
+	errDecryptPrivateKeyPasswords = errors.New("decrypting private key with any provided password")
+	errNoPEMCertificateRequest    = errors.New("no certificate request found in PEM data")
+	errParsePrivateKeyAnyFormat   = errors.New("parsing PRIVATE KEY block with any known format")
+	errUnsupportedPEMBlockType    = errors.New("unsupported PEM block type")
+	errUnsupportedPrivateKeyType  = errors.New("unsupported private key type")
+	errKeyMatchesCertNilCert      = errors.New("certificate is nil")
+	errUnsupportedPublicKeyType   = errors.New("unsupported public key type")
+	errGenerateECKeyNilCurve      = errors.New("generating EC key: curve cannot be nil")
 )
 
 // ParsePEMCertificates parses all certificates from a PEM bundle.
@@ -55,7 +69,7 @@ func ParsePEMCertificates(pemData []byte) ([]*x509.Certificate, error) {
 		if firstErr != nil {
 			return nil, firstErr
 		}
-		return nil, errors.New("no certificates found in PEM data")
+		return nil, errNoPEMCertificates
 	}
 	return certs, nil
 }
@@ -86,7 +100,12 @@ func ParseCertificatesAny(data []byte) ([]*x509.Certificate, error) {
 	if p7Err == nil {
 		return certs, nil
 	}
-	return nil, fmt.Errorf("not DER (%v) or PEM (%v) or PKCS#7 (%v)", derErr, pemErr, p7Err)
+	return nil, errors.Join(
+		errParseCertificatesAny,
+		fmt.Errorf("parsing as DER: %w", derErr),
+		fmt.Errorf("parsing as PEM: %w", pemErr),
+		fmt.Errorf("parsing as PKCS#7: %w", p7Err),
+	)
 }
 
 // normalizeKey converts non-standard private key representations to their
@@ -129,7 +148,7 @@ func ParsePEMPrivateKey(pemData []byte) (crypto.PrivateKey, error) {
 	if firstErr != nil {
 		return nil, firstErr
 	}
-	return nil, errors.New("no private keys found in PEM data")
+	return nil, errNoPEMPrivateKeys
 }
 
 // DefaultPasswords returns the list of passwords tried by default when decrypting
@@ -213,7 +232,7 @@ func ParsePEMPrivateKeyWithPasswords(pemData []byte, passwords []string) (crypto
 			continue
 		}
 
-		//nolint:staticcheck // x509.IsEncryptedPEMBlock is deprecated but needed for legacy encrypted PEM support
+		//nolint:staticcheck // Legacy PEM decryption support is intentional for backward compatibility with encrypted PEM inputs.
 		if !x509.IsEncryptedPEMBlock(block) {
 			if firstErr == nil {
 				firstErr = parseErr
@@ -224,7 +243,7 @@ func ParsePEMPrivateKeyWithPasswords(pemData []byte, passwords []string) (crypto
 
 		var encryptedErr error
 		for _, password := range passwords {
-			//nolint:staticcheck // x509.DecryptPEMBlock is deprecated but needed for legacy encrypted PEM support
+			//nolint:staticcheck // Legacy PEM decryption support is intentional for backward compatibility with encrypted PEM inputs.
 			decrypted, err := x509.DecryptPEMBlock(block, []byte(password))
 			if err != nil {
 				if encryptedErr == nil {
@@ -247,7 +266,7 @@ func ParsePEMPrivateKeyWithPasswords(pemData []byte, passwords []string) (crypto
 			firstErr = encryptedErr
 		}
 		if firstErr == nil {
-			firstErr = errors.New("decrypting private key with any provided password")
+			firstErr = errDecryptPrivateKeyPasswords
 		}
 		slog.Debug("skipping encrypted private key block after password attempts", "block_type", block.Type, "error", firstErr)
 	}
@@ -255,7 +274,7 @@ func ParsePEMPrivateKeyWithPasswords(pemData []byte, passwords []string) (crypto
 	if firstErr != nil {
 		return nil, firstErr
 	}
-	return nil, errors.New("no private keys found in PEM data")
+	return nil, errNoPEMPrivateKeys
 }
 
 // keyBlockTypes is the set of PEM block types that represent private keys.
@@ -293,7 +312,7 @@ func ParsePEMPrivateKeys(pemData []byte, passwords []string) ([]crypto.PrivateKe
 		keys = append(keys, key)
 	}
 	if len(keys) == 0 {
-		return nil, errors.New("no private keys found in PEM data")
+		return nil, errNoPEMPrivateKeys
 	}
 	return keys, nil
 }
@@ -324,15 +343,23 @@ func ParsePEMCertificateRequest(pemData []byte) (*x509.CertificateRequest, error
 	if firstErr != nil {
 		return nil, firstErr
 	}
-	return nil, errors.New("no certificate request found in PEM data")
+	return nil, errNoPEMCertificateRequest
 }
 
 func parsePEMPrivateKeyBlock(singlePEM []byte, block *pem.Block) (crypto.PrivateKey, error) {
 	switch block.Type {
 	case "RSA PRIVATE KEY":
-		return x509.ParsePKCS1PrivateKey(block.Bytes)
+		key, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("parsing PKCS#1 private key: %w", err)
+		}
+		return key, nil
 	case "EC PRIVATE KEY":
-		return x509.ParseECPrivateKey(block.Bytes)
+		key, err := x509.ParseECPrivateKey(block.Bytes)
+		if err != nil {
+			return nil, fmt.Errorf("parsing EC private key: %w", err)
+		}
+		return key, nil
 	case "PRIVATE KEY":
 		if key, err := x509.ParsePKCS8PrivateKey(block.Bytes); err == nil {
 			return normalizeKey(key), nil
@@ -344,7 +371,7 @@ func parsePEMPrivateKeyBlock(singlePEM []byte, block *pem.Block) (crypto.Private
 		if key, err := x509.ParseECPrivateKey(block.Bytes); err == nil {
 			return key, nil
 		}
-		return nil, errors.New("parsing PRIVATE KEY block with any known format")
+		return nil, errParsePrivateKeyAnyFormat
 	case "OPENSSH PRIVATE KEY":
 		key, err := ssh.ParseRawPrivateKey(singlePEM)
 		if err != nil {
@@ -352,7 +379,7 @@ func parsePEMPrivateKeyBlock(singlePEM []byte, block *pem.Block) (crypto.Private
 		}
 		return normalizeKey(key), nil
 	default:
-		return nil, fmt.Errorf("unsupported PEM block type %q", block.Type)
+		return nil, fmt.Errorf("%w %q", errUnsupportedPEMBlockType, block.Type)
 	}
 }
 
@@ -388,6 +415,7 @@ func CertFingerprint(cert *x509.Certificate) string {
 // CertFingerprintSHA1 returns the SHA-1 fingerprint of a certificate as a lowercase hex string.
 // SHA-1 fingerprints are widely used in browser UIs, CT logs, and legacy systems.
 func CertFingerprintSHA1(cert *x509.Certificate) string {
+	//nolint:gosec // Legacy certificate fingerprint compatibility requires SHA-1.
 	hash := sha1.Sum(cert.Raw)
 	return hex.EncodeToString(hash[:])
 }
@@ -547,7 +575,11 @@ func marshalDSAPublicKeyDER(pub *dsa.PublicKey) ([]byte, error) {
 		},
 	}
 
-	return asn1.Marshal(spki)
+	data, err := asn1.Marshal(spki)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling DSA subject public key info: %w", err)
+	}
+	return data, nil
 }
 
 // ComputeSKI computes a Subject Key Identifier using RFC 7093 Method 1:
@@ -577,6 +609,7 @@ func ComputeSKILegacy(pub crypto.PublicKey) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("extracting public key bit string: %w", err)
 	}
+	//nolint:gosec // RFC 5280 SKI compatibility requires SHA-1 of subjectPublicKey bits.
 	sum := sha1.Sum(bits)
 	return sum[:], nil
 }
@@ -597,7 +630,7 @@ func GetPublicKey(priv crypto.PrivateKey) (crypto.PublicKey, error) {
 	if signer, ok := priv.(crypto.Signer); ok {
 		return signer.Public(), nil
 	}
-	return nil, fmt.Errorf("unsupported private key type: %T", priv)
+	return nil, fmt.Errorf("%w: %T", errUnsupportedPrivateKeyType, priv)
 }
 
 // KeyMatchesCert reports whether a private key corresponds to the public key
@@ -605,7 +638,7 @@ func GetPublicKey(priv crypto.PrivateKey) (crypto.PublicKey, error) {
 // types since Go 1.20, which handles cross-type mismatches by returning false.
 func KeyMatchesCert(priv crypto.PrivateKey, cert *x509.Certificate) (bool, error) {
 	if cert == nil {
-		return false, errors.New("certificate is nil")
+		return false, errKeyMatchesCertNilCert
 	}
 	pub, err := GetPublicKey(priv)
 	if err != nil {
@@ -616,7 +649,7 @@ func KeyMatchesCert(priv crypto.PrivateKey, cert *x509.Certificate) (bool, error
 	}
 	eq, ok := pub.(equalKey)
 	if !ok {
-		return false, fmt.Errorf("unsupported public key type: %T", pub)
+		return false, fmt.Errorf("%w: %T", errUnsupportedPublicKeyType, pub)
 	}
 	return eq.Equal(cert.PublicKey), nil
 }
@@ -690,6 +723,7 @@ func CertFingerprintColonSHA256(cert *x509.Certificate) string {
 // in uppercase colon-separated hex format (AA:BB:CC:...), matching the format
 // used by OpenSSL and browser certificate viewers.
 func CertFingerprintColonSHA1(cert *x509.Certificate) string {
+	//nolint:gosec // Legacy certificate fingerprint compatibility requires SHA-1.
 	hash := sha1.Sum(cert.Raw)
 	return strings.ToUpper(ColonHex(hash[:]))
 }
@@ -713,7 +747,7 @@ func GenerateRSAKey(bits int) (*rsa.PrivateKey, error) {
 // GenerateECKey generates a new ECDSA private key on the given curve.
 func GenerateECKey(curve elliptic.Curve) (*ecdsa.PrivateKey, error) {
 	if curve == nil {
-		return nil, errors.New("generating EC key: curve cannot be nil")
+		return nil, errGenerateECKeyNilCurve
 	}
 	key, err := ecdsa.GenerateKey(curve, rand.Reader)
 	if err != nil {
@@ -733,5 +767,8 @@ func GenerateEd25519Key() (ed25519.PublicKey, ed25519.PrivateKey, error) {
 
 // VerifyCSR checks that the signature on a certificate signing request is valid.
 func VerifyCSR(csr *x509.CertificateRequest) error {
-	return csr.CheckSignature()
+	if err := csr.CheckSignature(); err != nil {
+		return fmt.Errorf("checking CSR signature: %w", err)
+	}
+	return nil
 }

@@ -19,13 +19,13 @@ type PasswordSets struct {
 
 // LoadPasswordsFromFile loads passwords from a file, one password per line.
 func LoadPasswordsFromFile(filename string) ([]string, error) {
-	file, err := os.Open(filename)
+	file, err := os.Open(filename) //nolint:gosec // This helper intentionally opens a caller-provided password file path.
 	if err != nil {
 		return nil, fmt.Errorf("opening password file %s: %w", filename, err)
 	}
 	defer func() {
 		if closeErr := file.Close(); closeErr != nil {
-			slog.Warn("closing password file", "file", filename, "error", closeErr)
+			slog.Warn("closing password file", "path", filename, "error", closeErr)
 		}
 	}()
 

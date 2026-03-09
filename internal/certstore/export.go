@@ -233,7 +233,11 @@ func GenerateJSON(bundle *certkit.BundleResult) ([]byte, error) {
 		},
 		"subject_key_id": subjectKeyID,
 	}
-	return json.MarshalIndent(out, "", "  ")
+	data, err := json.MarshalIndent(out, "", "  ")
+	if err != nil {
+		return nil, fmt.Errorf("marshaling bundle JSON: %w", err)
+	}
+	return data, nil
 }
 
 // GenerateYAML creates a YAML representation of the certificate bundle.
@@ -275,7 +279,11 @@ func GenerateYAML(bundle *certkit.BundleResult, keyPEM []byte, keyType string, b
 		"signature":     bundle.Leaf.SignatureAlgorithm.String(),
 		"subject":       bundle.Leaf.Subject.String(),
 	}
-	return yaml.Marshal(out)
+	data, err := yaml.Marshal(out)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling bundle YAML: %w", err)
+	}
+	return data, nil
 }
 
 // buildCSRSubject creates a pkix.Name for CSR generation from either the

@@ -3,8 +3,8 @@ package main
 import (
 	"crypto"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -23,6 +23,7 @@ var (
 	verifyOCSP                bool
 	verifyCRL                 bool
 	verifyAllowPrivateNetwork bool
+	errVerifyNoCertificate    = errors.New("no certificate found")
 )
 
 var verifyCmd = &cobra.Command{
@@ -75,7 +76,11 @@ func parseDuration(s string) (time.Duration, error) {
 		}
 		return time.Duration(days) * 24 * time.Hour, nil
 	}
-	return time.ParseDuration(s)
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return 0, fmt.Errorf("parsing duration %q: %w", s, err)
+	}
+	return d, nil
 }
 
 func runVerify(cmd *cobra.Command, args []string) error {
@@ -100,7 +105,7 @@ func runVerify(cmd *cobra.Command, args []string) error {
 	}
 
 	if contents.Leaf == nil {
-		return fmt.Errorf("no certificate found in %s", args[0])
+		return fmt.Errorf("%w in %s", errVerifyNoCertificate, args[0])
 	}
 
 	format := verifyFormat
@@ -119,7 +124,7 @@ func runVerify(cmd *cobra.Command, args []string) error {
 	// Load explicit key from --key flag (overrides embedded key)
 	var key crypto.PrivateKey
 	if verifyKeyPath != "" {
-		keyData, err := os.ReadFile(verifyKeyPath)
+		keyData, err := readCLIFile(verifyKeyPath)
 		if err != nil {
 			return fmt.Errorf("reading key file: %w", err)
 		}
@@ -172,7 +177,7 @@ func runVerify(cmd *cobra.Command, args []string) error {
 			fmt.Print(internal.FormatDiagnoses(result.Diagnostics))
 		}
 	default:
-		return fmt.Errorf("unsupported output format %q (use text or json)", format)
+		return fmt.Errorf("%w %q (use text or json)", ErrUnsupportedOutputFormat, format)
 	}
 
 	if len(result.Errors) > 0 {

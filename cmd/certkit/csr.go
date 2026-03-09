@@ -55,7 +55,7 @@ func init() {
 	csrCmd.MarkFlagsOneRequired("template", "from-cert", "from-csr")
 }
 
-func runCSR(cmd *cobra.Command, args []string) error {
+func runCSR(_ *cobra.Command, _ []string) error {
 	passwords, err := internal.ProcessPasswords(passwordList, passwordFile)
 	if err != nil {
 		return fmt.Errorf("loading passwords: %w", err)

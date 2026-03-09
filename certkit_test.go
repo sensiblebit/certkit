@@ -8,7 +8,7 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
-	"crypto/sha1"
+	"crypto/sha1" //nolint:gosec // Test coverage for legacy X.509 SHA-1 compatibility paths.
 	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -25,6 +25,8 @@ import (
 
 	"golang.org/x/crypto/ssh"
 )
+
+var errLookupFailed = errors.New("lookup failed")
 
 func TestParsePEMCertificates_NoCertificates(t *testing.T) {
 	// WHY: All non-certificate inputs (nil, non-PEM text, key-only PEM) must
@@ -190,6 +192,7 @@ func TestCertSKI_vs_Embedded(t *testing.T) {
 	if _, err := asn1.Unmarshal(pubKeyDER, &spki); err != nil {
 		t.Fatal(err)
 	}
+	//nolint:gosec // Test coverage for legacy SHA-1 SKI compatibility.
 	sha1Hash := sha1.Sum(spki.PublicKey.Bytes)
 
 	template := &x509.Certificate{
@@ -1504,6 +1507,7 @@ func TestCertFingerprints(t *testing.T) {
 
 	// Compute expected fingerprints independently to verify certkit wiring.
 	sha256Hash := sha256.Sum256(cert.Raw)
+	//nolint:gosec // Test coverage for legacy SHA-1 certificate fingerprints.
 	sha1Hash := sha1.Sum(cert.Raw)
 
 	t.Run("SHA256 hex", func(t *testing.T) {
@@ -1584,6 +1588,7 @@ func TestComputeSKILegacy(t *testing.T) {
 	if _, err := asn1.Unmarshal(pubDER, &spki); err != nil {
 		t.Fatal(err)
 	}
+	//nolint:gosec // Test coverage for legacy SHA-1 SKI compatibility.
 	expected := sha1.Sum(spki.PublicKey.Bytes)
 	if !slices.Equal(ski, expected[:]) {
 		t.Errorf("ComputeSKILegacy = %x, want SHA-1(%x...) = %x", ski, spki.PublicKey.Bytes[:8], expected)
@@ -2029,7 +2034,8 @@ func TestValidateAIAURL(t *testing.T) {
 				if tt.errSub != "" && !strings.Contains(err.Error(), tt.errSub) {
 					t.Errorf("error = %v, want substring %q", err, tt.errSub)
 				}
-			} else {
+			}
+			if !tt.wantErr {
 				if err != nil {
 					t.Errorf("unexpected error for %q: %v", tt.url, err)
 				}
@@ -2052,7 +2058,7 @@ func TestValidateAIAURLWithOptions_HostnameResolution(t *testing.T) {
 		case "empty.example":
 			return nil, nil
 		default:
-			return nil, fmt.Errorf("lookup failed")
+			return nil, errLookupFailed
 		}
 	}
 

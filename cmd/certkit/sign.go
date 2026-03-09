@@ -7,6 +7,7 @@ import (
 	"crypto/rand"
 	"crypto/x509/pkix"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 
@@ -49,11 +50,13 @@ Output is PEM to stdout by default.`,
 
 // sign csr flags
 var (
-	signCSRCAPath  string
-	signCSRKeyPath string
-	signCSRDays    int
-	signCSRCopySAN bool
-	signCSROutFile string
+	signCSRCAPath              string
+	signCSRKeyPath             string
+	signCSRDays                int
+	signCSRCopySAN             bool
+	signCSROutFile             string
+	errSignPrivateKeyNotSigner = errors.New("private key does not implement crypto.Signer")
+	errSignCAKeyNotSigner      = errors.New("CA private key does not implement crypto.Signer")
 )
 
 var signCSRCmd = &cobra.Command{
@@ -116,7 +119,7 @@ func runSignSelfSigned(_ *cobra.Command, _ []string) error {
 	var keyPEM string
 
 	if selfSignedKeyPath != "" {
-		keyData, err := os.ReadFile(selfSignedKeyPath)
+		keyData, err := readCLIFile(selfSignedKeyPath)
 		if err != nil {
 			return fmt.Errorf("reading key file: %w", err)
 		}
@@ -126,7 +129,7 @@ func runSignSelfSigned(_ *cobra.Command, _ []string) error {
 		}
 		s, ok := key.(crypto.Signer)
 		if !ok {
-			return fmt.Errorf("private key does not implement crypto.Signer")
+			return errSignPrivateKeyNotSigner
 		}
 		signer = s
 	} else {
@@ -156,10 +159,12 @@ func runSignSelfSigned(_ *cobra.Command, _ []string) error {
 
 	if selfSignedOutFile != "" {
 		output := certPEM
+		perm := os.FileMode(0o644)
 		if keyPEM != "" {
 			output += keyPEM
+			perm = 0o600
 		}
-		perm := os.FileMode(0600) // contains key or is a CA cert
+		// Generated cert+key output is secret (0600); cert-only output is intentionally public (0644).
 		if err := os.WriteFile(selfSignedOutFile, []byte(output), perm); err != nil {
 			return fmt.Errorf("writing output: %w", err)
 		}
@@ -196,7 +201,7 @@ func runSignCSR(_ *cobra.Command, args []string) error {
 	}
 
 	// Load CSR
-	csrData, err := os.ReadFile(args[0])
+	csrData, err := readCLIFile(args[0])
 	if err != nil {
 		return fmt.Errorf("reading CSR: %w", err)
 	}
@@ -206,7 +211,7 @@ func runSignCSR(_ *cobra.Command, args []string) error {
 	}
 
 	// Load CA cert
-	caData, err := os.ReadFile(signCSRCAPath)
+	caData, err := readCLIFile(signCSRCAPath)
 	if err != nil {
 		return fmt.Errorf("reading CA certificate: %w", err)
 	}
@@ -216,7 +221,7 @@ func runSignCSR(_ *cobra.Command, args []string) error {
 	}
 
 	// Load CA key
-	caKeyData, err := os.ReadFile(signCSRKeyPath)
+	caKeyData, err := readCLIFile(signCSRKeyPath)
 	if err != nil {
 		return fmt.Errorf("reading CA key: %w", err)
 	}
@@ -226,7 +231,7 @@ func runSignCSR(_ *cobra.Command, args []string) error {
 	}
 	signer, ok := caKey.(crypto.Signer)
 	if !ok {
-		return fmt.Errorf("CA private key does not implement crypto.Signer")
+		return errSignCAKeyNotSigner
 	}
 
 	cert, err := certkit.SignCSR(certkit.SignCSRInput{
@@ -243,7 +248,8 @@ func runSignCSR(_ *cobra.Command, args []string) error {
 	certPEM := certkit.CertToPEM(cert)
 
 	if signCSROutFile != "" {
-		if err := os.WriteFile(signCSROutFile, []byte(certPEM), 0644); err != nil {
+		//nolint:gosec // Signed certificates are public artifacts and do not contain private key material.
+		if err := os.WriteFile(signCSROutFile, []byte(certPEM), 0o644); err != nil {
 			return fmt.Errorf("writing output: %w", err)
 		}
 		fmt.Fprintf(os.Stderr, "Wrote %s (%d bytes)\n", signCSROutFile, len(certPEM))

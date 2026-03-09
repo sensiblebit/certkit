@@ -11,6 +11,11 @@ import (
 	"github.com/sensiblebit/certkit"
 )
 
+var (
+	errCSRSourceCountInvalid = errors.New("exactly one of --template, --cert, or --from-csr must be specified")
+	errCSRKeyNotSigner       = errors.New("private key does not implement crypto.Signer")
+)
+
 // CSROptions holds parameters for CSR generation from various sources.
 type CSROptions struct {
 	TemplatePath string // JSON template file
@@ -51,14 +56,14 @@ func GenerateCSRFiles(opts CSROptions) (*CSRResult, error) {
 		sources++
 	}
 	if sources != 1 {
-		return nil, errors.New("exactly one of --template, --cert, or --from-csr must be specified")
+		return nil, errCSRSourceCountInvalid
 	}
 
 	// Load or generate key
 	var signer crypto.Signer
 	keyGenerated := false
 	if opts.KeyPath != "" {
-		keyData, err := os.ReadFile(opts.KeyPath)
+		keyData, err := readFileLimited(opts.KeyPath, 0)
 		if err != nil {
 			return nil, fmt.Errorf("reading key file: %w", err)
 		}
@@ -69,7 +74,7 @@ func GenerateCSRFiles(opts CSROptions) (*CSRResult, error) {
 		var ok bool
 		signer, ok = key.(crypto.Signer)
 		if !ok {
-			return nil, errors.New("private key does not implement crypto.Signer")
+			return nil, errCSRKeyNotSigner
 		}
 	} else {
 		var err error
@@ -90,7 +95,7 @@ func GenerateCSRFiles(opts CSROptions) (*CSRResult, error) {
 
 	switch {
 	case opts.TemplatePath != "":
-		data, readErr := os.ReadFile(opts.TemplatePath)
+		data, readErr := readFileLimited(opts.TemplatePath, 0)
 		if readErr != nil {
 			return nil, fmt.Errorf("reading template: %w", readErr)
 		}
@@ -101,7 +106,7 @@ func GenerateCSRFiles(opts CSROptions) (*CSRResult, error) {
 		csrPEM, err = certkit.GenerateCSRFromTemplate(tmpl, signer)
 
 	case opts.CertPath != "":
-		data, readErr := os.ReadFile(opts.CertPath)
+		data, readErr := readFileLimited(opts.CertPath, 0)
 		if readErr != nil {
 			return nil, fmt.Errorf("reading certificate: %w", readErr)
 		}
@@ -117,7 +122,7 @@ func GenerateCSRFiles(opts CSROptions) (*CSRResult, error) {
 		csrPEM, _, err = certkit.GenerateCSR(cert, signer)
 
 	case opts.CSRPath != "":
-		data, readErr := os.ReadFile(opts.CSRPath)
+		data, readErr := readFileLimited(opts.CSRPath, 0)
 		if readErr != nil {
 			return nil, fmt.Errorf("reading CSR: %w", readErr)
 		}
@@ -146,12 +151,14 @@ func GenerateCSRFiles(opts CSROptions) (*CSRResult, error) {
 
 	// Write files only when an output path is specified
 	if opts.OutPath != "" {
-		if err := os.MkdirAll(opts.OutPath, 0755); err != nil {
+		//nolint:gosec // Output dirs need traversal bits so public CSRs remain readable; key.pem stays 0600.
+		if err := os.MkdirAll(opts.OutPath, 0o755); err != nil {
 			return nil, fmt.Errorf("creating output directory: %w", err)
 		}
 
 		result.CSRFile = filepath.Join(opts.OutPath, "csr.pem")
-		if err := os.WriteFile(result.CSRFile, []byte(csrPEM), 0644); err != nil {
+		//nolint:gosec // CSRs are intentionally non-secret output files.
+		if err := os.WriteFile(result.CSRFile, []byte(csrPEM), 0o644); err != nil {
 			return nil, fmt.Errorf("writing CSR: %w", err)
 		}
 

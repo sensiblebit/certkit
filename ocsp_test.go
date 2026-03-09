@@ -59,7 +59,7 @@ func TestCheckOCSP_MockResponse(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
 
-			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				resp := ocsp.Response{
 					Status:           tc.ocspStatus,
 					SerialNumber:     big.NewInt(tc.serial),
@@ -70,7 +70,7 @@ func TestCheckOCSP_MockResponse(t *testing.T) {
 				}
 				respBytes, err := ocsp.CreateResponse(ca.Cert, ca.Cert, resp, ca.Key)
 				if err != nil {
-					http.Error(w, err.Error(), 500)
+					http.Error(w, err.Error(), http.StatusInternalServerError)
 					return
 				}
 				w.Header().Set("Content-Type", "application/ocsp-response")

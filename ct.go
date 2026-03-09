@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	_ "embed"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -28,9 +29,15 @@ type ctLogInfo struct {
 }
 
 var (
-	ctLogsOnce sync.Once
-	ctLogs     map[[sha256.Size]byte]ctLogInfo
-	ctLogsErr  error
+	ctLogsOnce              sync.Once
+	ctLogs                  map[[sha256.Size]byte]ctLogInfo
+	errCTLogs               error
+	errSCTEmptyData         = errors.New("parsing SCT: empty data")
+	errSCTTrailingData      = errors.New("parsing SCT: trailing data")
+	errCTChainEmpty         = errors.New("CT chain is empty")
+	errCTChainNilCert       = errors.New("CT chain contains nil certificate")
+	errCTChainParsedNilCert = errors.New("parsing CT chain certificate: nil certificate")
+	errCTNoUsableLogs       = errors.New("CT log list has no usable logs")
 )
 
 // CheckCTInput contains parameters for Certificate Transparency verification.
@@ -276,7 +283,7 @@ type sctCandidate struct {
 
 func parseSCT(raw []byte) (ct.SignedCertificateTimestamp, error) {
 	if len(raw) == 0 {
-		return ct.SignedCertificateTimestamp{}, fmt.Errorf("parsing SCT: empty data")
+		return ct.SignedCertificateTimestamp{}, errSCTEmptyData
 	}
 	var sct ct.SignedCertificateTimestamp
 	rest, err := cttls.Unmarshal(raw, &sct)
@@ -284,7 +291,7 @@ func parseSCT(raw []byte) (ct.SignedCertificateTimestamp, error) {
 		return ct.SignedCertificateTimestamp{}, fmt.Errorf("parsing SCT: %w", err)
 	}
 	if len(rest) > 0 {
-		return ct.SignedCertificateTimestamp{}, fmt.Errorf("parsing SCT: trailing data")
+		return ct.SignedCertificateTimestamp{}, errSCTTrailingData
 	}
 	return sct, nil
 }
@@ -320,12 +327,12 @@ func embeddedSCTBytes(leaf *x509.Certificate) ([][]byte, error) {
 
 func ctChainFromCertificates(chain []*x509.Certificate) ([]*ctx509.Certificate, error) {
 	if len(chain) == 0 {
-		return nil, fmt.Errorf("CT chain is empty")
+		return nil, errCTChainEmpty
 	}
 	out := make([]*ctx509.Certificate, 0, len(chain))
 	for i, cert := range chain {
 		if cert == nil {
-			return nil, fmt.Errorf("CT chain contains nil certificate at index %d", i)
+			return nil, fmt.Errorf("%w at index %d", errCTChainNilCert, i)
 		}
 		ctCert, err := ctx509.ParseCertificate(cert.Raw)
 		if err != nil && ctx509.IsFatal(err) {
@@ -335,7 +342,7 @@ func ctChainFromCertificates(chain []*x509.Certificate) ([]*ctx509.Certificate, 
 			slog.Debug("ct chain parsing warning", "index", i, "error", err)
 		}
 		if ctCert == nil {
-			return nil, fmt.Errorf("parsing CT chain certificate %d: nil certificate", i)
+			return nil, fmt.Errorf("%w %d", errCTChainParsedNilCert, i)
 		}
 		out = append(out, ctCert)
 	}
@@ -347,9 +354,9 @@ func ctLogsFromInput(override []byte) (map[[sha256.Size]byte]ctLogInfo, error) {
 		return ctLogMapFromList(override)
 	}
 	ctLogsOnce.Do(func() {
-		ctLogs, ctLogsErr = ctLogMapFromList(ctLogListJSON)
+		ctLogs, errCTLogs = ctLogMapFromList(ctLogListJSON)
 	})
-	return ctLogs, ctLogsErr
+	return ctLogs, errCTLogs
 }
 
 func ctLogMapFromList(data []byte) (map[[sha256.Size]byte]ctLogInfo, error) {
@@ -381,7 +388,7 @@ func ctLogMapFromList(data []byte) (map[[sha256.Size]byte]ctLogInfo, error) {
 		}
 	}
 	if len(logs) == 0 {
-		return nil, fmt.Errorf("CT log list has no usable logs")
+		return nil, errCTNoUsableLogs
 	}
 	return logs, nil
 }

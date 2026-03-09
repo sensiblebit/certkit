@@ -254,7 +254,8 @@ func TestSignCSR(t *testing.T) {
 				if len(cert.IPAddresses) != 1 {
 					t.Errorf("got %d IP addresses, want 1", len(cert.IPAddresses))
 				}
-			} else {
+			}
+			if !tc.wantSANs {
 				if len(cert.DNSNames) != 0 {
 					t.Errorf("got %d DNS names, want 0 (CopySANs=false)", len(cert.DNSNames))
 				}

@@ -318,7 +318,7 @@ Every PR runs 11 parallel checks (`.github/workflows/ci.yml`):
 | PR Conventions | Branch name, commit messages, verified commits |
 | Go Checks | `go build`, `go fix`, `go vet`, goimports |
 | Go Test | `go test -race -count=1 ./...` |
-| Lint (golangci-lint) | errcheck, staticcheck, unused, etc. |
+| Lint (golangci-lint) | standard linters plus any stricter repo-local config in `.golangci.yml` |
 | Vulnerability Check | `govulncheck ./...` |
 | WASM Build | `GOOS=js GOARCH=wasm` vet + build |
 | Docs | `go generate ./...` + `git diff --exit-code README.md` |
@@ -352,7 +352,7 @@ These are enforced by the pre-commit hooks; run `pre-commit run --all-files` ins
 - **G-1 (MUST)** `go fix ./...` leaves no pending changes.
 - **G-2 (MUST)** `go vet ./...` passes.
 - **G-3 (MUST)** `go test -race ./...` passes.
-- **G-4 (MUST)** `golangci-lint run` passes with default linters (errcheck, staticcheck, unused, etc.). No `.golangci.yml` config — uses golangci-lint defaults.
+- **G-4 (MUST)** `golangci-lint run` passes. Repo-local `.golangci.yml` is allowed when the repo intentionally enforces stricter rules than golangci-lint defaults.
 - **G-5 (MUST)** `GOOS=js GOARCH=wasm go vet ./cmd/wasm/` and `go build` pass.
 - **G-6 (MUST)** `cd web && npm test` passes (vitest).
 - **G-7 (MUST)** `cd web && wrangler pages functions build` compiles (local only, no credentials).

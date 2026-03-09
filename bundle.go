@@ -23,14 +23,28 @@ import (
 var (
 	mozillaPoolOnce     sync.Once
 	mozillaPool         *x509.CertPool
-	mozillaPoolErr      error
+	errMozillaPool      error
 	mozillaSubjectsOnce sync.Once
 	mozillaSubjects     map[string]bool
 	mozillaRootKeysOnce sync.Once
 	mozillaRootKeys     map[string][]byte // RawSubject → marshaled PKIX public key
 
 	// ErrChainVerificationFailed indicates that certificate path validation failed.
-	ErrChainVerificationFailed = errors.New("chain verification failed")
+	ErrChainVerificationFailed  = errors.New("chain verification failed")
+	errMozillaRootParse         = errors.New("parsing embedded Mozilla root certificates")
+	errAIAAddressBlocked        = errors.New("blocked address for AIA fetch")
+	errAIAPrivateAddress        = errors.New("blocked private address for AIA fetch")
+	errAIAUnsupportedScheme     = errors.New("unsupported scheme")
+	errAIAMissingHostname       = errors.New("missing hostname in URL")
+	errAIAResolveNoIPs          = errors.New("no IP addresses returned")
+	errFetchLeafHTTPSRequired   = errors.New("invalid URL scheme")
+	errFetchLeafMissingHostname = errors.New("fetch leaf URL is missing hostname")
+	errFetchLeafNotTLS          = errors.New("TLS dial did not return TLS connection")
+	errFetchLeafNoCerts         = errors.New("no certificates returned by TLS server")
+	errAIAFetchRedirects        = errors.New("AIA redirect limit exceeded")
+	errAIAHTTPStatus            = errors.New("AIA server returned non-200 status")
+	errBundleLeafNil            = errors.New("leaf certificate is nil")
+	errBundleUnknownTrustStore  = errors.New("unknown trust_store")
 )
 
 // privateNetworks contains CIDR ranges for private, reserved, and shared
@@ -69,12 +83,12 @@ func MozillaRootPool() (*x509.CertPool, error) {
 	mozillaPoolOnce.Do(func() {
 		pool := x509.NewCertPool()
 		if !pool.AppendCertsFromPEM([]byte(embedded.MozillaCACertificatesPEM())) {
-			mozillaPoolErr = errors.New("parsing embedded Mozilla root certificates")
+			errMozillaPool = errMozillaRootParse
 			return
 		}
 		mozillaPool = pool
 	})
-	return mozillaPool, mozillaPoolErr
+	return mozillaPool, errMozillaPool
 }
 
 // MozillaRootSubjects returns a set of raw ASN.1 subject byte strings from all
@@ -186,11 +200,11 @@ type lookupIPAddressesFunc func(ctx context.Context, host string) ([]net.IP, err
 
 func ipBlockedForAIA(ip net.IP) error {
 	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsUnspecified() {
-		return fmt.Errorf("blocked address %s (loopback, link-local, or unspecified)", ip.String())
+		return fmt.Errorf("%w %s (loopback, link-local, or unspecified)", errAIAAddressBlocked, ip.String())
 	}
 	for _, network := range privateNetworks {
 		if network.Contains(ip) {
-			return fmt.Errorf("blocked private address %s", ip.String())
+			return fmt.Errorf("%w %s", errAIAPrivateAddress, ip.String())
 		}
 	}
 	return nil
@@ -213,11 +227,11 @@ func ValidateAIAURLWithOptions(ctx context.Context, input ValidateAIAURLInput) e
 	case "http", "https":
 		// allowed
 	default:
-		return fmt.Errorf("unsupported scheme %q (only http and https are allowed)", parsed.Scheme)
+		return fmt.Errorf("%w %q (only http and https are allowed)", errAIAUnsupportedScheme, parsed.Scheme)
 	}
 	host := parsed.Hostname()
 	if host == "" {
-		return fmt.Errorf("missing hostname in URL")
+		return errAIAMissingHostname
 	}
 
 	if input.AllowPrivateNetworks {
@@ -248,7 +262,7 @@ func ValidateAIAURLWithOptions(ctx context.Context, input ValidateAIAURLInput) e
 		return fmt.Errorf("resolving host %q: %w", host, err)
 	}
 	if len(ips) == 0 {
-		return fmt.Errorf("resolving host %q: no IP addresses returned", host)
+		return fmt.Errorf("resolving host %q: %w", host, errAIAResolveNoIPs)
 	}
 	for _, resolvedIP := range ips {
 		if blockedErr := ipBlockedForAIA(resolvedIP); blockedErr != nil {
@@ -366,12 +380,12 @@ func FetchLeafFromURL(ctx context.Context, input FetchLeafFromURLInput) (*x509.C
 		return nil, fmt.Errorf("parsing URL: %w", err)
 	}
 	if parsed.Scheme != "https" {
-		return nil, fmt.Errorf("invalid URL scheme %q (https required)", parsed.Scheme)
+		return nil, fmt.Errorf("%w: %q", errFetchLeafHTTPSRequired, parsed.Scheme)
 	}
 
 	host := parsed.Hostname()
 	if host == "" {
-		return nil, fmt.Errorf("missing hostname in URL")
+		return nil, errFetchLeafMissingHostname
 	}
 	port := parsed.Port()
 	if port == "" {
@@ -395,11 +409,11 @@ func FetchLeafFromURL(ctx context.Context, input FetchLeafFromURLInput) (*x509.C
 
 	tlsConn, ok := conn.(*tls.Conn)
 	if !ok {
-		return nil, fmt.Errorf("TLS dial to %s:%s: connection is not TLS", host, port)
+		return nil, fmt.Errorf("%w for %s:%s", errFetchLeafNotTLS, host, port)
 	}
 	certs := tlsConn.ConnectionState().PeerCertificates
 	if len(certs) == 0 {
-		return nil, fmt.Errorf("no certificates returned by %s:%s", host, port)
+		return nil, fmt.Errorf("%w for %s:%s", errFetchLeafNoCerts, host, port)
 	}
 	return certs[0], nil
 }
@@ -429,7 +443,7 @@ func FetchAIACertificates(ctx context.Context, input FetchAIACertificatesInput) 
 		Timeout: input.Timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= maxRedirects {
-				return fmt.Errorf("stopped after %d redirects", maxRedirects)
+				return fmt.Errorf("%w: stopped after %d redirects", errAIAFetchRedirects, maxRedirects)
 			}
 			if err := ValidateAIAURLWithOptions(req.Context(), ValidateAIAURLInput{URL: req.URL.String(), AllowPrivateNetworks: input.AllowPrivateNetworks}); err != nil {
 				return fmt.Errorf("redirect blocked: %w", err)
@@ -488,7 +502,7 @@ func fetchCertificatesFromURL(ctx context.Context, input fetchCertificatesFromUR
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, input.URL)
+		return nil, fmt.Errorf("%w: HTTP %d from %s", errAIAHTTPStatus, resp.StatusCode, input.URL)
 	}
 
 	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20)) // 1MB limit
@@ -538,8 +552,7 @@ func detectAndSwapLeaf(leaf *x509.Certificate, extras []*x509.Certificate) (*x50
 func checkSHA1Signatures(chain []*x509.Certificate) []string {
 	var warnings []string
 	for _, cert := range chain {
-		switch cert.SignatureAlgorithm {
-		case x509.SHA1WithRSA, x509.ECDSAWithSHA1:
+		if cert.SignatureAlgorithm == x509.SHA1WithRSA || cert.SignatureAlgorithm == x509.ECDSAWithSHA1 {
 			warnings = append(warnings, fmt.Sprintf("certificate %q uses deprecated SHA-1 signature algorithm (%s)", cert.Subject.CommonName, cert.SignatureAlgorithm))
 		}
 	}
@@ -572,7 +585,7 @@ type BundleInput struct {
 // Bundle resolves the full certificate chain for a leaf certificate.
 func Bundle(ctx context.Context, input BundleInput) (*BundleResult, error) {
 	if input.Leaf == nil {
-		return nil, fmt.Errorf("leaf certificate is nil")
+		return nil, errBundleLeafNil
 	}
 	leaf := input.Leaf
 	opts := input.Options
@@ -627,7 +640,7 @@ func Bundle(ctx context.Context, input BundleInput) (*BundleResult, error) {
 			rootPool.AddCert(cert)
 		}
 	default:
-		return nil, fmt.Errorf("unknown trust_store: %q", opts.TrustStore)
+		return nil, fmt.Errorf("%w: %q", errBundleUnknownTrustStore, opts.TrustStore)
 	}
 
 	// Verify

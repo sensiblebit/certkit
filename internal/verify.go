@@ -14,6 +14,11 @@ import (
 	"github.com/sensiblebit/certkit"
 )
 
+var (
+	errVerifyInputNil = errors.New("verify input is nil")
+	errVerifyCertNil  = errors.New("certificate is nil")
+)
+
 // VerifyInput holds the parsed certificate data and verification options.
 type VerifyInput struct {
 	Cert                 *x509.Certificate
@@ -90,10 +95,10 @@ type VerifyResult struct {
 // VerifyCert verifies a certificate with optional key matching, chain validation, and expiry checking.
 func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) {
 	if input == nil {
-		return nil, errors.New("verify input is nil")
+		return nil, errVerifyInputNil
 	}
 	if input.Cert == nil {
-		return nil, errors.New("certificate is nil")
+		return nil, errVerifyCertNil
 	}
 
 	cert := input.Cert
@@ -154,7 +159,7 @@ func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) 
 		result.ChainValid = &valid
 		if bundleErr != nil {
 			result.ChainErr = bundleErr.Error()
-			result.Errors = append(result.Errors, fmt.Sprintf("chain validation: %s", bundleErr.Error()))
+			result.Errors = append(result.Errors, "chain validation: "+bundleErr.Error())
 		}
 		if bundle != nil {
 			result.Chain = buildChainDisplay(bundle, input.Verbose)
@@ -324,13 +329,13 @@ func DiagnoseChain(input DiagnoseChainInput) []Diagnosis {
 		diags = append(diags, Diagnosis{
 			Check:  "expired",
 			Status: "error",
-			Detail: fmt.Sprintf("leaf certificate expired on %s", input.Cert.NotAfter.UTC().Format(time.RFC3339)),
+			Detail: "leaf certificate expired on " + input.Cert.NotAfter.UTC().Format(time.RFC3339),
 		})
 	} else {
 		diags = append(diags, Diagnosis{
 			Check:  "expired",
 			Status: "pass",
-			Detail: fmt.Sprintf("leaf certificate valid until %s", input.Cert.NotAfter.UTC().Format(time.RFC3339)),
+			Detail: "leaf certificate valid until " + input.Cert.NotAfter.UTC().Format(time.RFC3339),
 		})
 	}
 
@@ -339,7 +344,7 @@ func DiagnoseChain(input DiagnoseChainInput) []Diagnosis {
 		diags = append(diags, Diagnosis{
 			Check:  "not-yet-valid",
 			Status: "error",
-			Detail: fmt.Sprintf("leaf certificate not valid until %s", input.Cert.NotBefore.UTC().Format(time.RFC3339)),
+			Detail: "leaf certificate not valid until " + input.Cert.NotBefore.UTC().Format(time.RFC3339),
 		})
 	}
 

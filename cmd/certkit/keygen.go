@@ -47,7 +47,7 @@ func init() {
 	registerCompletion(keygenCmd, completionInput{"out-path", directoryCompletion})
 }
 
-func runKeygen(cmd *cobra.Command, args []string) error {
+func runKeygen(_ *cobra.Command, _ []string) error {
 	result, err := internal.GenerateKeyFiles(internal.KeygenOptions{
 		Algorithm: keygenAlgorithm,
 		Bits:      keygenBits,

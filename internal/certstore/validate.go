@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rsa"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"math"
 	"strings"
@@ -13,6 +14,8 @@ import (
 
 	"github.com/sensiblebit/certkit"
 )
+
+var errValidationCertNotFound = errors.New("certificate with SKI not found")
 
 // ValidationResult holds the outcome of validating a single certificate.
 type ValidationResult struct {
@@ -45,7 +48,7 @@ func RunValidation(ctx context.Context, input RunValidationInput) (*ValidationRe
 	allCerts := input.Store.AllCerts()
 	rec, ok := allCerts[skiHex]
 	if !ok {
-		return nil, fmt.Errorf("certificate with SKI %s not found", input.SKIColon)
+		return nil, fmt.Errorf("%w: %s", errValidationCertNotFound, input.SKIColon)
 	}
 
 	leaf := rec.Cert
@@ -100,14 +103,14 @@ func CheckExpiration(cert *x509.Certificate, now time.Time) ValidationCheck {
 		return ValidationCheck{
 			Name:   "Expiration",
 			Status: "fail",
-			Detail: fmt.Sprintf("Not valid until %s", cert.NotBefore.UTC().Format("Jan 2, 2006")),
+			Detail: "Not valid until " + cert.NotBefore.UTC().Format("Jan 2, 2006"),
 		}
 	}
 	if now.After(cert.NotAfter) {
 		return ValidationCheck{
 			Name:   "Expiration",
 			Status: "fail",
-			Detail: fmt.Sprintf("Expired %s", cert.NotAfter.UTC().Format("Jan 2, 2006")),
+			Detail: "Expired " + cert.NotAfter.UTC().Format("Jan 2, 2006"),
 		}
 	}
 	remaining := cert.NotAfter.Sub(now)
@@ -161,7 +164,7 @@ func CheckKeyStrength(cert *x509.Certificate) ValidationCheck {
 
 // CheckSignature evaluates the certificate's signature algorithm.
 func CheckSignature(cert *x509.Certificate) ValidationCheck {
-	switch cert.SignatureAlgorithm { //nolint:exhaustive // only flagging known-weak algorithms
+	switch cert.SignatureAlgorithm { //nolint:exhaustive // Only weak/legacy algorithms need special handling; all others share the default pass path.
 	case x509.MD2WithRSA, x509.MD5WithRSA:
 		return ValidationCheck{
 			Name:   "Signature",

@@ -9,6 +9,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/asn1"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"testing"
 	"time"
@@ -374,13 +375,25 @@ func sctListExtension(t *testing.T, scts ...[]byte) pkix.Extension {
 		if len(sct) > 0xffff {
 			t.Fatalf("sct too large: %d", len(sct))
 		}
-		list = append(list, byte(len(sct)>>8), byte(len(sct)))
+		sctLen, err := checkedUint16Len(len(sct), "SCT length")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var sctLenBytes [2]byte
+		binary.BigEndian.PutUint16(sctLenBytes[:], sctLen)
+		list = append(list, sctLenBytes[:]...)
 		list = append(list, sct...)
 	}
 	if len(list) > 0xffff {
 		t.Fatalf("sct list too large: %d", len(list))
 	}
-	sctList := append([]byte{byte(len(list) >> 8), byte(len(list))}, list...)
+	listLen, err := checkedUint16Len(len(list), "SCT list length")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var listLenBytes [2]byte
+	binary.BigEndian.PutUint16(listLenBytes[:], listLen)
+	sctList := append(listLenBytes[:], list...)
 	value, err := asn1.Marshal(sctList)
 	if err != nil {
 		t.Fatalf("marshal sct list: %v", err)

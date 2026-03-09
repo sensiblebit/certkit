@@ -43,7 +43,7 @@ func TestParseContainerData_PEMMultiKey_ReturnsFirst(t *testing.T) {
 	otherLeaf := newECDSALeaf(t, otherCA, "other.example.com", []string{"other.example.com"})
 
 	// PEM: leaf cert + leaf key (matching) + other key (non-matching)
-	combined := append(leaf.certPEM, leaf.keyPEM...)
+	combined := append(bytes.Clone(leaf.certPEM), leaf.keyPEM...)
 	combined = append(combined, otherLeaf.keyPEM...)
 
 	contents, err := ParseContainerData(combined, nil)

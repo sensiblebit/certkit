@@ -273,7 +273,7 @@ func TestRunConvert_PKCS12MultiMatchIsGeneralError(t *testing.T) {
 	outPath := filepath.Join(tempDir, "bundle.p12")
 
 	certData := append([]byte(certkit.CertToPEM(cert1)), []byte(certkit.CertToPEM(cert2))...)
-	if err := os.WriteFile(certPath, certData, 0644); err != nil {
+	if err := os.WriteFile(certPath, certData, 0600); err != nil {
 		t.Fatalf("write cert input: %v", err)
 	}
 
@@ -486,7 +486,8 @@ func TestFindAllKeyLeafPairs_ParsePEMPrivateKeysIntegration(t *testing.T) {
 
 	// Prepend a certificate PEM block — ParsePEMPrivateKeys should skip it
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw})
-	mixedPEM := append(certPEM, keyPEM...)
+	mixedPEM := append([]byte{}, certPEM...)
+	mixedPEM = append(mixedPEM, keyPEM...)
 
 	pairs, err := findAllKeyLeafPairs(mixedPEM, nil, []*x509.Certificate{cert})
 	if err != nil {

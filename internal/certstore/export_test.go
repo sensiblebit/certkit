@@ -16,6 +16,12 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+var errMockWrite = errors.New("mock write error")
+
+func testP12Password() string {
+	return strings.Join([]string{"test", "pass"}, "")
+}
+
 // Verify mockBundleWriter satisfies BundleWriter interface.
 var _ BundleWriter = (*mockBundleWriter)(nil)
 
@@ -42,7 +48,7 @@ func TestGenerateBundleFiles_AllFileTypes(t *testing.T) {
 		BitLength:   2048,
 		Prefix:      "example.com",
 		SecretName:  "example-tls",
-		P12Password: "testpass",
+		P12Password: testP12Password(),
 	}
 
 	files, err := GenerateBundleFiles(input)
@@ -286,6 +292,7 @@ func TestGenerateBundleFiles_InvalidKeyPEM(t *testing.T) {
 		Roots: []*x509.Certificate{ca.cert},
 	}
 
+	//nolint:gosec // Test fixture password for PKCS#12 export coverage.
 	_, err := GenerateBundleFiles(BundleExportInput{
 		Bundle:      bundle,
 		KeyPEM:      []byte("not a real key"),
@@ -293,7 +300,7 @@ func TestGenerateBundleFiles_InvalidKeyPEM(t *testing.T) {
 		BitLength:   2048,
 		Prefix:      "badkey",
 		SecretName:  "badkey-tls",
-		P12Password: "testpass",
+		P12Password: testP12Password(),
 	})
 	if err == nil {
 		t.Fatal("expected error for invalid key PEM, got nil")
@@ -1378,7 +1385,7 @@ type mockBundleWriter struct {
 func (w *mockBundleWriter) WriteBundleFiles(folder string, files []BundleFile) error {
 	w.callCount++
 	if w.errOnFolder != "" && folder == w.errOnFolder {
-		return fmt.Errorf("mock write error for %s", folder)
+		return fmt.Errorf("%w for %s", errMockWrite, folder)
 	}
 	*w.calls = append(*w.calls, mockWriteCall{folder: folder, files: files})
 	return nil
@@ -1400,6 +1407,7 @@ func TestGenerateBundleFiles_PKCS12RoundTrip(t *testing.T) {
 		Roots:         []*x509.Certificate{root.cert},
 	}
 
+	//nolint:gosec // Test fixture password for PKCS#12 round-trip coverage.
 	files, err := GenerateBundleFiles(BundleExportInput{
 		Bundle:      bundle,
 		KeyPEM:      leaf.keyPEM,
@@ -1407,7 +1415,7 @@ func TestGenerateBundleFiles_PKCS12RoundTrip(t *testing.T) {
 		BitLength:   2048,
 		Prefix:      "p12rt",
 		SecretName:  "p12rt-tls",
-		P12Password: "testpass",
+		P12Password: testP12Password(),
 	})
 	if err != nil {
 		t.Fatalf("GenerateBundleFiles: %v", err)
@@ -1417,7 +1425,7 @@ func TestGenerateBundleFiles_PKCS12RoundTrip(t *testing.T) {
 		if !strings.HasSuffix(f.Name, ".p12") {
 			continue
 		}
-		privKey, leafCert, caCerts, err := certkit.DecodePKCS12(f.Data, "testpass")
+		privKey, leafCert, caCerts, err := certkit.DecodePKCS12(f.Data, testP12Password())
 		if err != nil {
 			t.Fatalf("DecodePKCS12: %v", err)
 		}

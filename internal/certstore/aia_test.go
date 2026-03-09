@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -16,6 +17,12 @@ import (
 	"time"
 
 	"github.com/sensiblebit/certkit"
+)
+
+var (
+	errUnexpectedURL = errors.New("unexpected URL")
+	errFetcherUnused = errors.New("should not be called")
+	errConnRefused   = errors.New("connection refused")
 )
 
 func TestHasUnresolvedIssuers(t *testing.T) {
@@ -32,12 +39,13 @@ func TestHasUnresolvedIssuers(t *testing.T) {
 	}{
 		{
 			name:  "empty store",
-			setup: func(t *testing.T, store *MemStore) {},
+			setup: func(_ *testing.T, _ *MemStore) {},
 			want:  false,
 		},
 		{
 			name: "only roots",
 			setup: func(t *testing.T, store *MemStore) {
+				t.Helper()
 				ca := newRSACA(t)
 				if err := store.HandleCertificate(ca.cert, "ca.pem"); err != nil {
 					t.Fatal(err)
@@ -48,6 +56,7 @@ func TestHasUnresolvedIssuers(t *testing.T) {
 		{
 			name: "leaf with issuer in store",
 			setup: func(t *testing.T, store *MemStore) {
+				t.Helper()
 				ca := newRSACA(t)
 				leaf := newRSALeaf(t, ca, "has-issuer.example.com", []string{"has-issuer.example.com"})
 				if err := store.HandleCertificate(ca.cert, "ca.pem"); err != nil {
@@ -62,6 +71,7 @@ func TestHasUnresolvedIssuers(t *testing.T) {
 		{
 			name: "leaf issued by Mozilla root returns false",
 			setup: func(t *testing.T, store *MemStore) {
+				t.Helper()
 				// Parse the first Mozilla root to get its RawSubject.
 				pemData := certkit.MozillaRootPEM()
 				block, _ := pem.Decode(pemData)
@@ -135,6 +145,7 @@ func TestHasUnresolvedIssuers(t *testing.T) {
 		{
 			name: "leaf with missing issuer",
 			setup: func(t *testing.T, store *MemStore) {
+				t.Helper()
 				ca := newRSACA(t)
 				leaf := newRSALeaf(t, ca, "orphan.example.com", []string{"orphan.example.com"})
 				// Only add the leaf, not the CA
@@ -217,7 +228,7 @@ func TestResolveAIA_FetchesMissingIssuer(t *testing.T) {
 		if url == "http://example.com/ca.cer" {
 			return caDER, nil
 		}
-		return nil, fmt.Errorf("unexpected URL: %s", url)
+		return nil, fmt.Errorf("%w: %s", errUnexpectedURL, url)
 	}
 
 	warnings := ResolveAIA(context.Background(), ResolveAIAInput{
@@ -252,6 +263,7 @@ func TestResolveAIA_SkipsResolvedAndRoots(t *testing.T) {
 		setup func(t *testing.T, store *MemStore)
 	}{
 		{"issuer_in_store", func(t *testing.T, store *MemStore) {
+			t.Helper()
 			// Leaf must have an AIA URL so the test proves the issuer-presence
 			// check prevents the fetch, not the absence of URLs.
 			ca := newRSACA(t)
@@ -284,6 +296,7 @@ func TestResolveAIA_SkipsResolvedAndRoots(t *testing.T) {
 			}
 		}},
 		{"root_cert_with_aia", func(t *testing.T, store *MemStore) {
+			t.Helper()
 			// Root has an AIA URL set — fetch must still not occur because
 			// root certs are skipped before AIA URL iteration.
 			caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
@@ -323,7 +336,7 @@ func TestResolveAIA_SkipsResolvedAndRoots(t *testing.T) {
 			var fetchCount atomic.Int32
 			fetcher := func(_ context.Context, _ string) ([]byte, error) {
 				fetchCount.Add(1)
-				return nil, fmt.Errorf("should not be called")
+				return nil, errFetcherUnused
 			}
 
 			warnings := ResolveAIA(context.Background(), ResolveAIAInput{
@@ -352,7 +365,7 @@ func TestResolveAIA_FailureProducesWarning(t *testing.T) {
 		fetcher func(context.Context, string) ([]byte, error)
 	}{
 		{"fetch_failure", func(_ context.Context, _ string) ([]byte, error) {
-			return nil, fmt.Errorf("connection refused")
+			return nil, errConnRefused
 		}},
 		{"parse_failure", func(_ context.Context, _ string) ([]byte, error) {
 			return []byte("not a certificate"), nil
@@ -706,7 +719,7 @@ func TestResolveAIA_PKCS7Response(t *testing.T) {
 		if url == "http://crl.example.mil/issuedto/root_IT.p7c" {
 			return p7Data, nil
 		}
-		return nil, fmt.Errorf("unexpected URL: %s", url)
+		return nil, fmt.Errorf("%w: %s", errUnexpectedURL, url)
 	}
 
 	warnings := ResolveAIA(context.Background(), ResolveAIAInput{
@@ -790,7 +803,7 @@ func TestResolveAIA_CancelledContext(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel immediately
 
-	fetcher := func(fctx context.Context, url string) ([]byte, error) {
+	fetcher := func(fctx context.Context, _ string) ([]byte, error) {
 		return nil, fctx.Err()
 	}
 
@@ -1016,7 +1029,7 @@ func TestResolveAIA_ProgressNoDuplicateCounting(t *testing.T) {
 		if url == "http://example.com/ca-a.cer" {
 			return caADER, nil
 		}
-		return nil, fmt.Errorf("connection refused")
+		return nil, errConnRefused
 	}
 
 	var mu sync.Mutex

@@ -20,10 +20,7 @@ func TestBundlePassword(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got, err := bundlePassword(tt.passwords)
-			if err != nil {
-				t.Fatalf("bundlePassword(%v) unexpected error: %v", tt.passwords, err)
-			}
+			got := bundlePassword(tt.passwords)
 			if got != tt.want {
 				t.Fatalf("bundlePassword(%v) = %q, want %q", tt.passwords, got, tt.want)
 			}

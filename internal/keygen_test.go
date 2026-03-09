@@ -118,10 +118,7 @@ func TestGenerateKeyFiles(t *testing.T) {
 
 	// Verify key.pem exists, is parseable, and has secure permissions
 	keyPath := filepath.Join(dir, "key.pem")
-	keyData, err := os.ReadFile(keyPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	keyData := mustReadTestFile(t, keyPath)
 	if !strings.Contains(string(keyData), "PRIVATE KEY") {
 		t.Error("key file should contain PRIVATE KEY")
 	}
@@ -142,10 +139,7 @@ func TestGenerateKeyFiles(t *testing.T) {
 
 	// Verify pub.pem exists, is parseable, and has standard permissions
 	pubPath := filepath.Join(dir, "pub.pem")
-	pubData, err := os.ReadFile(pubPath)
-	if err != nil {
-		t.Fatal(err)
-	}
+	pubData := mustReadTestFile(t, pubPath)
 	if !strings.Contains(string(pubData), "PUBLIC KEY") {
 		t.Error("pub file should contain PUBLIC KEY")
 	}
@@ -179,7 +173,7 @@ func TestGenerateKeyFiles(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if perm := pubInfo.Mode().Perm(); perm != 0644 {
+	if perm := pubInfo.Mode().Perm(); perm != 0o644 {
 		t.Errorf("pub file permissions = %04o, want 0644", perm)
 	}
 
@@ -248,13 +242,17 @@ func TestGenerateKeyFiles_WithCSR_Content(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	csrData, err := os.ReadFile(filepath.Join(dir, "csr.pem"))
-	if err != nil {
-		t.Fatal(err)
-	}
+	csrData := mustReadTestFile(t, filepath.Join(dir, "csr.pem"))
 	csr, err := certkit.ParsePEMCertificateRequest(csrData)
 	if err != nil {
 		t.Fatalf("parsing CSR: %v", err)
+	}
+	csrInfo, err := os.Stat(filepath.Join(dir, "csr.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := csrInfo.Mode().Perm(); perm != 0o644 {
+		t.Errorf("csr file permissions = %04o, want 0644", perm)
 	}
 
 	if csr.Subject.CommonName != "keymatch.example.com" {

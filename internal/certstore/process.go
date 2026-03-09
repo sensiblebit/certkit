@@ -7,6 +7,7 @@ import (
 	stdpkix "crypto/x509/pkix"
 	"encoding/asn1"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -17,6 +18,8 @@ import (
 	ctpkix "github.com/google/certificate-transparency-go/x509/pkix"
 	"github.com/sensiblebit/certkit"
 )
+
+var errCompatCertParseNil = errors.New("compat certificate parse returned nil certificate")
 
 // normalizePrivateKey converts *ed25519.PrivateKey (pointer form, returned by
 // ssh.ParseRawPrivateKey and potentially by x509.ParsePKCS8PrivateKey) to the
@@ -94,7 +97,7 @@ func parseCertificateCompat(der []byte) (*x509.Certificate, error) {
 		if err != nil {
 			return nil, fmt.Errorf("compat certificate parse returned nil: %w", err)
 		}
-		return nil, fmt.Errorf("compat certificate parse returned nil certificate")
+		return nil, errCompatCertParseNil
 	}
 
 	cert := &x509.Certificate{
@@ -194,9 +197,7 @@ func convertObjectIdentifiers(oids []ctasn1.ObjectIdentifier) []asn1.ObjectIdent
 
 func convertObjectIdentifier(oid ctasn1.ObjectIdentifier) asn1.ObjectIdentifier {
 	converted := make(asn1.ObjectIdentifier, len(oid))
-	for i, v := range oid {
-		converted[i] = int(v)
-	}
+	copy(converted, oid)
 	return converted
 }
 

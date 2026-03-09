@@ -2,6 +2,7 @@ package internal
 
 import (
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -9,6 +10,8 @@ import (
 	"github.com/sensiblebit/certkit"
 	"github.com/sensiblebit/certkit/internal/certstore"
 )
+
+var errProcessInputExceedsMaxSize = errors.New("input exceeds max size")
 
 // skippableDirs contains directory names that cannot contain certificates or keys
 // and should be skipped during filesystem walks to avoid unnecessary I/O.
@@ -83,7 +86,7 @@ type ProcessDataInput struct {
 func ProcessData(input ProcessDataInput) error {
 	slog.Debug("processing data", "path", input.VirtualPath)
 	if input.MaxBytes > 0 && int64(len(input.Data)) > input.MaxBytes {
-		return fmt.Errorf("input %s exceeds max size (%d bytes)", input.VirtualPath, input.MaxBytes)
+		return fmt.Errorf("%w: %s (%d bytes)", errProcessInputExceedsMaxSize, input.VirtualPath, input.MaxBytes)
 	}
 
 	before := snapshotStoreCounts(input.Store)

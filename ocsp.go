@@ -4,12 +4,22 @@ import (
 	"bytes"
 	"context"
 	"crypto/x509"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"time"
 
 	"golang.org/x/crypto/ocsp"
+)
+
+var (
+	errOCSPCertRequired        = errors.New("checking OCSP: certificate is required")
+	errOCSPIssuerRequired      = errors.New("checking OCSP: issuer certificate is required")
+	errOCSPResponderURLMissing = errors.New("checking OCSP: certificate has no OCSP responder URL")
+	errOCSPTooManyRedirects    = errors.New("OCSP redirect limit exceeded")
+	errOCSPResponderHTTPStatus = errors.New("OCSP responder returned non-200 status")
+	errOCSPResponseExpired     = errors.New("OCSP response expired")
 )
 
 // CheckOCSPInput contains parameters for an OCSP revocation check.
@@ -46,14 +56,14 @@ type OCSPResult struct {
 // The OCSP responder URL is read from the certificate's AIA extension.
 func CheckOCSP(ctx context.Context, input CheckOCSPInput) (*OCSPResult, error) {
 	if input.Cert == nil {
-		return nil, fmt.Errorf("checking OCSP: certificate is required")
+		return nil, errOCSPCertRequired
 	}
 	if input.Issuer == nil {
-		return nil, fmt.Errorf("checking OCSP: issuer certificate is required")
+		return nil, errOCSPIssuerRequired
 	}
 
 	if len(input.Cert.OCSPServer) == 0 {
-		return nil, fmt.Errorf("checking OCSP: certificate has no OCSP responder URL")
+		return nil, errOCSPResponderURLMissing
 	}
 
 	responderURL := input.Cert.OCSPServer[0]
@@ -78,7 +88,7 @@ func CheckOCSP(ctx context.Context, input CheckOCSPInput) (*OCSPResult, error) {
 		Timeout: 10 * time.Second,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= maxRedirects {
-				return fmt.Errorf("stopped after %d redirects", maxRedirects)
+				return fmt.Errorf("%w: stopped after %d redirects", errOCSPTooManyRedirects, maxRedirects)
 			}
 			if err := ValidateAIAURLWithOptions(req.Context(), ValidateAIAURLInput{URL: req.URL.String(), AllowPrivateNetworks: input.AllowPrivateNetworks}); err != nil {
 				return fmt.Errorf("redirect blocked: %w", err)
@@ -93,7 +103,7 @@ func CheckOCSP(ctx context.Context, input CheckOCSPInput) (*OCSPResult, error) {
 	defer func() { _ = httpResp.Body.Close() }()
 
 	if httpResp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("OCSP responder returned HTTP %d", httpResp.StatusCode)
+		return nil, fmt.Errorf("%w: HTTP %d", errOCSPResponderHTTPStatus, httpResp.StatusCode)
 	}
 
 	respBytes, err := io.ReadAll(io.LimitReader(httpResp.Body, 1<<20)) // 1MB limit
@@ -108,7 +118,7 @@ func CheckOCSP(ctx context.Context, input CheckOCSPInput) (*OCSPResult, error) {
 
 	// Reject expired OCSP responses to prevent replay of stale data over HTTP.
 	if !resp.NextUpdate.IsZero() && time.Now().After(resp.NextUpdate) {
-		return nil, fmt.Errorf("OCSP response expired at %s", resp.NextUpdate.UTC().Format(time.RFC3339))
+		return nil, fmt.Errorf("%w at %s", errOCSPResponseExpired, resp.NextUpdate.UTC().Format(time.RFC3339))
 	}
 
 	result := &OCSPResult{

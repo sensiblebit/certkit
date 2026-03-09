@@ -45,7 +45,7 @@ func TestGenerateCSRFiles_Sources(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(tmplPath, data, 0644); err != nil {
+				if err := os.WriteFile(tmplPath, data, 0600); err != nil {
 					t.Fatalf("write template: %v", err)
 				}
 				return CSROptions{
@@ -82,7 +82,7 @@ func TestGenerateCSRFiles_Sources(t *testing.T) {
 				}
 				certPEM := certkit.CertToPEM(cert)
 				certPath := filepath.Join(dir, "cert.pem")
-				if err := os.WriteFile(certPath, []byte(certPEM), 0644); err != nil {
+				if err := os.WriteFile(certPath, []byte(certPEM), 0600); err != nil {
 					t.Fatalf("write cert: %v", err)
 				}
 				return CSROptions{
@@ -112,7 +112,7 @@ func TestGenerateCSRFiles_Sources(t *testing.T) {
 				}
 				csrPEMBytes := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: srcDER})
 				csrPath := filepath.Join(dir, "source.csr")
-				if err := os.WriteFile(csrPath, csrPEMBytes, 0644); err != nil {
+				if err := os.WriteFile(csrPath, csrPEMBytes, 0600); err != nil {
 					t.Fatalf("write source CSR: %v", err)
 				}
 				return CSROptions{
@@ -135,10 +135,7 @@ func TestGenerateCSRFiles_Sources(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			csrData, err := os.ReadFile(filepath.Join(opts.OutPath, "csr.pem"))
-			if err != nil {
-				t.Fatal(err)
-			}
+			csrData := mustReadTestFile(t, filepath.Join(opts.OutPath, "csr.pem"))
 			csr, err := certkit.ParsePEMCertificateRequest(csrData)
 			if err != nil {
 				t.Fatal(err)
@@ -182,7 +179,7 @@ func TestGenerateCSRFiles_WithExistingKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(tmplPath, data, 0644); err != nil {
+	if err := os.WriteFile(tmplPath, data, 0600); err != nil {
 		t.Fatalf("write template: %v", err)
 	}
 
@@ -197,13 +194,17 @@ func TestGenerateCSRFiles_WithExistingKey(t *testing.T) {
 	}
 
 	// CSR should exist and be signed by the existing key
-	csrData, err := os.ReadFile(filepath.Join(outDir, "csr.pem"))
-	if err != nil {
-		t.Fatal("CSR file should exist")
-	}
+	csrData := mustReadTestFile(t, filepath.Join(outDir, "csr.pem"))
 	csr, err := certkit.ParsePEMCertificateRequest(csrData)
 	if err != nil {
 		t.Fatalf("parse CSR: %v", err)
+	}
+	csrInfo, err := os.Stat(filepath.Join(outDir, "csr.pem"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := csrInfo.Mode().Perm(); perm != 0o644 {
+		t.Errorf("csr file permissions = %04o, want 0644", perm)
 	}
 	if !key.PublicKey.Equal(csr.PublicKey) {
 		t.Error("CSR public key does not match existing key — CSR was signed by a different key")
@@ -228,7 +229,7 @@ func TestGenerateCSRFiles_Stdout(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(tmplPath, data, 0644); err != nil {
+	if err := os.WriteFile(tmplPath, data, 0600); err != nil {
 		t.Fatalf("write template: %v", err)
 	}
 

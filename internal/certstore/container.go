@@ -4,11 +4,16 @@ import (
 	"crypto"
 	"crypto/x509"
 	"encoding/pem"
-	"fmt"
+	"errors"
 	"slices"
 	"strings"
 
 	"github.com/sensiblebit/certkit"
+)
+
+var (
+	errContainerDataEmpty   = errors.New("empty data")
+	errContainerParseFailed = errors.New("could not parse as PEM, DER, PKCS#12, JKS, or PKCS#7")
 )
 
 // ContainerContents holds the parsed contents of a certificate container file.
@@ -23,7 +28,7 @@ type ContainerContents struct {
 // certificates.
 func ParseContainerData(data []byte, passwords []string) (*ContainerContents, error) {
 	if len(data) == 0 {
-		return nil, fmt.Errorf("empty data")
+		return nil, errContainerDataEmpty
 	}
 
 	// Try PKCS#12
@@ -106,7 +111,7 @@ func ParseContainerData(data []byte, passwords []string) (*ContainerContents, er
 		return &ContainerContents{Key: key}, nil
 	}
 
-	return nil, fmt.Errorf("could not parse as PEM, DER, PKCS#12, JKS, or PKCS#7")
+	return nil, errContainerParseFailed
 }
 
 // selectLeafAndExtras picks a leaf certificate from certs and returns that leaf

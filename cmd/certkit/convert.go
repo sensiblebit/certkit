@@ -15,10 +15,16 @@ import (
 )
 
 var (
-	convertTo         string
-	convertOutFile    string
-	convertKeyPath    string
-	errPKCS12MultiKey = errors.New("PKCS#12 supports only one key entry")
+	convertTo                string
+	convertOutFile           string
+	convertKeyPath           string
+	errPKCS12MultiKey        = errors.New("PKCS#12 supports only one key entry")
+	errConvertNoCertsOrKeys  = errors.New("no certificates or keys found")
+	errConvertNoCerts        = errors.New("no certificates found")
+	errConvertDERMultiCert   = errors.New("DER format supports only a single certificate")
+	errConvertP12RequiresKey = errors.New("PKCS#12 output requires a private key (use --key)")
+	errConvertJKSRequiresKey = errors.New("JKS output requires a private key (use --key)")
+	errConvertExportPassword = errors.New("PKCS#12/JKS export requires an explicit password")
 )
 
 var convertCmd = &cobra.Command{
@@ -78,7 +84,7 @@ type formatConvertInput struct {
 	outputPassword string
 }
 
-func runConvert(cmd *cobra.Command, args []string) error {
+func runConvert(_ *cobra.Command, args []string) error {
 	passwordSets, err := internal.ProcessPasswordSets(passwordList, passwordFile)
 	if err != nil {
 		return fmt.Errorf("loading passwords: %w", err)
@@ -96,7 +102,7 @@ func runConvert(cmd *cobra.Command, args []string) error {
 	// matches keys to leaf certificates and builds chain bundles. Multiple
 	// matches produce multiple entries (for JKS multi-alias output).
 	if convertKeyPath != "" {
-		keyData, err := os.ReadFile(convertKeyPath)
+		keyData, err := readCLIFile(convertKeyPath)
 		if err != nil {
 			return fmt.Errorf("reading key file: %w", err)
 		}
@@ -126,10 +132,10 @@ func runConvert(cmd *cobra.Command, args []string) error {
 		case "pem":
 			// Allow key-only PEM conversions when a private key is present
 			if contents.Key == nil {
-				return fmt.Errorf("no certificates or keys found in %s", args[0])
+				return fmt.Errorf("%w in %s", errConvertNoCertsOrKeys, args[0])
 			}
 		default:
-			return fmt.Errorf("no certificates found in %s", args[0])
+			return fmt.Errorf("%w in %s", errConvertNoCerts, args[0])
 		}
 	}
 
@@ -140,10 +146,7 @@ func runConvert(cmd *cobra.Command, args []string) error {
 
 	exportPassword := ""
 	if convertTo == "p12" || convertTo == "jks" {
-		exportPassword, err = bundlePassword(passwordSets.Export)
-		if err != nil {
-			return fmt.Errorf("determining export password for %s output: %w", convertTo, err)
-		}
+		exportPassword = bundlePassword(passwordSets.Export)
 	}
 
 	output, err := formatConvertOutput(formatConvertInput{
@@ -202,19 +205,19 @@ func formatConvertOutput(input formatConvertInput) ([]byte, error) {
 
 	case "der":
 		if len(input.allCerts) > 1 {
-			return nil, fmt.Errorf("DER format supports only a single certificate; input contains %d (use p7b for multiple)", len(input.allCerts))
+			return nil, fmt.Errorf("%w; input contains %d (use p7b for multiple)", errConvertDERMultiCert, len(input.allCerts))
 		}
 		return input.allCerts[0].Raw, nil
 
 	case "p12":
 		if input.contents.Key == nil {
-			return nil, fmt.Errorf("PKCS#12 output requires a private key (use --key)")
+			return nil, errConvertP12RequiresKey
 		}
 		if len(input.pairs) > 1 {
 			return nil, fmt.Errorf("%w; %d matches found (use JKS for multiple)", errPKCS12MultiKey, len(input.pairs))
 		}
 		if input.outputPassword == "" {
-			return nil, fmt.Errorf("PKCS#12/JKS export requires an explicit password")
+			return nil, errConvertExportPassword
 		}
 		data, err := certkit.EncodePKCS12(input.contents.Key, input.contents.Leaf, input.contents.ExtraCerts, input.outputPassword)
 		if err != nil {
@@ -224,10 +227,10 @@ func formatConvertOutput(input formatConvertInput) ([]byte, error) {
 
 	case "jks":
 		if input.contents.Key == nil {
-			return nil, fmt.Errorf("JKS output requires a private key (use --key)")
+			return nil, errConvertJKSRequiresKey
 		}
 		if input.outputPassword == "" {
-			return nil, fmt.Errorf("PKCS#12/JKS export requires an explicit password")
+			return nil, errConvertExportPassword
 		}
 		return formatConvertJKS(input)
 

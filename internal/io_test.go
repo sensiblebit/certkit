@@ -22,7 +22,7 @@ func TestReadFileLimited(t *testing.T) {
 				t.Helper()
 				dir := t.TempDir()
 				file := filepath.Join(dir, "input.bin")
-				if err := os.WriteFile(file, []byte("abcde"), 0644); err != nil {
+				if err := os.WriteFile(file, []byte("abcde"), 0600); err != nil {
 					t.Fatalf("write file: %v", err)
 				}
 				return file
@@ -34,7 +34,7 @@ func TestReadFileLimited(t *testing.T) {
 				t.Helper()
 				dir := t.TempDir()
 				target := filepath.Join(dir, "target.bin")
-				if err := os.WriteFile(target, []byte("abcde"), 0644); err != nil {
+				if err := os.WriteFile(target, []byte("abcde"), 0600); err != nil {
 					t.Fatalf("write target file: %v", err)
 				}
 				link := filepath.Join(dir, "target-link.bin")

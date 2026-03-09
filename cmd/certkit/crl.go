@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -11,8 +12,9 @@ import (
 )
 
 var (
-	crlCheckPath string
-	crlFormat    string
+	crlCheckPath        string
+	crlFormat           string
+	errCRLNoCertificate = errors.New("no certificate found")
 )
 
 var crlCmd = &cobra.Command{
@@ -90,7 +92,7 @@ func runCRL(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("loading certificate %s: %w", crlCheckPath, err)
 		}
 		if contents.Leaf == nil {
-			return fmt.Errorf("no certificate found in %s", crlCheckPath)
+			return fmt.Errorf("%w in %s", errCRLNoCertificate, crlCheckPath)
 		}
 		checkResult = &crlCheckResult{
 			Serial:  certkit.FormatSerialNumber(contents.Leaf.SerialNumber),
@@ -122,7 +124,7 @@ func runCRL(cmd *cobra.Command, args []string) error {
 			}
 		}
 	default:
-		return fmt.Errorf("unsupported output format %q (use text or json)", format)
+		return fmt.Errorf("%w %q (use text or json)", ErrUnsupportedOutputFormat, format)
 	}
 
 	if checkResult != nil && checkResult.Revoked {

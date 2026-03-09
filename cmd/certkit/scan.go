@@ -5,11 +5,13 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -32,6 +34,10 @@ var (
 	scanFormat              string
 	scanAIATimeout          time.Duration
 	scanAllowPrivateNetwork bool
+	errScanAIATimeout       = errors.New("invalid --aia-timeout")
+	errScanAIARedirects     = errors.New("AIA redirect limit exceeded")
+	errScanAIAHTTPStatus    = errors.New("AIA server returned non-200 status")
+	errScanAIAResponseLarge = errors.New("AIA response exceeds size limit")
 )
 
 var scanCmd = &cobra.Command{
@@ -67,7 +73,7 @@ func init() {
 func runScan(cmd *cobra.Command, args []string) error {
 	inputPath := args[0]
 	if scanAIATimeout <= 0 {
-		return fmt.Errorf("invalid --aia-timeout %q: must be greater than 0", scanAIATimeout)
+		return fmt.Errorf("%w %s: must be greater than 0", errScanAIATimeout, scanAIATimeout)
 	}
 
 	scanExport := scanBundlePath != ""
@@ -309,7 +315,8 @@ func runScan(cmd *cobra.Command, args []string) error {
 				slog.Debug("skipped certificates", "count", skipped)
 			}
 			if count > 0 {
-				if err := os.WriteFile(scanDumpCerts, data, 0644); err != nil {
+				//nolint:gosec // Dumped certificates are intentionally public output; private keys use a separate 0600 path.
+				if err := os.WriteFile(scanDumpCerts, data, 0o644); err != nil {
 					return fmt.Errorf("writing certificates to %s: %w", scanDumpCerts, err)
 				}
 				slog.Debug("dumped certificates", "count", count, "path", scanDumpCerts)
@@ -327,12 +334,10 @@ func runScan(cmd *cobra.Command, args []string) error {
 				return err
 			}
 		}
-		p12Password, err := bundlePassword(passwordSets.Export)
-		if err != nil {
-			return fmt.Errorf("determining export password for scan bundle export: %w", err)
-		}
+		p12Password := bundlePassword(passwordSets.Export)
 		// Full export workflow — MemStore handles chain resolution via raw ASN.1 matching
-		if err := os.MkdirAll(scanBundlePath, 0755); err != nil {
+		//nolint:gosec // Bundle dirs need traversal bits so public bundle artifacts remain readable; sensitive files stay 0600.
+		if err := os.MkdirAll(scanBundlePath, 0o755); err != nil {
 			return fmt.Errorf("creating output directory %s: %w", scanBundlePath, err)
 		}
 		if err := internal.ExportBundles(cmd.Context(), internal.ExportBundlesInput{
@@ -390,7 +395,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 				return fmt.Errorf("writing export status: %w", err)
 			}
 		default:
-			return fmt.Errorf("unsupported output format %q (use text or json)", format)
+			return fmt.Errorf("%w %q (use text or json)", ErrUnsupportedOutputFormat, format)
 		}
 	} else {
 		if progressEnabled {
@@ -445,7 +450,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 				printScanVerboseText(store)
 			}
 		default:
-			return fmt.Errorf("unsupported output format %q (use text or json)", format)
+			return fmt.Errorf("%w %q (use text or json)", ErrUnsupportedOutputFormat, format)
 		}
 	}
 
@@ -520,7 +525,7 @@ func buildScanKeyList(store *certstore.MemStore) []scanKeyEntry {
 	for _, rec := range keys {
 		entries = append(entries, scanKeyEntry{
 			KeyType: rec.KeyType,
-			Size:    fmt.Sprintf("%d", rec.BitLength),
+			Size:    strconv.Itoa(rec.BitLength),
 			SKI:     rec.SKI,
 			Source:  rec.Source,
 		})
@@ -573,7 +578,7 @@ func newAIAHTTPClient(allowPrivateNetworks bool, timeout time.Duration) *http.Cl
 		Timeout: timeout,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
 			if len(via) >= 3 {
-				return fmt.Errorf("stopped after 3 redirects")
+				return fmt.Errorf("%w: stopped after 3 redirects", errScanAIARedirects)
 			}
 			if err := certkit.ValidateAIAURLWithOptions(req.Context(), certkit.ValidateAIAURLInput{URL: req.URL.String(), AllowPrivateNetworks: allowPrivateNetworks}); err != nil {
 				return fmt.Errorf("redirect blocked: %w", err)
@@ -612,7 +617,7 @@ func fetchAIAURL(ctx context.Context, input fetchAIAURLInput) ([]byte, error) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("HTTP %d from %s", resp.StatusCode, input.rawURL)
+		return nil, fmt.Errorf("%w: HTTP %d from %s", errScanAIAHTTPStatus, resp.StatusCode, input.rawURL)
 	}
 	limited := &io.LimitedReader{R: resp.Body, N: maxAIAResponseBytes + 1}
 	data, err := io.ReadAll(limited)
@@ -620,7 +625,7 @@ func fetchAIAURL(ctx context.Context, input fetchAIAURLInput) ([]byte, error) {
 		return nil, fmt.Errorf("reading AIA response from %s: %w", input.rawURL, err)
 	}
 	if len(data) > maxAIAResponseBytes {
-		return nil, fmt.Errorf("reading AIA response from %s: response exceeds %d bytes", input.rawURL, maxAIAResponseBytes)
+		return nil, fmt.Errorf("%w from %s: %d bytes", errScanAIAResponseLarge, input.rawURL, maxAIAResponseBytes)
 	}
 	return data, nil
 }
