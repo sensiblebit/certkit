@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
@@ -801,7 +802,9 @@ func dialProbeConn(ctx context.Context, input cipherProbeInput) (net.Conn, error
 	return &bufferedPrefixConn{Conn: conn, reader: reader}, nil
 }
 
-func detectScanStartTLSProtocol(ctx context.Context, addr string) startTLSProtocol {
+func detectScanStartTLSProtocol(ctx context.Context, addr, serverName string) startTLSProtocol {
+	serverName = detectStartTLSServerName(addr, serverName)
+
 	// Bound each STARTTLS preflight phase to a short budget even when the
 	// caller supplied a much longer context deadline; the actual probe sockets
 	// carry their own per-attempt timeouts and should not wait on this sniff
@@ -831,7 +834,10 @@ func detectScanStartTLSProtocol(ctx context.Context, addr string) startTLSProtoc
 			slog.Debug("detect STARTTLS protocol: aborting best-effort preflight after LDAP deadline reset failed", "addr", addr, "error", err)
 			return ""
 		}
-		if ok, err := detectLDAPStartTLS(conn); ok {
+		if ok, err := detectLDAPStartTLS(detectLDAPStartTLSInput{
+			conn:       conn,
+			serverName: serverName,
+		}); ok {
 			return startTLSProtocolLDAP
 		} else if err != nil {
 			slog.Debug("detect STARTTLS protocol: LDAP probe failed", "addr", addr, "error", err)
@@ -844,7 +850,11 @@ func detectScanStartTLSProtocol(ctx context.Context, addr string) startTLSProtoc
 			slog.Debug("detect STARTTLS protocol: aborting best-effort preflight after protocol deadline reset failed", "addr", addr, "protocol", protocol, "error", err)
 			return ""
 		}
-		if confirmed, detectErr := detectStartTLSOnBanner(conn, prefix, protocol); confirmed {
+		if confirmed, detectErr := detectStartTLSOnBanner(detectStartTLSOnBannerInput{
+			conn:     conn,
+			prefix:   prefix,
+			protocol: protocol,
+		}); confirmed {
 			if err != nil && !errors.Is(err, io.EOF) {
 				slog.Debug("detect STARTTLS protocol: ignoring trailing read error", "addr", addr, "error", err)
 			}
@@ -870,7 +880,11 @@ func detectScanStartTLSProtocol(ctx context.Context, addr string) startTLSProtoc
 			slog.Debug("detect STARTTLS protocol: aborting best-effort preflight after IMAP deadline reset failed", "addr", addr, "error", err)
 			return ""
 		}
-		if ok, err := detectStartTLSOnBanner(conn, prefix, startTLSProtocolIMAP); ok {
+		if ok, err := detectStartTLSOnBanner(detectStartTLSOnBannerInput{
+			conn:     conn,
+			prefix:   prefix,
+			protocol: startTLSProtocolIMAP,
+		}); ok {
 			return startTLSProtocolIMAP
 		} else if err != nil {
 			slog.Debug("detect STARTTLS protocol: IMAP probe failed", "addr", addr, "error", err)
@@ -881,7 +895,11 @@ func detectScanStartTLSProtocol(ctx context.Context, addr string) startTLSProtoc
 			slog.Debug("detect STARTTLS protocol: aborting best-effort preflight after POP3 deadline reset failed", "addr", addr, "error", err)
 			return ""
 		}
-		if ok, err := detectStartTLSOnBanner(conn, prefix, startTLSProtocolPOP3); ok {
+		if ok, err := detectStartTLSOnBanner(detectStartTLSOnBannerInput{
+			conn:     conn,
+			prefix:   prefix,
+			protocol: startTLSProtocolPOP3,
+		}); ok {
 			return startTLSProtocolPOP3
 		} else if err != nil {
 			slog.Debug("detect STARTTLS protocol: POP3 probe failed", "addr", addr, "error", err)
@@ -899,6 +917,24 @@ func startTLSDetectDeadline(ctx context.Context, now time.Time) time.Time {
 		return deadline
 	}
 	return detectDeadline
+}
+
+func detectStartTLSServerName(addr, explicitServerName string) string {
+	if explicitServerName != "" {
+		return explicitServerName
+	}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return ""
+	}
+	ipHost := host
+	if zoneIdx := strings.LastIndex(ipHost, "%"); zoneIdx != -1 {
+		ipHost = ipHost[:zoneIdx]
+	}
+	if net.ParseIP(ipHost) != nil {
+		return ipHost
+	}
+	return host
 }
 
 func readBannerPrefix(conn net.Conn) ([]byte, error) {
@@ -1364,41 +1400,178 @@ func detectSMTPStartTLS(conn net.Conn, prefix []byte) (bool, error) {
 	return smtpAdvertisesStartTLS(ehloLines), nil
 }
 
-func detectStartTLSOnBanner(conn net.Conn, prefix []byte, protocol startTLSProtocol) (bool, error) {
-	reader := bufio.NewReader(io.MultiReader(bytes.NewReader(prefix), conn))
+type detectStartTLSOnBannerInput struct {
+	conn     net.Conn
+	prefix   []byte
+	protocol startTLSProtocol
+}
+
+func detectStartTLSOnBanner(input detectStartTLSOnBannerInput) (bool, error) {
+	reader := bufio.NewReader(io.MultiReader(bytes.NewReader(input.prefix), input.conn))
 	if err := negotiateStartTLS(negotiateStartTLSInput{
 		reader:   reader,
-		conn:     conn,
-		protocol: protocol,
+		conn:     input.conn,
+		protocol: input.protocol,
 	}); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-func detectLDAPStartTLS(conn net.Conn) (bool, error) {
-	reader := bufio.NewReader(conn)
-	if err := negotiateLDAPStartTLS(reader, conn); err != nil {
+type detectLDAPStartTLSInput struct {
+	conn       net.Conn
+	serverName string
+}
+
+func detectLDAPStartTLS(input detectLDAPStartTLSInput) (bool, error) {
+	reader := bufio.NewReader(input.conn)
+	if err := negotiateLDAPStartTLS(reader, input.conn); err != nil {
 		return false, err
 	}
-	if !startTLSHandshakeProgressed(&bufferedPrefixConn{Conn: conn, reader: reader}) {
+	if !startTLSHandshakeProgressed(startTLSHandshakeProgressedInput{
+		conn:       &bufferedPrefixConn{Conn: input.conn, reader: reader},
+		serverName: input.serverName,
+	}) {
 		return false, errConnectNonTLSService
 	}
 	return true, nil
 }
 
-func startTLSHandshakeProgressed(conn net.Conn) bool {
-	tlsConn := tls.Client(conn, &tls.Config{
-		InsecureSkipVerify:   true, //nolint:gosec // Preflight only confirms that TLS starts; certificate verification is not the goal here.
-		GetClientCertificate: emptyClientCertificate,
-	})
-	defer func() { _ = tlsConn.Close() }()
+type startTLSHandshakeProgressedInput struct {
+	conn       net.Conn
+	serverName string
+}
 
-	if tlsConn.Handshake() == nil {
-		return true
+func startTLSHandshakeProgressed(input startTLSHandshakeProgressedInput) bool {
+	msg, err := buildStartTLSPreflightClientHello(input.serverName)
+	if err != nil {
+		return false
 	}
-	state := tlsConn.ConnectionState()
-	return state.Version != 0 && len(state.PeerCertificates) > 0
+	record, err := wrapTLSRecord(msg)
+	if err != nil {
+		return false
+	}
+	if _, err := input.conn.Write(record); err != nil {
+		return false
+	}
+	_, err = readServerHello(input.conn)
+	return err == nil || errors.Is(err, errAlertReceived) || errors.Is(err, errHelloRetryRequest)
+}
+
+func buildStartTLSPreflightClientHello(serverName string) ([]byte, error) {
+	keyShareData, err := generateKeyShare(tls.X25519)
+	if err != nil {
+		return nil, fmt.Errorf("generating key share for STARTTLS preflight: %w", err)
+	}
+
+	var exts []byte
+	exts, err = appendSNIExtension(exts, serverName)
+	if err != nil {
+		return nil, fmt.Errorf("building SNI extension: %w", err)
+	}
+	exts, err = appendSupportedGroupsListExtension(exts, []tls.CurveID{tls.X25519, tls.CurveP256})
+	if err != nil {
+		return nil, err
+	}
+	exts = appendSignatureAlgorithmsExtension(exts)
+	exts, err = appendKeyShareExtension(exts, appendKeyShareExtensionInput{
+		groupID: tls.X25519,
+		keyData: keyShareData,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("building key share extension: %w", err)
+	}
+	exts, err = appendSupportedVersionsListExtension(exts, []uint16{tls.VersionTLS13, tls.VersionTLS12})
+	if err != nil {
+		return nil, err
+	}
+	exts = appendPSKKeyExchangeModesExtension(exts)
+
+	randomBytes := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, randomBytes); err != nil {
+		return nil, fmt.Errorf("generating STARTTLS preflight random: %w", err)
+	}
+	sessionID := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, sessionID); err != nil {
+		return nil, fmt.Errorf("generating STARTTLS preflight session ID: %w", err)
+	}
+
+	var body []byte
+	body = append(body, 0x03, 0x03)
+	body = append(body, randomBytes...)
+	sessionIDLen, err := checkedUint8Len(len(sessionID), "STARTTLS preflight session ID")
+	if err != nil {
+		return nil, err
+	}
+	body = append(body, sessionIDLen)
+	body = append(body, sessionID...)
+
+	cipherSuites := []uint16{
+		tls.TLS_AES_128_GCM_SHA256,
+		tls.TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+		tls.TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+	}
+	cipherSuitesLen, err := checkedUint16Len(len(cipherSuites)*2, "STARTTLS preflight cipher suites")
+	if err != nil {
+		return nil, err
+	}
+	body = appendUint16(body, cipherSuitesLen)
+	for _, cipherSuite := range cipherSuites {
+		body = appendUint16(body, cipherSuite)
+	}
+
+	body = append(body, 1, 0)
+	extsLen, err := checkedUint16Len(len(exts), "STARTTLS preflight extensions")
+	if err != nil {
+		return nil, err
+	}
+	body = appendUint16(body, extsLen)
+	body = append(body, exts...)
+
+	msg := []byte{0x01}
+	bodyLen, err := checkedUint24Len(len(body), "STARTTLS preflight client hello body")
+	if err != nil {
+		return nil, err
+	}
+	msg = appendUint24(msg, bodyLen)
+	msg = append(msg, body...)
+	return msg, nil
+}
+
+func appendSupportedGroupsListExtension(b []byte, groups []tls.CurveID) ([]byte, error) {
+	groupsLen, err := checkedUint16Len(len(groups)*2, "STARTTLS preflight supported groups")
+	if err != nil {
+		return nil, err
+	}
+	extLen, err := checkedUint16Len(2+int(groupsLen), "STARTTLS preflight supported groups extension")
+	if err != nil {
+		return nil, err
+	}
+	b = appendUint16(b, 0x000a)
+	b = appendUint16(b, extLen)
+	b = appendUint16(b, groupsLen)
+	for _, group := range groups {
+		b = appendUint16(b, uint16(group))
+	}
+	return b, nil
+}
+
+func appendSupportedVersionsListExtension(b []byte, versions []uint16) ([]byte, error) {
+	versionsLen, err := checkedUint8Len(len(versions)*2, "STARTTLS preflight supported versions")
+	if err != nil {
+		return nil, err
+	}
+	extLen, err := checkedUint16Len(1+int(versionsLen), "STARTTLS preflight supported versions extension")
+	if err != nil {
+		return nil, err
+	}
+	b = appendUint16(b, 0x002b)
+	b = appendUint16(b, extLen)
+	b = append(b, versionsLen)
+	for _, version := range versions {
+		b = appendUint16(b, version)
+	}
+	return b, nil
 }
 
 func matchesIMAPBanner(addr, banner string) bool {
@@ -1940,7 +2113,7 @@ func ScanCipherSuites(ctx context.Context, input ScanCipherSuitesInput) (*Cipher
 	}
 
 	addr := net.JoinHostPort(input.Host, port)
-	startTLS := detectScanStartTLSProtocol(ctx, addr)
+	startTLS := detectScanStartTLSProtocol(ctx, addr, serverName)
 
 	sem := make(chan struct{}, concurrency)
 	var mu sync.Mutex

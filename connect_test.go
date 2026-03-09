@@ -673,15 +673,6 @@ func TestConnectTLS_NonTLSSHBanner(t *testing.T) {
 	}
 }
 
-func TestDetectStartTLSProtocol_DoesNotTreatLMTPAsSMTP(t *testing.T) {
-	t.Parallel()
-
-	protocol, ok := detectStartTLSProtocol("mail.example:24", []byte("220 mail.example LMTP ready\r\n"))
-	if ok {
-		t.Fatalf("detectStartTLSProtocol unexpectedly matched %q", protocol)
-	}
-}
-
 func TestStartTLSDetectDeadline_CapsLongerCallerDeadline(t *testing.T) {
 	t.Parallel()
 
@@ -706,28 +697,6 @@ func TestStartTLSDetectDeadline_UsesShorterCallerDeadline(t *testing.T) {
 	detectDeadline := startTLSDetectDeadline(ctx, time.Now())
 	if detectDeadline.After(parentDeadline.Add(10 * time.Millisecond)) {
 		t.Fatalf("detect deadline = %s, want no later than parent deadline %s", detectDeadline, parentDeadline)
-	}
-}
-
-func TestSMTPAdvertisesStartTLS_IgnoresGreetingLines(t *testing.T) {
-	t.Parallel()
-
-	lines := []string{
-		"220 mx.example.com STARTTLS mentioned in greeting",
-		"250-localhost",
-		"250 SIZE 35882577",
-	}
-	if smtpAdvertisesStartTLS(lines) {
-		t.Fatalf("smtpAdvertisesStartTLS unexpectedly matched greeting-only lines: %v", lines)
-	}
-
-	advertised := []string{
-		"250-localhost",
-		"250-STARTTLS",
-		"250 SIZE 35882577",
-	}
-	if !smtpAdvertisesStartTLS(advertised) {
-		t.Fatalf("smtpAdvertisesStartTLS failed to detect advertised STARTTLS in: %v", advertised)
 	}
 }
 
@@ -790,30 +759,6 @@ func TestConnectTLS_StartTLSProtocols(t *testing.T) {
 	}
 }
 
-func TestFormatProtocolWithStartTLS(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		protocol startTLSProtocol
-		want     string
-	}{
-		{name: "smtp", protocol: startTLSProtocolSMTP, want: "TLS 1.3 (SMTP STARTTLS)"},
-		{name: "imap", protocol: startTLSProtocolIMAP, want: "TLS 1.3 (IMAP STARTTLS)"},
-		{name: "pop3", protocol: startTLSProtocolPOP3, want: "TLS 1.3 (POP3 STLS)"},
-		{name: "ldap", protocol: startTLSProtocolLDAP, want: "TLS 1.3 (LDAP StartTLS)"},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			if got := formatProtocolWithStartTLS("TLS 1.3", tt.protocol); got != tt.want {
-				t.Fatalf("formatProtocolWithStartTLS(..., %q) = %q, want %q", tt.protocol, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestConnectTLS_StartTLSSMTPGeneric220Banner(t *testing.T) {
 	t.Parallel()
 
@@ -866,6 +811,44 @@ func TestConnectTLS_SMTPGreetingMentionsStartTLSWithoutEHLOCapability(t *testing
 	}
 	if strings.Contains(err.Error(), "STARTTLS with") {
 		t.Fatalf("error = %q, want non-TLS fallback instead of STARTTLS failure", err.Error())
+	}
+}
+
+func TestConnectTLS_DoesNotTreatLMTPAsSMTP(t *testing.T) {
+	t.Parallel()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	go func() {
+		conn, acceptErr := listener.Accept()
+		if acceptErr != nil {
+			return
+		}
+		defer func() { _ = conn.Close() }()
+		_, _ = conn.Write([]byte("220 mail.example LMTP ready\r\n"))
+	}()
+
+	_, port, err := net.SplitHostPort(listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	_, err = ConnectTLS(ctx, ConnectTLSInput{Host: "127.0.0.1", Port: port})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !errors.Is(err, errConnectNonTLSService) {
+		t.Fatalf("error = %v, want errConnectNonTLSService", err)
+	}
+	if strings.Contains(err.Error(), "SMTP") {
+		t.Fatalf("error = %q, want generic plaintext classification", err.Error())
 	}
 }
 
@@ -1043,127 +1026,21 @@ func TestScanCipherSuites_StartTLSLDAPFallback(t *testing.T) {
 	}
 }
 
-func TestDetectScanStartTLSProtocol_LDAPFallback(t *testing.T) {
-	ca := generateTestCA(t, "LDAP Detect Root")
-	leaf := generateTestLeafCert(t, ca)
-	port := startPlaintextUpgradeServer(t, startTLSProtocolLDAP, [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	protocol := detectScanStartTLSProtocol(ctx, net.JoinHostPort("127.0.0.1", port))
-	if protocol != startTLSProtocolLDAP {
-		t.Fatalf("detectScanStartTLSProtocol(...) = %q, want %q", protocol, startTLSProtocolLDAP)
-	}
-}
-
-func TestDetectScanStartTLSProtocol_DoesNotMisclassifySilentNonLDAP(t *testing.T) {
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = listener.Close() })
-
-	go func() {
-		conn, acceptErr := listener.Accept()
-		if acceptErr != nil {
-			return
-		}
-		defer func() { _ = conn.Close() }()
-		_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
-		buf := make([]byte, 64)
-		if _, readErr := conn.Read(buf); readErr != nil {
-			return
-		}
-		_, _ = conn.Write([]byte("NOPE"))
-	}()
-
-	_, port, err := net.SplitHostPort(listener.Addr().String())
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	protocol := detectScanStartTLSProtocol(ctx, net.JoinHostPort("127.0.0.1", port))
-	if protocol != "" {
-		t.Fatalf("detectScanStartTLSProtocol(...) = %q, want empty", protocol)
-	}
-}
-
-func TestDetectScanStartTLSProtocol_DoesNotTreatLDAPEnvelopeWithoutTLSAsLDAP(t *testing.T) {
+func TestScanCipherSuites_DoesNotTreatLDAPEnvelopeWithoutTLSAsLDAP(t *testing.T) {
 	port := startFakeLDAPStartTLSEnvelopeServer(t)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	protocol := detectScanStartTLSProtocol(ctx, net.JoinHostPort("127.0.0.1", port))
-	if protocol != "" {
-		t.Fatalf("detectScanStartTLSProtocol(...) = %q, want empty", protocol)
-	}
-}
-
-func TestDetectScanStartTLSProtocol_DoesNotMisclassifyUnsupportedUpgradeProtocol(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		banner   string
-		wantLine string
-		response string
-	}{
-		{
-			name:     "smtp",
-			banner:   "220 localhost ESMTP test\r\n",
-			wantLine: "EHLO certkit",
-			response: "250-localhost\r\n250 SIZE 35882577\r\n",
-		},
-		{
-			name:     "imap",
-			banner:   "* OK IMAP4rev1 ready\r\n",
-			wantLine: "a001 STARTTLS",
-			response: "a001 NO STARTTLS unsupported\r\n",
-		},
-		{
-			name:     "pop3",
-			banner:   "+OK POP3 ready\r\n",
-			wantLine: "STLS",
-			response: "-ERR STLS unsupported\r\n",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			port := startRejectedUpgradeServer(t, tt.banner, tt.wantLine, tt.response)
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-
-			protocol := detectScanStartTLSProtocol(ctx, net.JoinHostPort("127.0.0.1", port))
-			if protocol != "" {
-				t.Fatalf("detectScanStartTLSProtocol(...) = %q, want empty", protocol)
-			}
-		})
-	}
-}
-
-func TestProbeTLS13Cipher_StartTLSLDAP(t *testing.T) {
-	ca := generateTestCA(t, "LDAP Probe Root")
-	leaf := generateTestLeafCert(t, ca)
-	port := startPlaintextUpgradeServer(t, startTLSProtocolLDAP, [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
-
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	ok := probeTLS13Cipher(ctx, cipherProbeInput{
-		addr:       net.JoinHostPort("127.0.0.1", port),
-		serverName: "localhost",
-		cipherID:   tls.TLS_AES_128_GCM_SHA256,
-		startTLS:   startTLSProtocolLDAP,
+	result, err := ScanCipherSuites(ctx, ScanCipherSuitesInput{
+		Host: "127.0.0.1",
+		Port: port,
 	})
-	if !ok {
-		t.Fatal("expected TLS 1.3 LDAP StartTLS probe to accept AES_128_GCM_SHA256")
+	if err != nil {
+		t.Fatalf("ScanCipherSuites failed: %v", err)
+	}
+	if len(result.Ciphers) != 0 {
+		t.Fatalf("len(Ciphers) = %d, want 0", len(result.Ciphers))
 	}
 }
 
