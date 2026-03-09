@@ -24,6 +24,7 @@ var markerCommandMap = []struct {
 	{"inspect", inspectCmd, false},
 	{"verify", verifyCmd, false},
 	{"connect", connectCmd, false},
+	{"probe-ssh", probeSSHCmd, false},
 	{"bundle", bundleCmd, false},
 	{"convert", convertCmd, false},
 	{"sign-self-signed", signSelfSignedCmd, false},

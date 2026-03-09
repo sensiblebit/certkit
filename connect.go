@@ -437,7 +437,7 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 		// rejection, which only occurs when clientAuth is non-nil.
 		_ = tlsConn.Close()
 		prefix := sniffConn.prefix()
-		if detectedProtocol, ok := detectStartTLSProtocol("", prefix); ok {
+		if detectedProtocol, ok := detectStartTLSProtocol(addr, prefix); ok {
 			result, startTLSErr := connectViaStartTLS(connectCtx, connectViaStartTLSInput{
 				connectInput: input,
 				addr:         addr,
@@ -471,8 +471,13 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 			if startTLSErr == nil {
 				return result, nil
 			}
+			slog.Debug("ldap starttls attempt failed, falling back to tls handshake error", "addr", addr, "error", startTLSErr)
 		}
-		if inferredErr := inferNonTLSError(handshakeErr, addr, prefix); inferredErr != nil {
+		if inferredErr := inferNonTLSError(inferNonTLSErrorInput{
+			handshakeErr: handshakeErr,
+			addr:         addr,
+			prefix:       prefix,
+		}); inferredErr != nil {
 			return nil, fmt.Errorf("tls handshake with %s: %w", addr, inferredErr)
 		}
 		return nil, fmt.Errorf("tls handshake with %s: %w", addr, handshakeErr)
@@ -1163,16 +1168,22 @@ func (conn *bufferedPrefixConn) Read(p []byte) (int, error) {
 	return conn.reader.Read(p)
 }
 
-func inferNonTLSError(handshakeErr error, addr string, prefix []byte) error {
+type inferNonTLSErrorInput struct {
+	handshakeErr error
+	addr         string
+	prefix       []byte
+}
+
+func inferNonTLSError(input inferNonTLSErrorInput) error {
 	var headerErr tls.RecordHeaderError
-	if handshakeErr == nil || !errors.As(handshakeErr, &headerErr) {
+	if input.handshakeErr == nil || !errors.As(input.handshakeErr, &headerErr) {
 		return nil
 	}
-	if len(prefix) == 0 {
+	if len(input.prefix) == 0 {
 		return nil
 	}
 
-	banner := firstBannerLine(prefix)
+	banner := firstBannerLine(input.prefix)
 
 	switch {
 	case strings.HasPrefix(banner, "SSH-"):
@@ -1181,14 +1192,14 @@ func inferNonTLSError(handshakeErr error, addr string, prefix []byte) error {
 		return fmt.Errorf("%w: received HTTP response %q", errConnectNonTLSService, banner)
 	case matchesStrictSMTPBanner(banner):
 		return fmt.Errorf("%w: received SMTP banner %q", errConnectNonTLSService, banner)
-	case matchesIMAPBanner(addr, banner):
+	case matchesIMAPBanner(input.addr, banner):
 		return fmt.Errorf("%w: received IMAP banner %q", errConnectNonTLSService, banner)
 	case matchesPOP3Banner(banner):
 		return fmt.Errorf("%w: received POP3 banner %q", errConnectNonTLSService, banner)
-	case isMostlyPrintable(prefix):
+	case isMostlyPrintable(input.prefix):
 		return fmt.Errorf("%w: received plaintext banner %q", errConnectNonTLSService, banner)
 	default:
-		return fmt.Errorf("%w: received non-TLS bytes %x", errConnectNonTLSService, prefix[:min(len(prefix), 16)])
+		return fmt.Errorf("%w: received non-TLS bytes %x", errConnectNonTLSService, input.prefix[:min(len(input.prefix), 16)])
 	}
 }
 
