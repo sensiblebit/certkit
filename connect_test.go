@@ -791,12 +791,17 @@ func TestConnectViaStartTLS_LDAP(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	result, err := connectViaStartTLS(ctx, ConnectTLSInput{
-		Host:       "127.0.0.1",
-		Port:       port,
-		ServerName: "localhost",
-		RootCAs:    rootPool,
-	}, net.JoinHostPort("127.0.0.1", port), "localhost", startTLSProtocolLDAP)
+	result, err := connectViaStartTLS(ctx, connectViaStartTLSInput{
+		connectInput: ConnectTLSInput{
+			Host:       "127.0.0.1",
+			Port:       port,
+			ServerName: "localhost",
+			RootCAs:    rootPool,
+		},
+		addr:       net.JoinHostPort("127.0.0.1", port),
+		serverName: "localhost",
+		protocol:   startTLSProtocolLDAP,
+	})
 	if err != nil {
 		t.Fatalf("connectViaStartTLS failed: %v", err)
 	}
@@ -820,11 +825,16 @@ func TestConnectViaStartTLS_UsesAddrPortWhenInputPortEmpty(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	result, err := connectViaStartTLS(ctx, ConnectTLSInput{
-		Host:       "127.0.0.1",
-		ServerName: "localhost",
-		RootCAs:    rootPool,
-	}, net.JoinHostPort("127.0.0.1", port), "localhost", startTLSProtocolSMTP)
+	result, err := connectViaStartTLS(ctx, connectViaStartTLSInput{
+		connectInput: ConnectTLSInput{
+			Host:       "127.0.0.1",
+			ServerName: "localhost",
+			RootCAs:    rootPool,
+		},
+		addr:       net.JoinHostPort("127.0.0.1", port),
+		serverName: "localhost",
+		protocol:   startTLSProtocolSMTP,
+	})
 	if err != nil {
 		t.Fatalf("connectViaStartTLS failed: %v", err)
 	}

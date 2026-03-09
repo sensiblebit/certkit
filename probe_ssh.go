@@ -551,38 +551,60 @@ func writeSSHDirectionalSection(out *strings.Builder, title string, c2s, s2c []s
 }
 
 func writeSSHKexSection(out *strings.Builder, r *SSHProbeResult) {
-	writeSSHRatedListSection(out, "Key Exchange", r.KeyExchangeAlgorithms, r.Policy, isWeakSSHKex, sshPolicyDisallowsKex)
+	writeSSHRatedListSection(out, "Key Exchange", r.KeyExchangeAlgorithms, sshRatingConfig{
+		policy:   r.Policy,
+		weakFn:   isWeakSSHKex,
+		policyFn: sshPolicyDisallowsKex,
+	})
 }
 
 func writeSSHHostKeySection(out *strings.Builder, r *SSHProbeResult) {
-	writeSSHRatedListSection(out, "Host Keys", r.HostKeyAlgorithms, r.Policy, isWeakSSHHostKey, sshPolicyDisallowsHostKey)
+	writeSSHRatedListSection(out, "Host Keys", r.HostKeyAlgorithms, sshRatingConfig{
+		policy:   r.Policy,
+		weakFn:   isWeakSSHHostKey,
+		policyFn: sshPolicyDisallowsHostKey,
+	})
 }
 
 func writeSSHCipherSection(out *strings.Builder, r *SSHProbeResult) {
-	writeSSHRatedDirectionalSection(out, "Ciphers", r.CiphersClientToServer, r.CiphersServerToClient, r.Policy, isWeakSSHCipher, sshPolicyDisallowsCipher)
+	writeSSHRatedDirectionalSection(out, "Ciphers", r.CiphersClientToServer, r.CiphersServerToClient, sshRatingConfig{
+		policy:   r.Policy,
+		weakFn:   isWeakSSHCipher,
+		policyFn: sshPolicyDisallowsCipher,
+	})
 }
 
 func writeSSHMACSection(out *strings.Builder, r *SSHProbeResult) {
-	writeSSHRatedDirectionalSection(out, "MACs", r.MACsClientToServer, r.MACsServerToClient, r.Policy, isWeakSSHMAC, sshPolicyDisallowsMAC)
+	writeSSHRatedDirectionalSection(out, "MACs", r.MACsClientToServer, r.MACsServerToClient, sshRatingConfig{
+		policy:   r.Policy,
+		weakFn:   isWeakSSHMAC,
+		policyFn: sshPolicyDisallowsMAC,
+	})
 }
 
-func writeSSHRatedListSection(out *strings.Builder, title string, values []string, policy SecurityPolicy, weakFn func(string) bool, policyFn func(SecurityPolicy) func(string) bool) {
+type sshRatingConfig struct {
+	policy   SecurityPolicy
+	weakFn   func(string) bool
+	policyFn func(SecurityPolicy) func(string) bool
+}
+
+func writeSSHRatedListSection(out *strings.Builder, title string, values []string, config sshRatingConfig) {
 	preferred := ""
 	if len(values) > 0 {
 		preferred = values[0]
 	}
-	writeSSHRatedListSectionWithPreferred(out, title, values, preferred, policy, weakFn, policyFn)
+	writeSSHRatedListSectionWithPreferred(out, title, values, preferred, config)
 }
 
-func writeSSHRatedListSectionWithPreferred(out *strings.Builder, title string, values []string, preferred string, policy SecurityPolicy, weakFn func(string) bool, policyFn func(SecurityPolicy) func(string) bool) {
-	values = sortSSHDisplayValues(values, policy, weakFn, policyFn)
+func writeSSHRatedListSectionWithPreferred(out *strings.Builder, title string, values []string, preferred string, config sshRatingConfig) {
+	values = sortSSHDisplayValues(values, config)
 	fmt.Fprintf(out, "\n%s (%d):\n", title, len(values))
 	for _, value := range values {
-		fmt.Fprintf(out, "  %s %-16s %s\n", sshPreferenceMarker(value, preferred), sshAlgorithmTag(value, policy, weakFn, policyFn), value)
+		fmt.Fprintf(out, "  %s %-16s %s\n", sshPreferenceMarker(value, preferred), sshAlgorithmTag(value, config), value)
 	}
 }
 
-func writeSSHRatedDirectionalSection(out *strings.Builder, title string, c2s, s2c []string, policy SecurityPolicy, weakFn func(string) bool, policyFn func(SecurityPolicy) func(string) bool) {
+func writeSSHRatedDirectionalSection(out *strings.Builder, title string, c2s, s2c []string, config sshRatingConfig) {
 	preferredC2S := ""
 	if len(c2s) > 0 {
 		preferredC2S = c2s[0]
@@ -591,26 +613,26 @@ func writeSSHRatedDirectionalSection(out *strings.Builder, title string, c2s, s2
 	if len(s2c) > 0 {
 		preferredS2C = s2c[0]
 	}
-	c2s = sortSSHDisplayValues(c2s, policy, weakFn, policyFn)
-	s2c = sortSSHDisplayValues(s2c, policy, weakFn, policyFn)
+	c2s = sortSSHDisplayValues(c2s, config)
+	s2c = sortSSHDisplayValues(s2c, config)
 	if slices.Equal(c2s, s2c) {
-		writeSSHRatedListSectionWithPreferred(out, title, c2s, preferredC2S, policy, weakFn, policyFn)
+		writeSSHRatedListSectionWithPreferred(out, title, c2s, preferredC2S, config)
 		return
 	}
 	fmt.Fprintf(out, "\n%s:\n", title)
 	fmt.Fprintf(out, "  client->server (%d):\n", len(c2s))
 	for _, value := range c2s {
-		fmt.Fprintf(out, "    %s %-16s %s\n", sshPreferenceMarker(value, preferredC2S), sshAlgorithmTag(value, policy, weakFn, policyFn), value)
+		fmt.Fprintf(out, "    %s %-16s %s\n", sshPreferenceMarker(value, preferredC2S), sshAlgorithmTag(value, config), value)
 	}
 	fmt.Fprintf(out, "  server->client (%d):\n", len(s2c))
 	for _, value := range s2c {
-		fmt.Fprintf(out, "    %s %-16s %s\n", sshPreferenceMarker(value, preferredS2C), sshAlgorithmTag(value, policy, weakFn, policyFn), value)
+		fmt.Fprintf(out, "    %s %-16s %s\n", sshPreferenceMarker(value, preferredS2C), sshAlgorithmTag(value, config), value)
 	}
 }
 
-func sshAlgorithmTag(value string, policy SecurityPolicy, weakFn func(string) bool, policyFn func(SecurityPolicy) func(string) bool) string {
-	isWeak := weakFn(value)
-	isPolicy := policy.Enabled() && policyFn(policy)(value)
+func sshAlgorithmTag(value string, config sshRatingConfig) string {
+	isWeak := config.weakFn(value)
+	isPolicy := config.policy.Enabled() && config.policyFn(config.policy)(value)
 	switch {
 	case isWeak && isPolicy:
 		return "[weak, profile]"
@@ -623,10 +645,10 @@ func sshAlgorithmTag(value string, policy SecurityPolicy, weakFn func(string) bo
 	}
 }
 
-func sortSSHDisplayValues(values []string, policy SecurityPolicy, weakFn func(string) bool, policyFn func(SecurityPolicy) func(string) bool) []string {
+func sortSSHDisplayValues(values []string, config sshRatingConfig) []string {
 	sorted := slices.Clone(values)
 	slices.SortStableFunc(sorted, func(a, b string) int {
-		if c := cmp.Compare(sshAlgorithmStatusRank(a, policy, weakFn, policyFn), sshAlgorithmStatusRank(b, policy, weakFn, policyFn)); c != 0 {
+		if c := cmp.Compare(sshAlgorithmStatusRank(a, config), sshAlgorithmStatusRank(b, config)); c != 0 {
 			return c
 		}
 		return 0
@@ -634,9 +656,9 @@ func sortSSHDisplayValues(values []string, policy SecurityPolicy, weakFn func(st
 	return sorted
 }
 
-func sshAlgorithmStatusRank(value string, policy SecurityPolicy, weakFn func(string) bool, policyFn func(SecurityPolicy) func(string) bool) int {
-	isWeak := weakFn(value)
-	isPolicy := policy.Enabled() && policyFn(policy)(value)
+func sshAlgorithmStatusRank(value string, config sshRatingConfig) int {
+	isWeak := config.weakFn(value)
+	isPolicy := config.policy.Enabled() && config.policyFn(config.policy)(value)
 	switch {
 	case !isWeak && !isPolicy:
 		return 0

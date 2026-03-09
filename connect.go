@@ -435,7 +435,12 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 		_ = tlsConn.Close()
 		startTLSProtocol, attempted := detectConnectStartTLSProtocol(sniffConn.prefix(), port)
 		if attempted {
-			result, startTLSErr := connectViaStartTLS(connectCtx, input, addr, serverName, startTLSProtocol)
+			result, startTLSErr := connectViaStartTLS(connectCtx, connectViaStartTLSInput{
+				connectInput: input,
+				addr:         addr,
+				serverName:   serverName,
+				protocol:     startTLSProtocol,
+			})
 			if startTLSErr != nil {
 				return nil, fmt.Errorf("STARTTLS with %s: %w", addr, startTLSErr)
 			}
@@ -664,26 +669,34 @@ func newConnectTLSConfig(serverName string, clientAuth **ClientAuthInfo) *tls.Co
 	}
 }
 
-func connectResultFromTLSState(ctx context.Context, input ConnectTLSInput, serverName string, state tls.ConnectionState, clientAuth *ClientAuthInfo, startTLS startTLSProtocol) *ConnectResult {
-	rawProtocol := tlsVersionString(state.Version)
+type connectResultFromTLSStateInput struct {
+	connectInput ConnectTLSInput
+	serverName   string
+	state        tls.ConnectionState
+	clientAuth   *ClientAuthInfo
+	startTLS     startTLSProtocol
+}
+
+func connectResultFromTLSState(ctx context.Context, input connectResultFromTLSStateInput) *ConnectResult {
+	rawProtocol := tlsVersionString(input.state.Version)
 	protocol := rawProtocol
-	if startTLS != "" {
-		protocol = formatProtocolWithStartTLS(protocol, startTLS)
+	if input.startTLS != "" {
+		protocol = formatProtocolWithStartTLS(protocol, input.startTLS)
 	}
 	result := &ConnectResult{
-		Host:        input.Host,
-		Port:        input.Port,
+		Host:        input.connectInput.Host,
+		Port:        input.connectInput.Port,
 		Protocol:    protocol,
 		tlsVersion:  rawProtocol,
-		Policy:      input.Policy,
-		CipherSuite: tls.CipherSuiteName(state.CipherSuite),
-		ServerName:  serverName,
-		ALPN:        state.NegotiatedProtocol,
-		ClientAuth:  clientAuth,
-		PeerChain:   state.PeerCertificates,
-		TLSSCTs:     state.SignedCertificateTimestamps,
+		Policy:      input.connectInput.Policy,
+		CipherSuite: tls.CipherSuiteName(input.state.CipherSuite),
+		ServerName:  input.serverName,
+		ALPN:        input.state.NegotiatedProtocol,
+		ClientAuth:  input.clientAuth,
+		PeerChain:   input.state.PeerCertificates,
+		TLSSCTs:     input.state.SignedCertificateTimestamps,
 	}
-	result.populate(ctx, input)
+	result.populate(ctx, input.connectInput)
 	return result
 }
 
@@ -759,49 +772,62 @@ func ldapPort(addr string) bool {
 	return err == nil && port == "389"
 }
 
-func connectViaStartTLS(ctx context.Context, input ConnectTLSInput, addr, serverName string, protocol startTLSProtocol) (*ConnectResult, error) {
+type connectViaStartTLSInput struct {
+	connectInput ConnectTLSInput
+	addr         string
+	serverName   string
+	protocol     startTLSProtocol
+}
+
+func connectViaStartTLS(ctx context.Context, input connectViaStartTLSInput) (*ConnectResult, error) {
 	dialer := &net.Dialer{}
-	conn, err := dialer.DialContext(ctx, "tcp", addr)
+	conn, err := dialer.DialContext(ctx, "tcp", input.addr)
 	if err != nil {
-		return nil, fmt.Errorf("reconnecting for %s STARTTLS: %w", protocolDisplayName(protocol), err)
+		return nil, fmt.Errorf("reconnecting for %s STARTTLS: %w", protocolDisplayName(input.protocol), err)
 	}
 	defer func() { _ = conn.Close() }()
 
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := conn.SetDeadline(deadline); err != nil {
-			return nil, fmt.Errorf("setting %s STARTTLS deadline: %w", protocolDisplayName(protocol), err)
+			return nil, fmt.Errorf("setting %s STARTTLS deadline: %w", protocolDisplayName(input.protocol), err)
 		}
 	}
 
 	reader := bufio.NewReader(conn)
-	if err := negotiateStartTLS(reader, conn, protocol); err != nil {
+	if err := negotiateStartTLS(reader, conn, input.protocol); err != nil {
 		return nil, err
 	}
 
 	bufferedConn := &bufferedPrefixConn{Conn: conn, reader: reader}
 	var clientAuth *ClientAuthInfo
-	tlsConn := tls.Client(bufferedConn, newConnectTLSConfig(serverName, &clientAuth))
+	tlsConn := tls.Client(bufferedConn, newConnectTLSConfig(input.serverName, &clientAuth))
 	defer func() { _ = tlsConn.Close() }()
 
 	if deadline, ok := ctx.Deadline(); ok {
 		if err := tlsConn.SetDeadline(deadline); err != nil {
-			return nil, fmt.Errorf("setting %s TLS deadline: %w", protocolDisplayName(protocol), err)
+			return nil, fmt.Errorf("setting %s TLS deadline: %w", protocolDisplayName(input.protocol), err)
 		}
 	}
 	if err := tlsConn.HandshakeContext(ctx); err != nil && clientAuth == nil {
-		return nil, fmt.Errorf("%s STARTTLS handshake: %w", protocolDisplayName(protocol), err)
+		return nil, fmt.Errorf("%s STARTTLS handshake: %w", protocolDisplayName(input.protocol), err)
 	}
 
 	state := tlsConn.ConnectionState()
-	startTLSInput := input
+	startTLSInput := input.connectInput
 	if startTLSInput.Port == "" {
-		_, port, splitErr := net.SplitHostPort(addr)
+		_, port, splitErr := net.SplitHostPort(input.addr)
 		if splitErr != nil {
-			return nil, fmt.Errorf("parsing %s STARTTLS address %q: %w", protocolDisplayName(protocol), addr, splitErr)
+			return nil, fmt.Errorf("parsing %s STARTTLS address %q: %w", protocolDisplayName(input.protocol), input.addr, splitErr)
 		}
 		startTLSInput.Port = port
 	}
-	return connectResultFromTLSState(ctx, startTLSInput, serverName, state, clientAuth, protocol), nil
+	return connectResultFromTLSState(ctx, connectResultFromTLSStateInput{
+		connectInput: startTLSInput,
+		serverName:   input.serverName,
+		state:        state,
+		clientAuth:   clientAuth,
+		startTLS:     input.protocol,
+	}), nil
 }
 
 func negotiateStartTLS(reader *bufio.Reader, conn net.Conn, protocol startTLSProtocol) error {
@@ -865,8 +891,7 @@ func readSMTPResponse(reader *bufio.Reader, wantCode string) ([]string, error) {
 
 func smtpAdvertisesStartTLS(lines []string) bool {
 	for _, line := range lines {
-		if strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(line[4:], "250-")), "STARTTLS") ||
-			strings.EqualFold(strings.TrimSpace(strings.TrimPrefix(line[4:], "250 ")), "STARTTLS") {
+		if strings.EqualFold(strings.TrimSpace(line[4:]), "STARTTLS") {
 			return true
 		}
 	}
