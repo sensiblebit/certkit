@@ -217,7 +217,6 @@ func TestSaveToSQLite_CommitFailureLeavesNoPartialFile(t *testing.T) {
 	}
 }
 
-func TestSaveToSQLite_VacuumFailureLeavesExistingDatabaseUntouched(t *testing.T) {
 func TestSaveToSQLite_CommitRaceReturnsExist(t *testing.T) {
 	// WHY: The final commit step must not overwrite a database created by another
 	// save between the initial existence check and the final publish step.
@@ -268,6 +267,12 @@ func TestSaveToSQLite_CommitRaceReturnsExist(t *testing.T) {
 	}
 	if got := info.Mode().Perm(); got != 0o600 {
 		t.Fatalf("destination mode = %#o, want %#o", got, 0o600)
+	}
+
+	loaded := NewMemStore()
+	loadErr := LoadFromSQLite(loaded, dbPath)
+	if loadErr == nil || !strings.Contains(loadErr.Error(), "attaching database") {
+		t.Fatalf("LoadFromSQLite error = %v, want attach failure for competing file", loadErr)
 	}
 
 	entries, readDirErr := os.ReadDir(dir)
