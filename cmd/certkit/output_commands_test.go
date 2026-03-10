@@ -391,8 +391,9 @@ func TestRunBundle_CommandSurfaceOutput(t *testing.T) {
 	t.Cleanup(func() { restoreOutputGlobals114(snap) })
 
 	dir := t.TempDir()
-	_, leaf := createSelfSignedCert114(t, "bundle.example.com", false, time.Now().Add(365*24*time.Hour))
+	key, leaf := createSelfSignedCert114(t, "bundle.example.com", false, time.Now().Add(365*24*time.Hour))
 	leafPath := writeCertificatePEM114(t, dir, "leaf.pem", leaf)
+	keyPath := writeECDSAPrivateKeyPEM114(t, dir, "leaf.key", key)
 
 	t.Run("text output", func(t *testing.T) {
 		passwordList = nil
@@ -453,6 +454,60 @@ func TestRunBundle_CommandSurfaceOutput(t *testing.T) {
 		}
 	})
 
+	t.Run("p12 default password warning", func(t *testing.T) {
+		passwordList = nil
+		passwordFile = ""
+		jsonOutput = true
+		allowExpired = true
+		bundleKeyPath = keyPath
+		bundleOutFile = ""
+		bundleFormat = "p12"
+		bundleForce = true
+		bundleAllowPrivateNetwork = false
+		bundleTrustStore = "mozilla"
+
+		stdout, stderr, err := captureCmdOutput114(t, func() error {
+			return runBundle(newContextCmd114(), []string{leafPath})
+		})
+		if err != nil {
+			t.Fatalf("runBundle p12 json failed: %v", err)
+		}
+		if !strings.Contains(stderr, internal.DefaultExportPasswordWarning) {
+			t.Fatalf("bundle p12 stderr missing default password warning:\n%s", stderr)
+		}
+
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+			t.Fatalf("bundle p12 json unmarshal: %v\noutput:\n%s", err, stdout)
+		}
+		if payload["format"] != "p12" || payload["encoding"] != "base64" {
+			t.Fatalf("bundle p12 json format contract mismatch: %v", payload)
+		}
+	})
+
+	t.Run("p12 explicit password suppresses warning", func(t *testing.T) {
+		passwordList = []string{"topsecret"}
+		passwordFile = ""
+		jsonOutput = true
+		allowExpired = true
+		bundleKeyPath = keyPath
+		bundleOutFile = ""
+		bundleFormat = "p12"
+		bundleForce = true
+		bundleAllowPrivateNetwork = false
+		bundleTrustStore = "mozilla"
+
+		_, stderr, err := captureCmdOutput114(t, func() error {
+			return runBundle(newContextCmd114(), []string{leafPath})
+		})
+		if err != nil {
+			t.Fatalf("runBundle p12 json with explicit password failed: %v", err)
+		}
+		if strings.Contains(stderr, internal.DefaultExportPasswordWarning) {
+			t.Fatalf("bundle p12 stderr unexpectedly included default password warning:\n%s", stderr)
+		}
+	})
+
 	t.Run("error path", func(t *testing.T) {
 		passwordList = nil
 		passwordFile = ""
@@ -473,6 +528,40 @@ func TestRunBundle_CommandSurfaceOutput(t *testing.T) {
 		}
 		if !errors.Is(err, ErrUnsupportedOutputFormat) {
 			t.Fatalf("runBundle error should wrap ErrUnsupportedOutputFormat, got: %v", err)
+		}
+	})
+
+	t.Run("p12 default password warns", func(t *testing.T) {
+		key, cert := createSelfSignedCert114(t, "bundle-p12.example.com", false, time.Now().Add(365*24*time.Hour))
+		certPath := writeCertificatePEM114(t, dir, "bundle-p12.pem", cert)
+		keyPath := writeECDSAPrivateKeyPEM114(t, dir, "bundle-p12.key", key)
+		outPath := filepath.Join(dir, "bundle.p12")
+
+		passwordList = nil
+		passwordFile = ""
+		jsonOutput = false
+		allowExpired = true
+		bundleKeyPath = keyPath
+		bundleOutFile = outPath
+		bundleFormat = "p12"
+		bundleForce = true
+		bundleAllowPrivateNetwork = false
+		bundleTrustStore = "mozilla"
+
+		stdout, stderr, err := captureCmdOutput114(t, func() error {
+			return runBundle(newContextCmd114(), []string{certPath})
+		})
+		if err != nil {
+			t.Fatalf("runBundle p12 failed: %v", err)
+		}
+		if stdout != "" {
+			t.Fatalf("bundle p12 wrote unexpected stdout:\n%s", stdout)
+		}
+		if !strings.Contains(stderr, internal.DefaultExportPasswordWarning) {
+			t.Fatalf("bundle p12 stderr missing default-password warning:\n%s", stderr)
+		}
+		if !strings.Contains(stderr, "Wrote ") {
+			t.Fatalf("bundle p12 stderr missing write confirmation:\n%s", stderr)
 		}
 	})
 }
@@ -549,6 +638,36 @@ func TestRunConvert_CommandSurfaceOutput(t *testing.T) {
 		}
 		if !errors.Is(err, ErrBinaryOutputRequiresFile) {
 			t.Fatalf("runConvert error should wrap ErrBinaryOutputRequiresFile, got: %v", err)
+		}
+	})
+
+	t.Run("p12 default password warns", func(t *testing.T) {
+		key, cert := createSelfSignedCert114(t, "convert-p12.example.com", false, time.Now().Add(365*24*time.Hour))
+		certPath := writeCertificatePEM114(t, dir, "convert-p12.pem", cert)
+		keyPath := writeECDSAPrivateKeyPEM114(t, dir, "convert-p12.key", key)
+		outPath := filepath.Join(dir, "convert.p12")
+
+		passwordList = nil
+		passwordFile = ""
+		convertTo = "p12"
+		convertOutFile = outPath
+		convertKeyPath = keyPath
+		jsonOutput = false
+
+		stdout, stderr, err := captureCmdOutput114(t, func() error {
+			return runConvert(newContextCmd114(), []string{certPath})
+		})
+		if err != nil {
+			t.Fatalf("runConvert p12 failed: %v", err)
+		}
+		if stdout != "" {
+			t.Fatalf("convert p12 wrote unexpected stdout:\n%s", stdout)
+		}
+		if !strings.Contains(stderr, internal.DefaultExportPasswordWarning) {
+			t.Fatalf("convert p12 stderr missing default-password warning:\n%s", stderr)
+		}
+		if !strings.Contains(stderr, "Wrote ") {
+			t.Fatalf("convert p12 stderr missing write confirmation:\n%s", stderr)
 		}
 	})
 }

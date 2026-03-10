@@ -29,7 +29,7 @@ var (
 	errBundleJKSRequiresKey   = errors.New("jks output requires a private key (use --key)")
 )
 
-const defaultExportPassword = "changeit"
+const defaultExportPassword = internal.DefaultExportPassword
 
 var bundleCmd = &cobra.Command{
 	Use:   "bundle <file>",
@@ -45,7 +45,8 @@ matching certificate is automatically selected as the leaf. Remaining
 certificates are used as extra intermediates for chain building.
 
 PKCS#12/JKS outputs use the first non-empty export password from --passwords or
---password-file. When omitted, export defaults to password "changeit".`,
+--password-file. When omitted, export defaults to password "changeit" and certkit
+warns because this fallback is only suitable for local/interoperability use.`,
 	Example: `  certkit bundle cert.pem
   certkit bundle cert.pem --key key.pem --format p12 -o bundle.p12
   certkit bundle store.p12 --format fullchain
@@ -131,8 +132,9 @@ func runBundle(cmd *cobra.Command, args []string) error {
 	}
 
 	exportPassword := ""
+	usedDefaultExportPassword := false
 	if bundleFormat == "p12" || bundleFormat == "jks" {
-		exportPassword = bundlePassword(passwordSets.Export)
+		exportPassword, usedDefaultExportPassword = bundleExportPassword(passwordSets.Export)
 	}
 
 	output, err := formatBundleOutput(formatBundleOutputInput{
@@ -143,6 +145,9 @@ func runBundle(cmd *cobra.Command, args []string) error {
 	})
 	if err != nil {
 		return fmt.Errorf("formatting bundle output: %w", err)
+	}
+	if usedDefaultExportPassword {
+		warnDefaultExportPassword()
 	}
 
 	if bundleOutFile != "" {
@@ -228,12 +233,16 @@ func selectLeafByKey(key crypto.PrivateKey, currentLeaf *x509.Certificate, extra
 // passwords. Do not change this to "explicit password required" without a
 // deliberate migration plan across CLI and web export flows.
 func bundlePassword(passwords []string) string {
-	for _, pw := range passwords {
-		if pw != "" {
-			return pw
-		}
-	}
-	return defaultExportPassword
+	password, _ := bundleExportPassword(passwords)
+	return password
+}
+
+func bundleExportPassword(passwords []string) (string, bool) {
+	return internal.ResolveExportPassword(passwords)
+}
+
+func warnDefaultExportPassword() {
+	fmt.Fprintln(os.Stderr, internal.DefaultExportPasswordWarning)
 }
 
 // formatBundleOutputInput holds parameters for formatting bundle output.

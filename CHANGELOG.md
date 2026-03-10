@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Return a descriptive `errCertificateNil` error from `GenerateCSR` and `internal/certstore.GenerateCSR` when a nil leaf certificate is passed, instead of panicking. ([#145])
 - Return descriptive errors from `internal/certstore.GenerateBundleFiles`, `GenerateJSON`, and `GenerateYAML` when a nil bundle or nil leaf certificate is provided. ([#145])
 - Lock OCSP/CRL JSON schema consistency with contract tests: OCSP exposes `serial`, and OCSP/CRL freshness timestamps remain `this_update`/`next_update` instead of certificate validity keys. ([#138])
+- Warn when PKCS#12/JKS exports fall back to the default `changeit` password in CLI and WASM export flows, and surface that warning in the browser export response. ([#142])
 
 ## [0.8.3] - 2026-03-09
 
