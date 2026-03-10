@@ -779,30 +779,34 @@ func TestCertificateHelpers_NilInput(t *testing.T) {
 	// must degrade safely instead of panicking on exported API boundaries.
 	t.Parallel()
 
-	if got := CertToPEM(nil); got != "" {
-		t.Errorf("CertToPEM(nil) = %q, want empty string", got)
+	stringTests := []struct {
+		name string
+		fn   func(*x509.Certificate) string
+		want string
+	}{
+		{"CertToPEM", CertToPEM, ""},
+		{"CertFingerprint", CertFingerprint, ""},
+		{"CertFingerprintSHA1", CertFingerprintSHA1, ""},
+		{"CertFingerprintColonSHA256", CertFingerprintColonSHA256, ""},
+		{"CertFingerprintColonSHA1", CertFingerprintColonSHA1, ""},
+		{"CertSKI", CertSKI, ""},
+		{"GetCertificateType", GetCertificateType, ""},
 	}
-	if got := CertFingerprint(nil); got != "" {
-		t.Errorf("CertFingerprint(nil) = %q, want empty string", got)
+	for _, tt := range stringTests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tt.fn(nil); got != tt.want {
+				t.Errorf("%s(nil) = %q, want %q", tt.name, got, tt.want)
+			}
+		})
 	}
-	if got := CertFingerprintSHA1(nil); got != "" {
-		t.Errorf("CertFingerprintSHA1(nil) = %q, want empty string", got)
-	}
-	if got := CertFingerprintColonSHA256(nil); got != "" {
-		t.Errorf("CertFingerprintColonSHA256(nil) = %q, want empty string", got)
-	}
-	if got := CertFingerprintColonSHA1(nil); got != "" {
-		t.Errorf("CertFingerprintColonSHA1(nil) = %q, want empty string", got)
-	}
-	if got := CertSKI(nil); got != "" {
-		t.Errorf("CertSKI(nil) = %q, want empty string", got)
-	}
-	if got := GetCertificateType(nil); got != "" {
-		t.Errorf("GetCertificateType(nil) = %q, want empty string", got)
-	}
-	if got := CertExpiresWithin(nil, time.Hour); got {
-		t.Error("CertExpiresWithin(nil, time.Hour) = true, want false")
-	}
+
+	t.Run("CertExpiresWithin", func(t *testing.T) {
+		t.Parallel()
+		if CertExpiresWithin(nil, time.Hour) {
+			t.Error("CertExpiresWithin(nil, time.Hour) = true, want false")
+		}
+	})
 }
 
 func TestGetPublicKey_NilKey(t *testing.T) {
