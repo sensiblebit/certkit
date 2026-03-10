@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Return descriptive errors from `internal/certstore.GenerateBundleFiles`, `GenerateJSON`, and `GenerateYAML` when a nil bundle or nil leaf certificate is provided. ([#145])
 - Lock OCSP/CRL JSON schema consistency with contract tests: OCSP exposes `serial`, and OCSP/CRL freshness timestamps remain `this_update`/`next_update` instead of certificate validity keys. ([#138])
 - Warn when PKCS#12/JKS exports fall back to the default `changeit` password in CLI and WASM export flows, and surface that warning in the browser export response. ([#142])
+- Fix `TestResolveAIA_DeduplicatesURLs` and `TestResolveAIA_MaxDepth` failing in sandbox environments where DNS is unavailable by setting `AllowPrivateNetworks: true` on mock-fetcher test calls. ([#158])
 
 ## [0.8.3] - 2026-03-09
 
@@ -1074,6 +1075,7 @@ Initial release.
 [#131]: https://github.com/sensiblebit/certkit/pull/131
 [#132]: https://github.com/sensiblebit/certkit/pull/132
 [#145]: https://github.com/sensiblebit/certkit/pull/145
+[#158]: https://github.com/sensiblebit/certkit/pull/158
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63
