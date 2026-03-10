@@ -3,15 +3,21 @@
 package certkit
 
 import (
+	"crypto"
 	"errors"
 	"fmt"
 	"syscall/js"
 )
 
-// derivePBKDF2Key derives a key using PBKDF2-HMAC-SHA-256.
+// derivePBKDF2Key derives a key using PBKDF2 with the specified hash function.
 // On js/wasm this delegates to the browser's SubtleCrypto API so the
 // key derivation runs off the main thread and CSS animations keep running.
-func derivePBKDF2Key(password string, salt []byte, iterations, keyLen int) ([]byte, error) {
+func derivePBKDF2Key(h crypto.Hash, password string, salt []byte, iterations, keyLen int) ([]byte, error) {
+	hashName, err := webCryptoHashName(h)
+	if err != nil {
+		return nil, err
+	}
+
 	subtle := js.Global().Get("crypto").Get("subtle")
 	if subtle.IsUndefined() || subtle.IsNull() {
 		return nil, errors.New("Web Crypto API unavailable")
@@ -32,7 +38,7 @@ func derivePBKDF2Key(password string, salt []byte, iterations, keyLen int) ([]by
 		return nil, fmt.Errorf("importing PBKDF2 key material: %w", err)
 	}
 
-	// Derive bits using PBKDF2-HMAC-SHA-256.
+	// Derive bits using PBKDF2 with the requested hash.
 	saltBuf := js.Global().Get("Uint8Array").New(len(salt))
 	js.CopyBytesToJS(saltBuf, salt)
 
@@ -40,7 +46,7 @@ func derivePBKDF2Key(password string, salt []byte, iterations, keyLen int) ([]by
 		"name":       "PBKDF2",
 		"salt":       saltBuf,
 		"iterations": iterations,
-		"hash":       "SHA-256",
+		"hash":       hashName,
 	}
 	bitsPromise := subtle.Call("deriveBits",
 		deriveParams, cryptoKey, keyLen*8,
@@ -56,6 +62,17 @@ func derivePBKDF2Key(password string, salt []byte, iterations, keyLen int) ([]by
 	out := make([]byte, buf.Get("length").Int())
 	js.CopyBytesToGo(out, buf)
 	return out, nil
+}
+
+func webCryptoHashName(h crypto.Hash) (string, error) {
+	switch h {
+	case crypto.SHA1:
+		return "SHA-1", nil
+	case crypto.SHA256:
+		return "SHA-256", nil
+	default:
+		return "", fmt.Errorf("unsupported PBKDF2 hash: %v", h)
+	}
 }
 
 // awaitPromise blocks the current goroutine until a JS Promise settles,

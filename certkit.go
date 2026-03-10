@@ -439,6 +439,7 @@ func MarshalPrivateKeyToPEM(key crypto.PrivateKey) (string, error) {
 var (
 	oidPBES2          = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 5, 13}
 	oidPBKDF2         = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 5, 12}
+	oidHMACWithSHA1   = asn1.ObjectIdentifier{1, 2, 840, 113549, 2, 7}
 	oidHMACWithSHA256 = asn1.ObjectIdentifier{1, 2, 840, 113549, 2, 9}
 	oidAES256CBC      = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 42}
 )
@@ -500,7 +501,7 @@ func MarshalEncryptedPrivateKeyToPEM(key crypto.PrivateKey, password string) (st
 		return "", fmt.Errorf("generating AES IV: %w", err)
 	}
 
-	derivedKey, err := derivePBKDF2Key(password, salt, pkcs8EncryptIterations, 32)
+	derivedKey, err := derivePBKDF2Key(crypto.SHA256, password, salt, pkcs8EncryptIterations, 32)
 	if err != nil {
 		return "", fmt.Errorf("deriving PBKDF2 key: %w", err)
 	}
@@ -604,9 +605,17 @@ func decryptPKCS8PrivateKey(encryptedDER []byte, password string) (crypto.Privat
 		return nil, fmt.Errorf("parsing PBKDF2 params: %w", err)
 	}
 
-	// Validate PRF if explicitly specified (optional field)
-	if len(kdfParams.PRF.Algorithm) > 0 && !kdfParams.PRF.Algorithm.Equal(oidHMACWithSHA256) {
-		return nil, errDecryptPKCS8UnsupportedPRF
+	// Determine PRF hash. RFC 8018 §A.2: omitted PRF defaults to hmacWithSHA1.
+	prfHash := crypto.SHA1
+	if len(kdfParams.PRF.Algorithm) > 0 {
+		switch {
+		case kdfParams.PRF.Algorithm.Equal(oidHMACWithSHA1):
+			prfHash = crypto.SHA1
+		case kdfParams.PRF.Algorithm.Equal(oidHMACWithSHA256):
+			prfHash = crypto.SHA256
+		default:
+			return nil, errDecryptPKCS8UnsupportedPRF
+		}
 	}
 
 	keyLen := 32
@@ -614,7 +623,7 @@ func decryptPKCS8PrivateKey(encryptedDER []byte, password string) (crypto.Privat
 		keyLen = kdfParams.KeyLength
 	}
 
-	derivedKey, err := derivePBKDF2Key(password, kdfParams.Salt, kdfParams.IterationCount, keyLen)
+	derivedKey, err := derivePBKDF2Key(prfHash, password, kdfParams.Salt, kdfParams.IterationCount, keyLen)
 	if err != nil {
 		return nil, fmt.Errorf("deriving PBKDF2 key: %w", err)
 	}

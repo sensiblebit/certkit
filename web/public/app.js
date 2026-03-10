@@ -1205,7 +1205,7 @@ exportBtn.addEventListener("click", async () => {
   if (skis.length === 0) return;
 
   const rawPassword = window.prompt(
-    "Enter an export password to encrypt private keys (leave blank for no encryption):",
+    "Enter an export password for PKCS#12 and .key file encryption (leave blank for defaults):",
     "",
   );
   // null means user cancelled the dialog
