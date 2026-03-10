@@ -1,4 +1,4 @@
-import { formatDate, escapeHTML } from "./utils.js";
+import { formatDate, escapeHTML, normalizeExportPassword } from "./utils.js";
 
 // DOM references — Scan page
 const dropZone = document.getElementById("drop-zone");
@@ -1205,16 +1205,19 @@ exportBtn.addEventListener("click", async () => {
   if (skis.length === 0) return;
 
   const rawPassword = window.prompt(
-    "Enter an export password for PKCS#12 and .key file encryption (leave blank for defaults):",
+    "Export password?\n\n" +
+      "\u2022 With password: encrypts .key and .p12 files\n" +
+      "\u2022 Blank: .key files unencrypted, .p12 uses default password\n" +
+      "\u2022 Note: Kubernetes tls.key is always unencrypted",
     "",
   );
-  // null means user cancelled the dialog
-  if (rawPassword === null) return;
-  const password = rawPassword.trim() || undefined;
+  const ep = normalizeExportPassword(rawPassword);
+  if (ep.promptWasCancelled) return;
+  const password = ep.password;
 
   exportBtn.disabled = true;
   exportBtn.textContent = "Exporting...";
-  const encryptingNote = password ? " (encrypting keys\u2026)" : "";
+  const encryptingNote = ep.statusNote;
   showStatus(
     `Building ${skis.length} bundle(s) and ZIP${encryptingNote}`,
     false,
