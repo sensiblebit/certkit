@@ -876,7 +876,10 @@ func TestProcessArchive_WarnsOnTarPartialCorruption(t *testing.T) {
 	if !strings.Contains(logs, "archive processing skipped or stopped entries") {
 		t.Fatalf("expected archive warning summary, got: %s", logs)
 	}
-	if !strings.Contains(logs, "skipped_read_errors=1") {
-		t.Errorf("logs missing partial corruption read error count: %s", logs)
+	if !strings.Contains(logs, "skipped_total=2") {
+		t.Errorf("logs missing skipped total for partial corruption: %s", logs)
+	}
+	if !strings.Contains(logs, "skipped_corrupt_after_partial_read=1") {
+		t.Errorf("logs missing partial corruption count: %s", logs)
 	}
 }

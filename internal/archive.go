@@ -35,7 +35,7 @@ type archiveSkipSummary struct {
 
 func (s archiveSkipSummary) skippedTotal() int {
 	return s.nestedArchive + s.sizeOverflow + s.ratioTooHigh + s.entryTooLarge +
-		s.readError + s.processError
+		s.readError + s.processError + s.corruptAfterRead
 }
 
 func (s archiveSkipSummary) hasWarnings() bool {
