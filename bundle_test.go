@@ -636,6 +636,185 @@ func TestFetchAIACertificates_duplicateURLs(t *testing.T) {
 	}
 }
 
+func TestFetchAIACertificates_MaxTotalCerts(t *testing.T) {
+	// WHY: AIA resolution must stop after a bounded number of unique certs so
+	// pathological issuer chains cannot grow memory without limit.
+	t.Parallel()
+
+	var rootDER, int2DER, int1DER []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/int1.cer":
+			_, _ = w.Write(int1DER)
+		case "/int2.cer":
+			_, _ = w.Write(int2DER)
+		case "/root.cer":
+			_, _ = w.Write(rootDER)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	srvURL := strings.Replace(srv.URL, "127.0.0.1", "localhost", 1)
+
+	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootTmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "AIA Limit Root"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	rootDER, err = x509.CreateCertificate(rand.Reader, rootTmpl, rootTmpl, &rootKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootCert, err := x509.ParseCertificate(rootDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	int2Key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	int2Tmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "AIA Limit Intermediate 2"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		IssuingCertificateURL: []string{srvURL + "/root.cer"},
+	}
+	int2DER, err = x509.CreateCertificate(rand.Reader, int2Tmpl, rootCert, &int2Key.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	int2Cert, err := x509.ParseCertificate(int2DER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	int1Key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	int1Tmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "AIA Limit Intermediate 1"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		IssuingCertificateURL: []string{srvURL + "/int2.cer"},
+	}
+	int1DER, err = x509.CreateCertificate(rand.Reader, int1Tmpl, int2Cert, &int1Key.PublicKey, int2Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	int1Cert, err := x509.ParseCertificate(int1DER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafTmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "aia-limit.example.com"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IssuingCertificateURL: []string{srvURL + "/int1.cer"},
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, int1Cert, &leafKey.PublicKey, int1Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafCert, err := x509.ParseCertificate(leafDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	fetched, warnings := FetchAIACertificates(context.Background(), FetchAIACertificatesInput{
+		Cert:                 leafCert,
+		Timeout:              time.Second,
+		MaxDepth:             5,
+		MaxTotalCerts:        2,
+		AllowPrivateNetworks: true,
+	})
+
+	if len(fetched) != 2 {
+		t.Fatalf("fetched %d certs, want 2", len(fetched))
+	}
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %d, want 1: %v", len(warnings), warnings)
+	}
+	if !strings.Contains(warnings[0], "maximum certificate limit") {
+		t.Errorf("warning = %q, want limit message", warnings[0])
+	}
+}
+
+func TestBundle_MaxIntermediates(t *testing.T) {
+	// WHY: Bundle must reject certificate bombs with excessive intermediate
+	// depth in both verified and no-verify resolution paths.
+	t.Parallel()
+
+	root, intermediates, leaf := buildChain(t, defaultBundleMaxIntermediates+3)
+
+	tests := []struct {
+		name    string
+		options BundleOptions
+	}{
+		{
+			name: "verify true",
+			options: BundleOptions{
+				FetchAIA:           false,
+				TrustStore:         "custom",
+				CustomRoots:        []*x509.Certificate{root},
+				ExtraIntermediates: intermediates,
+				Verify:             true,
+			},
+		},
+		{
+			name: "verify false",
+			options: BundleOptions{
+				FetchAIA:           false,
+				ExtraIntermediates: intermediates,
+				TrustStore:         "custom",
+				Verify:             false,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			_, err := Bundle(context.Background(), BundleInput{
+				Leaf:    leaf,
+				Options: tt.options,
+			})
+			if err == nil {
+				t.Fatal("expected chain limit error")
+			}
+			if !strings.Contains(err.Error(), "maximum intermediate limit") {
+				t.Errorf("error = %v, want chain limit message", err)
+			}
+		})
+	}
+}
+
 func TestBundle_ExcludeRoot(t *testing.T) {
 	// WHY: ExcludeRoot must suppress root population in BundleResult;
 	// before this fix the option was dead code.

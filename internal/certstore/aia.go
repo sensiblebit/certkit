@@ -19,10 +19,13 @@ type ResolveAIAInput struct {
 	Store                *MemStore
 	Fetch                AIAFetcher
 	MaxDepth             int                        // 0 defaults to 5
+	MaxTotalCerts        int                        // 0 defaults to 100 unique fetched certificates
 	Concurrency          int                        // 0 defaults to 20; max parallel fetches per round
 	OnProgress           func(completed, total int) // optional; called after each cert's AIA URLs are processed
 	AllowPrivateNetworks bool                       // AllowPrivateNetworks allows AIA fetches to private/internal endpoints.
 }
+
+const defaultResolveAIAMaxTotalCerts = 100
 
 // HasUnresolvedIssuers reports whether any non-root certificate in the store
 // is missing its issuer (not in the store and not a Mozilla root).
@@ -72,6 +75,10 @@ func ResolveAIA(ctx context.Context, input ResolveAIAInput) []string {
 	if maxDepth <= 0 {
 		maxDepth = 5
 	}
+	maxTotalCerts := input.MaxTotalCerts
+	if maxTotalCerts <= 0 {
+		maxTotalCerts = defaultResolveAIAMaxTotalCerts
+	}
 	concurrency := input.Concurrency
 	if concurrency <= 0 {
 		concurrency = 20
@@ -103,6 +110,7 @@ func ResolveAIA(ctx context.Context, input ResolveAIAInput) []string {
 	progressTotal := 0
 	processed := make(map[string]bool)
 	totalSeen := make(map[string]bool)
+	addedByAIA := make(map[string]bool)
 
 	for range maxDepth {
 		var queue []*CertRecord
@@ -213,17 +221,34 @@ func ResolveAIA(ctx context.Context, input ResolveAIAInput) []string {
 
 		// Phase 3: Sequentially ingest fetched certificates and report progress.
 		fetched := 0
+		limitHit := false
 		for _, r := range results {
 			if r.warning != "" {
 				warnings = append(warnings, r.warning)
 				continue
 			}
 			for _, issuer := range r.certs {
+				id := certID(issuer)
+				if input.Store.certsByID[id] != nil || addedByAIA[id] {
+					continue
+				}
+				if len(addedByAIA) >= maxTotalCerts {
+					warnings = append(warnings, fmt.Sprintf(
+						"AIA resolution stopped after fetching %d unique certificate(s); maximum is %d",
+						len(addedByAIA), maxTotalCerts,
+					))
+					limitHit = true
+					break
+				}
 				if err := input.Store.HandleCertificate(issuer, "AIA: "+r.url); err != nil {
 					slog.Debug("skipping AIA certificate", "url", r.url, "error", err)
 					continue
 				}
+				addedByAIA[id] = true
 				fetched++
+			}
+			if limitHit {
+				break
 			}
 		}
 
@@ -238,6 +263,9 @@ func ResolveAIA(ctx context.Context, input ResolveAIAInput) []string {
 		}
 
 		if fetched == 0 {
+			break
+		}
+		if limitHit {
 			break
 		}
 	}
