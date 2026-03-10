@@ -11,7 +11,6 @@ import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
-	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha1" //nolint:gosec // SHA-1 is required for legacy certificate fingerprints and RFC 5280 SKI compatibility.
@@ -499,7 +498,7 @@ func MarshalEncryptedPrivateKeyToPEM(key crypto.PrivateKey, password string) (st
 		return "", fmt.Errorf("generating AES IV: %w", err)
 	}
 
-	derivedKey, err := pbkdf2.Key(sha256.New, password, salt, pkcs8EncryptIterations, 32)
+	derivedKey, err := derivePBKDF2Key(password, salt, pkcs8EncryptIterations, 32)
 	if err != nil {
 		return "", fmt.Errorf("deriving PBKDF2 key: %w", err)
 	}
@@ -613,7 +612,7 @@ func decryptPKCS8PrivateKey(encryptedDER []byte, password string) (crypto.Privat
 		keyLen = kdfParams.KeyLength
 	}
 
-	derivedKey, err := pbkdf2.Key(sha256.New, password, kdfParams.Salt, kdfParams.IterationCount, keyLen)
+	derivedKey, err := derivePBKDF2Key(password, kdfParams.Salt, kdfParams.IterationCount, keyLen)
 	if err != nil {
 		return nil, fmt.Errorf("deriving PBKDF2 key: %w", err)
 	}

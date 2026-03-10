@@ -1,0 +1,84 @@
+//go:build js
+
+package certkit
+
+import (
+	"errors"
+	"syscall/js"
+)
+
+// derivePBKDF2Key derives a key using PBKDF2-HMAC-SHA-256.
+// On js/wasm this delegates to the browser's SubtleCrypto API so the
+// key derivation runs off the main thread and CSS animations keep running.
+func derivePBKDF2Key(password string, salt []byte, iterations, keyLen int) ([]byte, error) {
+	subtle := js.Global().Get("crypto").Get("subtle")
+	if subtle.IsUndefined() || subtle.IsNull() {
+		return nil, errors.New("Web Crypto API unavailable")
+	}
+
+	// Import the password as a raw CryptoKey.
+	pwBuf := js.Global().Get("Uint8Array").New(len(password))
+	js.CopyBytesToJS(pwBuf, []byte(password))
+
+	importParams := map[string]any{"name": "PBKDF2"}
+	keyPromise := subtle.Call("importKey",
+		"raw", pwBuf, importParams, false,
+		[]any{"deriveBits"},
+	)
+
+	cryptoKey, err := awaitPromise(keyPromise)
+	if err != nil {
+		return nil, errors.New("importing PBKDF2 key material: " + err.Error())
+	}
+
+	// Derive bits using PBKDF2-HMAC-SHA-256.
+	saltBuf := js.Global().Get("Uint8Array").New(len(salt))
+	js.CopyBytesToJS(saltBuf, salt)
+
+	deriveParams := map[string]any{
+		"name":       "PBKDF2",
+		"salt":       saltBuf,
+		"iterations": iterations,
+		"hash":       "SHA-256",
+	}
+	bitsPromise := subtle.Call("deriveBits",
+		deriveParams, cryptoKey, keyLen*8,
+	)
+
+	result, err := awaitPromise(bitsPromise)
+	if err != nil {
+		return nil, errors.New("deriving PBKDF2 key: " + err.Error())
+	}
+
+	// Copy the ArrayBuffer result into a Go byte slice.
+	buf := js.Global().Get("Uint8Array").New(result)
+	out := make([]byte, buf.Get("length").Int())
+	js.CopyBytesToGo(out, buf)
+	return out, nil
+}
+
+// awaitPromise blocks the current goroutine until a JS Promise settles,
+// yielding control to the browser event loop in the meantime.
+func awaitPromise(p js.Value) (js.Value, error) {
+	type promiseResult struct {
+		val js.Value
+		err error
+	}
+	ch := make(chan promiseResult, 1)
+
+	onResolve := js.FuncOf(func(_ js.Value, args []js.Value) any {
+		ch <- promiseResult{val: args[0]}
+		return nil
+	})
+	onReject := js.FuncOf(func(_ js.Value, args []js.Value) any {
+		ch <- promiseResult{err: errors.New(args[0].Call("toString").String())}
+		return nil
+	})
+	defer onResolve.Release()
+	defer onReject.Release()
+
+	p.Call("then", onResolve, onReject)
+
+	res := <-ch
+	return res.val, res.err
+}

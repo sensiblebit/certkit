@@ -513,6 +513,7 @@ header p {
 .progress-fill.indeterminate {
   width: 30% !important;
   animation: indeterminate 1.4s ease-in-out infinite;
+  will-change: transform;
 }
 
 @keyframes indeterminate {
