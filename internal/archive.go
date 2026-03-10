@@ -21,6 +21,49 @@ var (
 	errZIPEntryTooLarge         = errors.New("ZIP entry exceeds max size")
 )
 
+type archiveSkipSummary struct {
+	nestedArchive     int
+	sizeOverflow      int
+	ratioTooHigh      int
+	entryTooLarge     int
+	readError         int
+	processError      int
+	corruptAfterRead  int
+	entryLimitStopped int
+	totalLimitStopped int
+}
+
+func (s archiveSkipSummary) skippedTotal() int {
+	return s.nestedArchive + s.sizeOverflow + s.ratioTooHigh + s.entryTooLarge +
+		s.readError + s.processError
+}
+
+func (s archiveSkipSummary) hasWarnings() bool {
+	return s.skippedTotal() > 0 || s.corruptAfterRead > 0 || s.entryLimitStopped > 0 || s.totalLimitStopped > 0
+}
+
+func (s archiveSkipSummary) logIfAny(archivePath, format string, processed int) {
+	if !s.hasWarnings() {
+		return
+	}
+
+	slog.Warn("archive processing skipped or stopped entries",
+		"archive", archivePath,
+		"format", format,
+		"processed_entries", processed,
+		"skipped_total", s.skippedTotal(),
+		"skipped_nested_archives", s.nestedArchive,
+		"skipped_size_overflow", s.sizeOverflow,
+		"skipped_ratio_limit", s.ratioTooHigh,
+		"skipped_entry_too_large", s.entryTooLarge,
+		"skipped_read_errors", s.readError,
+		"skipped_processing_errors", s.processError,
+		"skipped_corrupt_after_partial_read", s.corruptAfterRead,
+		"stopped_at_entry_limit", s.entryLimitStopped,
+		"stopped_at_total_size_limit", s.totalLimitStopped,
+	)
+}
+
 // ArchiveLimits controls zip bomb protection thresholds.
 type ArchiveLimits struct {
 	// MaxDecompressionRatio is the maximum allowed ratio of uncompressed to
@@ -128,11 +171,13 @@ func processZipArchive(input ProcessArchiveInput) (int, error) {
 
 	var totalSize int64
 	processed := 0
+	var skipped archiveSkipSummary
 
 	for _, f := range reader.File {
 		if processed >= input.Limits.MaxEntryCount {
 			slog.Warn("archive entry count limit reached, stopping",
 				"archive", input.ArchivePath, "limit", input.Limits.MaxEntryCount)
+			skipped.entryLimitStopped++
 			break
 		}
 
@@ -144,6 +189,7 @@ func processZipArchive(input ProcessArchiveInput) (int, error) {
 		// Skip nested archives (no recursion)
 		if IsArchive(f.Name) {
 			slog.Debug("skipping nested archive", "archive", input.ArchivePath, "entry", f.Name)
+			skipped.nestedArchive++
 			continue
 		}
 
@@ -153,6 +199,7 @@ func processZipArchive(input ProcessArchiveInput) (int, error) {
 			slog.Debug("skipping ZIP entry with overflowing size",
 				"archive", input.ArchivePath, "entry", f.Name,
 				"uncompressed", f.UncompressedSize64, "compressed", f.CompressedSize64)
+			skipped.sizeOverflow++
 			continue
 		}
 
@@ -163,6 +210,7 @@ func processZipArchive(input ProcessArchiveInput) (int, error) {
 				slog.Debug("skipping suspicious ZIP entry: decompression ratio too high",
 					"archive", input.ArchivePath, "entry", f.Name,
 					"ratio", ratio, "limit", input.Limits.MaxDecompressionRatio)
+				skipped.ratioTooHigh++
 				continue
 			}
 		}
@@ -172,6 +220,7 @@ func processZipArchive(input ProcessArchiveInput) (int, error) {
 			slog.Debug("skipping oversized ZIP entry",
 				"archive", input.ArchivePath, "entry", f.Name,
 				"size", f.UncompressedSize64, "limit", input.Limits.MaxEntrySize)
+			skipped.entryTooLarge++
 			continue
 		}
 
@@ -179,12 +228,18 @@ func processZipArchive(input ProcessArchiveInput) (int, error) {
 		if totalSize+int64(f.UncompressedSize64) > input.Limits.MaxTotalSize {
 			slog.Warn("archive total size limit reached, stopping",
 				"archive", input.ArchivePath, "limit", input.Limits.MaxTotalSize)
+			skipped.totalLimitStopped++
 			break
 		}
 
 		data, err := readZipEntry(f, input.Limits.MaxEntrySize)
 		if err != nil {
 			slog.Debug("reading ZIP entry", "archive", input.ArchivePath, "entry", f.Name, "error", err)
+			if errors.Is(err, errZIPEntryTooLarge) {
+				skipped.entryTooLarge++
+				continue
+			}
+			skipped.readError++
 			continue
 		}
 
@@ -199,10 +254,12 @@ func processZipArchive(input ProcessArchiveInput) (int, error) {
 			MaxBytes:    input.Limits.MaxEntrySize,
 		}); err != nil {
 			slog.Debug("processing archive entry", "path", virtualPath, "error", err)
+			skipped.processError++
 		}
 		processed++
 	}
 
+	skipped.logIfAny(input.ArchivePath, "zip", processed)
 	slog.Debug("processed archive", "archive", input.ArchivePath, "format", "zip", "entries", processed)
 	return processed, nil
 }
@@ -227,6 +284,7 @@ func processTarArchive(input ProcessArchiveInput, gzipped bool) (int, error) {
 	tr := tar.NewReader(reader)
 	var totalSize int64
 	processed := 0
+	var skipped archiveSkipSummary
 
 	for {
 		header, err := tr.Next()
@@ -238,6 +296,7 @@ func processTarArchive(input ProcessArchiveInput, gzipped bool) (int, error) {
 			if processed > 0 {
 				slog.Warn("tar read error after processing entries",
 					"archive", input.ArchivePath, "processed", processed, "error", err)
+				skipped.corruptAfterRead++
 				break
 			}
 			return 0, fmt.Errorf("reading TAR archive %s: %w", input.ArchivePath, err)
@@ -246,6 +305,7 @@ func processTarArchive(input ProcessArchiveInput, gzipped bool) (int, error) {
 		if processed >= input.Limits.MaxEntryCount {
 			slog.Warn("archive entry count limit reached, stopping",
 				"archive", input.ArchivePath, "limit", input.Limits.MaxEntryCount)
+			skipped.entryLimitStopped++
 			break
 		}
 
@@ -257,6 +317,7 @@ func processTarArchive(input ProcessArchiveInput, gzipped bool) (int, error) {
 		// Skip nested archives (no recursion)
 		if IsArchive(header.Name) {
 			slog.Debug("skipping nested archive", "archive", input.ArchivePath, "entry", header.Name)
+			skipped.nestedArchive++
 			continue
 		}
 
@@ -270,6 +331,7 @@ func processTarArchive(input ProcessArchiveInput, gzipped bool) (int, error) {
 			if _, err := io.Copy(io.Discard, io.LimitReader(tr, header.Size)); err != nil {
 				slog.Debug("draining oversized tar entry", "error", err)
 			}
+			skipped.entryTooLarge++
 			continue
 		}
 
@@ -277,6 +339,7 @@ func processTarArchive(input ProcessArchiveInput, gzipped bool) (int, error) {
 		if totalSize+header.Size > input.Limits.MaxTotalSize {
 			slog.Warn("archive total size limit reached, stopping",
 				"archive", input.ArchivePath, "limit", input.Limits.MaxTotalSize)
+			skipped.totalLimitStopped++
 			break
 		}
 
@@ -286,6 +349,7 @@ func processTarArchive(input ProcessArchiveInput, gzipped bool) (int, error) {
 		data, err := io.ReadAll(limited)
 		if err != nil {
 			slog.Debug("reading TAR entry", "archive", input.ArchivePath, "entry", header.Name, "error", err)
+			skipped.readError++
 			continue
 		}
 
@@ -293,6 +357,7 @@ func processTarArchive(input ProcessArchiveInput, gzipped bool) (int, error) {
 		if int64(len(data)) > input.Limits.MaxEntrySize {
 			slog.Warn("TAR entry exceeded max size despite header claim",
 				"archive", input.ArchivePath, "entry", header.Name)
+			skipped.entryTooLarge++
 			continue
 		}
 
@@ -307,10 +372,12 @@ func processTarArchive(input ProcessArchiveInput, gzipped bool) (int, error) {
 			MaxBytes:    input.Limits.MaxEntrySize,
 		}); err != nil {
 			slog.Debug("processing archive entry", "path", virtualPath, "error", err)
+			skipped.processError++
 		}
 		processed++
 	}
 
+	skipped.logIfAny(input.ArchivePath, formatLabel(gzipped), processed)
 	slog.Debug("processed archive", "archive", input.ArchivePath, "format", formatLabel(gzipped), "entries", processed)
 	return processed, nil
 }

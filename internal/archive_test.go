@@ -3,9 +3,29 @@ package internal
 import (
 	"archive/tar"
 	"bytes"
+	"log/slog"
+	"math"
 	"strings"
+	"sync"
 	"testing"
 )
+
+var captureArchiveLogsMu sync.Mutex
+
+func captureArchiveLogs(t *testing.T, fn func()) string {
+	t.Helper()
+
+	captureArchiveLogsMu.Lock()
+	defer captureArchiveLogsMu.Unlock()
+
+	var buf bytes.Buffer
+	origLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(origLogger)
+
+	fn()
+	return buf.String()
+}
 
 func TestArchiveFormat(t *testing.T) {
 	// WHY: Verifies that all supported archive extensions are detected
@@ -443,6 +463,64 @@ func TestProcessArchive_TarEntryExceedsMaxSize(t *testing.T) {
 	}
 }
 
+func TestProcessArchive_WarnsWhenZipEntriesSkipped(t *testing.T) {
+	// WHY: Archive scans that skip nested or oversized entries must emit a
+	// user-visible summary so partial results are not mistaken for complete ones.
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "warn.example.com", []string{"warn.example.com"}, nil)
+	innerZip := createTestZip(t, map[string][]byte{
+		"inner.pem": leaf.certPEM,
+	})
+
+	zipData := createTestZip(t, map[string][]byte{
+		"certs/server.pem": leaf.certPEM,
+		"nested.zip":       innerZip,
+		"big.bin":          bytes.Repeat([]byte("0123456789abcdef"), 8_000),
+	})
+
+	limits := DefaultArchiveLimits()
+	limits.MaxEntrySize = int64(len(leaf.certPEM)) + 128
+	limits.MaxDecompressionRatio = math.MaxInt64
+
+	cfg := newTestConfig(t)
+	var (
+		n   int
+		err error
+	)
+	logs := captureArchiveLogs(t, func() {
+		n, err = ProcessArchive(ProcessArchiveInput{
+			ArchivePath: "warnings.zip",
+			Data:        zipData,
+			Format:      "zip",
+			Limits:      limits,
+			Store:       cfg.Store,
+			Passwords:   cfg.Passwords,
+		})
+	})
+	if err != nil {
+		t.Fatalf("ProcessArchive: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("processed %d entries, want 1 valid entry", n)
+	}
+	if got := len(cfg.Store.AllCertsFlat()); got != 1 {
+		t.Fatalf("stored %d certs, want 1", got)
+	}
+
+	if !strings.Contains(logs, "archive processing skipped or stopped entries") {
+		t.Fatalf("expected archive warning summary, got: %s", logs)
+	}
+	if !strings.Contains(logs, "skipped_total=2") {
+		t.Errorf("logs missing total skipped count: %s", logs)
+	}
+	if !strings.Contains(logs, "skipped_nested_archives=1") {
+		t.Errorf("logs missing nested archive count: %s", logs)
+	}
+	if !strings.Contains(logs, "skipped_entry_too_large=1") {
+		t.Errorf("logs missing oversized entry count: %s", logs)
+	}
+}
+
 func TestProcessArchive_EntryCountLimit(t *testing.T) {
 	// WHY: Verifies that MaxEntryCount stops processing at the specified limit,
 	// protecting against archive bombs. One sub-case per archive handler
@@ -748,5 +826,55 @@ func TestProcessArchive_TarPartialCorruption(t *testing.T) {
 	certs := cfg.Store.AllCertsFlat()
 	if len(certs) != 1 {
 		t.Errorf("got %d certs in store, want 1", len(certs))
+	}
+}
+
+func TestProcessArchive_WarnsOnTarPartialCorruption(t *testing.T) {
+	// WHY: Partial TAR recovery should still warn that the archive was corrupt
+	// after some entries were processed so users know results are incomplete.
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "partial-warn.example.com", []string{"partial-warn.example.com"}, nil)
+
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	if err := tw.WriteHeader(&tar.Header{Name: "valid.pem", Size: int64(len(leaf.certPEM)), Mode: 0644}); err != nil {
+		t.Fatalf("write TAR header: %v", err)
+	}
+	if _, err := tw.Write(leaf.certPEM); err != nil {
+		t.Fatalf("write TAR entry: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close TAR: %v", err)
+	}
+	validTar := buf.Bytes()
+	corruptedTar := append(bytes.Clone(validTar[:len(validTar)-1024]), []byte("truncated-next-header")...)
+
+	cfg := newTestConfig(t)
+	var (
+		n   int
+		err error
+	)
+	logs := captureArchiveLogs(t, func() {
+		n, err = ProcessArchive(ProcessArchiveInput{
+			ArchivePath: "partial-warn.tar",
+			Data:        corruptedTar,
+			Format:      "tar",
+			Limits:      DefaultArchiveLimits(),
+			Store:       cfg.Store,
+			Passwords:   cfg.Passwords,
+		})
+	})
+	if err != nil {
+		t.Fatalf("ProcessArchive: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("processed %d entries, want 1 valid entry before corruption", n)
+	}
+
+	if !strings.Contains(logs, "archive processing skipped or stopped entries") {
+		t.Fatalf("expected archive warning summary, got: %s", logs)
+	}
+	if !strings.Contains(logs, "skipped_corrupt_after_partial_read=1") {
+		t.Errorf("logs missing partial corruption count: %s", logs)
 	}
 }

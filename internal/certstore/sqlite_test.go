@@ -3,20 +3,41 @@
 package certstore
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
+	"encoding/pem"
+	"log/slog"
 	"math/big"
 	"net"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/sensiblebit/certkit"
 )
+
+var captureSQLiteLogsMu sync.Mutex
+
+func captureSQLiteLogs(t *testing.T, fn func()) string {
+	t.Helper()
+
+	captureSQLiteLogsMu.Lock()
+	defer captureSQLiteLogsMu.Unlock()
+
+	var buf bytes.Buffer
+	origLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(origLogger)
+
+	fn()
+	return buf.String()
+}
 
 func TestSaveToSQLite_RoundTrip(t *testing.T) {
 	// WHY: SQLite persistence must round-trip certs, keys, and bundle names.
@@ -150,6 +171,93 @@ func TestLoadFromSQLite_EmptyDB(t *testing.T) {
 	keys := store.AllKeysFlat()
 	if len(keys) != 0 {
 		t.Errorf("expected 0 keys from empty DB, got %d", len(keys))
+	}
+}
+
+func TestLoadFromSQLite_WarnsWhenRecordsSkipped(t *testing.T) {
+	// WHY: Corrupted rows should not silently disappear during DB load; users
+	// need a warning that the in-memory store is incomplete.
+	ca := newRSACA(t)
+
+	db, err := openMemDB()
+	if err != nil {
+		t.Fatalf("openMemDB: %v", err)
+	}
+	defer func() {
+		if closeErr := db.Close(); closeErr != nil {
+			t.Fatalf("close db: %v", closeErr)
+		}
+	}()
+
+	validSKI, err := certkit.ComputeSKI(ca.cert.PublicKey)
+	if err != nil {
+		t.Fatalf("compute SKI: %v", err)
+	}
+	validCertPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.cert.Raw}))
+
+	if _, err := db.Exec(`
+		INSERT INTO certificates (serial_number, authority_key_identifier, cert_type, key_type, expiry, not_before, metadata, sans, common_name, bundle_name, subject_key_identifier, pem)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, ca.cert.SerialNumber.String(), certificateIdentityAuthorityKeyIdentifier(ca.cert), "root", "RSA", ca.cert.NotAfter, ca.cert.NotBefore, "", "[]", ca.cert.Subject.CommonName, "", hex.EncodeToString(validSKI), validCertPEM); err != nil {
+		t.Fatalf("insert valid cert row: %v", err)
+	}
+
+	if _, err := db.Exec(`
+		INSERT INTO certificates (serial_number, authority_key_identifier, cert_type, key_type, expiry, not_before, metadata, sans, common_name, bundle_name, subject_key_identifier, pem)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, "bad-pem", "issuer:bad-pem", "leaf", "RSA", ca.cert.NotAfter, ca.cert.NotBefore, "", "[]", "bad-pem.example.com", "", "bad-pem-ski", "not pem"); err != nil {
+		t.Fatalf("insert bad PEM row: %v", err)
+	}
+
+	badDERPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("not-der")}))
+	if _, err := db.Exec(`
+		INSERT INTO certificates (serial_number, authority_key_identifier, cert_type, key_type, expiry, not_before, metadata, sans, common_name, bundle_name, subject_key_identifier, pem)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, "bad-der", "issuer:bad-der", "leaf", "RSA", ca.cert.NotAfter, ca.cert.NotBefore, "", "[]", "bad-der.example.com", "", "bad-der-ski", badDERPEM); err != nil {
+		t.Fatalf("insert bad DER row: %v", err)
+	}
+
+	if _, err := db.Exec(`
+		INSERT INTO keys (subject_key_identifier, key_type, bit_length, public_exponent, modulus, curve, key_data)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, "bad-key-ski", "rsa", 2048, 65537, "abcd", "", []byte("not a key")); err != nil {
+		t.Fatalf("insert bad key row: %v", err)
+	}
+
+	dbPath := filepath.Join(t.TempDir(), "warnings.db")
+	if _, err := db.Exec("VACUUM INTO ?", dbPath); err != nil {
+		t.Fatalf("VACUUM INTO: %v", err)
+	}
+
+	store := NewMemStore()
+	logs := captureSQLiteLogs(t, func() {
+		err = LoadFromSQLite(store, dbPath)
+	})
+	if err != nil {
+		t.Fatalf("LoadFromSQLite: %v", err)
+	}
+
+	if got := len(store.AllCertsFlat()); got != 1 {
+		t.Fatalf("loaded %d certs, want 1 valid cert", got)
+	}
+	if got := len(store.AllKeysFlat()); got != 0 {
+		t.Fatalf("loaded %d keys, want 0 valid keys", got)
+	}
+
+	if !strings.Contains(logs, "loaded database with skipped records") {
+		t.Fatalf("expected warning summary in logs, got: %s", logs)
+	}
+	if !strings.Contains(logs, "skipped_total=3") {
+		t.Errorf("logs missing total skipped count: %s", logs)
+	}
+	if !strings.Contains(logs, "skipped_cert_unparseable_pem=1") {
+		t.Errorf("logs missing bad PEM count: %s", logs)
+	}
+	if !strings.Contains(logs, "skipped_cert_invalid_der=1") {
+		t.Errorf("logs missing bad DER count: %s", logs)
+	}
+	if !strings.Contains(logs, "skipped_key_parse_failed=1") {
+		t.Errorf("logs missing bad key count: %s", logs)
 	}
 }
 
