@@ -90,3 +90,69 @@ func TestJSONSchemaConsistency(t *testing.T) {
 		}
 	})
 }
+
+func TestTreeCommand(t *testing.T) {
+	t.Parallel()
+
+	// Build tree output once to avoid concurrent Cobra Commands() sorting.
+	var rootTree strings.Builder
+	printCommandTree(&rootTree, rootCmd, "")
+	rootOutput := rootTree.String()
+
+	// Snapshot the expected command names before subtests run.
+	var expectedCommands []string
+	for _, child := range rootCmd.Commands() {
+		if child.Hidden || child.Name() == "help" || child.Name() == "completion" {
+			continue
+		}
+		expectedCommands = append(expectedCommands, child.Name()+" — "+child.Short)
+	}
+
+	var leafTree strings.Builder
+	printCommandTree(&leafTree, treeCmd, "")
+	leafOutput := leafTree.String()
+
+	t.Run("includes all top-level commands", func(t *testing.T) {
+		t.Parallel()
+		for _, entry := range expectedCommands {
+			if !strings.Contains(rootOutput, entry) {
+				t.Errorf("tree output missing command %q", entry)
+			}
+		}
+	})
+
+	t.Run("includes nested subcommands", func(t *testing.T) {
+		t.Parallel()
+		for _, name := range []string{"self-signed", "csr"} {
+			if !strings.Contains(rootOutput, name+" — ") {
+				t.Errorf("tree output missing nested command %q", name)
+			}
+		}
+	})
+
+	t.Run("rejects arguments", func(t *testing.T) {
+		t.Parallel()
+		if treeCmd.Args == nil {
+			t.Fatal("treeCmd.Args is nil; expected cobra.NoArgs")
+		}
+		if err := treeCmd.Args(treeCmd, []string{"unexpected"}); err == nil {
+			t.Fatal("expected error for unexpected argument")
+		}
+	})
+
+	t.Run("uses box-drawing connectors", func(t *testing.T) {
+		t.Parallel()
+		for _, connector := range []string{"├── ", "└── ", "│   "} {
+			if !strings.Contains(rootOutput, connector) {
+				t.Errorf("tree output missing connector %q", connector)
+			}
+		}
+	})
+
+	t.Run("excludes help flag", func(t *testing.T) {
+		t.Parallel()
+		if strings.Contains(leafOutput, "--help") {
+			t.Error("tree output should not include --help flag")
+		}
+	})
+}

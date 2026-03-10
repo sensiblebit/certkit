@@ -12,6 +12,7 @@ var treeCmd = &cobra.Command{
 	Use:   "tree",
 	Short: "Display the full command tree",
 	Long:  "Display every command, subcommand, and flag in a tree layout.",
+	Args:  cobra.NoArgs,
 	RunE:  runTree,
 }
 
