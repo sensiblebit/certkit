@@ -104,10 +104,9 @@ func (w *zipBundleWriter) WriteBundleFiles(folder string, files []certstore.Bund
 	prefix := folder + "/"
 	now := time.Now()
 	for _, f := range files {
-		data := append([]byte(nil), f.Data...)
 		w.entries = append(w.entries, zipBundleEntry{
 			name:     prefix + f.Name,
-			data:     data,
+			data:     f.Data,
 			modified: now,
 		})
 	}

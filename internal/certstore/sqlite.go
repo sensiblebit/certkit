@@ -439,30 +439,40 @@ func publishSQLiteFile(tempPath, dbPath string, mode os.FileMode, allowRename bo
 				return nil
 			}
 		}
-		return copySQLiteFileExclusive(tempPath, dbPath, mode)
+		return copySQLiteFileExclusive(copySQLiteFileExclusiveInput{
+			TempPath: tempPath,
+			DBPath:   dbPath,
+			Mode:     mode,
+		})
 	default:
 		return fmt.Errorf("linking staged database into place: %w", linkErr)
 	}
 }
 
-func copySQLiteFileExclusive(tempPath, dbPath string, mode os.FileMode) error {
+type copySQLiteFileExclusiveInput struct {
+	TempPath string
+	DBPath   string
+	Mode     os.FileMode
+}
+
+func copySQLiteFileExclusive(input copySQLiteFileExclusiveInput) error {
 	//nolint:gosec // tempPath is produced by our own staging path logic inside the parent directory.
-	src, err := os.Open(tempPath)
+	src, err := os.Open(input.TempPath)
 	if err != nil {
 		return fmt.Errorf("opening staged database: %w", err)
 	}
 	defer func() { _ = src.Close() }()
 
-	createMode := mode
+	createMode := input.Mode
 	if createMode == 0 {
-		info, err := sqliteStat(tempPath)
+		info, err := sqliteStat(input.TempPath)
 		if err != nil {
 			return fmt.Errorf("stat staged database: %w", err)
 		}
 		createMode = info.Mode().Perm()
 	}
 
-	dst, err := sqliteOpenFile(dbPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, createMode)
+	dst, err := sqliteOpenFile(input.DBPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, createMode)
 	if err != nil {
 		if os.IsExist(err) {
 			return os.ErrExist
@@ -471,11 +481,11 @@ func copySQLiteFileExclusive(tempPath, dbPath string, mode os.FileMode) error {
 	}
 	if _, err := io.Copy(dst, src); err != nil {
 		_ = dst.Close()
-		_ = sqliteRemoveAll(dbPath)
+		_ = sqliteRemoveAll(input.DBPath)
 		return fmt.Errorf("copying staged database into place: %w", err)
 	}
 	if err := dst.Close(); err != nil {
-		_ = sqliteRemoveAll(dbPath)
+		_ = sqliteRemoveAll(input.DBPath)
 		return fmt.Errorf("closing destination database: %w", err)
 	}
 	return nil
