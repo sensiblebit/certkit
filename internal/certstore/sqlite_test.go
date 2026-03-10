@@ -222,6 +222,68 @@ func TestSaveToSQLite_ReplaceRaceKeepsCompetingWriter(t *testing.T) {
 	}
 }
 
+func TestSaveToSQLite_ReplaceRaceRestoresBackupWhenWinnerIsDirectory(t *testing.T) {
+	// WHY: If a competing writer recreates the destination as a directory, we
+	// must preserve the moved-aside backup instead of deleting it.
+	storeA := NewMemStore()
+	caA := newRSACA(t)
+	if err := storeA.HandleCertificate(caA.cert, "ca-a.pem"); err != nil {
+		t.Fatalf("store cert A: %v", err)
+	}
+
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "replace-race-dir.db")
+	if err := SaveToSQLite(storeA, dbPath); err != nil {
+		t.Fatalf("initial SaveToSQLite: %v", err)
+	}
+
+	storeB := NewMemStore()
+	caB := newECDSACA(t)
+	if err := storeB.HandleCertificate(caB.cert, "ca-b.pem"); err != nil {
+		t.Fatalf("store cert B: %v", err)
+	}
+
+	originalLink := sqliteLink
+	t.Cleanup(func() {
+		sqliteLink = originalLink
+	})
+	sqliteLink = func(oldPath, newPath string) error {
+		_ = oldPath
+		if err := os.Mkdir(newPath, 0o755); err != nil {
+			return fmt.Errorf("injecting competing directory: %w", err)
+		}
+		return os.ErrExist
+	}
+
+	err := SaveToSQLite(storeB, dbPath)
+	if err == nil {
+		t.Fatal("expected SaveToSQLite race failure, got nil")
+	}
+	if !errors.Is(err, os.ErrExist) {
+		t.Fatalf("SaveToSQLite error = %v, want wrapped %v", err, os.ErrExist)
+	}
+
+	info, statErr := os.Stat(dbPath)
+	if statErr != nil {
+		t.Fatalf("stat restored database: %v", statErr)
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatalf("destination mode = %v, want regular file", info.Mode())
+	}
+
+	loaded := NewMemStore()
+	if err := LoadFromSQLite(loaded, dbPath); err != nil {
+		t.Fatalf("LoadFromSQLite restored database: %v", err)
+	}
+	certs := loaded.AllCertsFlat()
+	if len(certs) != 1 {
+		t.Fatalf("restored cert count = %d, want 1", len(certs))
+	}
+	if got := certs[0].Cert.Subject.CommonName; got != "Test RSA Root CA" {
+		t.Fatalf("restored cert CN = %q, want %q", got, "Test RSA Root CA")
+	}
+}
+
 func TestSaveToSQLite_FallsBackWhenHardLinksUnsupported(t *testing.T) {
 	// WHY: Some filesystems reject hard links; SaveToSQLite must still publish a
 	// valid database when link-based staging is unavailable.

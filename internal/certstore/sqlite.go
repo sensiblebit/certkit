@@ -385,7 +385,7 @@ func replaceExistingSQLiteFile(tempPath, dbPath string, mode os.FileMode) error 
 
 	if err := publishSQLiteFile(tempPath, dbPath, mode, true); err != nil {
 		if errors.Is(err, os.ErrExist) {
-			if _, statErr := sqliteStat(dbPath); statErr == nil {
+			if info, statErr := sqliteStat(dbPath); statErr == nil && info.Mode().IsRegular() {
 				restoreBackup = false
 				if removeErr := sqliteRemoveAll(backupPath); removeErr != nil {
 					slog.Warn("removing stale backup database", "path", backupPath, "error", removeErr)
