@@ -1206,8 +1206,8 @@ exportBtn.addEventListener("click", async () => {
 
   const rawPassword = window.prompt(
     "Export password?\n\n" +
-      "\u2022 With password: encrypts .key and .p12 files\n" +
-      "\u2022 Blank: .key files unencrypted, .p12 uses default password\n" +
+      "\u2022 With password: encrypts .key and .yaml key material; .p12 uses that password\n" +
+      "\u2022 Blank: .key and .yaml key material unencrypted; .p12 uses default password\n" +
       "\u2022 Note: Kubernetes tls.key is always unencrypted",
     "",
   );

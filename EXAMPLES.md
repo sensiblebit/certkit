@@ -470,7 +470,7 @@ certkit scan /path/to/certs/ --bundle-path ./bundles -c bundles.yaml
 
 This creates a directory per bundle with every format you might need: PEM (leaf, chain, fullchain, intermediates, root), private key, PKCS#12, JKS, Kubernetes Secret, and a CSR for renewal.
 
-When an export password is supplied via `-p`/`--password-file`, the `.key` PEM output is encrypted (PKCS#8 v2, PBES2/AES-256-CBC, written as an `ENCRYPTED PRIVATE KEY` block). Without an explicit password, `.key` files are written as unencrypted PKCS#8 (`PRIVATE KEY`). Kubernetes TLS secrets always contain unencrypted keys regardless of the password setting.
+When an export password is supplied via `-p`/`--password-file`, the `.key` PEM output is encrypted and the `.yaml` bundle's `key` field also contains an encrypted PKCS#8 v2 `ENCRYPTED PRIVATE KEY` block. Without an explicit password, those key outputs are written as unencrypted PKCS#8 (`PRIVATE KEY`). Kubernetes TLS secrets always contain unencrypted keys regardless of the password setting.
 
 ---
 

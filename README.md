@@ -369,7 +369,7 @@ When running `certkit scan --bundle-path`, each bundle produces the following fi
 | `<cn>.p12`               | PKCS#12 archive (uses first non-empty export password from `--passwords`/`--password-file`, or defaults to `changeit` with a warning, mode 0600) |
 | `<cn>.k8s.yaml`          | Kubernetes `kubernetes.io/tls` Secret (mode 0600)                                     |
 | `<cn>.json`              | Certificate metadata                                                                  |
-| `<cn>.yaml`              | Certificate and key metadata (mode 0600)                                              |
+| `<cn>.yaml`              | Certificate and key metadata (mode 0600). When an export password is supplied, the `key` field contains an `ENCRYPTED PRIVATE KEY` block |
 | `<cn>.csr`               | Certificate Signing Request                                                           |
 | `<cn>.csr.json`          | CSR details (subject, SANs, key algorithm)                                            |
 
