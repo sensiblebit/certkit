@@ -40,9 +40,11 @@ type OCSPResult struct {
 	SerialNumber string `json:"serial,omitempty"`
 	// URL is the OCSP responder that was queried.
 	URL string `json:"url,omitempty"`
-	// ThisUpdate is when the OCSP response was generated (RFC 3339).
+	// ThisUpdate is when the OCSP response was generated (RFC 3339). OCSP keeps
+	// RFC freshness terminology instead of certificate validity keys.
 	ThisUpdate string `json:"this_update,omitempty"`
-	// NextUpdate is when the OCSP response expires (RFC 3339).
+	// NextUpdate is when the OCSP response expires (RFC 3339). OCSP keeps RFC
+	// freshness terminology instead of certificate validity keys.
 	NextUpdate string `json:"next_update,omitempty"`
 	// RevokedAt is the revocation time in RFC 3339 (only set when Status is "revoked").
 	RevokedAt *string `json:"revoked_at,omitempty"`

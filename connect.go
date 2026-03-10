@@ -546,7 +546,6 @@ func startTLSFallbackContext(parent context.Context, connectTimeout time.Duratio
 	if connectTimeout == 0 {
 		connectTimeout = defaultConnectTimeout
 	}
-	//nolint:gosec // The caller always defers the returned cancel func at the call site.
 	ctx, cancel := context.WithTimeout(parent, connectTimeout)
 	return ctx, cancel
 }

@@ -36,7 +36,7 @@ var (
 	errParsePrivateKeyAnyFormat   = errors.New("parsing PRIVATE KEY block with any known format")
 	errUnsupportedPEMBlockType    = errors.New("unsupported PEM block type")
 	errUnsupportedPrivateKeyType  = errors.New("unsupported private key type")
-	errKeyMatchesCertNilCert      = errors.New("certificate is nil")
+	errCertificateNil             = errors.New("certificate is nil")
 	errUnsupportedPublicKeyType   = errors.New("unsupported public key type")
 	errGenerateECKeyNilCurve      = errors.New("generating EC key: curve cannot be nil")
 )
@@ -385,6 +385,9 @@ func parsePEMPrivateKeyBlock(singlePEM []byte, block *pem.Block) (crypto.Private
 
 // CertToPEM encodes a certificate as PEM.
 func CertToPEM(cert *x509.Certificate) string {
+	if cert == nil {
+		return ""
+	}
 	return string(pem.EncodeToMemory(&pem.Block{
 		Type:  "CERTIFICATE",
 		Bytes: cert.Raw,
@@ -408,6 +411,9 @@ func MarshalPrivateKeyToPEM(key crypto.PrivateKey) (string, error) {
 
 // CertFingerprint returns the SHA-256 fingerprint of a certificate as a lowercase hex string.
 func CertFingerprint(cert *x509.Certificate) string {
+	if cert == nil {
+		return ""
+	}
 	hash := sha256.Sum256(cert.Raw)
 	return hex.EncodeToString(hash[:])
 }
@@ -415,6 +421,9 @@ func CertFingerprint(cert *x509.Certificate) string {
 // CertFingerprintSHA1 returns the SHA-1 fingerprint of a certificate as a lowercase hex string.
 // SHA-1 fingerprints are widely used in browser UIs, CT logs, and legacy systems.
 func CertFingerprintSHA1(cert *x509.Certificate) string {
+	if cert == nil {
+		return ""
+	}
 	//nolint:gosec // Legacy certificate fingerprint compatibility requires SHA-1.
 	hash := sha1.Sum(cert.Raw)
 	return hex.EncodeToString(hash[:])
@@ -426,6 +435,9 @@ func CertFingerprintSHA1(cert *x509.Certificate) string {
 // (excluding tag, length, and unused-bits octet). The result is 20
 // bytes, the same length as a SHA-1 SKI, ensuring compatibility.
 func CertSKI(cert *x509.Certificate) string {
+	if cert == nil {
+		return ""
+	}
 	pubKeyBytes, err := extractPublicKeyBitString(cert.RawSubjectPublicKeyInfo)
 	if err != nil {
 		return ""
@@ -616,6 +628,9 @@ func ComputeSKILegacy(pub crypto.PublicKey) ([]byte, error) {
 
 // GetCertificateType determines if a certificate is root, intermediate, or leaf.
 func GetCertificateType(cert *x509.Certificate) string {
+	if cert == nil {
+		return ""
+	}
 	if cert.IsCA {
 		if bytes.Equal(cert.RawIssuer, cert.RawSubject) {
 			return "root"
@@ -638,7 +653,7 @@ func GetPublicKey(priv crypto.PrivateKey) (crypto.PublicKey, error) {
 // types since Go 1.20, which handles cross-type mismatches by returning false.
 func KeyMatchesCert(priv crypto.PrivateKey, cert *x509.Certificate) (bool, error) {
 	if cert == nil {
-		return false, errKeyMatchesCertNilCert
+		return false, errCertificateNil
 	}
 	pub, err := GetPublicKey(priv)
 	if err != nil {
@@ -694,6 +709,9 @@ func IsPEM(data []byte) bool {
 // CertExpiresWithin reports whether the certificate will expire within the
 // given duration from now.
 func CertExpiresWithin(cert *x509.Certificate, d time.Duration) bool {
+	if cert == nil {
+		return false
+	}
 	return time.Now().Add(d).After(cert.NotAfter)
 }
 
@@ -715,6 +733,9 @@ func MarshalPublicKeyToPEM(pub crypto.PublicKey) (string, error) {
 // in uppercase colon-separated hex format (AA:BB:CC:...), matching the format
 // used by OpenSSL and browser certificate viewers.
 func CertFingerprintColonSHA256(cert *x509.Certificate) string {
+	if cert == nil {
+		return ""
+	}
 	hash := sha256.Sum256(cert.Raw)
 	return strings.ToUpper(ColonHex(hash[:]))
 }
@@ -723,6 +744,9 @@ func CertFingerprintColonSHA256(cert *x509.Certificate) string {
 // in uppercase colon-separated hex format (AA:BB:CC:...), matching the format
 // used by OpenSSL and browser certificate viewers.
 func CertFingerprintColonSHA1(cert *x509.Certificate) string {
+	if cert == nil {
+		return ""
+	}
 	//nolint:gosec // Legacy certificate fingerprint compatibility requires SHA-1.
 	hash := sha1.Sum(cert.Raw)
 	return strings.ToUpper(ColonHex(hash[:]))

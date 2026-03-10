@@ -21,6 +21,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"time"
 )
 
 var (
@@ -371,8 +372,8 @@ func legacyFallbackConnect(ctx context.Context, input legacyFallbackInput) (*leg
 	}
 	defer func() { _ = conn.Close() }()
 
-	if deadline, ok := ctx.Deadline(); ok {
-		_ = conn.SetDeadline(deadline)
+	if err := setProbeConnDeadline(ctx, setProbeConnDeadlineInput{conn: conn, now: time.Now}); err != nil {
+		return nil, fmt.Errorf("setting legacy fallback deadline: %w", err)
 	}
 
 	msg, err := buildLegacyClientHelloMsg(legacyClientHelloInput{
@@ -407,4 +408,24 @@ func legacyFallbackConnect(ctx context.Context, input legacyFallbackInput) (*leg
 		cipherSuite:  shResult.cipherSuite,
 		certificates: certs,
 	}, nil
+}
+
+type deadlineConn interface {
+	SetDeadline(time.Time) error
+}
+
+type setProbeConnDeadlineInput struct {
+	conn deadlineConn
+	now  func() time.Time
+}
+
+func setProbeConnDeadline(ctx context.Context, input setProbeConnDeadlineInput) error {
+	deadline := input.now().Add(defaultConnectTimeout)
+	if ctxDeadline, ok := ctx.Deadline(); ok {
+		deadline = ctxDeadline
+	}
+	if err := input.conn.SetDeadline(deadline); err != nil {
+		return fmt.Errorf("setting probe connection deadline: %w", err)
+	}
+	return nil
 }

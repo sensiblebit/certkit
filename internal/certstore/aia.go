@@ -12,6 +12,8 @@ import (
 
 // AIAFetcher fetches raw certificate bytes from a URL. Implementations handle
 // transport details: CLI uses net/http, WASM delegates to JavaScript fetch.
+// Implementations must honor ctx cancellation promptly so ResolveAIA can abort
+// in-flight fetches on timeout or user cancellation.
 type AIAFetcher func(ctx context.Context, url string) ([]byte, error)
 
 // ResolveAIAInput holds parameters for ResolveAIA.
@@ -19,30 +21,18 @@ type ResolveAIAInput struct {
 	Store                *MemStore
 	Fetch                AIAFetcher
 	MaxDepth             int                        // 0 defaults to 5
+	MaxTotalCerts        int                        // 0 defaults to 100 unique fetched certificates
 	Concurrency          int                        // 0 defaults to 20; max parallel fetches per round
 	OnProgress           func(completed, total int) // optional; called after each cert's AIA URLs are processed
 	AllowPrivateNetworks bool                       // AllowPrivateNetworks allows AIA fetches to private/internal endpoints.
 }
 
+const defaultResolveAIAMaxTotalCerts = 100
+
 // HasUnresolvedIssuers reports whether any non-root certificate in the store
 // is missing its issuer (not in the store and not a Mozilla root).
 func HasUnresolvedIssuers(store *MemStore) bool {
-	for _, rec := range store.AllCertsFlat() {
-		if rec.CertType == "root" {
-			continue
-		}
-		if certkit.IsMozillaRoot(rec.Cert) {
-			continue
-		}
-		if store.HasIssuer(rec.Cert) {
-			continue
-		}
-		if certkit.IsIssuedByMozillaRoot(rec.Cert) {
-			continue
-		}
-		return true
-	}
-	return false
+	return len(unresolvedIssuerQueue(store)) > 0
 }
 
 // aiaWorkItem is a single URL to fetch during a depth round.
@@ -58,6 +48,40 @@ type aiaFetchResult struct {
 	warning string // non-empty on failure
 }
 
+// ResolveAIAResult reports the outcome of an AIA resolution pass.
+type ResolveAIAResult struct {
+	Warnings        []string
+	FetchedCount    int
+	Incomplete      bool
+	UnresolvedCount int
+}
+
+func certNeedsAIAResolution(store *MemStore, rec *CertRecord) bool {
+	if rec.CertType == "root" {
+		return false
+	}
+	if certkit.IsMozillaRoot(rec.Cert) {
+		return false
+	}
+	if store.HasIssuer(rec.Cert) {
+		return false
+	}
+	if certkit.IsIssuedByMozillaRoot(rec.Cert) {
+		return false
+	}
+	return true
+}
+
+func unresolvedIssuerQueue(store *MemStore) []*CertRecord {
+	var queue []*CertRecord
+	for _, rec := range store.AllCertsFlat() {
+		if certNeedsAIAResolution(store, rec) {
+			queue = append(queue, rec)
+		}
+	}
+	return queue
+}
+
 // ResolveAIA walks AIA CA Issuers URLs for all non-root certificates in the
 // store, fetching any missing intermediate issuers. Certificates whose issuer
 // is already in the store or is a Mozilla root are skipped.
@@ -65,12 +89,17 @@ type aiaFetchResult struct {
 // Fetches within each depth round run concurrently (up to Concurrency).
 // Store mutations (HandleCertificate) are sequential.
 //
-// Returns warnings for fetch/parse failures. Callers should surface these to
-// the user.
-func ResolveAIA(ctx context.Context, input ResolveAIAInput) []string {
+// Returns structured completion state plus warnings for fetch/parse failures.
+// Callers should surface the warnings and may choose to fail when Incomplete is
+// true.
+func ResolveAIA(ctx context.Context, input ResolveAIAInput) ResolveAIAResult {
 	maxDepth := input.MaxDepth
 	if maxDepth <= 0 {
 		maxDepth = 5
+	}
+	maxTotalCerts := input.MaxTotalCerts
+	if maxTotalCerts <= 0 {
+		maxTotalCerts = defaultResolveAIAMaxTotalCerts
 	}
 	concurrency := input.Concurrency
 	if concurrency <= 0 {
@@ -79,39 +108,15 @@ func ResolveAIA(ctx context.Context, input ResolveAIAInput) []string {
 
 	var warnings []string
 	seen := make(map[string]bool)
-
-	// needsResolution reports whether a cert's issuer is missing from the
-	// store and not a known Mozilla root. Certs that are themselves Mozilla
-	// roots (e.g. cross-signed ISRG Root X1) are also skipped — their AIA
-	// URLs point to expired cross-signers we don't need.
-	needsResolution := func(rec *CertRecord) bool {
-		if rec.CertType == "root" {
-			return false
-		}
-		if certkit.IsMozillaRoot(rec.Cert) {
-			return false
-		}
-		if input.Store.HasIssuer(rec.Cert) {
-			return false
-		}
-		if certkit.IsIssuedByMozillaRoot(rec.Cert) {
-			return false
-		}
-		return true
-	}
+	fetchedTotal := 0
 
 	progressTotal := 0
 	processed := make(map[string]bool)
 	totalSeen := make(map[string]bool)
+	addedByAIA := make(map[string]bool)
 
 	for range maxDepth {
-		var queue []*CertRecord
-		for _, rec := range input.Store.AllCertsFlat() {
-			if needsResolution(rec) {
-				queue = append(queue, rec)
-			}
-		}
-
+		queue := unresolvedIssuerQueue(input.Store)
 		if len(queue) == 0 {
 			break
 		}
@@ -213,19 +218,37 @@ func ResolveAIA(ctx context.Context, input ResolveAIAInput) []string {
 
 		// Phase 3: Sequentially ingest fetched certificates and report progress.
 		fetched := 0
+		limitHit := false
 		for _, r := range results {
 			if r.warning != "" {
 				warnings = append(warnings, r.warning)
 				continue
 			}
 			for _, issuer := range r.certs {
+				id := certID(issuer)
+				if input.Store.hasCertID(id) || addedByAIA[id] {
+					continue
+				}
+				if len(addedByAIA) >= maxTotalCerts {
+					warnings = append(warnings, fmt.Sprintf(
+						"AIA resolution stopped after fetching %d unique certificate(s); maximum is %d",
+						len(addedByAIA), maxTotalCerts,
+					))
+					limitHit = true
+					break
+				}
 				if err := input.Store.HandleCertificate(issuer, "AIA: "+r.url); err != nil {
 					slog.Debug("skipping AIA certificate", "url", r.url, "error", err)
 					continue
 				}
+				addedByAIA[id] = true
 				fetched++
 			}
+			if limitHit {
+				break
+			}
 		}
+		fetchedTotal += fetched
 
 		// Mark all certs in this round as processed and report progress.
 		for _, rec := range queue {
@@ -240,6 +263,9 @@ func ResolveAIA(ctx context.Context, input ResolveAIAInput) []string {
 		if fetched == 0 {
 			break
 		}
+		if limitHit {
+			break
+		}
 	}
 
 	// Fire a final progress tick so the bar always reaches 100%.
@@ -247,5 +273,12 @@ func ResolveAIA(ctx context.Context, input ResolveAIAInput) []string {
 		input.OnProgress(progressTotal, progressTotal)
 	}
 
-	return warnings
+	unresolvedCount := len(unresolvedIssuerQueue(input.Store))
+
+	return ResolveAIAResult{
+		Warnings:        warnings,
+		FetchedCount:    fetchedTotal,
+		Incomplete:      unresolvedCount > 0,
+		UnresolvedCount: unresolvedCount,
+	}
 }

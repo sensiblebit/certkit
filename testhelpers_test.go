@@ -314,7 +314,7 @@ func generateTestCA(t *testing.T, cn string) *testCA {
 }
 
 // generateIntermediateCA creates a CA certificate signed by parent, for 3-tier chain tests.
-func generateIntermediateCA(t *testing.T, parent *testCA, cn string) *testCA {
+func generateIntermediateCA(t *testing.T, parent *testCA, cn string, opts ...testLeafOption) *testCA {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -328,6 +328,9 @@ func generateIntermediateCA(t *testing.T, parent *testCA, cn string) *testCA {
 		IsCA:                  true,
 		BasicConstraintsValid: true,
 		KeyUsage:              x509.KeyUsageCertSign | x509.KeyUsageCRLSign,
+	}
+	for _, opt := range opts {
+		opt(template)
 	}
 	der, err := x509.CreateCertificate(rand.Reader, template, parent.Cert, &key.PublicKey, parent.Key)
 	if err != nil {

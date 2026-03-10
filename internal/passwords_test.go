@@ -138,3 +138,35 @@ func TestProcessUserPasswords(t *testing.T) {
 		}
 	})
 }
+
+func TestResolveExportPassword(t *testing.T) {
+	// WHY: PKCS#12/JKS export keeps the legacy "changeit" fallback for
+	// interoperability, but callers must know when that default was selected so
+	// they can warn users.
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		passwords   []string
+		want        string
+		wantDefault bool
+	}{
+		{name: "nil list falls back", passwords: nil, want: DefaultExportPassword, wantDefault: true},
+		{name: "blank entries fall back", passwords: []string{"", "  "}, want: DefaultExportPassword, wantDefault: true},
+		{name: "first non-empty wins", passwords: []string{"", "alpha", "beta"}, want: "alpha", wantDefault: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, usedDefault := ResolveExportPassword(tt.passwords)
+			if got != tt.want {
+				t.Fatalf("ResolveExportPassword(%v) password = %q, want %q", tt.passwords, got, tt.want)
+			}
+			if usedDefault != tt.wantDefault {
+				t.Fatalf("ResolveExportPassword(%v) usedDefault = %v, want %v", tt.passwords, usedDefault, tt.wantDefault)
+			}
+		})
+	}
+}

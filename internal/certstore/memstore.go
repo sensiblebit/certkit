@@ -13,6 +13,7 @@ import (
 	"maps"
 	"slices"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/sensiblebit/certkit"
@@ -57,6 +58,7 @@ func certID(cert *x509.Certificate) string {
 // MemStore is an in-memory certificate and key store that implements
 // CertHandler. It is used by both CLI and WASM builds.
 type MemStore struct {
+	mu         sync.RWMutex
 	certsByID  map[string]*CertRecord   // composite "serial\x00akiHex" → cert
 	certsBySKI map[string][]*CertRecord // SKI → all certs with that SKI
 	keys       map[string]*KeyRecord    // SKI → key
@@ -73,11 +75,15 @@ func NewMemStore() *MemStore {
 
 // CertCount returns the number of unique certificates in the store.
 func (s *MemStore) CertCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return len(s.certsByID)
 }
 
 // KeyCount returns the number of private keys in the store.
 func (s *MemStore) KeyCount() int {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return len(s.keys)
 }
 
@@ -97,6 +103,8 @@ func (s *MemStore) HandleCertificate(cert *x509.Certificate, source string) erro
 	ski := hex.EncodeToString(rawSKI)
 
 	id := certID(cert)
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if _, exists := s.certsByID[id]; exists {
 		// INSERT OR IGNORE semantics — skip duplicates
 		return nil
@@ -158,12 +166,16 @@ func (s *MemStore) HandleKey(key any, pemData []byte, source string) error {
 		slog.Debug("HandleKey: unrecognized private key type", "type", fmt.Sprintf("%T", key), "source", source)
 	}
 
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.keys[ski] = rec
 	return nil
 }
 
 // SetBundleName sets the bundle name on all certificates matching the given SKI.
 func (s *MemStore) SetBundleName(ski, name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	for _, rec := range s.certsBySKI[ski] {
 		rec.BundleName = name
 	}
@@ -173,36 +185,35 @@ func (s *MemStore) SetBundleName(ski, name string) {
 // given SKI, or nil if not found. This preserves backward compatibility with
 // callers that expect a single cert per SKI.
 func (s *MemStore) GetCert(ski string) *CertRecord {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	certs := s.certsBySKI[ski]
-	if len(certs) == 0 {
-		return nil
-	}
-	latest := certs[0]
-	for _, c := range certs[1:] {
-		if c.NotAfter.After(latest.NotAfter) {
-			latest = c
-		}
-	}
-	return latest
+	return latestCertRecord(certs)
 }
 
 // GetKey returns the key record for the given SKI, or nil.
 func (s *MemStore) GetKey(ski string) *KeyRecord {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.keys[ski]
 }
 
 // AllCerts returns a map of the latest-expiring certificate per SKI. This
 // preserves backward compatibility with WASM code that iterates by SKI.
 func (s *MemStore) AllCerts() map[string]*CertRecord {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	result := make(map[string]*CertRecord, len(s.certsBySKI))
-	for ski := range s.certsBySKI {
-		result[ski] = s.GetCert(ski)
+	for ski, certs := range s.certsBySKI {
+		result[ski] = latestCertRecord(certs)
 	}
 	return result
 }
 
 // AllKeys returns a copy of all key records keyed by SKI.
 func (s *MemStore) AllKeys() map[string]*KeyRecord {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	result := make(map[string]*KeyRecord, len(s.keys))
 	maps.Copy(result, s.keys)
 	return result
@@ -210,6 +221,8 @@ func (s *MemStore) AllKeys() map[string]*KeyRecord {
 
 // AllCertsFlat returns all certificate records as a flat slice.
 func (s *MemStore) AllCertsFlat() []*CertRecord {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	result := make([]*CertRecord, 0, len(s.certsByID))
 	for _, rec := range s.certsByID {
 		result = append(result, rec)
@@ -219,6 +232,8 @@ func (s *MemStore) AllCertsFlat() []*CertRecord {
 
 // AllKeysFlat returns all key records as a flat slice.
 func (s *MemStore) AllKeysFlat() []*KeyRecord {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	result := make([]*KeyRecord, 0, len(s.keys))
 	for _, rec := range s.keys {
 		result = append(result, rec)
@@ -228,6 +243,8 @@ func (s *MemStore) AllKeysFlat() []*KeyRecord {
 
 // MatchedPairs returns SKIs that have both a leaf certificate and a key.
 func (s *MemStore) MatchedPairs() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	var matched []string
 	for ski, certs := range s.certsBySKI {
 		hasLeaf := slices.ContainsFunc(certs, func(c *CertRecord) bool {
@@ -245,6 +262,8 @@ func (s *MemStore) MatchedPairs() []string {
 
 // Intermediates returns all intermediate certificates in the store.
 func (s *MemStore) Intermediates() []*x509.Certificate {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	var result []*x509.Certificate
 	for _, rec := range s.certsByID {
 		if rec.CertType == "intermediate" {
@@ -257,6 +276,8 @@ func (s *MemStore) Intermediates() []*x509.Certificate {
 // IntermediatePool returns an x509.CertPool containing all intermediate
 // certificates in the store. Useful for chain verification.
 func (s *MemStore) IntermediatePool() *x509.CertPool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	pool := x509.NewCertPool()
 	for _, rec := range s.certsByID {
 		if rec.CertType == "intermediate" {
@@ -269,6 +290,8 @@ func (s *MemStore) IntermediatePool() *x509.CertPool {
 // HasIssuer reports whether the store contains the issuer for the given cert,
 // by comparing raw ASN.1 subject/issuer bytes.
 func (s *MemStore) HasIssuer(cert *x509.Certificate) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	for _, rec := range s.certsByID {
 		if rec.Cert == cert {
 			continue
@@ -280,9 +303,17 @@ func (s *MemStore) HasIssuer(cert *x509.Certificate) bool {
 	return false
 }
 
+func (s *MemStore) hasCertID(id string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.certsByID[id] != nil
+}
+
 // CertsByBundleName returns all certificates with the given bundle name,
 // sorted by NotAfter descending (newest first).
 func (s *MemStore) CertsByBundleName(name string) []*CertRecord {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	var result []*CertRecord
 	for _, rec := range s.certsByID {
 		if rec.BundleName == name {
@@ -298,6 +329,8 @@ func (s *MemStore) CertsByBundleName(name string) []*CertRecord {
 // BundleNames returns unique bundle names that have at least one certificate
 // with a matching key in the store. Empty bundle names are excluded.
 func (s *MemStore) BundleNames() []string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	seen := make(map[string]bool)
 	for _, rec := range s.certsByID {
 		if rec.BundleName == "" {
@@ -321,17 +354,43 @@ func (s *MemStore) BundleNames() []string {
 // certificates. Expired certificates are only counted as expired, never
 // as untrusted, to avoid misleading double-counts in the summary output.
 func (s *MemStore) ScanSummary(input ScanSummaryInput) ScanSummary {
+	s.mu.RLock()
+	keyCount := len(s.keys)
+	certs := make([]*CertRecord, 0, len(s.certsByID))
+	for _, rec := range s.certsByID {
+		certs = append(certs, rec)
+	}
+	matched := make([]string, 0)
+	for ski, certsForSKI := range s.certsBySKI {
+		hasLeaf := slices.ContainsFunc(certsForSKI, func(c *CertRecord) bool {
+			return c.CertType == "leaf"
+		})
+		if !hasLeaf {
+			continue
+		}
+		if _, ok := s.keys[ski]; ok {
+			matched = append(matched, ski)
+		}
+	}
+	s.mu.RUnlock()
+
 	summary := ScanSummary{
-		Keys: len(s.keys),
+		Keys:    keyCount,
+		Matched: len(matched),
 	}
 
 	var intermediatePool *x509.CertPool
 	if input.RootPool != nil {
-		intermediatePool = s.IntermediatePool()
+		intermediatePool = x509.NewCertPool()
+		for _, rec := range certs {
+			if rec.CertType == "intermediate" {
+				intermediatePool.AddCert(rec.Cert)
+			}
+		}
 	}
 
 	now := time.Now()
-	for _, rec := range s.certsByID {
+	for _, rec := range certs {
 		expired := now.After(rec.NotAfter)
 
 		switch rec.CertType {
@@ -367,12 +426,13 @@ func (s *MemStore) ScanSummary(input ScanSummaryInput) ScanSummary {
 			}
 		}
 	}
-	summary.Matched = len(s.MatchedPairs())
 	return summary
 }
 
 // DumpDebug logs all certificates and keys at debug level.
 func (s *MemStore) DumpDebug() {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	slog.Debug("dumping certificates")
 	for id, rec := range s.certsByID {
 		slog.Debug("certificate details",
@@ -397,7 +457,22 @@ func (s *MemStore) DumpDebug() {
 
 // Reset clears all stored certificates and keys.
 func (s *MemStore) Reset() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	s.certsByID = make(map[string]*CertRecord)
 	s.certsBySKI = make(map[string][]*CertRecord)
 	s.keys = make(map[string]*KeyRecord)
+}
+
+func latestCertRecord(certs []*CertRecord) *CertRecord {
+	if len(certs) == 0 {
+		return nil
+	}
+	latest := certs[0]
+	for _, c := range certs[1:] {
+		if c.NotAfter.After(latest.NotAfter) {
+			latest = c
+		}
+	}
+	return latest
 }

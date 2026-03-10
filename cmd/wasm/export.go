@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/sensiblebit/certkit"
@@ -15,6 +16,10 @@ import (
 )
 
 var errVerifiedExportFailed = errors.New("verified export failed")
+
+var newZipArchiveWriter = func(w io.Writer) zipArchiveWriter {
+	return zip.NewWriter(w)
+}
 
 // exportBundles generates a ZIP file containing organized certificate bundles.
 // If filterSKIs is non-empty, only pairs whose colon-hex SKI appears in the
@@ -52,20 +57,18 @@ func exportBundles(ctx context.Context, input exportBundlesInput) ([]byte, error
 		}
 	}
 
-	var buf bytes.Buffer
-	zw := zip.NewWriter(&buf)
-
 	opts := certkit.BundleOptions{
 		FetchAIA:   false,
 		TrustStore: "mozilla",
 		Verify:     !input.AllowUnverifiedExport,
 	}
+	writer := &zipBundleWriter{}
 
 	if err := certstore.ExportMatchedBundles(ctx, certstore.ExportMatchedBundleInput{
 		Store:         input.Store,
 		SKIs:          matched,
 		BundleOpts:    opts,
-		Writer:        &zipBundleWriter{zw: zw},
+		Writer:        writer,
 		RetryNoVerify: false,
 		P12Password:   input.P12Password,
 	}); err != nil {
@@ -75,35 +78,64 @@ func exportBundles(ctx context.Context, input exportBundlesInput) ([]byte, error
 		return nil, fmt.Errorf("unverified export failed: %w", err)
 	}
 
-	if err := zw.Close(); err != nil {
-		return nil, fmt.Errorf("closing ZIP: %w", err)
-	}
-
-	return buf.Bytes(), nil
+	return writer.Bytes()
 }
 
 // zipBundleWriter implements certstore.BundleWriter by writing files into a
 // ZIP archive under a folder named after the bundle.
 type zipBundleWriter struct {
-	zw *zip.Writer
+	entries []zipBundleEntry
 }
 
-// WriteBundleFiles writes each file as a ZIP entry under folder/.
+type zipArchiveWriter interface {
+	CreateHeader(*zip.FileHeader) (io.Writer, error)
+	Close() error
+}
+
+type zipBundleEntry struct {
+	name     string
+	data     []byte
+	modified time.Time
+}
+
+// WriteBundleFiles stages each ZIP entry so the final archive is only
+// materialized after every bundle has been generated successfully.
 func (w *zipBundleWriter) WriteBundleFiles(folder string, files []certstore.BundleFile) error {
 	prefix := folder + "/"
 	now := time.Now()
 	for _, f := range files {
-		entry, err := w.zw.CreateHeader(&zip.FileHeader{
-			Name:     prefix + f.Name,
-			Modified: now,
+		data := append([]byte(nil), f.Data...)
+		w.entries = append(w.entries, zipBundleEntry{
+			name:     prefix + f.Name,
+			data:     data,
+			modified: now,
+		})
+	}
+	return nil
+}
+
+// Bytes materializes the staged ZIP entries into the final archive.
+func (w *zipBundleWriter) Bytes() ([]byte, error) {
+	var buf bytes.Buffer
+	zw := newZipArchiveWriter(&buf)
+
+	for _, entryData := range w.entries {
+		entry, err := zw.CreateHeader(&zip.FileHeader{
+			Name:     entryData.name,
+			Modified: entryData.modified,
 			Method:   zip.Deflate,
 		})
 		if err != nil {
-			return fmt.Errorf("creating ZIP entry %s: %w", f.Name, err)
+			return nil, fmt.Errorf("creating ZIP entry %s: %w", entryData.name, err)
 		}
-		if _, err := entry.Write(f.Data); err != nil {
-			return fmt.Errorf("writing ZIP entry %s: %w", f.Name, err)
+		if _, err := entry.Write(entryData.data); err != nil {
+			return nil, fmt.Errorf("writing ZIP entry %s: %w", entryData.name, err)
 		}
 	}
-	return nil
+
+	if err := zw.Close(); err != nil {
+		return nil, fmt.Errorf("closing ZIP: %w", err)
+	}
+
+	return buf.Bytes(), nil
 }

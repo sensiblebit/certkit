@@ -238,12 +238,12 @@ func runScan(cmd *cobra.Command, args []string) error {
 	// Resolve missing intermediates via AIA before trust checking
 	if certstore.HasUnresolvedIssuers(store) {
 		slog.Debug("resolving certificate chains")
-		aiaWarnings := certstore.ResolveAIA(cmd.Context(), certstore.ResolveAIAInput{
+		aiaResult := certstore.ResolveAIA(cmd.Context(), certstore.ResolveAIAInput{
 			Store:                store,
 			Fetch:                httpAIAFetcher,
 			AllowPrivateNetworks: scanAllowPrivateNetwork,
 		})
-		for _, w := range aiaWarnings {
+		for _, w := range aiaResult.Warnings {
 			slog.Debug("AIA resolution", "warning", w)
 		}
 	}
@@ -334,7 +334,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 				return err
 			}
 		}
-		p12Password := bundlePassword(passwordSets.Export)
+		p12Password, usedDefault := bundleExportPassword(passwordSets.Export)
 		// Full export workflow — MemStore handles chain resolution via raw ASN.1 matching
 		//nolint:gosec // Bundle dirs need traversal bits so public bundle artifacts remain readable; sensitive files stay 0600.
 		if err := os.MkdirAll(scanBundlePath, 0o755); err != nil {
@@ -349,6 +349,9 @@ func runScan(cmd *cobra.Command, args []string) error {
 			P12Password: p12Password,
 		}); err != nil {
 			return fmt.Errorf("exporting bundles: %w", err)
+		}
+		if usedDefault {
+			warnDefaultExportPassword()
 		}
 		store.DumpDebug()
 		switch format {

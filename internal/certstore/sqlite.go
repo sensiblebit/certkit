@@ -10,10 +10,15 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -48,6 +53,55 @@ type sqliteKeyRow struct {
 	Curve                string `db:"curve"`
 	KeyData              []byte `db:"key_data"`
 }
+
+type sqliteLoadWarnings struct {
+	certUnparseablePEM int
+	certInvalidDER     int
+	certRejected       int
+	keyParseFailed     int
+	keyRejected        int
+}
+
+func (w sqliteLoadWarnings) totalSkipped() int {
+	return w.certUnparseablePEM + w.certInvalidDER + w.certRejected + w.keyParseFailed + w.keyRejected
+}
+
+func (w sqliteLoadWarnings) logIfAny(dbPath string) {
+	if w.totalSkipped() == 0 {
+		return
+	}
+
+	slog.Warn("loaded database with skipped records",
+		"path", dbPath,
+		"skipped_total", w.totalSkipped(),
+		"skipped_cert_unparseable_pem", w.certUnparseablePEM,
+		"skipped_cert_invalid_der", w.certInvalidDER,
+		"skipped_cert_rejected", w.certRejected,
+		"skipped_key_parse_failed", w.keyParseFailed,
+		"skipped_key_rejected", w.keyRejected,
+	)
+}
+
+var (
+	errSQLiteDestinationIsDir           = errors.New("destination path is a directory")
+	errSQLiteNoReplaceRenameUnsupported = errors.New("no-replace rename unsupported")
+
+	sqliteOpenFile        = os.OpenFile
+	sqliteMkdirTemp       = os.MkdirTemp
+	sqliteLink            = os.Link
+	sqliteRename          = os.Rename
+	sqliteRenameNoReplace = renameSQLiteFileNoReplace
+	sqliteRemoveAll       = os.RemoveAll
+	sqliteStat            = os.Stat
+	sqliteChmod           = os.Chmod
+	sqliteVacuumInto      = func(db *sqlx.DB, path string) error {
+		_, err := db.Exec("VACUUM INTO ?", path)
+		if err != nil {
+			return fmt.Errorf("vacuum into %s: %w", path, err)
+		}
+		return nil
+	}
+)
 
 func certificateIdentityAuthorityKeyIdentifier(cert *x509.Certificate) string {
 	if len(cert.AuthorityKeyId) > 0 {
@@ -155,19 +209,23 @@ func LoadFromSQLite(store *MemStore, dbPath string) error {
 	if err := db.Select(&certs, "SELECT * FROM certificates"); err != nil {
 		return fmt.Errorf("reading certificates: %w", err)
 	}
+	var warnings sqliteLoadWarnings
 	for _, c := range certs {
 		block, _ := pem.Decode([]byte(c.PEM))
 		if block == nil {
 			slog.Debug("skipping certificate with unparseable PEM", "serial", c.SerialNumber)
+			warnings.certUnparseablePEM++
 			continue
 		}
 		cert, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {
 			slog.Debug("skipping certificate with invalid DER", "serial", c.SerialNumber, "error", err)
+			warnings.certInvalidDER++
 			continue
 		}
 		if err := store.HandleCertificate(cert, "db:"+c.SerialNumber); err != nil {
 			slog.Warn("loading cert from DB", "serial", c.SerialNumber, "error", err)
+			warnings.certRejected++
 			continue
 		}
 		// Restore bundle name from DB record
@@ -186,13 +244,16 @@ func LoadFromSQLite(store *MemStore, dbPath string) error {
 		key, err := certkit.ParsePEMPrivateKey(k.KeyData)
 		if err != nil {
 			slog.Warn("parsing key from DB", "ski", k.SubjectKeyIdentifier, "error", err)
+			warnings.keyParseFailed++
 			continue
 		}
 		if err := store.HandleKey(key, k.KeyData, "db:"+k.SubjectKeyIdentifier); err != nil {
 			slog.Warn("loading key from DB", "ski", k.SubjectKeyIdentifier, "error", err)
+			warnings.keyRejected++
 		}
 	}
 
+	warnings.logIfAny(dbPath)
 	slog.Info("loaded database into store", "path", dbPath)
 	return nil
 }
@@ -264,11 +325,186 @@ func SaveToSQLite(store *MemStore, dbPath string) error {
 		}
 	}
 
-	// VACUUM INTO produces a clean, compact copy
-	if _, err := db.Exec("VACUUM INTO ?", dbPath); err != nil {
-		return fmt.Errorf("saving database to %s: %w", dbPath, err)
+	parentDir := filepath.Dir(dbPath)
+	tempDir, err := sqliteMkdirTemp(parentDir, "."+filepath.Base(dbPath)+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("creating temporary database path for %s: %w", dbPath, err)
+	}
+	tempPath := filepath.Join(tempDir, filepath.Base(dbPath))
+	defer func() {
+		if removeErr := sqliteRemoveAll(tempDir); removeErr != nil {
+			slog.Warn("removing temporary database path", "path", tempDir, "error", removeErr)
+		}
+	}()
+
+	// VACUUM INTO produces a clean, compact copy. Write to a temp path first so
+	// the final database is only published after the new file is complete.
+	if err := sqliteVacuumInto(db, tempPath); err != nil {
+		return fmt.Errorf("saving database to temporary path for %s: %w", dbPath, err)
+	}
+	if err := replaceSQLiteFileAtomically(tempPath, dbPath); err != nil {
+		return fmt.Errorf("committing database %s: %w", dbPath, err)
 	}
 
 	slog.Info("database saved", "path", dbPath)
 	return nil
+}
+
+func replaceSQLiteFileAtomically(tempPath, dbPath string) error {
+	if info, err := sqliteStat(dbPath); err == nil {
+		if info.IsDir() {
+			return fmt.Errorf("%w: %s", errSQLiteDestinationIsDir, dbPath)
+		}
+		return replaceExistingSQLiteFile(tempPath, dbPath, info.Mode().Perm())
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("checking existing database: %w", err)
+	}
+	return publishSQLiteFile(tempPath, dbPath, 0, false)
+}
+
+func replaceExistingSQLiteFile(tempPath, dbPath string, mode os.FileMode) error {
+	parentDir := filepath.Dir(dbPath)
+	backupPath, err := reserveSQLiteTemporaryPath(parentDir, "."+filepath.Base(dbPath)+".bak-*")
+	if err != nil {
+		return fmt.Errorf("creating backup path for %s: %w", dbPath, err)
+	}
+	if err := sqliteRename(dbPath, backupPath); err != nil {
+		return fmt.Errorf("moving existing database aside: %w", err)
+	}
+
+	restoreBackup := true
+	defer func() {
+		if !restoreBackup {
+			return
+		}
+		if _, err := sqliteStat(dbPath); err == nil {
+			if removeErr := sqliteRemoveAll(dbPath); removeErr != nil {
+				slog.Warn("removing failed database publish before restore", "path", dbPath, "error", removeErr)
+			}
+		}
+		if err := sqliteRename(backupPath, dbPath); err != nil {
+			slog.Warn("restoring original database", "from", backupPath, "to", dbPath, "error", err)
+		}
+	}()
+
+	if err := publishSQLiteFile(tempPath, dbPath, mode, true); err != nil {
+		if errors.Is(err, os.ErrExist) {
+			if info, statErr := sqliteStat(dbPath); statErr == nil && info.Mode().IsRegular() {
+				restoreBackup = false
+				if removeErr := sqliteRemoveAll(backupPath); removeErr != nil {
+					slog.Warn("removing stale backup database", "path", backupPath, "error", removeErr)
+				}
+			}
+		}
+		return err
+	}
+
+	restoreBackup = false
+	if err := sqliteRemoveAll(backupPath); err != nil {
+		return fmt.Errorf("removing backup database %s: %w", backupPath, err)
+	}
+	return nil
+}
+
+func publishSQLiteFile(tempPath, dbPath string, mode os.FileMode, allowRename bool) error {
+	linkErr := sqliteLink(tempPath, dbPath)
+	switch {
+	case linkErr == nil:
+		if mode != 0 {
+			if err := sqliteChmod(dbPath, mode); err != nil {
+				if removeErr := sqliteRemoveAll(dbPath); removeErr != nil {
+					slog.Warn("removing database after chmod failure", "path", dbPath, "error", removeErr)
+				}
+				return fmt.Errorf("restoring database file mode: %w", err)
+			}
+		}
+		return nil
+	case os.IsExist(linkErr):
+		return os.ErrExist
+	case isHardLinkUnsupported(linkErr):
+		if allowRename {
+			if err := sqliteRenameNoReplace(tempPath, dbPath); err != nil {
+				if os.IsExist(err) {
+					return os.ErrExist
+				}
+				if !errors.Is(err, errSQLiteNoReplaceRenameUnsupported) {
+					return fmt.Errorf("renaming staged database into place without replace: %w", err)
+				}
+			} else {
+				if mode != 0 {
+					if err := sqliteChmod(dbPath, mode); err != nil {
+						return fmt.Errorf("restoring database file mode: %w", err)
+					}
+				}
+				return nil
+			}
+		}
+		return copySQLiteFileExclusive(copySQLiteFileExclusiveInput{
+			TempPath: tempPath,
+			DBPath:   dbPath,
+			Mode:     mode,
+		})
+	default:
+		return fmt.Errorf("linking staged database into place: %w", linkErr)
+	}
+}
+
+type copySQLiteFileExclusiveInput struct {
+	TempPath string
+	DBPath   string
+	Mode     os.FileMode
+}
+
+func copySQLiteFileExclusive(input copySQLiteFileExclusiveInput) error {
+	src, err := os.Open(input.TempPath)
+	if err != nil {
+		return fmt.Errorf("opening staged database: %w", err)
+	}
+	defer func() { _ = src.Close() }()
+
+	createMode := input.Mode
+	if createMode == 0 {
+		info, err := sqliteStat(input.TempPath)
+		if err != nil {
+			return fmt.Errorf("stat staged database: %w", err)
+		}
+		createMode = info.Mode().Perm()
+	}
+
+	dst, err := sqliteOpenFile(input.DBPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, createMode)
+	if err != nil {
+		if os.IsExist(err) {
+			return os.ErrExist
+		}
+		return fmt.Errorf("creating destination database: %w", err)
+	}
+	if _, err := io.Copy(dst, src); err != nil {
+		_ = dst.Close()
+		_ = sqliteRemoveAll(input.DBPath)
+		return fmt.Errorf("copying staged database into place: %w", err)
+	}
+	if err := dst.Close(); err != nil {
+		_ = sqliteRemoveAll(input.DBPath)
+		return fmt.Errorf("closing destination database: %w", err)
+	}
+	return nil
+}
+
+func isHardLinkUnsupported(err error) bool {
+	return errors.Is(err, syscall.EXDEV) ||
+		errors.Is(err, syscall.EPERM) ||
+		errors.Is(err, syscall.ENOTSUP) ||
+		errors.Is(err, syscall.EOPNOTSUPP) ||
+		isPlatformHardLinkUnsupported(err)
+}
+
+func reserveSQLiteTemporaryPath(parentDir, pattern string) (string, error) {
+	path, err := sqliteMkdirTemp(parentDir, pattern)
+	if err != nil {
+		return "", err
+	}
+	if err := sqliteRemoveAll(path); err != nil {
+		return "", fmt.Errorf("releasing reserved path %s: %w", path, err)
+	}
+	return path, nil
 }

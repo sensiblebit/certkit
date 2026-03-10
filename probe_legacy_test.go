@@ -2,6 +2,7 @@ package certkit
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -387,4 +388,34 @@ func TestLegacyFallbackConnect(t *testing.T) {
 	if result.certificates[0].Subject.CommonName != leafCert.Subject.CommonName {
 		t.Errorf("cert CN = %q, want %q", result.certificates[0].Subject.CommonName, leafCert.Subject.CommonName)
 	}
+}
+
+func TestLegacyFallbackConnect_DefaultDeadlineWithoutContextDeadline(t *testing.T) {
+	t.Parallel()
+
+	conn := &recordingDeadlineConn{}
+	baseTime := time.Date(2026, time.March, 9, 12, 0, 0, 0, time.UTC)
+
+	err := setProbeConnDeadline(context.Background(), setProbeConnDeadlineInput{
+		conn: conn,
+		now: func() time.Time {
+			return baseTime
+		},
+	})
+	if err != nil {
+		t.Fatalf("setProbeConnDeadline: %v", err)
+	}
+
+	if !conn.deadline.Equal(baseTime.Add(defaultConnectTimeout)) {
+		t.Fatalf("deadline = %s, want %s", conn.deadline, baseTime.Add(defaultConnectTimeout))
+	}
+}
+
+type recordingDeadlineConn struct {
+	deadline time.Time
+}
+
+func (c *recordingDeadlineConn) SetDeadline(deadline time.Time) error {
+	c.deadline = deadline
+	return nil
 }

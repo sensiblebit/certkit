@@ -774,6 +774,41 @@ func TestGetCertificateType(t *testing.T) {
 	}
 }
 
+func TestCertificateHelpers_NilInput(t *testing.T) {
+	// WHY: Nil certificates can flow in from library callers. Helper functions
+	// must degrade safely instead of panicking on exported API boundaries.
+	t.Parallel()
+
+	stringTests := []struct {
+		name string
+		fn   func(*x509.Certificate) string
+		want string
+	}{
+		{"CertToPEM", CertToPEM, ""},
+		{"CertFingerprint", CertFingerprint, ""},
+		{"CertFingerprintSHA1", CertFingerprintSHA1, ""},
+		{"CertFingerprintColonSHA256", CertFingerprintColonSHA256, ""},
+		{"CertFingerprintColonSHA1", CertFingerprintColonSHA1, ""},
+		{"CertSKI", CertSKI, ""},
+		{"GetCertificateType", GetCertificateType, ""},
+	}
+	for _, tt := range stringTests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := tt.fn(nil); got != tt.want {
+				t.Errorf("%s(nil) = %q, want %q", tt.name, got, tt.want)
+			}
+		})
+	}
+
+	t.Run("CertExpiresWithin", func(t *testing.T) {
+		t.Parallel()
+		if CertExpiresWithin(nil, time.Hour) {
+			t.Error("CertExpiresWithin(nil, time.Hour) = true, want false")
+		}
+	})
+}
+
 func TestGetPublicKey_NilKey(t *testing.T) {
 	// WHY: GetPublicKey with nil must return a clear error, not panic.
 	// Happy path is covered transitively by TestKeyMatchesCert and

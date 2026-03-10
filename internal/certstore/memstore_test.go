@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -1199,6 +1200,155 @@ func TestMemStore_HandleKey_Ed25519PointerNormalization(t *testing.T) {
 		if !priv.Equal(rec.Key) {
 			t.Error("stored Ed25519 key does not Equal original")
 		}
+	}
+}
+
+func TestMemStore_ConcurrentAccess(t *testing.T) {
+	// WHY: MemStore is used by concurrent ingestion and read paths. This test
+	// exercises mixed readers and writers under load so `go test -race` catches
+	// any missing synchronization around the internal maps and bundle metadata.
+	t.Parallel()
+
+	store := NewMemStore()
+	ca := newRSACA(t)
+	inter := newIntermediateCA(t, ca)
+	leaf1 := newRSALeaf(t, inter, "concurrent-one.example.com", []string{"concurrent-one.example.com"})
+	leaf2 := newECDSALeaf(t, inter, "concurrent-two.example.com", []string{"concurrent-two.example.com"})
+
+	leaf1SKI := computeSKIHex(t, leaf1.cert)
+	leaf2SKI := computeSKIHex(t, leaf2.cert)
+
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(ca.cert)
+
+	type certInput struct {
+		cert   *x509.Certificate
+		source string
+	}
+	certs := []certInput{
+		{cert: ca.cert, source: "root.pem"},
+		{cert: inter.cert, source: "intermediate.pem"},
+		{cert: leaf1.cert, source: "leaf1.pem"},
+		{cert: leaf2.cert, source: "leaf2.pem"},
+	}
+
+	type keyInput struct {
+		key    any
+		pem    []byte
+		source string
+	}
+	keys := []keyInput{
+		{key: leaf1.key, pem: leaf1.keyPEM, source: "leaf1.key"},
+		{key: leaf2.key, pem: leaf2.keyPEM, source: "leaf2.key"},
+	}
+
+	const iterations = 200
+
+	start := make(chan struct{})
+	errs := make(chan error, 6)
+	var wg sync.WaitGroup
+
+	run := func(fn func(int) error) {
+		wg.Go(func() {
+			<-start
+			for i := range iterations {
+				if err := fn(i); err != nil {
+					errs <- err
+					return
+				}
+			}
+		})
+	}
+
+	run(func(int) error {
+		for _, input := range certs {
+			if err := store.HandleCertificate(input.cert, input.source); err != nil {
+				return fmt.Errorf("HandleCertificate(%s): %w", input.source, err)
+			}
+		}
+		return nil
+	})
+
+	run(func(int) error {
+		for _, input := range keys {
+			if err := store.HandleKey(input.key, input.pem, input.source); err != nil {
+				return fmt.Errorf("HandleKey(%s): %w", input.source, err)
+			}
+		}
+		return nil
+	})
+
+	run(func(int) error {
+		store.SetBundleName(leaf1SKI, "bundle-a")
+		store.SetBundleName(leaf2SKI, "bundle-b")
+		return nil
+	})
+
+	run(func(int) error {
+		_ = store.GetCert(leaf1SKI)
+		_ = store.GetCert(leaf2SKI)
+		_ = store.AllCerts()
+		_ = store.AllCertsFlat()
+		_ = store.Intermediates()
+		_ = store.IntermediatePool()
+		_ = store.HasIssuer(leaf1.cert)
+		return nil
+	})
+
+	run(func(int) error {
+		_ = store.GetKey(leaf1SKI)
+		_ = store.GetKey(leaf2SKI)
+		_ = store.AllKeys()
+		_ = store.AllKeysFlat()
+		_ = store.MatchedPairs()
+		_ = store.BundleNames()
+		_ = store.CertsByBundleName("bundle-a")
+		_ = store.ScanSummary(ScanSummaryInput{RootPool: rootPool})
+		return nil
+	})
+
+	run(func(i int) error {
+		if i%25 == 0 {
+			store.Reset()
+		}
+		return nil
+	})
+
+	close(start)
+	wg.Wait()
+	close(errs)
+
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	store.Reset()
+	for _, input := range certs {
+		if err := store.HandleCertificate(input.cert, input.source); err != nil {
+			t.Fatalf("final HandleCertificate(%s): %v", input.source, err)
+		}
+	}
+	for _, input := range keys {
+		if err := store.HandleKey(input.key, input.pem, input.source); err != nil {
+			t.Fatalf("final HandleKey(%s): %v", input.source, err)
+		}
+	}
+	store.SetBundleName(leaf1SKI, "bundle-a")
+	store.SetBundleName(leaf2SKI, "bundle-b")
+
+	if got := store.CertCount(); got != len(certs) {
+		t.Fatalf("CertCount = %d, want %d", got, len(certs))
+	}
+	if got := store.KeyCount(); got != len(keys) {
+		t.Fatalf("KeyCount = %d, want %d", got, len(keys))
+	}
+	if got := len(store.MatchedPairs()); got != len(keys) {
+		t.Fatalf("MatchedPairs = %d, want %d", got, len(keys))
+	}
+	if got := len(store.BundleNames()); got != 2 {
+		t.Fatalf("BundleNames count = %d, want 2", got)
 	}
 }
 

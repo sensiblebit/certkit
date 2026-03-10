@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/sensiblebit/certkit"
+	"github.com/sensiblebit/certkit/internal"
 	"github.com/sensiblebit/certkit/internal/certstore"
 )
 
@@ -27,6 +28,8 @@ const (
 	wasmMaxInputFileBytes  = 10 * 1024 * 1024
 	wasmMaxInputTotalBytes = 50 * 1024 * 1024
 )
+
+const wasmDefaultExportPasswordWarning = "export used the default PKCS#12 password 'changeit'; pass a custom password to certkitExportBundles to avoid shipping insecure .p12 files"
 
 var errWASMTotalInputBytesExceeded = errors.New("total upload size limit exceeded")
 
@@ -383,8 +386,9 @@ func getState(_ js.Value, _ []js.Value) any {
 	return string(jsonBytes)
 }
 
-// exportBundlesJS generates a ZIP and returns it as a Uint8Array.
-// JS signature: certkitExportBundles(skis: string[], p12Password?: string, allowUnverifiedExport?: boolean) → Promise<Uint8Array>
+// exportBundlesJS generates a ZIP and returns a JS object containing the ZIP
+// bytes plus any warning.
+// JS signature: certkitExportBundles(skis: string[], p12Password?: string, allowUnverifiedExport?: boolean) → Promise<{data: Uint8Array, warning?: string}>
 // Only bundles for the specified SKIs are included.
 func exportBundlesJS(_ js.Value, args []js.Value) any {
 	// Parse the SKI filter list from the JS array argument.
@@ -396,11 +400,12 @@ func exportBundlesJS(_ js.Value, args []js.Value) any {
 		}
 	}
 
-	// Keep "changeit" default for PKCS#12 export compatibility with common tooling.
-	p12Password := "changeit"
+	p12Password := internal.DefaultExportPassword
+	defaultPasswordWarning := wasmDefaultExportPasswordWarning
 	if len(args) >= 2 && args[1].Type() != js.TypeUndefined && args[1].Type() != js.TypeNull {
 		if candidate := strings.TrimSpace(args[1].String()); candidate != "" {
 			p12Password = candidate
+			defaultPasswordWarning = ""
 		}
 	}
 
@@ -437,9 +442,14 @@ func exportBundlesJS(_ js.Value, args []js.Value) any {
 				return
 			}
 
-			uint8Array := js.Global().Get("Uint8Array").New(len(zipData))
-			js.CopyBytesToJS(uint8Array, zipData)
-			resolve.Invoke(uint8Array)
+			payload := js.Global().Get("Object").New()
+			dataJS := js.Global().Get("Uint8Array").New(len(zipData))
+			js.CopyBytesToJS(dataJS, zipData)
+			payload.Set("data", dataJS)
+			if defaultPasswordWarning != "" {
+				payload.Set("warning", defaultPasswordWarning)
+			}
+			resolve.Invoke(payload)
 		}()
 		return nil
 	})

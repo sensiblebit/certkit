@@ -40,7 +40,8 @@ chain bundles. If multiple keys match different certs, JKS output creates a
 multi-alias keystore. PKCS#12 supports only a single key entry.
 
 PKCS#12/JKS outputs use the first non-empty export password from --passwords or
---password-file. When omitted, export defaults to password "changeit".`,
+--password-file. When omitted, export defaults to password "changeit" and certkit
+warns because this fallback is only suitable for local/interoperability use.`,
 	Example: `  certkit convert cert.der --to pem
   certkit convert cert.pem --to der -o cert.der
   certkit convert cert.pem --key key.pem --to p12 -o bundle.p12
@@ -145,8 +146,9 @@ func runConvert(_ *cobra.Command, args []string) error {
 	}
 
 	exportPassword := ""
+	usedDefaultExportPassword := false
 	if convertTo == "p12" || convertTo == "jks" {
-		exportPassword = bundlePassword(passwordSets.Export)
+		exportPassword, usedDefaultExportPassword = bundleExportPassword(passwordSets.Export)
 	}
 
 	output, err := formatConvertOutput(formatConvertInput{
@@ -158,6 +160,9 @@ func runConvert(_ *cobra.Command, args []string) error {
 	})
 	if err != nil {
 		return fmt.Errorf("formatting output: %w", err)
+	}
+	if usedDefaultExportPassword {
+		warnDefaultExportPassword()
 	}
 
 	if convertOutFile != "" {

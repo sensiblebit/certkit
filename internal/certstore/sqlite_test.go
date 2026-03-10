@@ -3,20 +3,48 @@
 package certstore
 
 import (
+	"bytes"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/hex"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"log/slog"
 	"math/big"
 	"net"
+	"os"
 	"path/filepath"
 	"strings"
+	"sync"
+	"syscall"
 	"testing"
 	"time"
 
+	"github.com/jmoiron/sqlx"
 	"github.com/sensiblebit/certkit"
 )
+
+var captureSQLiteLogsMu sync.Mutex
+
+func captureSQLiteLogs(t *testing.T, fn func()) string {
+	t.Helper()
+
+	captureSQLiteLogsMu.Lock()
+	defer captureSQLiteLogsMu.Unlock()
+
+	var buf bytes.Buffer
+	origLogger := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	defer slog.SetDefault(origLogger)
+
+	fn()
+	return buf.String()
+}
+
+var errInjectedVacuumFailure = errors.New("injected vacuum failure")
 
 func TestSaveToSQLite_RoundTrip(t *testing.T) {
 	// WHY: SQLite persistence must round-trip certs, keys, and bundle names.
@@ -94,23 +122,443 @@ func TestSaveToSQLite_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestSaveToSQLite_ExistingFileErrors(t *testing.T) {
-	// WHY: VACUUM INTO does not overwrite; saving to an existing file must error to prevent silent data loss.
+func TestSaveToSQLite_ReplacesExistingFile(t *testing.T) {
+	// WHY: SaveToSQLite now writes to a temp path and atomically renames it into
+	// place, so re-saving the same database path replaces the old contents.
 	t.Parallel()
 
-	store := NewMemStore()
-	dbPath := filepath.Join(t.TempDir(), "existing.db")
+	storeA := NewMemStore()
+	caA := newRSACA(t)
+	if err := storeA.HandleCertificate(caA.cert, "ca-a.pem"); err != nil {
+		t.Fatalf("store cert A: %v", err)
+	}
 
-	if err := SaveToSQLite(store, dbPath); err != nil {
+	dbPath := filepath.Join(t.TempDir(), "replace.db")
+	if err := SaveToSQLite(storeA, dbPath); err != nil {
 		t.Fatalf("first SaveToSQLite: %v", err)
+	}
+	if err := os.Chmod(dbPath, 0o600); err != nil {
+		t.Fatalf("chmod existing db: %v", err)
+	}
+
+	storeB := NewMemStore()
+	caB := newECDSACA(t)
+	if err := storeB.HandleCertificate(caB.cert, "ca-b.pem"); err != nil {
+		t.Fatalf("store cert B: %v", err)
+	}
+
+	if err := SaveToSQLite(storeB, dbPath); err != nil {
+		t.Fatalf("second SaveToSQLite: %v", err)
+	}
+
+	loaded := NewMemStore()
+	if err := LoadFromSQLite(loaded, dbPath); err != nil {
+		t.Fatalf("LoadFromSQLite: %v", err)
+	}
+
+	certs := loaded.AllCertsFlat()
+	if len(certs) != 1 {
+		t.Fatalf("expected 1 cert after replacement save, got %d", len(certs))
+	}
+	if got := certs[0].Cert.Subject.CommonName; got != "Test ECDSA Root CA" {
+		t.Fatalf("loaded cert CN = %q, want %q", got, "Test ECDSA Root CA")
+	}
+	info, err := os.Stat(dbPath)
+	if err != nil {
+		t.Fatalf("stat replaced db: %v", err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("replaced db mode = %#o, want %#o", got, 0o600)
+	}
+}
+
+func TestSaveToSQLite_ReplaceRaceKeepsCompetingWriter(t *testing.T) {
+	// WHY: If another writer recreates the destination after the original file is
+	// moved aside, rollback must not delete the competing winner.
+	storeA := NewMemStore()
+	caA := newRSACA(t)
+	if err := storeA.HandleCertificate(caA.cert, "ca-a.pem"); err != nil {
+		t.Fatalf("store cert A: %v", err)
+	}
+
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "replace-race.db")
+	if err := SaveToSQLite(storeA, dbPath); err != nil {
+		t.Fatalf("initial SaveToSQLite: %v", err)
+	}
+
+	storeB := NewMemStore()
+	caB := newECDSACA(t)
+	if err := storeB.HandleCertificate(caB.cert, "ca-b.pem"); err != nil {
+		t.Fatalf("store cert B: %v", err)
+	}
+
+	originalLink := sqliteLink
+	t.Cleanup(func() {
+		sqliteLink = originalLink
+	})
+	sqliteLink = func(oldPath, newPath string) error {
+		_ = oldPath
+		if err := os.WriteFile(newPath, []byte("winner"), 0o600); err != nil {
+			return fmt.Errorf("injecting competing database: %w", err)
+		}
+		return os.ErrExist
+	}
+
+	err := SaveToSQLite(storeB, dbPath)
+	if err == nil {
+		t.Fatal("expected SaveToSQLite race failure, got nil")
+	}
+	if !errors.Is(err, os.ErrExist) {
+		t.Fatalf("SaveToSQLite error = %v, want wrapped %v", err, os.ErrExist)
+	}
+
+	data, readErr := os.ReadFile(dbPath) //nolint:gosec // dbPath is created inside the test temp dir.
+	if readErr != nil {
+		t.Fatalf("read competing database: %v", readErr)
+	}
+	if string(data) != "winner" {
+		t.Fatalf("destination contents = %q, want competing writer contents", string(data))
+	}
+}
+
+func TestSaveToSQLite_ReplaceRaceRestoresBackupWhenWinnerIsDirectory(t *testing.T) {
+	// WHY: If a competing writer recreates the destination as a directory, we
+	// must preserve the moved-aside backup instead of deleting it.
+	storeA := NewMemStore()
+	caA := newRSACA(t)
+	if err := storeA.HandleCertificate(caA.cert, "ca-a.pem"); err != nil {
+		t.Fatalf("store cert A: %v", err)
+	}
+
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "replace-race-dir.db")
+	if err := SaveToSQLite(storeA, dbPath); err != nil {
+		t.Fatalf("initial SaveToSQLite: %v", err)
+	}
+
+	storeB := NewMemStore()
+	caB := newECDSACA(t)
+	if err := storeB.HandleCertificate(caB.cert, "ca-b.pem"); err != nil {
+		t.Fatalf("store cert B: %v", err)
+	}
+
+	originalLink := sqliteLink
+	t.Cleanup(func() {
+		sqliteLink = originalLink
+	})
+	sqliteLink = func(oldPath, newPath string) error {
+		_ = oldPath
+		if err := os.Mkdir(newPath, 0o750); err != nil {
+			return fmt.Errorf("injecting competing directory: %w", err)
+		}
+		return os.ErrExist
+	}
+
+	err := SaveToSQLite(storeB, dbPath)
+	if err == nil {
+		t.Fatal("expected SaveToSQLite race failure, got nil")
+	}
+	if !errors.Is(err, os.ErrExist) {
+		t.Fatalf("SaveToSQLite error = %v, want wrapped %v", err, os.ErrExist)
+	}
+
+	info, statErr := os.Stat(dbPath)
+	if statErr != nil {
+		t.Fatalf("stat restored database: %v", statErr)
+	}
+	if !info.Mode().IsRegular() {
+		t.Fatalf("destination mode = %v, want regular file", info.Mode())
+	}
+
+	loaded := NewMemStore()
+	if err := LoadFromSQLite(loaded, dbPath); err != nil {
+		t.Fatalf("LoadFromSQLite restored database: %v", err)
+	}
+	certs := loaded.AllCertsFlat()
+	if len(certs) != 1 {
+		t.Fatalf("restored cert count = %d, want 1", len(certs))
+	}
+	if got := certs[0].Cert.Subject.CommonName; got != "Test RSA Root CA" {
+		t.Fatalf("restored cert CN = %q, want %q", got, "Test RSA Root CA")
+	}
+}
+
+func TestSaveToSQLite_ReplaceRaceKeepsCompetingWriterWhenHardLinksUnsupported(t *testing.T) {
+	// WHY: On filesystems without hard-link support, replacement should still
+	// preserve a competing writer that recreates the destination before publish.
+	storeA := NewMemStore()
+	caA := newRSACA(t)
+	if err := storeA.HandleCertificate(caA.cert, "ca-a.pem"); err != nil {
+		t.Fatalf("store cert A: %v", err)
+	}
+
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "replace-race-copy.db")
+	if err := SaveToSQLite(storeA, dbPath); err != nil {
+		t.Fatalf("initial SaveToSQLite: %v", err)
+	}
+
+	storeB := NewMemStore()
+	caB := newECDSACA(t)
+	if err := storeB.HandleCertificate(caB.cert, "ca-b.pem"); err != nil {
+		t.Fatalf("store cert B: %v", err)
+	}
+
+	originalLink := sqliteLink
+	originalRenameNoReplace := sqliteRenameNoReplace
+	t.Cleanup(func() {
+		sqliteLink = originalLink
+		sqliteRenameNoReplace = originalRenameNoReplace
+	})
+	sqliteLink = func(oldPath, newPath string) error {
+		_ = oldPath
+		_ = newPath
+		return syscall.EXDEV
+	}
+	sqliteRenameNoReplace = func(oldPath, newPath string) error {
+		_ = oldPath
+		if err := os.WriteFile(newPath, []byte("winner"), 0o600); err != nil {
+			return fmt.Errorf("injecting competing database: %w", err)
+		}
+		return os.ErrExist
+	}
+
+	err := SaveToSQLite(storeB, dbPath)
+	if err == nil {
+		t.Fatal("expected SaveToSQLite race failure, got nil")
+	}
+	if !errors.Is(err, os.ErrExist) {
+		t.Fatalf("SaveToSQLite error = %v, want wrapped %v", err, os.ErrExist)
+	}
+
+	data, readErr := os.ReadFile(dbPath) //nolint:gosec // dbPath is created inside the test temp dir.
+	if readErr != nil {
+		t.Fatalf("read competing database: %v", readErr)
+	}
+	if string(data) != "winner" {
+		t.Fatalf("destination contents = %q, want competing writer contents", string(data))
+	}
+}
+
+func TestSaveToSQLite_FallsBackWhenHardLinksUnsupported(t *testing.T) {
+	// WHY: Some filesystems reject hard links; SaveToSQLite must still publish a
+	// valid database when link-based staging is unavailable.
+	store := NewMemStore()
+	ca := newRSACA(t)
+	if err := store.HandleCertificate(ca.cert, "ca.pem"); err != nil {
+		t.Fatalf("store cert: %v", err)
+	}
+
+	originalLink := sqliteLink
+	t.Cleanup(func() {
+		sqliteLink = originalLink
+	})
+	sqliteLink = func(oldPath, newPath string) error {
+		_ = oldPath
+		_ = newPath
+		return syscall.EXDEV
+	}
+
+	dbPath := filepath.Join(t.TempDir(), "fallback.db")
+	if err := SaveToSQLite(store, dbPath); err != nil {
+		t.Fatalf("SaveToSQLite with hard-link fallback: %v", err)
+	}
+
+	loaded := NewMemStore()
+	if err := LoadFromSQLite(loaded, dbPath); err != nil {
+		t.Fatalf("LoadFromSQLite: %v", err)
+	}
+	if got := len(loaded.AllCertsFlat()); got != 1 {
+		t.Fatalf("loaded cert count = %d, want 1", got)
+	}
+}
+
+func TestSaveToSQLite_CommitFailureLeavesNoPartialFile(t *testing.T) {
+	// WHY: If the final commit into place fails, SaveToSQLite must clean up its temporary
+	// output and leave the destination path untouched.
+
+	store := NewMemStore()
+	ca := newRSACA(t)
+	if err := store.HandleCertificate(ca.cert, "ca.pem"); err != nil {
+		t.Fatalf("store cert: %v", err)
+	}
+
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "atomic.db")
+
+	originalLink := sqliteLink
+	originalOpenFile := sqliteOpenFile
+	t.Cleanup(func() {
+		sqliteLink = originalLink
+		sqliteOpenFile = originalOpenFile
+	})
+	sqliteLink = func(oldPath, newPath string) error {
+		_ = oldPath
+		_ = newPath
+		return syscall.EXDEV
+	}
+	sqliteOpenFile = func(name string, flag int, perm os.FileMode) (*os.File, error) {
+		_ = flag
+		_ = perm
+		if name == dbPath {
+			return nil, os.ErrPermission
+		}
+		return originalOpenFile(name, flag, perm)
 	}
 
 	err := SaveToSQLite(store, dbPath)
 	if err == nil {
-		t.Fatal("expected error when saving to existing file, got nil")
+		t.Fatal("expected commit failure, got nil")
 	}
-	if !strings.Contains(err.Error(), "saving database to") {
-		t.Errorf("unexpected error: %v", err)
+	if !strings.Contains(err.Error(), "committing database") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if _, statErr := os.Stat(dbPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("destination path stat error = %v, want not exists", statErr)
+	}
+
+	entries, readErr := os.ReadDir(dir)
+	if readErr != nil {
+		t.Fatalf("read dir: %v", readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("unexpected leftover entries after failed save: %v", entries)
+	}
+}
+
+func TestSaveToSQLite_CommitRaceReturnsExist(t *testing.T) {
+	// WHY: The final commit step must not overwrite a database created by another
+	// save between the initial existence check and the final publish step.
+
+	store := NewMemStore()
+	ca := newRSACA(t)
+	if err := store.HandleCertificate(ca.cert, "ca.pem"); err != nil {
+		t.Fatalf("store cert: %v", err)
+	}
+
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "race.db")
+
+	originalLink := sqliteLink
+	t.Cleanup(func() {
+		sqliteLink = originalLink
+	})
+	sqliteLink = func(oldPath, newPath string) error {
+		_ = oldPath
+		if err := os.WriteFile(newPath, []byte("winner"), 0o600); err != nil {
+			return fmt.Errorf("injecting competing database: %w", err)
+		}
+		return os.ErrExist
+	}
+
+	err := SaveToSQLite(store, dbPath)
+	if err == nil {
+		t.Fatal("expected commit race failure, got nil")
+	}
+	if !errors.Is(err, os.ErrExist) {
+		t.Fatalf("SaveToSQLite error = %v, want wrapped %v", err, os.ErrExist)
+	}
+	if !strings.Contains(err.Error(), "committing database") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	//nolint:gosec // dbPath is created inside the test temp dir for this test only.
+	data, readErr := os.ReadFile(dbPath)
+	if readErr != nil {
+		t.Fatalf("read competing database: %v", readErr)
+	}
+	if string(data) != "winner" {
+		t.Fatalf("destination contents = %q, want competing writer contents", string(data))
+	}
+
+	info, statErr := os.Stat(dbPath)
+	if statErr != nil {
+		t.Fatalf("stat competing database: %v", statErr)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("destination mode = %#o, want %#o", got, 0o600)
+	}
+
+	loaded := NewMemStore()
+	loadErr := LoadFromSQLite(loaded, dbPath)
+	if loadErr == nil || !strings.Contains(loadErr.Error(), "attaching database") {
+		t.Fatalf("LoadFromSQLite error = %v, want attach failure for competing file", loadErr)
+	}
+
+	entries, readDirErr := os.ReadDir(dir)
+	if readDirErr != nil {
+		t.Fatalf("read dir: %v", readDirErr)
+	}
+	if len(entries) != 1 || entries[0].Name() != "race.db" {
+		t.Fatalf("unexpected leftover entries after failed commit race: %v", entries)
+	}
+}
+
+func TestSaveToSQLite_VacuumFailureLeavesExistingDatabaseUntouched(t *testing.T) {
+	// WHY: If the temp database write fails after producing partial temp output,
+	// SaveToSQLite must remove that temp state and leave the on-disk database
+	// untouched.
+
+	storeA := NewMemStore()
+	caA := newRSACA(t)
+	if err := storeA.HandleCertificate(caA.cert, "ca-a.pem"); err != nil {
+		t.Fatalf("store cert A: %v", err)
+	}
+
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "atomic.db")
+	if err := SaveToSQLite(storeA, dbPath); err != nil {
+		t.Fatalf("initial SaveToSQLite: %v", err)
+	}
+
+	originalVacuumInto := sqliteVacuumInto
+	t.Cleanup(func() {
+		sqliteVacuumInto = originalVacuumInto
+	})
+	sqliteVacuumInto = func(_ *sqlx.DB, path string) error {
+		if err := os.WriteFile(path, []byte("partial"), 0o600); err != nil {
+			return fmt.Errorf("writing injected partial database: %w", err)
+		}
+		return errInjectedVacuumFailure
+	}
+
+	storeB := NewMemStore()
+	caB := newECDSACA(t)
+	if err := storeB.HandleCertificate(caB.cert, "ca-b.pem"); err != nil {
+		t.Fatalf("store cert B: %v", err)
+	}
+
+	err := SaveToSQLite(storeB, dbPath)
+	if err == nil {
+		t.Fatal("expected SaveToSQLite error, got nil")
+	}
+	if !strings.Contains(err.Error(), "saving database to temporary path") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !errors.Is(err, errInjectedVacuumFailure) {
+		t.Fatalf("SaveToSQLite error = %v, want wrapped %v", err, errInjectedVacuumFailure)
+	}
+
+	loaded := NewMemStore()
+	if err := LoadFromSQLite(loaded, dbPath); err != nil {
+		t.Fatalf("LoadFromSQLite after failed save: %v", err)
+	}
+	certs := loaded.AllCertsFlat()
+	if len(certs) != 1 {
+		t.Fatalf("expected original database contents to remain, got %d certs", len(certs))
+	}
+	if got := certs[0].Cert.Subject.CommonName; got != "Test RSA Root CA" {
+		t.Fatalf("loaded cert CN = %q, want %q", got, "Test RSA Root CA")
+	}
+
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read dir: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "atomic.db" {
+		t.Fatalf("unexpected leftover entries after failed save: %v", entries)
 	}
 }
 
@@ -150,6 +598,93 @@ func TestLoadFromSQLite_EmptyDB(t *testing.T) {
 	keys := store.AllKeysFlat()
 	if len(keys) != 0 {
 		t.Errorf("expected 0 keys from empty DB, got %d", len(keys))
+	}
+}
+
+func TestLoadFromSQLite_WarnsWhenRecordsSkipped(t *testing.T) {
+	// WHY: Corrupted rows should not silently disappear during DB load; users
+	// need a warning that the in-memory store is incomplete.
+	ca := newRSACA(t)
+
+	db, err := openMemDB()
+	if err != nil {
+		t.Fatalf("openMemDB: %v", err)
+	}
+	defer func() {
+		if closeErr := db.Close(); closeErr != nil {
+			t.Fatalf("close db: %v", closeErr)
+		}
+	}()
+
+	validSKI, err := certkit.ComputeSKI(ca.cert.PublicKey)
+	if err != nil {
+		t.Fatalf("compute SKI: %v", err)
+	}
+	validCertPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: ca.cert.Raw}))
+
+	if _, err := db.Exec(`
+		INSERT INTO certificates (serial_number, authority_key_identifier, cert_type, key_type, expiry, not_before, metadata, sans, common_name, bundle_name, subject_key_identifier, pem)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, ca.cert.SerialNumber.String(), certificateIdentityAuthorityKeyIdentifier(ca.cert), "root", "RSA", ca.cert.NotAfter, ca.cert.NotBefore, "", "[]", ca.cert.Subject.CommonName, "", hex.EncodeToString(validSKI), validCertPEM); err != nil {
+		t.Fatalf("insert valid cert row: %v", err)
+	}
+
+	if _, err := db.Exec(`
+		INSERT INTO certificates (serial_number, authority_key_identifier, cert_type, key_type, expiry, not_before, metadata, sans, common_name, bundle_name, subject_key_identifier, pem)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, "bad-pem", "issuer:bad-pem", "leaf", "RSA", ca.cert.NotAfter, ca.cert.NotBefore, "", "[]", "bad-pem.example.com", "", "bad-pem-ski", "not pem"); err != nil {
+		t.Fatalf("insert bad PEM row: %v", err)
+	}
+
+	badDERPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("not-der")}))
+	if _, err := db.Exec(`
+		INSERT INTO certificates (serial_number, authority_key_identifier, cert_type, key_type, expiry, not_before, metadata, sans, common_name, bundle_name, subject_key_identifier, pem)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, "bad-der", "issuer:bad-der", "leaf", "RSA", ca.cert.NotAfter, ca.cert.NotBefore, "", "[]", "bad-der.example.com", "", "bad-der-ski", badDERPEM); err != nil {
+		t.Fatalf("insert bad DER row: %v", err)
+	}
+
+	if _, err := db.Exec(`
+		INSERT INTO keys (subject_key_identifier, key_type, bit_length, public_exponent, modulus, curve, key_data)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, "bad-key-ski", "rsa", 2048, 65537, "abcd", "", []byte("not a key")); err != nil {
+		t.Fatalf("insert bad key row: %v", err)
+	}
+
+	dbPath := filepath.Join(t.TempDir(), "warnings.db")
+	if _, err := db.Exec("VACUUM INTO ?", dbPath); err != nil {
+		t.Fatalf("VACUUM INTO: %v", err)
+	}
+
+	store := NewMemStore()
+	logs := captureSQLiteLogs(t, func() {
+		err = LoadFromSQLite(store, dbPath)
+	})
+	if err != nil {
+		t.Fatalf("LoadFromSQLite: %v", err)
+	}
+
+	if got := len(store.AllCertsFlat()); got != 1 {
+		t.Fatalf("loaded %d certs, want 1 valid cert", got)
+	}
+	if got := len(store.AllKeysFlat()); got != 0 {
+		t.Fatalf("loaded %d keys, want 0 valid keys", got)
+	}
+
+	if !strings.Contains(logs, "loaded database with skipped records") {
+		t.Fatalf("expected warning summary in logs, got: %s", logs)
+	}
+	if !strings.Contains(logs, "skipped_total=3") {
+		t.Errorf("logs missing total skipped count: %s", logs)
+	}
+	if !strings.Contains(logs, "skipped_cert_unparseable_pem=1") {
+		t.Errorf("logs missing bad PEM count: %s", logs)
+	}
+	if !strings.Contains(logs, "skipped_cert_invalid_der=1") {
+		t.Errorf("logs missing bad DER count: %s", logs)
+	}
+	if !strings.Contains(logs, "skipped_key_parse_failed=1") {
+		t.Errorf("logs missing bad key count: %s", logs)
 	}
 }
 

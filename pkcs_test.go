@@ -1,7 +1,9 @@
 package certkit
 
 import (
+	"crypto"
 	"crypto/ecdsa"
+	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
@@ -74,11 +76,99 @@ func TestEncodeContainers_InvalidInput(t *testing.T) {
 }
 
 func TestEncodePKCS12_RoundTrip(t *testing.T) {
-	// WHY: EncodePKCS12 is a thin wrapper around gopkcs12.Modern.Encode.
-	// One key type (RSA) suffices per T-13 to prove the wrapper chains correctly.
-	// Both nil and non-nil CA chain paths are covered to exercise the CAs
-	// parameter wiring.
+	// WHY: EncodePKCS12 includes certkit-specific key normalization before
+	// calling the upstream encoder, so RSA, ECDSA, and Ed25519 all need
+	// round-trip coverage. Nil and non-nil CA chain paths still exercise
+	// the CA parameter wiring.
 	t.Parallel()
+
+	caCert, caKey := newPKCS12TestCA(t)
+
+	tests := []struct {
+		name        string
+		password    string
+		includeCA   bool
+		newLeafKey  func(*testing.T) crypto.PrivateKey
+		wantKeyName string
+	}{
+		{
+			name:        "RSA/nil CA chain",
+			password:    pkcs12TestPassword("rsa"),
+			newLeafKey:  newPKCS12RSATestKey,
+			wantKeyName: "RSA",
+		},
+		{
+			name:        "RSA/with CA chain",
+			password:    pkcs12TestPassword("chain"),
+			includeCA:   true,
+			newLeafKey:  newPKCS12RSATestKey,
+			wantKeyName: "RSA",
+		},
+		{
+			name:        "ECDSA/with CA chain",
+			password:    pkcs12TestPassword("ecdsa"),
+			includeCA:   true,
+			newLeafKey:  newPKCS12ECDSATestKey,
+			wantKeyName: "ECDSA",
+		},
+		{
+			name:        "ECDSA_P384/with CA chain",
+			password:    pkcs12TestPassword("ecdsa-p384"),
+			includeCA:   true,
+			newLeafKey:  newPKCS12ECDSAP384TestKey,
+			wantKeyName: "ECDSA",
+		},
+		{
+			name:        "Ed25519/with CA chain",
+			password:    pkcs12TestPassword("ed25519"),
+			includeCA:   true,
+			newLeafKey:  newPKCS12Ed25519TestKey,
+			wantKeyName: "Ed25519",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			leafKey := tt.newLeafKey(t)
+			leafCert := newPKCS12TestLeaf(t, caCert, caKey, leafKey, "pkcs12-roundtrip.example.com")
+
+			var chain []*x509.Certificate
+			if tt.includeCA {
+				chain = []*x509.Certificate{caCert}
+			}
+
+			pfxData, err := EncodePKCS12(leafKey, leafCert, chain, tt.password)
+			if err != nil {
+				t.Fatalf("EncodePKCS12: %v", err)
+			}
+
+			assertPKCS12RoundTrip(t, pfxData, tt.password, leafKey, tt.wantKeyName, leafCert, chain)
+		})
+	}
+}
+
+func TestEncodePKCS12Legacy_RoundTrip(t *testing.T) {
+	// WHY: Legacy PKCS#12 encoding uses different cipher suites from the modern
+	// path and needs its own round-trip coverage.
+	t.Parallel()
+
+	caCert, caKey := newPKCS12TestCA(t)
+	leafKey := mustGenerateRSAKey(t)
+	leafCert := newPKCS12TestLeaf(t, caCert, caKey, leafKey, "pkcs12-legacy-roundtrip.example.com")
+	chain := []*x509.Certificate{caCert}
+
+	pfxData, err := EncodePKCS12Legacy(leafKey, leafCert, chain, "legacy-pass")
+	if err != nil {
+		t.Fatalf("EncodePKCS12Legacy: %v", err)
+	}
+
+	assertPKCS12RoundTrip(t, pfxData, "legacy-pass", leafKey, "RSA", leafCert, chain)
+}
+
+func newPKCS12TestCA(t *testing.T) (*x509.Certificate, *ecdsa.PrivateKey) {
+	t.Helper()
 
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -101,19 +191,25 @@ func TestEncodePKCS12_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return caCert, caKey
+}
 
-	leafKey, err := rsa.GenerateKey(rand.Reader, 2048)
+func newPKCS12TestLeaf(t *testing.T, caCert *x509.Certificate, caKey *ecdsa.PrivateKey, leafKey crypto.PrivateKey, commonName string) *x509.Certificate {
+	t.Helper()
+
+	pub, err := GetPublicKey(leafKey)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("GetPublicKey: %v", err)
 	}
+
 	leafTemplate := &x509.Certificate{
 		SerialNumber: randomSerial(t),
-		Subject:      pkix.Name{CommonName: "pkcs12-roundtrip.example.com"},
+		Subject:      pkix.Name{CommonName: commonName},
 		NotBefore:    time.Now().Add(-1 * time.Hour),
 		NotAfter:     time.Now().Add(24 * time.Hour),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 	}
-	leafBytes, err := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
+	leafBytes, err := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, pub, caKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,51 +217,105 @@ func TestEncodePKCS12_RoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return leafCert
+}
 
-	t.Run("nil CA chain", func(t *testing.T) {
-		t.Parallel()
-		pfxData, err := EncodePKCS12(leafKey, leafCert, nil, "test-pass")
-		if err != nil {
-			t.Fatalf("EncodePKCS12: %v", err)
-		}
-		decodedKey, decodedCert, decodedCAs, err := DecodePKCS12(pfxData, "test-pass")
-		if err != nil {
-			t.Fatalf("DecodePKCS12: %v", err)
-		}
-		if !decodedCert.Equal(leafCert) {
-			t.Error("decoded certificate does not match original")
-		}
-		if len(decodedCAs) != 0 {
-			t.Errorf("expected 0 CA certs, got %d", len(decodedCAs))
-		}
-		if !leafKey.Equal(decodedKey) {
-			t.Error("key mismatch")
-		}
-	})
+func assertPKCS12RoundTrip(t *testing.T, pfxData []byte, password string, originalKey crypto.PrivateKey, wantKeyName string, leafCert *x509.Certificate, chain []*x509.Certificate) {
+	t.Helper()
 
-	t.Run("with CA chain", func(t *testing.T) {
-		t.Parallel()
-		pfxData, err := EncodePKCS12(leafKey, leafCert, []*x509.Certificate{caCert}, "chain-pass")
-		if err != nil {
-			t.Fatalf("EncodePKCS12: %v", err)
+	decodedKey, decodedCert, decodedCAs, err := DecodePKCS12(pfxData, password)
+	if err != nil {
+		t.Fatalf("DecodePKCS12: %v", err)
+	}
+	if !decodedCert.Equal(leafCert) {
+		t.Error("decoded certificate does not match original")
+	}
+	if len(decodedCAs) != len(chain) {
+		t.Fatalf("expected %d CA certs, got %d", len(chain), len(decodedCAs))
+	}
+	for i, cert := range chain {
+		if !decodedCAs[i].Equal(cert) {
+			t.Fatalf("decoded CA cert %d does not match original", i)
 		}
-		decodedKey, decodedCert, decodedCAs, err := DecodePKCS12(pfxData, "chain-pass")
-		if err != nil {
-			t.Fatalf("DecodePKCS12: %v", err)
+	}
+
+	matches, err := KeyMatchesCert(decodedKey, leafCert)
+	if err != nil {
+		t.Fatalf("KeyMatchesCert(decoded): %v", err)
+	}
+	if !matches {
+		t.Fatal("decoded key does not match original certificate")
+	}
+	type privateKeyEqualer interface {
+		Equal(crypto.PrivateKey) bool
+	}
+	equaler, ok := normalizeKey(originalKey).(privateKeyEqualer)
+	if !ok {
+		t.Fatalf("original key type %T does not support private-key equality", originalKey)
+	}
+	if !equaler.Equal(normalizeKey(decodedKey)) {
+		t.Fatal("decoded private key does not match original")
+	}
+	if got := KeyAlgorithmName(decodedKey); got != wantKeyName {
+		t.Fatalf("decoded key algorithm = %q, want %q", got, wantKeyName)
+	}
+	if got := KeyAlgorithmName(originalKey); got != wantKeyName {
+		t.Fatalf("original key algorithm = %q, want %q", got, wantKeyName)
+	}
+	if _, ok := originalKey.(*ed25519.PrivateKey); ok {
+		if _, ok := decodedKey.(ed25519.PrivateKey); !ok {
+			t.Fatalf("decoded key type = %T, want ed25519.PrivateKey", decodedKey)
 		}
-		if !decodedCert.Equal(leafCert) {
-			t.Error("decoded certificate does not match original")
-		}
-		if len(decodedCAs) != 1 {
-			t.Fatalf("expected 1 CA cert, got %d", len(decodedCAs))
-		}
-		if !decodedCAs[0].Equal(caCert) {
-			t.Error("decoded CA cert does not match original")
-		}
-		if !leafKey.Equal(decodedKey) {
-			t.Error("key mismatch")
-		}
-	})
+	}
+}
+
+func mustGenerateRSAKey(t *testing.T) *rsa.PrivateKey {
+	t.Helper()
+
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key
+}
+
+func newPKCS12RSATestKey(t *testing.T) crypto.PrivateKey {
+	t.Helper()
+	return mustGenerateRSAKey(t)
+}
+
+func newPKCS12ECDSATestKey(t *testing.T) crypto.PrivateKey {
+	t.Helper()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key
+}
+
+func newPKCS12ECDSAP384TestKey(t *testing.T) crypto.PrivateKey {
+	t.Helper()
+
+	key, err := ecdsa.GenerateKey(elliptic.P384(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return key
+}
+
+func newPKCS12Ed25519TestKey(t *testing.T) crypto.PrivateKey {
+	t.Helper()
+
+	_, key, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return &key
+}
+
+func pkcs12TestPassword(kind string) string {
+	return "pw-" + kind
 }
 
 func TestDecodePKCS12_wrongPassword(t *testing.T) {

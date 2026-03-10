@@ -231,14 +231,17 @@ func TestResolveAIA_FetchesMissingIssuer(t *testing.T) {
 		return nil, fmt.Errorf("%w: %s", errUnexpectedURL, url)
 	}
 
-	warnings := ResolveAIA(context.Background(), ResolveAIAInput{
+	result := ResolveAIA(context.Background(), ResolveAIAInput{
 		Store:                store,
 		Fetch:                fetcher,
 		AllowPrivateNetworks: true,
 	})
 
-	if len(warnings) != 0 {
-		t.Errorf("expected 0 warnings, got %v", warnings)
+	if len(result.Warnings) != 0 {
+		t.Errorf("expected 0 warnings, got %v", result.Warnings)
+	}
+	if result.Incomplete {
+		t.Fatalf("expected complete resolution, got %+v", result)
 	}
 
 	// CA should now be in the store
@@ -339,13 +342,16 @@ func TestResolveAIA_SkipsResolvedAndRoots(t *testing.T) {
 				return nil, errFetcherUnused
 			}
 
-			warnings := ResolveAIA(context.Background(), ResolveAIAInput{
+			result := ResolveAIA(context.Background(), ResolveAIAInput{
 				Store: store,
 				Fetch: fetcher,
 			})
 
-			if len(warnings) != 0 {
-				t.Errorf("expected 0 warnings, got %v", warnings)
+			if len(result.Warnings) != 0 {
+				t.Errorf("expected 0 warnings, got %v", result.Warnings)
+			}
+			if result.Incomplete {
+				t.Fatalf("expected complete resolution, got %+v", result)
 			}
 			if fetchCount.Load() != 0 {
 				t.Errorf("expected 0 fetches, got %d", fetchCount.Load())
@@ -423,13 +429,22 @@ func TestResolveAIA_FailureProducesWarning(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			warnings := ResolveAIA(context.Background(), ResolveAIAInput{
+			result := ResolveAIA(context.Background(), ResolveAIAInput{
 				Store: store,
 				Fetch: tt.fetcher,
 			})
 
-			if len(warnings) != 1 {
-				t.Fatalf("expected 1 warning, got %d: %v", len(warnings), warnings)
+			if len(result.Warnings) != 1 {
+				t.Fatalf("expected 1 warning, got %d: %v", len(result.Warnings), result.Warnings)
+			}
+			if !result.Incomplete {
+				t.Fatal("expected incomplete resolution when all fetches fail")
+			}
+			if result.FetchedCount != 0 {
+				t.Fatalf("expected 0 fetched certs, got %d", result.FetchedCount)
+			}
+			if result.UnresolvedCount != 1 {
+				t.Fatalf("expected 1 unresolved cert, got %d", result.UnresolvedCount)
 			}
 			if len(store.AllCertsFlat()) != 1 {
 				t.Errorf("store should still have only the leaf, got %d certs", len(store.AllCertsFlat()))
@@ -498,9 +513,10 @@ func TestResolveAIA_DeduplicatesURLs(t *testing.T) {
 		return caDER, nil
 	}
 
-	ResolveAIA(context.Background(), ResolveAIAInput{
-		Store: store,
-		Fetch: fetcher,
+	_ = ResolveAIA(context.Background(), ResolveAIAInput{
+		Store:                store,
+		Fetch:                fetcher,
+		AllowPrivateNetworks: true,
 	})
 
 	if fetchCount.Load() != 1 {
@@ -528,9 +544,11 @@ func TestResolveAIA_MaxDepth(t *testing.T) {
 		maxDepth       int
 		wantFetchCount int
 		wantStoreCount int // leaf + fetched certs
+		wantIncomplete bool
+		wantUnresolved int
 	}{
-		{"default (0) resolves full chain", 0, 2, 3},
-		{"depth 1 fetches only immediate issuer", 1, 1, 2},
+		{"default (0) resolves full chain", 0, 2, 3, false, 0},
+		{"depth 1 fetches only immediate issuer", 1, 1, 2, true, 1},
 	}
 
 	for _, tt := range tests {
@@ -617,10 +635,11 @@ func TestResolveAIA_MaxDepth(t *testing.T) {
 				return rootDER, nil
 			}
 
-			ResolveAIA(context.Background(), ResolveAIAInput{
-				Store:    store,
-				Fetch:    fetcher,
-				MaxDepth: tt.maxDepth,
+			result := ResolveAIA(context.Background(), ResolveAIAInput{
+				Store:                store,
+				Fetch:                fetcher,
+				MaxDepth:             tt.maxDepth,
+				AllowPrivateNetworks: true,
 			})
 
 			if int(fetchCount.Load()) != tt.wantFetchCount {
@@ -629,6 +648,15 @@ func TestResolveAIA_MaxDepth(t *testing.T) {
 			allCerts := store.AllCertsFlat()
 			if len(allCerts) != tt.wantStoreCount {
 				t.Errorf("expected %d certs in store, got %d", tt.wantStoreCount, len(allCerts))
+			}
+			if result.Incomplete != tt.wantIncomplete {
+				t.Errorf("Incomplete = %v, want %v", result.Incomplete, tt.wantIncomplete)
+			}
+			if result.UnresolvedCount != tt.wantUnresolved {
+				t.Errorf("UnresolvedCount = %d, want %d", result.UnresolvedCount, tt.wantUnresolved)
+			}
+			if result.FetchedCount != tt.wantFetchCount {
+				t.Errorf("FetchedCount = %d, want %d", result.FetchedCount, tt.wantFetchCount)
 			}
 		})
 	}
@@ -722,14 +750,17 @@ func TestResolveAIA_PKCS7Response(t *testing.T) {
 		return nil, fmt.Errorf("%w: %s", errUnexpectedURL, url)
 	}
 
-	warnings := ResolveAIA(context.Background(), ResolveAIAInput{
+	result := ResolveAIA(context.Background(), ResolveAIAInput{
 		Store:                store,
 		Fetch:                fetcher,
 		AllowPrivateNetworks: true,
 	})
 
-	if len(warnings) != 0 {
-		t.Errorf("expected 0 warnings, got %v", warnings)
+	if len(result.Warnings) != 0 {
+		t.Errorf("expected 0 warnings, got %v", result.Warnings)
+	}
+	if result.Incomplete {
+		t.Fatalf("expected complete resolution, got %+v", result)
 	}
 
 	// All three certs should be in the store: leaf + intermediate + root from p7c
@@ -741,6 +772,141 @@ func TestResolveAIA_PKCS7Response(t *testing.T) {
 	// Verify the issuer chain is resolved
 	if !store.HasIssuer(leafCert) {
 		t.Error("leaf should now have its issuer in the store")
+	}
+}
+
+func TestResolveAIA_MaxTotalCerts(t *testing.T) {
+	// WHY: AIA resolution must stop after a bounded number of unique
+	// certificates so a malicious issuer chain cannot keep expanding the store.
+	t.Parallel()
+
+	store := NewMemStore()
+
+	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootTmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "AIA Limit Root"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	rootDER, err := x509.CreateCertificate(rand.Reader, rootTmpl, rootTmpl, &rootKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootCert, err := x509.ParseCertificate(rootDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	int2Key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	int2Tmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "AIA Limit Intermediate 2"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		IssuingCertificateURL: []string{"http://example.com/root.cer"},
+	}
+	int2DER, err := x509.CreateCertificate(rand.Reader, int2Tmpl, rootCert, &int2Key.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	int2Cert, err := x509.ParseCertificate(int2DER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	int1Key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	int1Tmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "AIA Limit Intermediate 1"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		IssuingCertificateURL: []string{"http://example.com/int2.cer"},
+	}
+	int1DER, err := x509.CreateCertificate(rand.Reader, int1Tmpl, int2Cert, &int1Key.PublicKey, int2Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	int1Cert, err := x509.ParseCertificate(int1DER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafTmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "aia-limit.example.com"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IssuingCertificateURL: []string{"http://example.com/int1.cer"},
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, int1Cert, &leafKey.PublicKey, int1Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafCert, err := x509.ParseCertificate(leafDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HandleCertificate(leafCert, "leaf.pem"); err != nil {
+		t.Fatal(err)
+	}
+
+	fetcher := func(_ context.Context, url string) ([]byte, error) {
+		switch url {
+		case "http://example.com/int1.cer":
+			return int1DER, nil
+		case "http://example.com/int2.cer":
+			return int2DER, nil
+		case "http://example.com/root.cer":
+			return rootDER, nil
+		default:
+			return nil, fmt.Errorf("%w: %s", errUnexpectedURL, url)
+		}
+	}
+
+	result := ResolveAIA(context.Background(), ResolveAIAInput{
+		Store:                store,
+		Fetch:                fetcher,
+		MaxTotalCerts:        2,
+		AllowPrivateNetworks: true,
+	})
+
+	if len(result.Warnings) != 1 {
+		t.Fatalf("warnings = %d, want 1: %v", len(result.Warnings), result.Warnings)
+	}
+	if !strings.Contains(result.Warnings[0], "maximum is 2") {
+		t.Errorf("warning = %q, want max-total-certs message", result.Warnings[0])
+	}
+	if !result.Incomplete {
+		t.Fatal("expected incomplete result when max total certs is hit")
+	}
+	if got := len(store.AllCertsFlat()); got != 3 {
+		t.Fatalf("store cert count = %d, want 3 (leaf + 2 fetched intermediates)", got)
+	}
+	if store.HasIssuer(int2Cert) {
+		t.Error("int2 should remain unresolved after the AIA certificate limit is hit")
 	}
 }
 
@@ -807,7 +973,7 @@ func TestResolveAIA_CancelledContext(t *testing.T) {
 		return nil, fctx.Err()
 	}
 
-	warnings := ResolveAIA(ctx, ResolveAIAInput{
+	result := ResolveAIA(ctx, ResolveAIAInput{
 		Store: store,
 		Fetch: fetcher,
 	})
@@ -815,8 +981,102 @@ func TestResolveAIA_CancelledContext(t *testing.T) {
 	// With a pre-cancelled context, the semaphore select may short-circuit
 	// before calling the fetcher, or the fetcher may run and return ctx.Err().
 	// Either path produces a warning — assert that.
-	if len(warnings) == 0 {
+	if len(result.Warnings) == 0 {
 		t.Error("expected at least one warning from cancelled context")
+	}
+}
+
+func TestResolveAIA_CancelledContextMidFetch(t *testing.T) {
+	// WHY: Cancellation must also stop in-flight AIA fetches after work has
+	// started, not just when the context is already cancelled before the round.
+	t.Parallel()
+
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caTemplate := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "AIA Cancel Mid-Fetch CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	caBytes, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caCert, err := x509.ParseCertificate(caBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafTemplate := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "cancel-mid-fetch.example.com"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		IssuingCertificateURL: []string{"http://ca.example.com/issuer.cer"},
+		AuthorityKeyId:        caCert.SubjectKeyId,
+	}
+	leafBytes, err := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafCert, err := x509.ParseCertificate(leafBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewMemStore()
+	if err := store.HandleCertificate(leafCert, "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	fetchStarted := make(chan struct{})
+	fetcher := func(fctx context.Context, _ string) ([]byte, error) {
+		close(fetchStarted)
+		<-fctx.Done()
+		return []byte{}, fctx.Err()
+	}
+
+	done := make(chan ResolveAIAResult, 1)
+	go func() {
+		done <- ResolveAIA(ctx, ResolveAIAInput{
+			Store:                store,
+			Fetch:                fetcher,
+			AllowPrivateNetworks: true,
+		})
+	}()
+
+	select {
+	case <-fetchStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for AIA fetch to start")
+	}
+
+	cancel()
+
+	select {
+	case result := <-done:
+		if len(result.Warnings) == 0 {
+			t.Fatal("expected at least one warning from cancelled mid-fetch context")
+		}
+		if !strings.Contains(result.Warnings[0], context.Canceled.Error()) {
+			t.Fatalf("expected cancellation warning, got %q", result.Warnings[0])
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ResolveAIA did not return promptly after context cancellation")
 	}
 }
 
@@ -893,7 +1153,7 @@ func TestResolveAIA_RejectsSSRFURL(t *testing.T) {
 				return caDER, nil
 			}
 
-			warnings := ResolveAIA(context.Background(), ResolveAIAInput{
+			result := ResolveAIA(context.Background(), ResolveAIAInput{
 				Store: store,
 				Fetch: fetcher,
 			})
@@ -901,11 +1161,14 @@ func TestResolveAIA_RejectsSSRFURL(t *testing.T) {
 			if fetchCount.Load() != 0 {
 				t.Errorf("fetcher should not be called for SSRF URL, got %d calls", fetchCount.Load())
 			}
-			if len(warnings) != 1 {
-				t.Fatalf("expected 1 warning, got %d: %v", len(warnings), warnings)
+			if len(result.Warnings) != 1 {
+				t.Fatalf("expected 1 warning, got %d: %v", len(result.Warnings), result.Warnings)
 			}
-			if !strings.Contains(warnings[0], tt.errSub) {
-				t.Errorf("warning = %q, want substring %q", warnings[0], tt.errSub)
+			if !strings.Contains(result.Warnings[0], tt.errSub) {
+				t.Errorf("warning = %q, want substring %q", result.Warnings[0], tt.errSub)
+			}
+			if !result.Incomplete {
+				t.Fatal("expected incomplete resolution for rejected AIA URL")
 			}
 			if len(store.AllCertsFlat()) != 1 {
 				t.Errorf("store should still have only the leaf, got %d certs", len(store.AllCertsFlat()))
@@ -1040,7 +1303,7 @@ func TestResolveAIA_ProgressNoDuplicateCounting(t *testing.T) {
 		mu.Unlock()
 	}
 
-	ResolveAIA(context.Background(), ResolveAIAInput{
+	_ = ResolveAIA(context.Background(), ResolveAIAInput{
 		Store:      store,
 		Fetch:      fetcher,
 		OnProgress: onProgress,

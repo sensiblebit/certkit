@@ -343,7 +343,7 @@ PKCS#12/JKS exports use the first non-empty password from `-p`/`--password-file`
 certkit bundle cert.pem --key key.pem --format jks -p "your-password" -o keystore.jks
 ```
 
-If no non-empty export password is provided, certkit defaults to `changeit` for compatibility.
+If no non-empty export password is provided, certkit defaults to `changeit` for compatibility and warns on stderr so production exports do not silently rely on the well-known default.
 
 ---
 

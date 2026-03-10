@@ -1208,9 +1208,13 @@ exportBtn.addEventListener("click", async () => {
   showStatus(`Building ${skis.length} bundle(s) and ZIP...`, false, true);
 
   try {
-    const zipData = await certkitExportBundles(skis);
-    downloadBlob(zipData, "certkit-bundles.zip", "application/zip");
-    hideStatus();
+    const payload = await certkitExportBundles(skis);
+    downloadBlob(payload.data, "certkit-bundles.zip", "application/zip");
+    if (payload.warning) {
+      showStatus(payload.warning, false, false);
+    } else {
+      hideStatus();
+    }
   } catch (err) {
     if (
       err?.code === "VERIFY_FAILED" &&
@@ -1219,12 +1223,14 @@ exportBtn.addEventListener("click", async () => {
       )
     ) {
       try {
-        const zipData = await certkitExportBundles(skis, undefined, true);
-        downloadBlob(zipData, "certkit-bundles.zip", "application/zip");
-        showStatus(
+        const payload = await certkitExportBundles(skis, undefined, true);
+        downloadBlob(payload.data, "certkit-bundles.zip", "application/zip");
+        const messages = [];
+        if (payload.warning) messages.push(payload.warning);
+        messages.push(
           "Export completed without chain verification. Verify trust before use.",
-          false,
         );
+        showStatus(messages.join(" "), false);
       } catch (retryErr) {
         showStatus(`Export error: ${retryErr.message}`, true);
       }
