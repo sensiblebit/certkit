@@ -7,8 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Encrypt PEM private key output (`.key`) using PKCS#8 v2 (AES-256-CBC) when an explicit export password is supplied ([#167])
+- Support decryption of PKCS#8 v2 encrypted private keys (`ENCRYPTED PRIVATE KEY` PEM blocks) with all PBES2 cipher (AES-128/192/256-CBC, 3DES-CBC) and PRF (HMAC-SHA-1/256/384/512) combinations ([#167])
+
+### Changed
+
+- Normalize all exported private key PEM output (`.key`, K8s `tls.key`, YAML `key`) to PKCS#8 (`PRIVATE KEY`) regardless of input format ([#167])
+- Bundle export warns when Kubernetes TLS secret contains an unencrypted private key alongside encrypted outputs ([#167])
+- Use browser Web Crypto API for PBKDF2 key derivation in WASM builds to avoid blocking the main thread during encrypted key export ([#167])
+
 ### Fixed
 
+- Encrypt private key in YAML bundle output (`.yaml`) when an export password is supplied; previously leaked plaintext key ([#167])
+- Reject malformed `ENCRYPTED PRIVATE KEY` blocks with invalid AES IV length instead of panicking ([#167])
+- Trim whitespace from web UI export password so whitespace-only input is treated as blank ([#167])
+- Clarify web UI export password prompt to accurately describe what the password controls ([#167])
 - Add nil guards to exported certificate helper functions (`CertToPEM`, `CertFingerprint`, `CertFingerprintSHA1`, `CertFingerprintColonSHA256`, `CertFingerprintColonSHA1`, `CertSKI`, `GetCertificateType`, `CertExpiresWithin`) so they return safe zero values instead of panicking on nil input. ([#145])
 - Return a descriptive `errCertificateNil` error from `GenerateCSR` and `internal/certstore.GenerateCSR` when a nil leaf certificate is passed, instead of panicking. ([#145])
 - Return descriptive errors from `internal/certstore.GenerateBundleFiles`, `GenerateJSON`, and `GenerateYAML` when a nil bundle or nil leaf certificate is provided. ([#145])
@@ -1072,12 +1087,14 @@ Initial release.
 [#127]: https://github.com/sensiblebit/certkit/pull/127
 [#128]: https://github.com/sensiblebit/certkit/pull/128
 [#129]: https://github.com/sensiblebit/certkit/pull/129
+[#130]: https://github.com/sensiblebit/certkit/pull/130
 [#131]: https://github.com/sensiblebit/certkit/pull/131
 [#132]: https://github.com/sensiblebit/certkit/pull/132
 [#138]: https://github.com/sensiblebit/certkit/pull/138
 [#142]: https://github.com/sensiblebit/certkit/pull/142
 [#145]: https://github.com/sensiblebit/certkit/pull/145
 [#158]: https://github.com/sensiblebit/certkit/pull/158
+[#167]: https://github.com/sensiblebit/certkit/issues/167
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63

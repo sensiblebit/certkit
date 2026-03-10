@@ -402,10 +402,12 @@ func exportBundlesJS(_ js.Value, args []js.Value) any {
 
 	p12Password := internal.DefaultExportPassword
 	defaultPasswordWarning := wasmDefaultExportPasswordWarning
+	explicitPassword := false
 	if len(args) >= 2 && args[1].Type() != js.TypeUndefined && args[1].Type() != js.TypeNull {
 		if candidate := strings.TrimSpace(args[1].String()); candidate != "" {
 			p12Password = candidate
 			defaultPasswordWarning = ""
+			explicitPassword = true
 		}
 	}
 
@@ -428,6 +430,7 @@ func exportBundlesJS(_ js.Value, args []js.Value) any {
 				FilterSKIs:            filterSKIs,
 				P12Password:           p12Password,
 				AllowUnverifiedExport: allowUnverifiedExport,
+				EncryptKey:            explicitPassword,
 			})
 
 			if err != nil {

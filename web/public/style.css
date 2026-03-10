@@ -510,6 +510,21 @@ header p {
   color: var(--accent);
 }
 
+.progress-fill.indeterminate {
+  width: 30% !important;
+  animation: indeterminate 1.4s ease-in-out infinite;
+  will-change: transform;
+}
+
+@keyframes indeterminate {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(433%);
+  }
+}
+
 .progress-container {
   display: flex;
   align-items: center;

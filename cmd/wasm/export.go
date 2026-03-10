@@ -30,6 +30,7 @@ type exportBundlesInput struct {
 	FilterSKIs            []string
 	P12Password           string
 	AllowUnverifiedExport bool
+	EncryptKey            bool
 }
 
 func exportBundles(ctx context.Context, input exportBundlesInput) ([]byte, error) {
@@ -71,6 +72,7 @@ func exportBundles(ctx context.Context, input exportBundlesInput) ([]byte, error
 		Writer:        writer,
 		RetryNoVerify: false,
 		P12Password:   input.P12Password,
+		EncryptKey:    input.EncryptKey,
 	}); err != nil {
 		if opts.Verify {
 			return nil, fmt.Errorf("%w: %w", errVerifiedExportFailed, err)

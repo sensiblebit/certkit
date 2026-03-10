@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from "vitest";
-import { formatDate, escapeHTML } from "./utils.js";
+import { formatDate, escapeHTML, normalizeExportPassword } from "./utils.js";
 
 // ---------------------------------------------------------------------------
 // formatDate
@@ -71,5 +71,49 @@ describe("escapeHTML", () => {
     expect(result).not.toContain(">");
     expect(result).toContain("&lt;");
     expect(result).toContain("&gt;");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// normalizeExportPassword
+// ---------------------------------------------------------------------------
+
+describe("normalizeExportPassword", () => {
+  it("returns cancelled for null (user pressed Cancel)", () => {
+    const result = normalizeExportPassword(null);
+    expect(result.promptWasCancelled).toBe(true);
+    expect(result.password).toBeUndefined();
+    expect(result.isExplicit).toBe(false);
+    expect(result.statusNote).toBe("");
+  });
+
+  it("returns no encryption for empty string", () => {
+    const result = normalizeExportPassword("");
+    expect(result.promptWasCancelled).toBe(false);
+    expect(result.password).toBeUndefined();
+    expect(result.isExplicit).toBe(false);
+    expect(result.statusNote).toBe("");
+  });
+
+  it("returns no encryption for whitespace-only input", () => {
+    const result = normalizeExportPassword("   \t  ");
+    expect(result.promptWasCancelled).toBe(false);
+    expect(result.password).toBeUndefined();
+    expect(result.isExplicit).toBe(false);
+    expect(result.statusNote).toBe("");
+  });
+
+  it("returns explicit password for non-empty input", () => {
+    const result = normalizeExportPassword("my-password");
+    expect(result.promptWasCancelled).toBe(false);
+    expect(result.password).toBe("my-password");
+    expect(result.isExplicit).toBe(true);
+    expect(result.statusNote).toContain("encrypting");
+  });
+
+  it("trims whitespace from password", () => {
+    const result = normalizeExportPassword("  secret  ");
+    expect(result.password).toBe("secret");
+    expect(result.isExplicit).toBe(true);
   });
 });

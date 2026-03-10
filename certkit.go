@@ -5,6 +5,9 @@ package certkit
 import (
 	"bytes"
 	"crypto"
+	"crypto/aes"
+	"crypto/cipher"
+	"crypto/des" //nolint:gosec // 3DES-CBC is required to decrypt legacy PKCS#8 encrypted private keys.
 	"crypto/dsa" //nolint:staticcheck // DSA remains needed to identify and parse legacy certificate/key material.
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -196,6 +199,29 @@ func ParsePEMPrivateKeyWithPasswords(pemData []byte, passwords []string) (crypto
 		key, parseErr := parsePEMPrivateKeyBlock(singlePEM, block)
 		if parseErr == nil {
 			return key, nil
+		}
+
+		// PKCS#8 v2 encrypted private keys (RFC 5958, PBES2).
+		if block.Type == "ENCRYPTED PRIVATE KEY" {
+			var pkcs8Err error
+			for _, password := range passwords {
+				key, err := decryptPKCS8PrivateKey(block.Bytes, password)
+				if err == nil {
+					return key, nil
+				}
+				if pkcs8Err == nil {
+					pkcs8Err = fmt.Errorf("decrypting PKCS#8 encrypted private key: %w", err)
+				}
+				slog.Debug("failed decrypting PKCS#8 encrypted private key", "error", err)
+			}
+			if pkcs8Err != nil && firstErr == nil {
+				firstErr = pkcs8Err
+			}
+			if firstErr == nil {
+				firstErr = errDecryptPrivateKeyPasswords
+			}
+			slog.Debug("skipping PKCS#8 encrypted private key block after password attempts", "error", firstErr)
+			continue
 		}
 
 		// OpenSSH uses a proprietary encrypted format.
@@ -407,6 +433,310 @@ func MarshalPrivateKeyToPEM(key crypto.PrivateKey) (string, error) {
 		Bytes: der,
 	})
 	return string(pemBytes), nil
+}
+
+// PKCS#8 v2 encrypted private key support (RFC 5958, PBES2).
+
+var (
+	oidPBES2          = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 5, 13}
+	oidPBKDF2         = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 5, 12}
+	oidHMACWithSHA1   = asn1.ObjectIdentifier{1, 2, 840, 113549, 2, 7}
+	oidHMACWithSHA256 = asn1.ObjectIdentifier{1, 2, 840, 113549, 2, 9}
+	oidHMACWithSHA384 = asn1.ObjectIdentifier{1, 2, 840, 113549, 2, 10}
+	oidHMACWithSHA512 = asn1.ObjectIdentifier{1, 2, 840, 113549, 2, 11}
+	oidAES128CBC      = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 2}
+	oidAES192CBC      = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 22}
+	oidAES256CBC      = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 42}
+	oidDESEDE3CBC     = asn1.ObjectIdentifier{1, 2, 840, 113549, 3, 7}
+)
+
+// pkcs8EncryptIterations controls the PBKDF2 iteration count for PKCS#8 v2
+// key encryption. 600,000 matches the OWASP recommendation for
+// PBKDF2-HMAC-SHA-256 (2023). WASM builds use the browser's Web Crypto API
+// to run key derivation off the main thread.
+const pkcs8EncryptIterations = 600_000
+
+type asn1AlgorithmIdentifier struct {
+	Algorithm  asn1.ObjectIdentifier
+	Parameters asn1.RawValue `asn1:"optional"`
+}
+
+type encryptedPrivateKeyInfo struct {
+	Algorithm     asn1AlgorithmIdentifier
+	EncryptedData []byte
+}
+
+type pbes2Params struct {
+	KeyDerivationFunc asn1AlgorithmIdentifier
+	EncryptionScheme  asn1AlgorithmIdentifier
+}
+
+type pbkdf2Params struct {
+	Salt           []byte
+	IterationCount int
+	KeyLength      int                     `asn1:"optional"`
+	PRF            asn1AlgorithmIdentifier `asn1:"optional"`
+}
+
+// pkcs8MaxDecryptIterations is the maximum PBKDF2 iteration count accepted
+// when decrypting PKCS#8 keys. This prevents CPU-DoS from crafted ASN.1 with
+// extreme iteration values. 10 million is generous for any legitimate use.
+const pkcs8MaxDecryptIterations = 10_000_000
+
+// pkcs8MaxKeyLength is the maximum PBKDF2-derived key length (in bytes)
+// accepted when decrypting PKCS#8 keys. 64 bytes (512 bits) covers all
+// standard ciphers and prevents memory abuse from crafted ASN.1.
+const pkcs8MaxKeyLength = 64
+
+var (
+	errDecryptPKCS8UnsupportedAlgorithm = errors.New("unsupported PKCS#8 encryption algorithm: expected PBES2")
+	errDecryptPKCS8UnsupportedKDF       = errors.New("unsupported PKCS#8 KDF: expected PBKDF2")
+	errDecryptPKCS8UnsupportedCipher    = errors.New("unsupported PKCS#8 cipher")
+	errDecryptPKCS8UnsupportedPRF       = errors.New("unsupported PKCS#8 PRF")
+	errDecryptPKCS8InvalidPadding       = errors.New("invalid PKCS#7 padding in decrypted PKCS#8 key")
+	errDecryptPKCS8InvalidIVLength      = errors.New("invalid IV length for cipher")
+	errDecryptPKCS8InvalidCiphertext    = errors.New("ciphertext is not a multiple of cipher block size")
+	errDecryptPKCS8ExcessiveIterations  = errors.New("PBKDF2 iteration count exceeds safety limit")
+	errDecryptPKCS8InvalidKeyLength     = errors.New("PBKDF2 key length exceeds safety limit")
+	errEncryptPKCS8EmptyPassword        = errors.New("password must not be empty")
+)
+
+// pbes2CipherConfig describes a supported PBES2 encryption scheme.
+type pbes2CipherConfig struct {
+	keyLen   int
+	newBlock func(key []byte) (cipher.Block, error)
+}
+
+// lookupPBES2Cipher returns cipher config for a PBES2 encryption scheme OID.
+func lookupPBES2Cipher(oid asn1.ObjectIdentifier) (pbes2CipherConfig, error) {
+	switch {
+	case oid.Equal(oidAES128CBC):
+		return pbes2CipherConfig{keyLen: 16, newBlock: aes.NewCipher}, nil
+	case oid.Equal(oidAES192CBC):
+		return pbes2CipherConfig{keyLen: 24, newBlock: aes.NewCipher}, nil
+	case oid.Equal(oidAES256CBC):
+		return pbes2CipherConfig{keyLen: 32, newBlock: aes.NewCipher}, nil
+	case oid.Equal(oidDESEDE3CBC):
+		return pbes2CipherConfig{keyLen: 24, newBlock: des.NewTripleDESCipher}, nil
+	default:
+		return pbes2CipherConfig{}, errDecryptPKCS8UnsupportedCipher
+	}
+}
+
+// lookupPBKDF2PRF returns the crypto.Hash for a PBKDF2 PRF OID.
+// Per RFC 8018 §A.2, omitted PRF defaults to hmacWithSHA1.
+func lookupPBKDF2PRF(oid asn1.ObjectIdentifier) (crypto.Hash, error) {
+	switch {
+	case oid.Equal(oidHMACWithSHA1):
+		return crypto.SHA1, nil
+	case oid.Equal(oidHMACWithSHA256):
+		return crypto.SHA256, nil
+	case oid.Equal(oidHMACWithSHA384):
+		return crypto.SHA384, nil
+	case oid.Equal(oidHMACWithSHA512):
+		return crypto.SHA512, nil
+	default:
+		return 0, errDecryptPKCS8UnsupportedPRF
+	}
+}
+
+// MarshalEncryptedPrivateKeyToPEM encrypts a private key using PKCS#8 v2
+// (PBES2 with PBKDF2-HMAC-SHA-256 and AES-256-CBC) and returns it as a PEM
+// string with block type "ENCRYPTED PRIVATE KEY".
+func MarshalEncryptedPrivateKeyToPEM(key crypto.PrivateKey, password string) (string, error) {
+	if strings.TrimSpace(password) == "" {
+		return "", errEncryptPKCS8EmptyPassword
+	}
+
+	pkcs8DER, err := x509.MarshalPKCS8PrivateKey(normalizeKey(key))
+	if err != nil {
+		return "", fmt.Errorf("marshaling private key to PKCS#8: %w", err)
+	}
+
+	salt := make([]byte, 16)
+	if _, err := rand.Read(salt); err != nil {
+		return "", fmt.Errorf("generating PBKDF2 salt: %w", err)
+	}
+
+	iv := make([]byte, aes.BlockSize)
+	if _, err := rand.Read(iv); err != nil {
+		return "", fmt.Errorf("generating AES IV: %w", err)
+	}
+
+	derivedKey, err := derivePBKDF2Key(crypto.SHA256, password, salt, pkcs8EncryptIterations, 32)
+	if err != nil {
+		return "", fmt.Errorf("deriving PBKDF2 key: %w", err)
+	}
+
+	block, err := aes.NewCipher(derivedKey)
+	if err != nil {
+		return "", fmt.Errorf("creating AES cipher: %w", err)
+	}
+
+	// PKCS#7 padding
+	padLen := aes.BlockSize - len(pkcs8DER)%aes.BlockSize
+	padded := make([]byte, len(pkcs8DER)+padLen)
+	copy(padded, pkcs8DER)
+	for i := len(pkcs8DER); i < len(padded); i++ {
+		padded[i] = byte(padLen)
+	}
+
+	cbc := cipher.NewCBCEncrypter(block, iv)
+	cbc.CryptBlocks(padded, padded)
+
+	// Build ASN.1 EncryptedPrivateKeyInfo
+	kdfParams, err := asn1.Marshal(pbkdf2Params{
+		Salt:           salt,
+		IterationCount: pkcs8EncryptIterations,
+		KeyLength:      32,
+		PRF: asn1AlgorithmIdentifier{
+			Algorithm:  oidHMACWithSHA256,
+			Parameters: asn1.RawValue{Tag: asn1.TagNull, Class: asn1.ClassUniversal},
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("marshaling PBKDF2 params: %w", err)
+	}
+
+	ivRaw, err := asn1.Marshal(iv)
+	if err != nil {
+		return "", fmt.Errorf("marshaling AES IV: %w", err)
+	}
+
+	pbes2Raw, err := asn1.Marshal(pbes2Params{
+		KeyDerivationFunc: asn1AlgorithmIdentifier{
+			Algorithm:  oidPBKDF2,
+			Parameters: asn1.RawValue{FullBytes: kdfParams},
+		},
+		EncryptionScheme: asn1AlgorithmIdentifier{
+			Algorithm:  oidAES256CBC,
+			Parameters: asn1.RawValue{FullBytes: ivRaw},
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("marshaling PBES2 params: %w", err)
+	}
+
+	epki := encryptedPrivateKeyInfo{
+		Algorithm: asn1AlgorithmIdentifier{
+			Algorithm:  oidPBES2,
+			Parameters: asn1.RawValue{FullBytes: pbes2Raw},
+		},
+		EncryptedData: padded,
+	}
+
+	der, err := asn1.Marshal(epki)
+	if err != nil {
+		return "", fmt.Errorf("marshaling EncryptedPrivateKeyInfo: %w", err)
+	}
+
+	pemBytes := pem.EncodeToMemory(&pem.Block{
+		Type:  "ENCRYPTED PRIVATE KEY",
+		Bytes: der,
+	})
+	return string(pemBytes), nil
+}
+
+// decryptPKCS8PrivateKey decrypts a PKCS#8 v2 EncryptedPrivateKeyInfo DER
+// block using the given password. Supports PBES2 with PBKDF2 and any
+// combination of AES-128/192/256-CBC or 3DES-CBC ciphers with
+// HMAC-SHA-1/256/384/512 PRFs.
+func decryptPKCS8PrivateKey(encryptedDER []byte, password string) (crypto.PrivateKey, error) {
+	var epki encryptedPrivateKeyInfo
+	if _, err := asn1.Unmarshal(encryptedDER, &epki); err != nil {
+		return nil, fmt.Errorf("parsing EncryptedPrivateKeyInfo: %w", err)
+	}
+
+	if !epki.Algorithm.Algorithm.Equal(oidPBES2) {
+		return nil, errDecryptPKCS8UnsupportedAlgorithm
+	}
+
+	var params pbes2Params
+	if _, err := asn1.Unmarshal(epki.Algorithm.Parameters.FullBytes, &params); err != nil {
+		return nil, fmt.Errorf("parsing PBES2 params: %w", err)
+	}
+
+	if !params.KeyDerivationFunc.Algorithm.Equal(oidPBKDF2) {
+		return nil, errDecryptPKCS8UnsupportedKDF
+	}
+
+	cipherCfg, err := lookupPBES2Cipher(params.EncryptionScheme.Algorithm)
+	if err != nil {
+		return nil, err
+	}
+
+	var kdfParams pbkdf2Params
+	if _, err := asn1.Unmarshal(params.KeyDerivationFunc.Parameters.FullBytes, &kdfParams); err != nil {
+		return nil, fmt.Errorf("parsing PBKDF2 params: %w", err)
+	}
+
+	// Determine PRF hash. RFC 8018 §A.2: omitted PRF defaults to hmacWithSHA1.
+	prfHash := crypto.SHA1
+	if len(kdfParams.PRF.Algorithm) > 0 {
+		prfHash, err = lookupPBKDF2PRF(kdfParams.PRF.Algorithm)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if kdfParams.IterationCount <= 0 || kdfParams.IterationCount > pkcs8MaxDecryptIterations {
+		return nil, errDecryptPKCS8ExcessiveIterations
+	}
+
+	keyLen := cipherCfg.keyLen
+	if kdfParams.KeyLength > 0 {
+		if kdfParams.KeyLength > pkcs8MaxKeyLength {
+			return nil, errDecryptPKCS8InvalidKeyLength
+		}
+		keyLen = kdfParams.KeyLength
+	}
+
+	derivedKey, err := derivePBKDF2Key(prfHash, password, kdfParams.Salt, kdfParams.IterationCount, keyLen)
+	if err != nil {
+		return nil, fmt.Errorf("deriving PBKDF2 key: %w", err)
+	}
+
+	var iv []byte
+	if _, err := asn1.Unmarshal(params.EncryptionScheme.Parameters.FullBytes, &iv); err != nil {
+		return nil, fmt.Errorf("parsing cipher IV: %w", err)
+	}
+
+	block, err := cipherCfg.newBlock(derivedKey)
+	if err != nil {
+		return nil, fmt.Errorf("creating block cipher: %w", err)
+	}
+
+	if len(iv) != block.BlockSize() {
+		return nil, errDecryptPKCS8InvalidIVLength
+	}
+	if len(epki.EncryptedData)%block.BlockSize() != 0 {
+		return nil, errDecryptPKCS8InvalidCiphertext
+	}
+
+	plaintext := make([]byte, len(epki.EncryptedData))
+	cbc := cipher.NewCBCDecrypter(block, iv)
+	cbc.CryptBlocks(plaintext, epki.EncryptedData)
+
+	// Remove PKCS#7 padding
+	if len(plaintext) == 0 {
+		return nil, errDecryptPKCS8InvalidPadding
+	}
+	padLen := int(plaintext[len(plaintext)-1])
+	if padLen == 0 || padLen > block.BlockSize() || padLen > len(plaintext) {
+		return nil, errDecryptPKCS8InvalidPadding
+	}
+	for _, b := range plaintext[len(plaintext)-padLen:] {
+		if int(b) != padLen {
+			return nil, errDecryptPKCS8InvalidPadding
+		}
+	}
+	plaintext = plaintext[:len(plaintext)-padLen]
+
+	key, err := x509.ParsePKCS8PrivateKey(plaintext)
+	if err != nil {
+		return nil, fmt.Errorf("parsing decrypted PKCS#8 key: %w", err)
+	}
+	return normalizeKey(key), nil
 }
 
 // CertFingerprint returns the SHA-256 fingerprint of a certificate as a lowercase hex string.

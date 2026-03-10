@@ -1,4 +1,4 @@
-import { formatDate, escapeHTML } from "./utils.js";
+import { formatDate, escapeHTML, normalizeExportPassword } from "./utils.js";
 
 // DOM references — Scan page
 const dropZone = document.getElementById("drop-zone");
@@ -368,6 +368,7 @@ window.certkitOnAIAProgress = function (completed, total) {
   const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
   statusText.textContent = `Resolving certificate chains via AIA... (${completed} of ${total})`;
   progressContainer.hidden = false;
+  progressFill.classList.remove("indeterminate");
   progressFill.style.width = `${pct}%`;
   progressFill.setAttribute("aria-valuenow", String(pct));
   progressLabel.textContent = `${pct}%`;
@@ -1203,12 +1204,33 @@ exportBtn.addEventListener("click", async () => {
   const skis = getExportableSKIs();
   if (skis.length === 0) return;
 
+  const rawPassword = window.prompt(
+    "Export password?\n\n" +
+      "\u2022 With password: encrypts .key and .yaml key material; .p12 uses that password\n" +
+      "\u2022 Blank: .key and .yaml key material unencrypted; .p12 uses default password\n" +
+      "\u2022 Note: Kubernetes tls.key is always unencrypted",
+    "",
+  );
+  const ep = normalizeExportPassword(rawPassword);
+  if (ep.promptWasCancelled) return;
+  const password = ep.password;
+
   exportBtn.disabled = true;
   exportBtn.textContent = "Exporting...";
-  showStatus(`Building ${skis.length} bundle(s) and ZIP...`, false, true);
+  const encryptingNote = ep.statusNote;
+  showStatus(
+    `Building ${skis.length} bundle(s) and ZIP${encryptingNote}`,
+    false,
+    true,
+  );
+
+  // Yield to the browser so the status bar paints before WASM blocks.
+  await new Promise((r) =>
+    requestAnimationFrame(() => requestAnimationFrame(r)),
+  );
 
   try {
-    const payload = await certkitExportBundles(skis);
+    const payload = await certkitExportBundles(skis, password);
     downloadBlob(payload.data, "certkit-bundles.zip", "application/zip");
     if (payload.warning) {
       showStatus(payload.warning, false, false);
@@ -1223,7 +1245,15 @@ exportBtn.addEventListener("click", async () => {
       )
     ) {
       try {
-        const payload = await certkitExportBundles(skis, undefined, true);
+        showStatus(
+          `Retrying ${skis.length} bundle(s) without verification${encryptingNote}`,
+          false,
+          true,
+        );
+        await new Promise((r) =>
+          requestAnimationFrame(() => requestAnimationFrame(r)),
+        );
+        const payload = await certkitExportBundles(skis, password, true);
         downloadBlob(payload.data, "certkit-bundles.zip", "application/zip");
         const messages = [];
         if (payload.warning) messages.push(payload.warning);
@@ -1284,17 +1314,27 @@ function showStatus(message, isError = false, isProcessing = false) {
   statusBar.hidden = false;
   statusText.textContent = message;
   statusBar.className = "status-bar";
-  progressContainer.hidden = true;
+  progressFill.classList.remove("indeterminate");
   progressFill.style.width = "0%";
   progressFill.setAttribute("aria-valuenow", "0");
   statusBar.style.color = "";
-  if (isError) statusBar.style.color = "var(--danger)";
-  else if (isProcessing) statusBar.classList.add("processing");
+  if (isError) {
+    statusBar.style.color = "var(--danger)";
+    progressContainer.hidden = true;
+  } else if (isProcessing) {
+    statusBar.classList.add("processing");
+    progressContainer.hidden = false;
+    progressLabel.textContent = "";
+    progressFill.classList.add("indeterminate");
+  } else {
+    progressContainer.hidden = true;
+  }
 }
 
 function hideStatus() {
   statusBar.hidden = true;
   progressContainer.hidden = true;
+  progressFill.classList.remove("indeterminate");
   progressFill.style.width = "0%";
   progressFill.setAttribute("aria-valuenow", "0");
 }
