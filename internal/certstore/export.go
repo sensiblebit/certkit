@@ -191,6 +191,7 @@ func earliestExpiry(b *certkit.BundleResult) time.Time {
 	earliest := b.Leaf.NotAfter
 	for _, c := range b.Intermediates {
 		if c == nil {
+			slog.Debug("skipping nil intermediate certificate in expiry calculation")
 			continue
 		}
 		if c.NotAfter.Before(earliest) {
