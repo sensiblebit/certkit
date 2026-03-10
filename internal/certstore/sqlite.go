@@ -84,11 +84,13 @@ func (w sqliteLoadWarnings) logIfAny(dbPath string) {
 
 var (
 	errSQLiteDestinationIsDir = errors.New("destination path is a directory")
+	errSQLiteNoReplaceRenameUnsupported = errors.New("no-replace rename unsupported")
 
 	sqliteOpenFile   = os.OpenFile
 	sqliteMkdirTemp  = os.MkdirTemp
 	sqliteLink       = os.Link
 	sqliteRename     = os.Rename
+	sqliteRenameNoReplace = renameSQLiteFileNoReplace
 	sqliteRemoveAll  = os.RemoveAll
 	sqliteStat       = os.Stat
 	sqliteChmod      = os.Chmod
@@ -420,7 +422,23 @@ func publishSQLiteFile(tempPath, dbPath string, mode os.FileMode, allowRename bo
 	case os.IsExist(linkErr):
 		return os.ErrExist
 	case isHardLinkUnsupported(linkErr):
-		_ = allowRename
+		if allowRename {
+			if err := sqliteRenameNoReplace(tempPath, dbPath); err != nil {
+				if os.IsExist(err) {
+					return os.ErrExist
+				}
+				if !errors.Is(err, errSQLiteNoReplaceRenameUnsupported) {
+					return fmt.Errorf("renaming staged database into place without replace: %w", err)
+				}
+			} else {
+				if mode != 0 {
+					if err := sqliteChmod(dbPath, mode); err != nil {
+						return fmt.Errorf("restoring database file mode: %w", err)
+					}
+				}
+				return nil
+			}
+		}
 		return copySQLiteFileExclusive(tempPath, dbPath, mode)
 	default:
 		return fmt.Errorf("linking staged database into place: %w", linkErr)

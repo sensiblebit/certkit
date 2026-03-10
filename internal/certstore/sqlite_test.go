@@ -306,24 +306,22 @@ func TestSaveToSQLite_ReplaceRaceKeepsCompetingWriterWhenHardLinksUnsupported(t 
 	}
 
 	originalLink := sqliteLink
-	originalOpenFile := sqliteOpenFile
+	originalRenameNoReplace := sqliteRenameNoReplace
 	t.Cleanup(func() {
 		sqliteLink = originalLink
-		sqliteOpenFile = originalOpenFile
+		sqliteRenameNoReplace = originalRenameNoReplace
 	})
 	sqliteLink = func(oldPath, newPath string) error {
 		_ = oldPath
 		_ = newPath
 		return syscall.EXDEV
 	}
-	sqliteOpenFile = func(name string, flag int, perm os.FileMode) (*os.File, error) {
-		if name == dbPath && flag == os.O_CREATE|os.O_EXCL|os.O_WRONLY {
-			if err := os.WriteFile(name, []byte("winner"), perm); err != nil {
-				return nil, fmt.Errorf("injecting competing database: %w", err)
-			}
-			return nil, os.ErrExist
+	sqliteRenameNoReplace = func(oldPath, newPath string) error {
+		_ = oldPath
+		if err := os.WriteFile(newPath, []byte("winner"), 0o600); err != nil {
+			return fmt.Errorf("injecting competing database: %w", err)
 		}
-		return os.OpenFile(name, flag, perm)
+		return os.ErrExist
 	}
 
 	err := SaveToSQLite(storeB, dbPath)
