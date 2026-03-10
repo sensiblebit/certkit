@@ -7,6 +7,7 @@ import (
 	"crypto"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/des" //nolint:gosec // 3DES-CBC is required to decrypt legacy PKCS#8 encrypted private keys.
 	"crypto/dsa" //nolint:staticcheck // DSA remains needed to identify and parse legacy certificate/key material.
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -434,14 +435,19 @@ func MarshalPrivateKeyToPEM(key crypto.PrivateKey) (string, error) {
 	return string(pemBytes), nil
 }
 
-// PKCS#8 v2 encrypted private key support (RFC 5958, PBES2/AES-256-CBC).
+// PKCS#8 v2 encrypted private key support (RFC 5958, PBES2).
 
 var (
 	oidPBES2          = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 5, 13}
 	oidPBKDF2         = asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 5, 12}
 	oidHMACWithSHA1   = asn1.ObjectIdentifier{1, 2, 840, 113549, 2, 7}
 	oidHMACWithSHA256 = asn1.ObjectIdentifier{1, 2, 840, 113549, 2, 9}
+	oidHMACWithSHA384 = asn1.ObjectIdentifier{1, 2, 840, 113549, 2, 10}
+	oidHMACWithSHA512 = asn1.ObjectIdentifier{1, 2, 840, 113549, 2, 11}
+	oidAES128CBC      = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 2}
+	oidAES192CBC      = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 22}
 	oidAES256CBC      = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 42}
+	oidDESEDE3CBC     = asn1.ObjectIdentifier{1, 2, 840, 113549, 3, 7}
 )
 
 // pkcs8EncryptIterations controls the PBKDF2 iteration count for PKCS#8 v2
@@ -475,12 +481,51 @@ type pbkdf2Params struct {
 var (
 	errDecryptPKCS8UnsupportedAlgorithm = errors.New("unsupported PKCS#8 encryption algorithm: expected PBES2")
 	errDecryptPKCS8UnsupportedKDF       = errors.New("unsupported PKCS#8 KDF: expected PBKDF2")
-	errDecryptPKCS8UnsupportedCipher    = errors.New("unsupported PKCS#8 cipher: expected AES-256-CBC")
-	errDecryptPKCS8UnsupportedPRF       = errors.New("unsupported PKCS#8 PRF: expected HMAC-SHA-256")
+	errDecryptPKCS8UnsupportedCipher    = errors.New("unsupported PKCS#8 cipher")
+	errDecryptPKCS8UnsupportedPRF       = errors.New("unsupported PKCS#8 PRF")
 	errDecryptPKCS8InvalidPadding       = errors.New("invalid PKCS#7 padding in decrypted PKCS#8 key")
-	errDecryptPKCS8InvalidIVLength      = errors.New("invalid AES IV length")
-	errDecryptPKCS8InvalidCiphertext    = errors.New("ciphertext is not a multiple of AES block size")
+	errDecryptPKCS8InvalidIVLength      = errors.New("invalid IV length for cipher")
+	errDecryptPKCS8InvalidCiphertext    = errors.New("ciphertext is not a multiple of cipher block size")
 )
+
+// pbes2CipherConfig describes a supported PBES2 encryption scheme.
+type pbes2CipherConfig struct {
+	keyLen   int
+	newBlock func(key []byte) (cipher.Block, error)
+}
+
+// lookupPBES2Cipher returns cipher config for a PBES2 encryption scheme OID.
+func lookupPBES2Cipher(oid asn1.ObjectIdentifier) (pbes2CipherConfig, error) {
+	switch {
+	case oid.Equal(oidAES128CBC):
+		return pbes2CipherConfig{keyLen: 16, newBlock: aes.NewCipher}, nil
+	case oid.Equal(oidAES192CBC):
+		return pbes2CipherConfig{keyLen: 24, newBlock: aes.NewCipher}, nil
+	case oid.Equal(oidAES256CBC):
+		return pbes2CipherConfig{keyLen: 32, newBlock: aes.NewCipher}, nil
+	case oid.Equal(oidDESEDE3CBC):
+		return pbes2CipherConfig{keyLen: 24, newBlock: des.NewTripleDESCipher}, nil
+	default:
+		return pbes2CipherConfig{}, errDecryptPKCS8UnsupportedCipher
+	}
+}
+
+// lookupPBKDF2PRF returns the crypto.Hash for a PBKDF2 PRF OID.
+// Per RFC 8018 §A.2, omitted PRF defaults to hmacWithSHA1.
+func lookupPBKDF2PRF(oid asn1.ObjectIdentifier) (crypto.Hash, error) {
+	switch {
+	case oid.Equal(oidHMACWithSHA1):
+		return crypto.SHA1, nil
+	case oid.Equal(oidHMACWithSHA256):
+		return crypto.SHA256, nil
+	case oid.Equal(oidHMACWithSHA384):
+		return crypto.SHA384, nil
+	case oid.Equal(oidHMACWithSHA512):
+		return crypto.SHA512, nil
+	default:
+		return 0, errDecryptPKCS8UnsupportedPRF
+	}
+}
 
 // MarshalEncryptedPrivateKeyToPEM encrypts a private key using PKCS#8 v2
 // (PBES2 with PBKDF2-HMAC-SHA-256 and AES-256-CBC) and returns it as a PEM
@@ -576,8 +621,9 @@ func MarshalEncryptedPrivateKeyToPEM(key crypto.PrivateKey, password string) (st
 }
 
 // decryptPKCS8PrivateKey decrypts a PKCS#8 v2 EncryptedPrivateKeyInfo DER
-// block using the given password. Supports PBES2 with PBKDF2-HMAC-SHA-256
-// and AES-256-CBC.
+// block using the given password. Supports PBES2 with PBKDF2 and any
+// combination of AES-128/192/256-CBC or 3DES-CBC ciphers with
+// HMAC-SHA-1/256/384/512 PRFs.
 func decryptPKCS8PrivateKey(encryptedDER []byte, password string) (crypto.PrivateKey, error) {
 	var epki encryptedPrivateKeyInfo
 	if _, err := asn1.Unmarshal(encryptedDER, &epki); err != nil {
@@ -596,8 +642,10 @@ func decryptPKCS8PrivateKey(encryptedDER []byte, password string) (crypto.Privat
 	if !params.KeyDerivationFunc.Algorithm.Equal(oidPBKDF2) {
 		return nil, errDecryptPKCS8UnsupportedKDF
 	}
-	if !params.EncryptionScheme.Algorithm.Equal(oidAES256CBC) {
-		return nil, errDecryptPKCS8UnsupportedCipher
+
+	cipherCfg, err := lookupPBES2Cipher(params.EncryptionScheme.Algorithm)
+	if err != nil {
+		return nil, err
 	}
 
 	var kdfParams pbkdf2Params
@@ -608,17 +656,13 @@ func decryptPKCS8PrivateKey(encryptedDER []byte, password string) (crypto.Privat
 	// Determine PRF hash. RFC 8018 §A.2: omitted PRF defaults to hmacWithSHA1.
 	prfHash := crypto.SHA1
 	if len(kdfParams.PRF.Algorithm) > 0 {
-		switch {
-		case kdfParams.PRF.Algorithm.Equal(oidHMACWithSHA1):
-			prfHash = crypto.SHA1
-		case kdfParams.PRF.Algorithm.Equal(oidHMACWithSHA256):
-			prfHash = crypto.SHA256
-		default:
-			return nil, errDecryptPKCS8UnsupportedPRF
+		prfHash, err = lookupPBKDF2PRF(kdfParams.PRF.Algorithm)
+		if err != nil {
+			return nil, err
 		}
 	}
 
-	keyLen := 32
+	keyLen := cipherCfg.keyLen
 	if kdfParams.KeyLength > 0 {
 		keyLen = kdfParams.KeyLength
 	}
@@ -630,19 +674,19 @@ func decryptPKCS8PrivateKey(encryptedDER []byte, password string) (crypto.Privat
 
 	var iv []byte
 	if _, err := asn1.Unmarshal(params.EncryptionScheme.Parameters.FullBytes, &iv); err != nil {
-		return nil, fmt.Errorf("parsing AES IV: %w", err)
+		return nil, fmt.Errorf("parsing cipher IV: %w", err)
 	}
-	if len(iv) != aes.BlockSize {
+
+	block, err := cipherCfg.newBlock(derivedKey)
+	if err != nil {
+		return nil, fmt.Errorf("creating block cipher: %w", err)
+	}
+
+	if len(iv) != block.BlockSize() {
 		return nil, errDecryptPKCS8InvalidIVLength
 	}
-
-	if len(epki.EncryptedData)%aes.BlockSize != 0 {
+	if len(epki.EncryptedData)%block.BlockSize() != 0 {
 		return nil, errDecryptPKCS8InvalidCiphertext
-	}
-
-	block, err := aes.NewCipher(derivedKey)
-	if err != nil {
-		return nil, fmt.Errorf("creating AES cipher: %w", err)
 	}
 
 	plaintext := make([]byte, len(epki.EncryptedData))
@@ -654,7 +698,7 @@ func decryptPKCS8PrivateKey(encryptedDER []byte, password string) (crypto.Privat
 		return nil, errDecryptPKCS8InvalidPadding
 	}
 	padLen := int(plaintext[len(plaintext)-1])
-	if padLen == 0 || padLen > aes.BlockSize || padLen > len(plaintext) {
+	if padLen == 0 || padLen > block.BlockSize() || padLen > len(plaintext) {
 		return nil, errDecryptPKCS8InvalidPadding
 	}
 	for _, b := range plaintext[len(plaintext)-padLen:] {

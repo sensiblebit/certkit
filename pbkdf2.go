@@ -7,6 +7,7 @@ import (
 	"crypto/pbkdf2"
 	"crypto/sha1" //nolint:gosec // SHA-1 is the RFC 8018 default PRF for PBKDF2; needed to decrypt third-party PKCS#8 files.
 	"crypto/sha256"
+	"crypto/sha512"
 	"errors"
 	"fmt"
 	"hash"
@@ -29,11 +30,15 @@ func derivePBKDF2Key(h crypto.Hash, password string, salt []byte, iterations, ke
 }
 
 func pbkdf2HashFunc(h crypto.Hash) (func() hash.Hash, error) {
-	switch h { //nolint:exhaustive // Only SHA-1 and SHA-256 are used in PKCS#8 PBKDF2.
+	switch h { //nolint:exhaustive // Only hash functions used in PKCS#8 PBKDF2 PRFs.
 	case crypto.SHA1:
 		return sha1.New, nil
 	case crypto.SHA256:
 		return sha256.New, nil
+	case crypto.SHA384:
+		return sha512.New384, nil
+	case crypto.SHA512:
+		return sha512.New, nil
 	default:
 		return nil, errUnsupportedPBKDF2Hash
 	}

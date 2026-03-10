@@ -5,6 +5,7 @@ import (
 	"crypto"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/des" //nolint:gosec // Testing 3DES-CBC PKCS#8 decryption.
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/elliptic"
@@ -1576,10 +1577,11 @@ func TestDecryptPKCS8PrivateKey_MalformedIV(t *testing.T) {
 	}
 }
 
-func TestDecryptPKCS8PrivateKey_SHA1PRFDefault(t *testing.T) {
-	// WHY: RFC 8018 §A.2 says omitted PRF defaults to hmacWithSHA1. OpenSSL
-	// produces PBES2/AES-256-CBC keys with no explicit PRF field (SHA-1
-	// implied). We must derive with SHA-1 in that case, not SHA-256.
+func TestDecryptPKCS8PrivateKey_CipherPRFCombinations(t *testing.T) {
+	// WHY: PKCS#8 encrypted keys in the wild use various PBES2 cipher and PRF
+	// combinations. We must decrypt all of them correctly. This covers
+	// AES-128/192/256-CBC and 3DES-CBC with HMAC-SHA-1/256/384/512 PRFs,
+	// plus the omitted-PRF case (defaults to SHA-1 per RFC 8018 §A.2).
 	t.Parallel()
 
 	_, edKey, err := ed25519.GenerateKey(rand.Reader)
@@ -1591,47 +1593,20 @@ func TestDecryptPKCS8PrivateKey_SHA1PRFDefault(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	password := "test-sha1-prf" //nolint:gosec // Test password, not a credential.
-	salt := make([]byte, 16)
-	if _, err := rand.Read(salt); err != nil {
-		t.Fatal(err)
-	}
-	iv := make([]byte, 16)
-	if _, err := rand.Read(iv); err != nil {
-		t.Fatal(err)
-	}
-
-	// Derive key with SHA-1 (the RFC default).
-	derivedKey, err := derivePBKDF2Key(crypto.SHA1, password, salt, 10000, 32)
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	// Encrypt with AES-256-CBC.
-	block, err := aes.NewCipher(derivedKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	padLen := aes.BlockSize - len(pkcs8DER)%aes.BlockSize
-	padded := make([]byte, len(pkcs8DER)+padLen)
-	copy(padded, pkcs8DER)
-	for i := len(pkcs8DER); i < len(padded); i++ {
-		padded[i] = byte(padLen)
-	}
-	ciphertext := make([]byte, len(padded))
-	cipher.NewCBCEncrypter(block, iv).CryptBlocks(ciphertext, padded)
-
-	// Build ASN.1 EncryptedPrivateKeyInfo with PBKDF2 params that omit the
-	// PRF field (making it default to hmacWithSHA1 per RFC 8018).
-	type pbkdf2P struct {
-		Salt           []byte
-		IterationCount int
-		KeyLength      int `asn1:"optional"`
-		// PRF intentionally omitted — defaults to hmacWithSHA1
-	}
 	type algID struct {
 		Algorithm  asn1.ObjectIdentifier
 		Parameters asn1.RawValue `asn1:"optional"`
+	}
+	type pbkdf2WithPRF struct {
+		Salt           []byte
+		IterationCount int
+		KeyLength      int   `asn1:"optional"`
+		PRF            algID `asn1:"optional"`
+	}
+	type pbkdf2NoPRF struct {
+		Salt           []byte
+		IterationCount int
+		KeyLength      int `asn1:"optional"`
 	}
 	type pbes2P struct {
 		KDF    algID
@@ -1642,34 +1617,108 @@ func TestDecryptPKCS8PrivateKey_SHA1PRFDefault(t *testing.T) {
 		EncryptedData []byte
 	}
 
-	kdfParamsDER, _ := asn1.Marshal(pbkdf2P{
-		Salt: salt, IterationCount: 10000, KeyLength: 32,
-	})
-	ivDER, _ := asn1.Marshal(iv)
-	pbes2ParamsDER, _ := asn1.Marshal(pbes2P{
-		KDF:    algID{Algorithm: asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 5, 12}, Parameters: asn1.RawValue{FullBytes: kdfParamsDER}},
-		Cipher: algID{Algorithm: asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 42}, Parameters: asn1.RawValue{FullBytes: ivDER}},
-	})
-	encDER, _ := asn1.Marshal(epki{
-		Algorithm: algID{
-			Algorithm:  asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 5, 13},
-			Parameters: asn1.RawValue{FullBytes: pbes2ParamsDER},
-		},
-		EncryptedData: ciphertext,
-	})
-
-	encPEM := pem.EncodeToMemory(&pem.Block{Type: "ENCRYPTED PRIVATE KEY", Bytes: encDER})
-
-	parsed, err := ParsePEMPrivateKeyWithPasswords(encPEM, []string{password})
-	if err != nil {
-		t.Fatalf("decrypting SHA-1 PRF key: %v", err)
+	type cipherSpec struct {
+		name     string
+		oid      asn1.ObjectIdentifier
+		keyLen   int
+		ivLen    int
+		newBlock func(key []byte) (cipher.Block, error)
+	}
+	ciphers := []cipherSpec{
+		{"AES-128-CBC", asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 2}, 16, 16, aes.NewCipher},
+		{"AES-192-CBC", asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 22}, 24, 16, aes.NewCipher},
+		{"AES-256-CBC", asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 42}, 32, 16, aes.NewCipher},
+		{"3DES-CBC", asn1.ObjectIdentifier{1, 2, 840, 113549, 3, 7}, 24, 8, des.NewTripleDESCipher},
 	}
 
-	// Verify the key matches.
+	type prfSpec struct {
+		name string
+		oid  asn1.ObjectIdentifier // nil = omit (SHA-1 default)
+		hash crypto.Hash
+	}
+	prfs := []prfSpec{
+		{"SHA1-omitted", nil, crypto.SHA1},
+		{"SHA1-explicit", asn1.ObjectIdentifier{1, 2, 840, 113549, 2, 7}, crypto.SHA1},
+		{"SHA256", asn1.ObjectIdentifier{1, 2, 840, 113549, 2, 9}, crypto.SHA256},
+		{"SHA384", asn1.ObjectIdentifier{1, 2, 840, 113549, 2, 10}, crypto.SHA384},
+		{"SHA512", asn1.ObjectIdentifier{1, 2, 840, 113549, 2, 11}, crypto.SHA512},
+	}
+
+	password := "test-combo"
 	origPEM, _ := MarshalPrivateKeyToPEM(edKey)
-	parsedPEM, _ := MarshalPrivateKeyToPEM(parsed)
-	if origPEM != parsedPEM {
-		t.Error("decrypted key does not match original")
+
+	for _, cs := range ciphers {
+		for _, ps := range prfs {
+			t.Run(cs.name+"/"+ps.name, func(t *testing.T) {
+				t.Parallel()
+
+				salt := make([]byte, 16)
+				if _, err := rand.Read(salt); err != nil {
+					t.Fatal(err)
+				}
+				iv := make([]byte, cs.ivLen)
+				if _, err := rand.Read(iv); err != nil {
+					t.Fatal(err)
+				}
+
+				derivedKey, err := derivePBKDF2Key(ps.hash, password, salt, 1000, cs.keyLen)
+				if err != nil {
+					t.Fatal(err)
+				}
+
+				blk, err := cs.newBlock(derivedKey)
+				if err != nil {
+					t.Fatal(err)
+				}
+				padLen := blk.BlockSize() - len(pkcs8DER)%blk.BlockSize()
+				padded := make([]byte, len(pkcs8DER)+padLen)
+				copy(padded, pkcs8DER)
+				padByte := byte(padLen) //nolint:gosec // Block sizes are 8 or 16, always fits in a byte.
+				for i := len(pkcs8DER); i < len(padded); i++ {
+					padded[i] = padByte
+				}
+				ciphertext := make([]byte, len(padded))
+				cipher.NewCBCEncrypter(blk, iv).CryptBlocks(ciphertext, padded)
+
+				// Build PBKDF2 params — omit PRF field when testing the default.
+				var kdfParamsDER []byte
+				if ps.oid == nil {
+					kdfParamsDER, _ = asn1.Marshal(pbkdf2NoPRF{
+						Salt: salt, IterationCount: 1000, KeyLength: cs.keyLen,
+					})
+				} else {
+					kdfParamsDER, _ = asn1.Marshal(pbkdf2WithPRF{
+						Salt: salt, IterationCount: 1000, KeyLength: cs.keyLen,
+						PRF: algID{Algorithm: ps.oid},
+					})
+				}
+
+				ivDER, _ := asn1.Marshal(iv)
+				pbes2ParamsDER, _ := asn1.Marshal(pbes2P{
+					KDF:    algID{Algorithm: asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 5, 12}, Parameters: asn1.RawValue{FullBytes: kdfParamsDER}},
+					Cipher: algID{Algorithm: cs.oid, Parameters: asn1.RawValue{FullBytes: ivDER}},
+				})
+				encDER, _ := asn1.Marshal(epki{
+					Algorithm: algID{
+						Algorithm:  asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 5, 13},
+						Parameters: asn1.RawValue{FullBytes: pbes2ParamsDER},
+					},
+					EncryptedData: ciphertext,
+				})
+
+				encPEM := pem.EncodeToMemory(&pem.Block{Type: "ENCRYPTED PRIVATE KEY", Bytes: encDER})
+
+				parsed, err := ParsePEMPrivateKeyWithPasswords(encPEM, []string{password})
+				if err != nil {
+					t.Fatalf("decrypt failed: %v", err)
+				}
+
+				parsedPEM, _ := MarshalPrivateKeyToPEM(parsed)
+				if origPEM != parsedPEM {
+					t.Error("decrypted key does not match original")
+				}
+			})
+		}
 	}
 }
 

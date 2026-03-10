@@ -65,11 +65,15 @@ func derivePBKDF2Key(h crypto.Hash, password string, salt []byte, iterations, ke
 }
 
 func webCryptoHashName(h crypto.Hash) (string, error) {
-	switch h {
+	switch h { //nolint:exhaustive // Only hash functions used in PKCS#8 PBKDF2 PRFs.
 	case crypto.SHA1:
 		return "SHA-1", nil
 	case crypto.SHA256:
 		return "SHA-256", nil
+	case crypto.SHA384:
+		return "SHA-384", nil
+	case crypto.SHA512:
+		return "SHA-512", nil
 	default:
 		return "", fmt.Errorf("unsupported PBKDF2 hash: %v", h)
 	}
