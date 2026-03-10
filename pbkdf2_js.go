@@ -4,6 +4,7 @@ package certkit
 
 import (
 	"errors"
+	"fmt"
 	"syscall/js"
 )
 
@@ -28,7 +29,7 @@ func derivePBKDF2Key(password string, salt []byte, iterations, keyLen int) ([]by
 
 	cryptoKey, err := awaitPromise(keyPromise)
 	if err != nil {
-		return nil, errors.New("importing PBKDF2 key material: " + err.Error())
+		return nil, fmt.Errorf("importing PBKDF2 key material: %w", err)
 	}
 
 	// Derive bits using PBKDF2-HMAC-SHA-256.
@@ -47,7 +48,7 @@ func derivePBKDF2Key(password string, salt []byte, iterations, keyLen int) ([]by
 
 	result, err := awaitPromise(bitsPromise)
 	if err != nil {
-		return nil, errors.New("deriving PBKDF2 key: " + err.Error())
+		return nil, fmt.Errorf("deriving PBKDF2 key: %w", err)
 	}
 
 	// Copy the ArrayBuffer result into a Go byte slice.
