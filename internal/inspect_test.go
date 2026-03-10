@@ -970,8 +970,9 @@ func TestResolveInspectAIA_FetchesIntermediate(t *testing.T) {
 	}
 
 	got, warnings := ResolveInspectAIA(context.Background(), ResolveInspectAIAInput{
-		Results: results,
-		Fetch:   fetcher,
+		Results:              results,
+		Fetch:                fetcher,
+		AllowPrivateNetworks: true,
 	})
 
 	if len(warnings) != 0 {

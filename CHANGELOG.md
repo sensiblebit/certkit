@@ -15,6 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Lock OCSP/CRL JSON schema consistency with contract tests: OCSP exposes `serial`, and OCSP/CRL freshness timestamps remain `this_update`/`next_update` instead of certificate validity keys. ([#138])
 - Warn when PKCS#12/JKS exports fall back to the default `changeit` password in CLI and WASM export flows, and surface that warning in the browser export response. ([#142])
 
+### Tests
+
+- Add `AllowPrivateNetworks: true` to `TestResolveAIA_DeduplicatesURLs`, `TestResolveAIA_MaxDepth`, and `TestResolveInspectAIA_FetchesIntermediate` so they pass in environments without external DNS resolution. ([#160])
+
 ## [0.8.3] - 2026-03-09
 
 ### Changed
@@ -1074,6 +1078,7 @@ Initial release.
 [#131]: https://github.com/sensiblebit/certkit/pull/131
 [#132]: https://github.com/sensiblebit/certkit/pull/132
 [#145]: https://github.com/sensiblebit/certkit/pull/145
+[#160]: https://github.com/sensiblebit/certkit/pull/160
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63
