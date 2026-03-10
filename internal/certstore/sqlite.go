@@ -49,6 +49,34 @@ type sqliteKeyRow struct {
 	KeyData              []byte `db:"key_data"`
 }
 
+type sqliteLoadWarnings struct {
+	certUnparseablePEM int
+	certInvalidDER     int
+	certRejected       int
+	keyParseFailed     int
+	keyRejected        int
+}
+
+func (w sqliteLoadWarnings) totalSkipped() int {
+	return w.certUnparseablePEM + w.certInvalidDER + w.certRejected + w.keyParseFailed + w.keyRejected
+}
+
+func (w sqliteLoadWarnings) logIfAny(dbPath string) {
+	if w.totalSkipped() == 0 {
+		return
+	}
+
+	slog.Warn("loaded database with skipped records",
+		"path", dbPath,
+		"skipped_total", w.totalSkipped(),
+		"skipped_cert_unparseable_pem", w.certUnparseablePEM,
+		"skipped_cert_invalid_der", w.certInvalidDER,
+		"skipped_cert_rejected", w.certRejected,
+		"skipped_key_parse_failed", w.keyParseFailed,
+		"skipped_key_rejected", w.keyRejected,
+	)
+}
+
 func certificateIdentityAuthorityKeyIdentifier(cert *x509.Certificate) string {
 	if len(cert.AuthorityKeyId) > 0 {
 		return hex.EncodeToString(cert.AuthorityKeyId)
@@ -155,19 +183,23 @@ func LoadFromSQLite(store *MemStore, dbPath string) error {
 	if err := db.Select(&certs, "SELECT * FROM certificates"); err != nil {
 		return fmt.Errorf("reading certificates: %w", err)
 	}
+	var warnings sqliteLoadWarnings
 	for _, c := range certs {
 		block, _ := pem.Decode([]byte(c.PEM))
 		if block == nil {
 			slog.Debug("skipping certificate with unparseable PEM", "serial", c.SerialNumber)
+			warnings.certUnparseablePEM++
 			continue
 		}
 		cert, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {
 			slog.Debug("skipping certificate with invalid DER", "serial", c.SerialNumber, "error", err)
+			warnings.certInvalidDER++
 			continue
 		}
 		if err := store.HandleCertificate(cert, "db:"+c.SerialNumber); err != nil {
 			slog.Warn("loading cert from DB", "serial", c.SerialNumber, "error", err)
+			warnings.certRejected++
 			continue
 		}
 		// Restore bundle name from DB record
@@ -186,13 +218,16 @@ func LoadFromSQLite(store *MemStore, dbPath string) error {
 		key, err := certkit.ParsePEMPrivateKey(k.KeyData)
 		if err != nil {
 			slog.Warn("parsing key from DB", "ski", k.SubjectKeyIdentifier, "error", err)
+			warnings.keyParseFailed++
 			continue
 		}
 		if err := store.HandleKey(key, k.KeyData, "db:"+k.SubjectKeyIdentifier); err != nil {
 			slog.Warn("loading key from DB", "ski", k.SubjectKeyIdentifier, "error", err)
+			warnings.keyRejected++
 		}
 	}
 
+	warnings.logIfAny(dbPath)
 	slog.Info("loaded database into store", "path", dbPath)
 	return nil
 }
