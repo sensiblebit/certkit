@@ -367,6 +367,46 @@ func TestBundle_AIAIncompleteError(t *testing.T) {
 	}
 }
 
+func TestBundle_AIAIncompleteIgnoresTrustedCustomRootIssuer(t *testing.T) {
+	// WHY: If a supplied intermediate already chains to the selected trust
+	// store, unresolved AIA counting must not treat its root issuer as missing.
+	t.Parallel()
+
+	root := generateTestCA(t, "Bundle Trusted Root CA")
+	intermediate := generateIntermediateCA(t, root, "Bundle Trusted Intermediate CA", withAIA("http://ca.example.com/root.cer"))
+	leaf := generateTestLeafCert(t, intermediate)
+
+	leafCert, err := x509.ParseCertificate(leaf.DER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Bundle(context.Background(), BundleInput{
+		Leaf: leafCert,
+		Options: BundleOptions{
+			ExtraIntermediates: []*x509.Certificate{intermediate.Cert},
+			FetchAIA:           true,
+			AIATimeout:         2 * time.Second,
+			AIAMaxDepth:        5,
+			TrustStore:         "custom",
+			CustomRoots:        []*x509.Certificate{root.Cert},
+			Verify:             true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Bundle returned error: %v", err)
+	}
+	if result == nil {
+		t.Fatal("expected bundle result")
+	}
+	if result.AIAIncomplete {
+		t.Fatal("expected AIAIncomplete=false when issuer is already trusted")
+	}
+	if result.AIAUnresolvedCount != 0 {
+		t.Fatalf("expected 0 unresolved issuers, got %d", result.AIAUnresolvedCount)
+	}
+}
+
 func TestBundle_ReversedChainDetection(t *testing.T) {
 	// WHY: Users sometimes pass certs in reversed order (CA first); the swap
 	// heuristic must detect this and reorder to produce a valid chain.

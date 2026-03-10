@@ -509,7 +509,7 @@ func fetchAIACertificatesDetailed(ctx context.Context, input FetchAIACertificate
 	allCerts = append(allCerts, input.Cert)
 	allCerts = append(allCerts, input.KnownIntermediates...)
 	allCerts = append(allCerts, fetched...)
-	unresolvedCount := countAIAUnresolvedIssuers(allCerts)
+	unresolvedCount := countAIAUnresolvedIssuers(allCerts, nil)
 
 	return aiaFetchCertificatesResult{
 		certs:           fetched,
@@ -519,7 +519,7 @@ func fetchAIACertificatesDetailed(ctx context.Context, input FetchAIACertificate
 	}
 }
 
-func countAIAUnresolvedIssuers(certs []*x509.Certificate) int {
+func countAIAUnresolvedIssuers(certs []*x509.Certificate, roots *x509.CertPool) int {
 	unresolved := 0
 	for _, cert := range certs {
 		if cert == nil {
@@ -537,12 +537,33 @@ func countAIAUnresolvedIssuers(certs []*x509.Certificate) int {
 		if hasIssuerInSet(cert, certs) {
 			continue
 		}
-		if IsIssuedByMozillaRoot(cert) {
+		if roots != nil && chainsToTrustedRoot(cert, certs, roots) {
+			continue
+		}
+		if roots == nil && IsIssuedByMozillaRoot(cert) {
 			continue
 		}
 		unresolved++
 	}
 	return unresolved
+}
+
+func chainsToTrustedRoot(cert *x509.Certificate, certs []*x509.Certificate, roots *x509.CertPool) bool {
+	if roots == nil {
+		return false
+	}
+	intermediates := x509.NewCertPool()
+	for _, candidate := range certs {
+		if candidate == nil || candidate == cert {
+			continue
+		}
+		intermediates.AddCert(candidate)
+	}
+	return VerifyChainTrust(VerifyChainTrustInput{
+		Cert:          cert,
+		Roots:         roots,
+		Intermediates: intermediates,
+	})
 }
 
 func hasIssuerInSet(cert *x509.Certificate, candidates []*x509.Certificate) bool {
@@ -727,6 +748,14 @@ func Bundle(ctx context.Context, input BundleInput) (*BundleResult, error) {
 		}
 	default:
 		return nil, fmt.Errorf("%w: %q", errBundleUnknownTrustStore, opts.TrustStore)
+	}
+
+	if opts.FetchAIA {
+		allCerts := make([]*x509.Certificate, 0, 1+len(allIntermediates))
+		allCerts = append(allCerts, leaf)
+		allCerts = append(allCerts, allIntermediates...)
+		result.AIAUnresolvedCount = countAIAUnresolvedIssuers(allCerts, rootPool)
+		result.AIAIncomplete = result.AIAUnresolvedCount > 0
 	}
 
 	// Verify
