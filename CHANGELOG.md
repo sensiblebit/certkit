@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Return descriptive errors from `internal/certstore.GenerateBundleFiles`, `GenerateJSON`, and `GenerateYAML` when a nil bundle or nil leaf certificate is provided. ([#145])
 - Lock OCSP/CRL JSON schema consistency with contract tests: OCSP exposes `serial`, and OCSP/CRL freshness timestamps remain `this_update`/`next_update` instead of certificate validity keys. ([#138])
 - Warn when PKCS#12/JKS exports fall back to the default `changeit` password in CLI and WASM export flows, and surface that warning in the browser export response. ([#142])
+- Recognize Windows-specific hard-link error codes (`ERROR_NOT_SUPPORTED`, `ERROR_INVALID_FUNCTION`, `ERROR_PRIVILEGE_NOT_HELD`, `ERROR_ACCESS_DENIED`) so SQLite publish falls back to copy-based staging on filesystems and environments where hard links are unavailable. ([#158])
 
 ## [0.8.3] - 2026-03-09
 
@@ -1073,7 +1074,10 @@ Initial release.
 [#129]: https://github.com/sensiblebit/certkit/pull/129
 [#131]: https://github.com/sensiblebit/certkit/pull/131
 [#132]: https://github.com/sensiblebit/certkit/pull/132
+[#138]: https://github.com/sensiblebit/certkit/pull/138
+[#142]: https://github.com/sensiblebit/certkit/pull/142
 [#145]: https://github.com/sensiblebit/certkit/pull/145
+[#158]: https://github.com/sensiblebit/certkit/pull/158
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63

@@ -514,8 +514,9 @@ func TestResolveAIA_DeduplicatesURLs(t *testing.T) {
 	}
 
 	_ = ResolveAIA(context.Background(), ResolveAIAInput{
-		Store: store,
-		Fetch: fetcher,
+		Store:                store,
+		Fetch:                fetcher,
+		AllowPrivateNetworks: true,
 	})
 
 	if fetchCount.Load() != 1 {
@@ -635,9 +636,10 @@ func TestResolveAIA_MaxDepth(t *testing.T) {
 			}
 
 			result := ResolveAIA(context.Background(), ResolveAIAInput{
-				Store:    store,
-				Fetch:    fetcher,
-				MaxDepth: tt.maxDepth,
+				Store:                store,
+				Fetch:                fetcher,
+				MaxDepth:             tt.maxDepth,
+				AllowPrivateNetworks: true,
 			})
 
 			if int(fetchCount.Load()) != tt.wantFetchCount {
