@@ -21,14 +21,24 @@ func init() {
 }
 
 func runTree(_ *cobra.Command, _ []string) error {
-	// Trigger Cobra's lazy flag registration so --help and --version appear.
-	rootCmd.InitDefaultHelpFlag()
-	rootCmd.InitDefaultVersionFlag()
+	initTreeSurface(rootCmd)
 
 	var b strings.Builder
 	printCommandTree(&b, rootCmd, "")
 	fmt.Print(b.String())
 	return nil
+}
+
+func initTreeSurface(cmd *cobra.Command) {
+	cmd.InitDefaultHelpFlag()
+	if cmd == rootCmd {
+		cmd.InitDefaultHelpCmd()
+		cmd.InitDefaultVersionFlag()
+		cmd.InitDefaultCompletionCmd()
+	}
+	for _, child := range cmd.Commands() {
+		initTreeSurface(child)
+	}
 }
 
 // printCommandTree recursively prints a command and its children with
@@ -39,13 +49,10 @@ func printCommandTree(b *strings.Builder, cmd *cobra.Command, prefix string) {
 		fmt.Fprintf(b, "%s — %s\n", cmd.Name(), cmd.Short)
 	}
 
-	// Collect local (non-inherited, non-hidden) flags.
+	// Collect every visible flag the command accepts, including inherited ones.
 	var flags []string
 	cmd.Flags().VisitAll(func(f *pflag.Flag) {
 		if f.Hidden {
-			return
-		}
-		if cmd.InheritedFlags().Lookup(f.Name) != nil {
 			return
 		}
 		name := "--" + f.Name

@@ -94,13 +94,8 @@ func TestJSONSchemaConsistency(t *testing.T) {
 func TestTreeCommand(t *testing.T) {
 	t.Parallel()
 
-	// Trigger Cobra's lazy initialization of help/completion/version so the
-	// tree output matches the real runtime surface.
 	rootCmd.Version = "test"
-	rootCmd.InitDefaultHelpCmd()
-	rootCmd.InitDefaultHelpFlag()
-	rootCmd.InitDefaultVersionFlag()
-	rootCmd.InitDefaultCompletionCmd()
+	initTreeSurface(rootCmd)
 
 	// Build tree output once to avoid concurrent Cobra Commands() sorting.
 	var rootTree strings.Builder
@@ -148,6 +143,24 @@ func TestTreeCommand(t *testing.T) {
 		for _, flag := range []string{"--help", "--version"} {
 			if !strings.Contains(rootOutput, flag) {
 				t.Errorf("tree output missing flag %q", flag)
+			}
+		}
+	})
+
+	t.Run("includes subcommand help and inherited global flags", func(t *testing.T) {
+		t.Parallel()
+		start := strings.Index(rootOutput, "bundle — ")
+		if start == -1 {
+			t.Fatal("tree output missing bundle command")
+		}
+		end := strings.Index(rootOutput[start:], "\n├── completion — ")
+		if end == -1 {
+			t.Fatal("tree output missing completion command boundary")
+		}
+		bundleSection := rootOutput[start : start+end]
+		for _, flag := range []string{"-h, --help", "--password-file", "-p, --passwords", "-v, --verbose", "--json", "--allow-expired"} {
+			if !strings.Contains(bundleSection, flag) {
+				t.Errorf("bundle subtree missing accepted flag %q", flag)
 			}
 		}
 	})
