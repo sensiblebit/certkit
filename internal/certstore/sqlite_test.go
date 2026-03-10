@@ -100,43 +100,23 @@ func TestSaveToSQLite_RoundTrip(t *testing.T) {
 	}
 }
 
-func TestSaveToSQLite_ReplacesExistingFile(t *testing.T) {
-	// WHY: SaveToSQLite now writes to a temp path and atomically renames it into
-	// place, so re-saving the same database path replaces the old contents.
+func TestSaveToSQLite_ExistingFileErrors(t *testing.T) {
+	// WHY: Atomic temp-file saves should not change the existing no-overwrite
+	// contract; a second save to the same path must still fail.
 	t.Parallel()
 
-	storeA := NewMemStore()
-	caA := newRSACA(t)
-	if err := storeA.HandleCertificate(caA.cert, "ca-a.pem"); err != nil {
-		t.Fatalf("store cert A: %v", err)
-	}
-
-	dbPath := filepath.Join(t.TempDir(), "replace.db")
-	if err := SaveToSQLite(storeA, dbPath); err != nil {
+	store := NewMemStore()
+	dbPath := filepath.Join(t.TempDir(), "existing.db")
+	if err := SaveToSQLite(store, dbPath); err != nil {
 		t.Fatalf("first SaveToSQLite: %v", err)
 	}
 
-	storeB := NewMemStore()
-	caB := newECDSACA(t)
-	if err := storeB.HandleCertificate(caB.cert, "ca-b.pem"); err != nil {
-		t.Fatalf("store cert B: %v", err)
+	err := SaveToSQLite(store, dbPath)
+	if err == nil {
+		t.Fatal("expected error when saving to existing file, got nil")
 	}
-
-	if err := SaveToSQLite(storeB, dbPath); err != nil {
-		t.Fatalf("second SaveToSQLite: %v", err)
-	}
-
-	loaded := NewMemStore()
-	if err := LoadFromSQLite(loaded, dbPath); err != nil {
-		t.Fatalf("LoadFromSQLite: %v", err)
-	}
-
-	certs := loaded.AllCertsFlat()
-	if len(certs) != 1 {
-		t.Fatalf("expected 1 cert after replacement save, got %d", len(certs))
-	}
-	if got := certs[0].Cert.Subject.CommonName; got != "Test ECDSA Root CA" {
-		t.Fatalf("loaded cert CN = %q, want %q", got, "Test ECDSA Root CA")
+	if !strings.Contains(err.Error(), "saving database to") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -185,22 +165,9 @@ func TestSaveToSQLite_RenameFailureLeavesNoPartialFile(t *testing.T) {
 	}
 }
 
-func TestSaveToSQLite_VacuumFailureLeavesExistingDatabaseUntouched(t *testing.T) {
+func TestSaveToSQLite_VacuumFailureLeavesNoPartialFile(t *testing.T) {
 	// WHY: If the temp database write fails after producing partial temp output,
-	// SaveToSQLite must remove that temp state and leave the on-disk database
-	// untouched.
-
-	storeA := NewMemStore()
-	caA := newRSACA(t)
-	if err := storeA.HandleCertificate(caA.cert, "ca-a.pem"); err != nil {
-		t.Fatalf("store cert A: %v", err)
-	}
-
-	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "atomic.db")
-	if err := SaveToSQLite(storeA, dbPath); err != nil {
-		t.Fatalf("initial SaveToSQLite: %v", err)
-	}
+	// SaveToSQLite must remove that temp state and leave no destination file.
 
 	originalVacuumInto := sqliteVacuumInto
 	t.Cleanup(func() {
@@ -213,13 +180,16 @@ func TestSaveToSQLite_VacuumFailureLeavesExistingDatabaseUntouched(t *testing.T)
 		return errInjectedVacuumFailure
 	}
 
-	storeB := NewMemStore()
-	caB := newECDSACA(t)
-	if err := storeB.HandleCertificate(caB.cert, "ca-b.pem"); err != nil {
-		t.Fatalf("store cert B: %v", err)
+	store := NewMemStore()
+	ca := newECDSACA(t)
+	if err := store.HandleCertificate(ca.cert, "ca.pem"); err != nil {
+		t.Fatalf("store cert: %v", err)
 	}
 
-	err := SaveToSQLite(storeB, dbPath)
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "atomic.db")
+
+	err := SaveToSQLite(store, dbPath)
 	if err == nil {
 		t.Fatal("expected SaveToSQLite error, got nil")
 	}
@@ -230,23 +200,15 @@ func TestSaveToSQLite_VacuumFailureLeavesExistingDatabaseUntouched(t *testing.T)
 		t.Fatalf("SaveToSQLite error = %v, want wrapped %v", err, errInjectedVacuumFailure)
 	}
 
-	loaded := NewMemStore()
-	if err := LoadFromSQLite(loaded, dbPath); err != nil {
-		t.Fatalf("LoadFromSQLite after failed save: %v", err)
-	}
-	certs := loaded.AllCertsFlat()
-	if len(certs) != 1 {
-		t.Fatalf("expected original database contents to remain, got %d certs", len(certs))
-	}
-	if got := certs[0].Cert.Subject.CommonName; got != "Test RSA Root CA" {
-		t.Fatalf("loaded cert CN = %q, want %q", got, "Test RSA Root CA")
+	if _, statErr := os.Stat(dbPath); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("destination path stat error = %v, want not exists", statErr)
 	}
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		t.Fatalf("read dir: %v", err)
 	}
-	if len(entries) != 1 || entries[0].Name() != "atomic.db" {
+	if len(entries) != 0 {
 		t.Fatalf("unexpected leftover entries after failed save: %v", entries)
 	}
 }

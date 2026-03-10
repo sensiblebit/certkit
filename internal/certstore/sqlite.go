@@ -10,7 +10,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
-	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -53,8 +52,6 @@ type sqliteKeyRow struct {
 }
 
 var (
-	errSQLiteDestinationIsDir = errors.New("destination path is a directory")
-
 	sqliteMkdirTemp  = os.MkdirTemp
 	sqliteRename     = os.Rename
 	sqliteRemoveAll  = os.RemoveAll
@@ -283,6 +280,12 @@ func SaveToSQLite(store *MemStore, dbPath string) error {
 		}
 	}
 
+	if _, err := sqliteStat(dbPath); err == nil {
+		return fmt.Errorf("saving database to %s: %w", dbPath, os.ErrExist)
+	} else if !os.IsNotExist(err) {
+		return fmt.Errorf("checking existing database %s: %w", dbPath, err)
+	}
+
 	parentDir := filepath.Dir(dbPath)
 	tempDir, err := sqliteMkdirTemp(parentDir, "."+filepath.Base(dbPath)+".tmp-*")
 	if err != nil {
@@ -296,65 +299,14 @@ func SaveToSQLite(store *MemStore, dbPath string) error {
 	}()
 
 	// VACUUM INTO produces a clean, compact copy. Write to a temp path first so
-	// the final database is only replaced after the new file is complete.
+	// the final database is only created after the new file is complete.
 	if err := sqliteVacuumInto(db, tempPath); err != nil {
 		return fmt.Errorf("saving database to temporary path for %s: %w", dbPath, err)
 	}
-	if err := replaceSQLiteFileAtomically(tempPath, dbPath); err != nil {
+	if err := sqliteRename(tempPath, dbPath); err != nil {
 		return fmt.Errorf("committing database %s: %w", dbPath, err)
 	}
 
 	slog.Info("database saved", "path", dbPath)
 	return nil
-}
-
-func replaceSQLiteFileAtomically(tempPath, dbPath string) error {
-	parentDir := filepath.Dir(dbPath)
-	backupPath, err := reserveSQLiteTemporaryPath(parentDir, "."+filepath.Base(dbPath)+".bak-*")
-	if err != nil {
-		return fmt.Errorf("creating backup path for %s: %w", dbPath, err)
-	}
-
-	hadExisting := false
-	if info, err := sqliteStat(dbPath); err == nil {
-		if info.IsDir() {
-			return fmt.Errorf("%w: %s", errSQLiteDestinationIsDir, dbPath)
-		}
-		if err := sqliteRename(dbPath, backupPath); err != nil {
-			return fmt.Errorf("moving existing database aside: %w", err)
-		}
-		hadExisting = true
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("checking existing database: %w", err)
-	}
-
-	if err := sqliteRename(tempPath, dbPath); err != nil {
-		if hadExisting {
-			if restoreErr := sqliteRename(backupPath, dbPath); restoreErr != nil {
-				return fmt.Errorf(
-					"moving staged database into place: %w",
-					errors.Join(err, fmt.Errorf("restoring previous database: %w", restoreErr)),
-				)
-			}
-		}
-		return fmt.Errorf("moving staged database into place: %w", err)
-	}
-
-	if hadExisting {
-		if err := sqliteRemoveAll(backupPath); err != nil {
-			return fmt.Errorf("removing replaced database backup: %w", err)
-		}
-	}
-	return nil
-}
-
-func reserveSQLiteTemporaryPath(parentDir, pattern string) (string, error) {
-	path, err := sqliteMkdirTemp(parentDir, pattern)
-	if err != nil {
-		return "", err
-	}
-	if err := sqliteRemoveAll(path); err != nil {
-		return "", fmt.Errorf("releasing reserved path %s: %w", path, err)
-	}
-	return path, nil
 }
