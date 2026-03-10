@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -86,19 +87,9 @@ func ProbeSSH(ctx context.Context, input SSHProbeInput) (*SSHProbeResult, error)
 	if err != nil {
 		return nil, fmt.Errorf("connecting to SSH server %s: %w", addr, err)
 	}
-	stopOnCancel := context.AfterFunc(ctx, func() { _ = conn.Close() })
-	defer func() {
-		if !stopOnCancel() {
-			return
-		}
-		_ = conn.Close()
-	}()
+	defer sshProbeConnCloser(ctx, conn)()
 
-	if deadline, ok := ctx.Deadline(); ok {
-		if err := conn.SetDeadline(deadline); err != nil {
-			return nil, fmt.Errorf("setting SSH probe deadline: %w", err)
-		}
-	} else if err := conn.SetDeadline(time.Now().Add(defaultConnectTimeout)); err != nil {
+	if err := setProbeConnDeadline(ctx, conn, time.Now); err != nil {
 		return nil, fmt.Errorf("setting SSH probe deadline: %w", err)
 	}
 
@@ -135,6 +126,20 @@ func ProbeSSH(ctx context.Context, input SSHProbeInput) (*SSHProbeResult, error)
 	SortDiagnostics(result.Diagnostics)
 	result.OverallRating = RateSSHAlgorithms(result)
 	return result, nil
+}
+
+func sshProbeConnCloser(ctx context.Context, conn io.Closer) func() {
+	var once sync.Once
+	closeConn := func() {
+		once.Do(func() {
+			_ = conn.Close()
+		})
+	}
+	stopOnCancel := context.AfterFunc(ctx, closeConn)
+	return func() {
+		stopOnCancel()
+		closeConn()
+	}
 }
 
 func readSSHBanner(reader *bufio.Reader) (string, error) {

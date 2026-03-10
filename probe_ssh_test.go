@@ -11,6 +11,7 @@ import (
 	"net"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -132,6 +133,87 @@ func TestProbeSSH_IgnoresPreKexPackets(t *testing.T) {
 	}
 	if !slices.Contains(result.KeyExchangeAlgorithms, "curve25519-sha256") {
 		t.Fatalf("KeyExchangeAlgorithms = %v, want curve25519-sha256", result.KeyExchangeAlgorithms)
+	}
+}
+
+func TestProbeSSH_CancellationReturnsPromptly(t *testing.T) {
+	t.Parallel()
+
+	addr, accepted := startStalledSSHServer(t)
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		t.Fatalf("SplitHostPort: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := ProbeSSH(ctx, SSHProbeInput{Host: host, Port: port})
+		errCh <- err
+	}()
+
+	select {
+	case <-accepted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("SSH test server did not accept probe connection")
+	}
+
+	cancel()
+
+	select {
+	case err := <-errCh:
+		if err == nil {
+			t.Fatal("ProbeSSH returned nil error after context cancellation")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("ProbeSSH did not return after context cancellation")
+	}
+}
+
+func TestSSHProbeConnCloser_ClosesConnectionOnce(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	conn := &blockingTestCloser{
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	cleanup := sshProbeConnCloser(ctx, conn)
+
+	cancel()
+
+	select {
+	case <-conn.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("context cancellation did not start connection close")
+	}
+
+	done := make(chan struct{})
+	go func() {
+		cleanup()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		t.Fatal("cleanup returned before the first close completed")
+	default:
+	}
+
+	close(conn.release)
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("cleanup did not return after releasing the first close")
+	}
+
+	if got := conn.closeCount.Load(); got != 1 {
+		t.Fatalf("Close called %d times, want 1", got)
 	}
 }
 
@@ -577,6 +659,47 @@ func startNoisyTestSSHServer(t *testing.T) string {
 	}()
 
 	return listener.Addr().String()
+}
+
+func startStalledSSHServer(t *testing.T) (string, <-chan struct{}) {
+	t.Helper()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen: %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	accepted := make(chan struct{}, 1)
+	go func() {
+		for {
+			conn, acceptErr := listener.Accept()
+			if acceptErr != nil {
+				return
+			}
+			accepted <- struct{}{}
+			go func(c net.Conn) {
+				defer func() { _ = c.Close() }()
+				_, _ = c.Read(make([]byte, 1))
+			}(conn)
+		}
+	}()
+
+	return listener.Addr().String(), accepted
+}
+
+type blockingTestCloser struct {
+	closeCount atomic.Int32
+	started    chan struct{}
+	release    chan struct{}
+}
+
+func (c *blockingTestCloser) Close() error {
+	if c.closeCount.Add(1) == 1 {
+		close(c.started)
+		<-c.release
+	}
+	return nil
 }
 
 func containsAny(values []string, wants ...string) bool {
