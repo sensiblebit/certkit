@@ -177,6 +177,8 @@ type ExportBundlesInput struct {
 	ForceBundle bool
 	Duplicates  bool
 	P12Password string
+	// EncryptKey when true encrypts .key PEM output using PKCS#8 v2.
+	EncryptKey bool
 }
 
 // ExportBundles iterates over bundle names in the store, finds matching
@@ -199,6 +201,7 @@ func ExportBundles(ctx context.Context, input ExportBundlesInput) error {
 			BundleName:  bundleName,
 			Duplicates:  input.Duplicates,
 			P12Password: input.P12Password,
+			EncryptKey:  input.EncryptKey,
 			UsedFolders: usedFolders,
 		}); err != nil {
 			return fmt.Errorf("exporting bundle %q: %w", bundleName, err)
@@ -215,6 +218,8 @@ type exportBundleCertsInput struct {
 	BundleName  string
 	Duplicates  bool
 	P12Password string
+	// EncryptKey when true encrypts .key PEM output using PKCS#8 v2.
+	EncryptKey  bool
 	UsedFolders map[string]string
 }
 
@@ -286,6 +291,7 @@ func exportBundleCerts(ctx context.Context, input exportBundleCertsInput) error 
 			CSRSubject:    csrSubject,
 			RetryNoVerify: false,
 			P12Password:   input.P12Password,
+			EncryptKey:    input.EncryptKey,
 		}); err != nil {
 			if input.Opts.Verify && isBundleVerificationError(err) {
 				delete(input.UsedFolders, folder)

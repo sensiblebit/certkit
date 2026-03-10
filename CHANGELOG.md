@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Encrypt PEM private key output (`.key`) using PKCS#8 v2 (AES-256-CBC) when an explicit export password is supplied ([#167])
+- Support decryption of PKCS#8 v2 encrypted private keys (`ENCRYPTED PRIVATE KEY` PEM blocks) ([#167])
+
+### Changed
+
+- Normalize all exported private key PEM output (`.key`, K8s `tls.key`, YAML `key`) to PKCS#8 (`PRIVATE KEY`) regardless of input format ([#167])
+- Bundle export warns when Kubernetes TLS secret contains an unencrypted private key alongside encrypted outputs ([#167])
+
 ### Fixed
 
 - Add nil guards to exported certificate helper functions (`CertToPEM`, `CertFingerprint`, `CertFingerprintSHA1`, `CertFingerprintColonSHA256`, `CertFingerprintColonSHA1`, `CertSKI`, `GetCertificateType`, `CertExpiresWithin`) so they return safe zero values instead of panicking on nil input. ([#145])
@@ -1079,6 +1089,7 @@ Initial release.
 [#142]: https://github.com/sensiblebit/certkit/pull/142
 [#145]: https://github.com/sensiblebit/certkit/pull/145
 [#158]: https://github.com/sensiblebit/certkit/pull/158
+[#167]: https://github.com/sensiblebit/certkit/issues/167
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63

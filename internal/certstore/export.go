@@ -57,6 +57,8 @@ type BundleExportInput struct {
 	CSRSubject *CSRSubjectOverride // optional; nil uses cert's own subject
 	// P12Password controls the .p12 output file password and must be explicit.
 	P12Password string
+	// EncryptKey when true encrypts the .key PEM output using PKCS#8 v2.
+	EncryptKey bool
 }
 
 // K8sSecret represents a Kubernetes TLS secret.
@@ -113,17 +115,34 @@ func GenerateBundleFiles(input BundleExportInput) ([]BundleFile, error) {
 		files = append(files, BundleFile{Name: prefix + ".root.pem", Data: rootPEM})
 	}
 
-	// Private key
-	files = append(files, BundleFile{Name: prefix + ".key", Data: input.KeyPEM, Sensitive: true})
+	// Parse private key once for P12, CSR, and optional encryption.
+	privKey, err := certkit.ParsePEMPrivateKey(input.KeyPEM)
+	if err != nil {
+		return nil, fmt.Errorf("parsing private key: %w", err)
+	}
+
+	// Normalize key output to PKCS#8 PEM regardless of input format.
+	pkcs8PEM, err := certkit.MarshalPrivateKeyToPEM(privKey)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling private key to PKCS#8: %w", err)
+	}
+	pkcs8Bytes := []byte(pkcs8PEM)
+
+	// Private key — encrypt when explicitly requested.
+	keyOutput := pkcs8Bytes
+	if input.EncryptKey {
+		encrypted, encErr := certkit.MarshalEncryptedPrivateKeyToPEM(privKey, input.P12Password)
+		if encErr != nil {
+			return nil, fmt.Errorf("encrypting private key PEM: %w", encErr)
+		}
+		keyOutput = []byte(encrypted)
+	}
+	files = append(files, BundleFile{Name: prefix + ".key", Data: keyOutput, Sensitive: true})
 
 	// PKCS#12
 	p12Password := input.P12Password
 	if p12Password == "" {
 		return nil, errP12PasswordRequired
-	}
-	privKey, err := certkit.ParsePEMPrivateKey(input.KeyPEM)
-	if err != nil {
-		return nil, fmt.Errorf("parsing private key for P12: %w", err)
 	}
 	p12Data, err := certkit.EncodePKCS12Legacy(privKey, bundle.Leaf, bundle.Intermediates, p12Password)
 	if err != nil {
@@ -141,7 +160,7 @@ func GenerateBundleFiles(input BundleExportInput) ([]BundleFile, error) {
 		},
 		Data: map[string]string{
 			"tls.crt": base64.StdEncoding.EncodeToString(chainPEM),
-			"tls.key": base64.StdEncoding.EncodeToString(input.KeyPEM),
+			"tls.key": base64.StdEncoding.EncodeToString(pkcs8Bytes),
 		},
 	}
 	k8sYAML, err := yaml.Marshal(k8sSecret)
@@ -149,6 +168,11 @@ func GenerateBundleFiles(input BundleExportInput) ([]BundleFile, error) {
 		return nil, fmt.Errorf("marshaling kubernetes secret YAML: %w", err)
 	}
 	files = append(files, BundleFile{Name: prefix + ".k8s.yaml", Data: k8sYAML, Sensitive: true})
+	if input.EncryptKey {
+		slog.Warn("kubernetes TLS secret contains unencrypted private key",
+			"file", prefix+".k8s.yaml",
+			"reason", "kubernetes.io/tls requires unencrypted tls.key")
+	}
 
 	// JSON
 	jsonData, err := GenerateJSON(bundle)
@@ -158,14 +182,14 @@ func GenerateBundleFiles(input BundleExportInput) ([]BundleFile, error) {
 	files = append(files, BundleFile{Name: prefix + ".json", Data: jsonData})
 
 	// YAML
-	yamlData, err := GenerateYAML(bundle, input.KeyPEM, input.KeyType, input.BitLength)
+	yamlData, err := GenerateYAML(bundle, pkcs8Bytes, input.KeyType, input.BitLength)
 	if err != nil {
 		return nil, fmt.Errorf("generating YAML: %w", err)
 	}
 	files = append(files, BundleFile{Name: prefix + ".yaml", Data: yamlData, Sensitive: true})
 
 	// CSR
-	csrPEM, csrJSON, err := GenerateCSR(bundle.Leaf, input.KeyPEM, input.CSRSubject)
+	csrPEM, csrJSON, err := GenerateCSR(bundle.Leaf, pkcs8Bytes, input.CSRSubject)
 	if err != nil {
 		return nil, fmt.Errorf("generating CSR: %w", err)
 	}
@@ -353,6 +377,7 @@ type ExportMatchedBundleInput struct {
 	CSRSubject    *CSRSubjectOverride // optional; nil uses cert's own subject
 	RetryNoVerify bool                // retry bundle without verification on failure
 	P12Password   string              // required for PKCS#12 output
+	EncryptKey    bool                // encrypt .key PEM output using PKCS#8 v2
 }
 
 // ExportMatchedBundles builds certificate chains and writes bundle files for
@@ -421,6 +446,7 @@ func ExportMatchedBundles(ctx context.Context, input ExportMatchedBundleInput) e
 			SecretName:  strings.TrimPrefix(prefix, "_."),
 			CSRSubject:  input.CSRSubject,
 			P12Password: input.P12Password,
+			EncryptKey:  input.EncryptKey,
 		})
 		if err != nil {
 			wrapped := fmt.Errorf("generating bundle files for %q: %w", certRec.Cert.Subject.CommonName, err)

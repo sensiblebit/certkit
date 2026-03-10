@@ -1438,6 +1438,81 @@ func TestMarshalPrivateKeyToPEM_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestMarshalEncryptedPrivateKeyToPEM_RoundTrip(t *testing.T) {
+	// WHY: Verifies that MarshalEncryptedPrivateKeyToPEM produces a valid
+	// PKCS#8 v2 encrypted PEM that ParsePEMPrivateKeyWithPasswords can decrypt
+	// back to the original key, and that wrong passwords fail.
+	t.Parallel()
+
+	rsaKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ecKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, edKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name string
+		key  crypto.PrivateKey
+	}{
+		{"RSA-2048", rsaKey},
+		{"ECDSA-P256", ecKey},
+		{"Ed25519", edKey},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			password := "test-password"
+
+			encrypted, err := MarshalEncryptedPrivateKeyToPEM(tt.key, password)
+			if err != nil {
+				t.Fatalf("MarshalEncryptedPrivateKeyToPEM: %v", err)
+			}
+
+			// Verify PEM block type
+			block, _ := pem.Decode([]byte(encrypted))
+			if block == nil {
+				t.Fatal("no PEM block in encrypted output")
+			}
+			if block.Type != "ENCRYPTED PRIVATE KEY" {
+				t.Errorf("PEM type = %q, want \"ENCRYPTED PRIVATE KEY\"", block.Type)
+			}
+
+			// Decrypt with correct password
+			parsed, err := ParsePEMPrivateKeyWithPasswords([]byte(encrypted), []string{password})
+			if err != nil {
+				t.Fatalf("decrypt with correct password: %v", err)
+			}
+
+			// Verify key matches original
+			origPEM, err := MarshalPrivateKeyToPEM(tt.key)
+			if err != nil {
+				t.Fatalf("marshal original key: %v", err)
+			}
+			parsedPEM, err := MarshalPrivateKeyToPEM(parsed)
+			if err != nil {
+				t.Fatalf("marshal parsed key: %v", err)
+			}
+			if origPEM != parsedPEM {
+				t.Error("decrypted key does not match original")
+			}
+
+			// Wrong password must fail
+			_, err = ParsePEMPrivateKeyWithPasswords([]byte(encrypted), []string{"wrong-password"})
+			if err == nil {
+				t.Error("expected error with wrong password, got nil")
+			}
+		})
+	}
+}
+
 func TestMarshalPublicKeyToPEM_RoundTrip(t *testing.T) {
 	// WHY: MarshalPublicKeyToPEM serializes public keys to PKIX PEM; a round-
 	// trip through x509.ParsePKIXPublicKey proves the PEM wrapper and DER

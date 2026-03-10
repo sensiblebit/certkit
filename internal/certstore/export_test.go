@@ -1549,3 +1549,141 @@ func TestGenerateBundleFiles_PKCS12RoundTrip(t *testing.T) {
 	}
 	t.Fatal("no .p12 file in output")
 }
+
+func TestGenerateBundleFiles_EncryptedKey(t *testing.T) {
+	// WHY: When EncryptKey is true, the .key file must contain an
+	// ENCRYPTED PRIVATE KEY block that is decryptable with the P12 password.
+	t.Parallel()
+
+	root := newRSACA(t)
+	intermediate := newIntermediateCA(t, root)
+	leaf := newRSALeaf(t, intermediate, "enc.example.com", []string{"enc.example.com"})
+
+	password := testP12Password()
+	files, err := GenerateBundleFiles(BundleExportInput{
+		Bundle:      &certkit.BundleResult{Leaf: leaf.cert, Intermediates: []*x509.Certificate{intermediate.cert}, Roots: []*x509.Certificate{root.cert}},
+		KeyPEM:      leaf.keyPEM,
+		KeyType:     "RSA",
+		BitLength:   2048,
+		Prefix:      "enc.example.com",
+		SecretName:  "enc-tls",
+		P12Password: password,
+		EncryptKey:  true,
+	})
+	if err != nil {
+		t.Fatalf("GenerateBundleFiles: %v", err)
+	}
+
+	for _, f := range files {
+		if f.Name != "enc.example.com.key" {
+			continue
+		}
+		block, _ := pem.Decode(f.Data)
+		if block == nil {
+			t.Fatal(".key file has no PEM block")
+		}
+		if block.Type != "ENCRYPTED PRIVATE KEY" {
+			t.Errorf(".key PEM type = %q, want \"ENCRYPTED PRIVATE KEY\"", block.Type)
+		}
+		// Decrypt and verify
+		parsed, parseErr := certkit.ParsePEMPrivateKeyWithPasswords(f.Data, []string{password})
+		if parseErr != nil {
+			t.Fatalf("decrypting .key file: %v", parseErr)
+		}
+		matches, matchErr := certkit.KeyMatchesCert(parsed, leaf.cert)
+		if matchErr != nil {
+			t.Fatalf("key-cert match check: %v", matchErr)
+		}
+		if !matches {
+			t.Error("decrypted .key does not match leaf certificate")
+		}
+		return
+	}
+	t.Fatal("no .key file in output")
+}
+
+func TestGenerateBundleFiles_K8sKeyUnencrypted(t *testing.T) {
+	// WHY: Kubernetes TLS secrets require unencrypted tls.key. Even when
+	// EncryptKey is true, the k8s YAML must contain a plaintext PRIVATE KEY.
+	t.Parallel()
+
+	root := newRSACA(t)
+	intermediate := newIntermediateCA(t, root)
+	leaf := newRSALeaf(t, intermediate, "k8s.example.com", []string{"k8s.example.com"})
+
+	files, err := GenerateBundleFiles(BundleExportInput{
+		Bundle:      &certkit.BundleResult{Leaf: leaf.cert, Intermediates: []*x509.Certificate{intermediate.cert}, Roots: []*x509.Certificate{root.cert}},
+		KeyPEM:      leaf.keyPEM,
+		KeyType:     "RSA",
+		BitLength:   2048,
+		Prefix:      "k8s.example.com",
+		SecretName:  "k8s-tls",
+		P12Password: testP12Password(),
+		EncryptKey:  true,
+	})
+	if err != nil {
+		t.Fatalf("GenerateBundleFiles: %v", err)
+	}
+
+	for _, f := range files {
+		if f.Name != "k8s.example.com.k8s.yaml" {
+			continue
+		}
+		var secret K8sSecret
+		if err := yaml.Unmarshal(f.Data, &secret); err != nil {
+			t.Fatalf("k8s.yaml: invalid YAML: %v", err)
+		}
+		tlsKeyBytes, err := base64.StdEncoding.DecodeString(secret.Data["tls.key"])
+		if err != nil {
+			t.Fatalf("k8s.yaml: decode tls.key: %v", err)
+		}
+		block, _ := pem.Decode(tlsKeyBytes)
+		if block == nil {
+			t.Fatal("k8s.yaml: tls.key has no PEM block")
+		}
+		if block.Type != "PRIVATE KEY" {
+			t.Errorf("k8s.yaml: tls.key PEM type = %q, want \"PRIVATE KEY\" (PKCS#8 unencrypted)", block.Type)
+		}
+		return
+	}
+	t.Fatal("no .k8s.yaml file in output")
+}
+
+func TestGenerateBundleFiles_PlaintextKeyDefault(t *testing.T) {
+	// WHY: When EncryptKey is false (default), the .key file must contain
+	// a plaintext PRIVATE KEY block.
+	t.Parallel()
+
+	root := newRSACA(t)
+	intermediate := newIntermediateCA(t, root)
+	leaf := newRSALeaf(t, intermediate, "plain.example.com", []string{"plain.example.com"})
+
+	files, err := GenerateBundleFiles(BundleExportInput{
+		Bundle:      &certkit.BundleResult{Leaf: leaf.cert, Intermediates: []*x509.Certificate{intermediate.cert}, Roots: []*x509.Certificate{root.cert}},
+		KeyPEM:      leaf.keyPEM,
+		KeyType:     "RSA",
+		BitLength:   2048,
+		Prefix:      "plain.example.com",
+		SecretName:  "plain-tls",
+		P12Password: testP12Password(),
+		EncryptKey:  false,
+	})
+	if err != nil {
+		t.Fatalf("GenerateBundleFiles: %v", err)
+	}
+
+	for _, f := range files {
+		if f.Name != "plain.example.com.key" {
+			continue
+		}
+		block, _ := pem.Decode(f.Data)
+		if block == nil {
+			t.Fatal(".key file has no PEM block")
+		}
+		if block.Type == "ENCRYPTED PRIVATE KEY" {
+			t.Error(".key file is encrypted when EncryptKey=false")
+		}
+		return
+	}
+	t.Fatal("no .key file in output")
+}

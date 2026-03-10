@@ -1203,12 +1203,19 @@ exportBtn.addEventListener("click", async () => {
   const skis = getExportableSKIs();
   if (skis.length === 0) return;
 
+  const password = window.prompt(
+    "Enter an export password to encrypt private keys (leave blank for no encryption):",
+    "",
+  );
+  // null means user cancelled the dialog
+  if (password === null) return;
+
   exportBtn.disabled = true;
   exportBtn.textContent = "Exporting...";
   showStatus(`Building ${skis.length} bundle(s) and ZIP...`, false, true);
 
   try {
-    const payload = await certkitExportBundles(skis);
+    const payload = await certkitExportBundles(skis, password || undefined);
     downloadBlob(payload.data, "certkit-bundles.zip", "application/zip");
     if (payload.warning) {
       showStatus(payload.warning, false, false);
@@ -1223,7 +1230,11 @@ exportBtn.addEventListener("click", async () => {
       )
     ) {
       try {
-        const payload = await certkitExportBundles(skis, undefined, true);
+        const payload = await certkitExportBundles(
+          skis,
+          password || undefined,
+          true,
+        );
         downloadBlob(payload.data, "certkit-bundles.zip", "application/zip");
         const messages = [];
         if (payload.warning) messages.push(payload.warning);

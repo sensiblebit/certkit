@@ -347,6 +347,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 			ForceBundle: scanForceExport,
 			Duplicates:  scanDuplicates,
 			P12Password: p12Password,
+			EncryptKey:  len(passwordSets.Export) > 0,
 		}); err != nil {
 			return fmt.Errorf("exporting bundles: %w", err)
 		}

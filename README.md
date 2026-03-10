@@ -365,8 +365,8 @@ When running `certkit scan --bundle-path`, each bundle produces the following fi
 | `<cn>.fullchain.pem`     | Leaf + intermediates + root                                                           |
 | `<cn>.intermediates.pem` | Intermediate certificates                                                             |
 | `<cn>.root.pem`          | Root certificate                                                                      |
-| `<cn>.key`               | Private key (PEM, mode 0600)                                                          |
-| `<cn>.p12`               | PKCS#12 archive (uses first non-empty export password from `--passwords`/`--password-file`, or defaults to `changeit` with a warning because it is only for local/interoperability use, mode 0600) |
+| `<cn>.key`               | Private key (PKCS#8 PEM, mode 0600). When an export password is supplied, contains an `ENCRYPTED PRIVATE KEY` block (PKCS#8 v2, PBES2/AES-256-CBC) |
+| `<cn>.p12`               | PKCS#12 archive (uses first non-empty export password from `--passwords`/`--password-file`, or defaults to `changeit` with a warning, mode 0600) |
 | `<cn>.k8s.yaml`          | Kubernetes `kubernetes.io/tls` Secret (mode 0600)                                     |
 | `<cn>.json`              | Certificate metadata                                                                  |
 | `<cn>.yaml`              | Certificate and key metadata (mode 0600)                                              |
@@ -422,6 +422,9 @@ ocspResp, _ := certkit.CheckOCSP(ctx, certkit.CheckOCSPInput{Cert: cert, Issuer:
 p12, _ := certkit.EncodePKCS12(key, leaf, intermediates, "password")
 p7, _ := certkit.EncodePKCS7(certs)
 jks, _ := certkit.EncodeJKS(key, leaf, intermediates, "changeit")
+
+// Encrypt a private key to PEM (PKCS#8 v2, PBES2/AES-256-CBC)
+encPEM, _ := certkit.MarshalEncryptedPrivateKeyToPEM(key, "secret")
 ```
 
 ### How It Works
