@@ -564,7 +564,6 @@ def command_show(args: argparse.Namespace) -> int:
 def command_reply(args: argparse.Namespace) -> int:
     """Reply to a review comment."""
     owner, repo, pr_number = resolve_repo_and_pr(args)
-    _ = pr_number  # resolved for consistency and clearer failure mode
 
     if bool(args.url) == bool(args.database_id):
         raise CommandError("reply requires exactly one of --url or --database-id")
@@ -586,7 +585,7 @@ def command_reply(args: argparse.Namespace) -> int:
         [
             "gh",
             "api",
-            f"repos/{owner}/{repo}/pulls/comments/{database_id}/replies",
+            f"repos/{owner}/{repo}/pulls/{pr_number}/comments/{database_id}/replies",
             "-X",
             "POST",
             "-f",
