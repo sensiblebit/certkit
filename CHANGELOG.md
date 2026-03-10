@@ -9,6 +9,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Preserve the moved-aside SQLite backup during an atomic-replace rollback when the race winner at the destination is not a regular file (e.g., a directory), so the original database is restored correctly instead of being lost. ([#162])
+- Prevent data loss when two concurrent `SaveToSQLite` calls target the same path: the competing writer's file is no longer overwritten during rollback — the caller that lost the race receives `os.ErrExist` and the winner's data remains intact. ([#162])
+- Make `ResolveAIA` concurrent-safe by using a locked `MemStore.ContainsCertByID` helper instead of direct map access, eliminating a data race when multiple goroutines fetch and ingest intermediates simultaneously. ([#162])
+- Properly record `incomplete` status and `unresolved_count` in AIA fetch results when the per-run certificate limit is reached mid-walk, so callers can detect and surface partial chain resolution. ([#162])
 - Add nil guards to exported certificate helper functions (`CertToPEM`, `CertFingerprint`, `CertFingerprintSHA1`, `CertFingerprintColonSHA256`, `CertFingerprintColonSHA1`, `CertSKI`, `GetCertificateType`, `CertExpiresWithin`) so they return safe zero values instead of panicking on nil input. ([#145])
 - Return a descriptive `errCertificateNil` error from `GenerateCSR` and `internal/certstore.GenerateCSR` when a nil leaf certificate is passed, instead of panicking. ([#145])
 - Return descriptive errors from `internal/certstore.GenerateBundleFiles`, `GenerateJSON`, and `GenerateYAML` when a nil bundle or nil leaf certificate is provided. ([#145])
@@ -1073,6 +1077,7 @@ Initial release.
 [#129]: https://github.com/sensiblebit/certkit/pull/129
 [#131]: https://github.com/sensiblebit/certkit/pull/131
 [#132]: https://github.com/sensiblebit/certkit/pull/132
+[#162]: https://github.com/sensiblebit/certkit/pull/162
 [#145]: https://github.com/sensiblebit/certkit/pull/145
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
