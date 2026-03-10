@@ -1,4 +1,4 @@
-import { decodeBase64ToUint8Array, formatDate, escapeHTML } from "./utils.js";
+import { formatDate, escapeHTML } from "./utils.js";
 
 // DOM references — Scan page
 const dropZone = document.getElementById("drop-zone");
@@ -1208,9 +1208,8 @@ exportBtn.addEventListener("click", async () => {
   showStatus(`Building ${skis.length} bundle(s) and ZIP...`, false, true);
 
   try {
-    const payload = JSON.parse(await certkitExportBundles(skis));
-    const zipData = decodeBase64ToUint8Array(payload.data);
-    downloadBlob(zipData, "certkit-bundles.zip", "application/zip");
+    const payload = await certkitExportBundles(skis);
+    downloadBlob(payload.data, "certkit-bundles.zip", "application/zip");
     if (payload.warning) {
       showStatus(payload.warning, false, false);
     } else {
@@ -1224,11 +1223,8 @@ exportBtn.addEventListener("click", async () => {
       )
     ) {
       try {
-        const payload = JSON.parse(
-          await certkitExportBundles(skis, undefined, true),
-        );
-        const zipData = decodeBase64ToUint8Array(payload.data);
-        downloadBlob(zipData, "certkit-bundles.zip", "application/zip");
+        const payload = await certkitExportBundles(skis, undefined, true);
+        downloadBlob(payload.data, "certkit-bundles.zip", "application/zip");
         const messages = [];
         if (payload.warning) messages.push(payload.warning);
         messages.push(

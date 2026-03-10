@@ -384,8 +384,9 @@ func getState(_ js.Value, _ []js.Value) any {
 	return string(jsonBytes)
 }
 
-// exportBundlesJS generates a ZIP and returns JSON with a base64 payload.
-// JS signature: certkitExportBundles(skis: string[], p12Password?: string, allowUnverifiedExport?: boolean) → Promise<string>
+// exportBundlesJS generates a ZIP and returns a JS object containing the ZIP
+// bytes plus any warning.
+// JS signature: certkitExportBundles(skis: string[], p12Password?: string, allowUnverifiedExport?: boolean) → Promise<{data: Uint8Array, warning?: string}>
 // Only bundles for the specified SKIs are included.
 func exportBundlesJS(_ js.Value, args []js.Value) any {
 	// Parse the SKI filter list from the JS array argument.
@@ -439,12 +440,14 @@ func exportBundlesJS(_ js.Value, args []js.Value) any {
 				return
 			}
 
-			payloadJSON, err := marshalExportBundlesResponse(zipData, defaultPasswordWarning)
-			if err != nil {
-				reject.Invoke(js.Global().Get("Error").New(fmt.Sprintf("marshaling export response: %v", err)))
-				return
+			payload := js.Global().Get("Object").New()
+			dataJS := js.Global().Get("Uint8Array").New(len(zipData))
+			js.CopyBytesToJS(dataJS, zipData)
+			payload.Set("data", dataJS)
+			if defaultPasswordWarning != "" {
+				payload.Set("warning", defaultPasswordWarning)
 			}
-			resolve.Invoke(payloadJSON)
+			resolve.Invoke(payload)
 		}()
 		return nil
 	})

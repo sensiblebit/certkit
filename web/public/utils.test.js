@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from "vitest";
-import { decodeBase64ToUint8Array, formatDate, escapeHTML } from "./utils.js";
+import { formatDate, escapeHTML } from "./utils.js";
 
 // ---------------------------------------------------------------------------
 // formatDate
@@ -71,20 +71,5 @@ describe("escapeHTML", () => {
     expect(result).not.toContain(">");
     expect(result).toContain("&lt;");
     expect(result).toContain("&gt;");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// decodeBase64ToUint8Array
-// ---------------------------------------------------------------------------
-
-describe("decodeBase64ToUint8Array", () => {
-  it("decodes base64 payloads into bytes", () => {
-    const result = decodeBase64ToUint8Array("AQID");
-    expect(Array.from(result)).toEqual([1, 2, 3]);
-  });
-
-  it.each([null, undefined, ""])("returns empty bytes for %s", (input) => {
-    expect(Array.from(decodeBase64ToUint8Array(input))).toEqual([]);
   });
 });

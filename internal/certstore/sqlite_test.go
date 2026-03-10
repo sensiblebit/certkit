@@ -175,8 +175,6 @@ func TestSaveToSQLite_ReplacesExistingFile(t *testing.T) {
 func TestSaveToSQLite_ReplaceRaceKeepsCompetingWriter(t *testing.T) {
 	// WHY: If another writer recreates the destination after the original file is
 	// moved aside, rollback must not delete the competing winner.
-	t.Parallel()
-
 	storeA := NewMemStore()
 	caA := newRSACA(t)
 	if err := storeA.HandleCertificate(caA.cert, "ca-a.pem"); err != nil {
@@ -227,8 +225,6 @@ func TestSaveToSQLite_ReplaceRaceKeepsCompetingWriter(t *testing.T) {
 func TestSaveToSQLite_FallsBackWhenHardLinksUnsupported(t *testing.T) {
 	// WHY: Some filesystems reject hard links; SaveToSQLite must still publish a
 	// valid database when link-based staging is unavailable.
-	t.Parallel()
-
 	store := NewMemStore()
 	ca := newRSACA(t)
 	if err := store.HandleCertificate(ca.cert, "ca.pem"); err != nil {

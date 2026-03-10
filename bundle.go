@@ -617,7 +617,14 @@ func hasIssuerInSet(cert *x509.Certificate, candidates []*x509.Certificate) bool
 		if candidate == nil || candidate == cert {
 			continue
 		}
-		if bytes.Equal(candidate.RawSubject, cert.RawIssuer) {
+		if !bytes.Equal(candidate.RawSubject, cert.RawIssuer) {
+			continue
+		}
+		if len(cert.AuthorityKeyId) > 0 && len(candidate.SubjectKeyId) > 0 &&
+			!bytes.Equal(candidate.SubjectKeyId, cert.AuthorityKeyId) {
+			continue
+		}
+		if cert.CheckSignatureFrom(candidate) == nil {
 			return true
 		}
 	}
