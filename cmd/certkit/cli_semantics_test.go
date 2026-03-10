@@ -94,29 +94,42 @@ func TestJSONSchemaConsistency(t *testing.T) {
 func TestTreeCommand(t *testing.T) {
 	t.Parallel()
 
+	// Trigger Cobra's lazy initialization of help/completion/version so the
+	// tree output matches the real runtime surface.
+	rootCmd.Version = "test"
+	rootCmd.InitDefaultHelpCmd()
+	rootCmd.InitDefaultHelpFlag()
+	rootCmd.InitDefaultVersionFlag()
+	rootCmd.InitDefaultCompletionCmd()
+
 	// Build tree output once to avoid concurrent Cobra Commands() sorting.
 	var rootTree strings.Builder
 	printCommandTree(&rootTree, rootCmd, "")
 	rootOutput := rootTree.String()
 
-	// Snapshot the expected command names before subtests run.
+	// Snapshot every non-hidden command before subtests run.
 	var expectedCommands []string
 	for _, child := range rootCmd.Commands() {
-		if child.Hidden || child.Name() == "help" || child.Name() == "completion" {
+		if child.Hidden {
 			continue
 		}
 		expectedCommands = append(expectedCommands, child.Name()+" — "+child.Short)
 	}
 
-	var leafTree strings.Builder
-	printCommandTree(&leafTree, treeCmd, "")
-	leafOutput := leafTree.String()
-
-	t.Run("includes all top-level commands", func(t *testing.T) {
+	t.Run("includes all non-hidden commands", func(t *testing.T) {
 		t.Parallel()
 		for _, entry := range expectedCommands {
 			if !strings.Contains(rootOutput, entry) {
 				t.Errorf("tree output missing command %q", entry)
+			}
+		}
+	})
+
+	t.Run("includes help and completion", func(t *testing.T) {
+		t.Parallel()
+		for _, name := range []string{"help", "completion"} {
+			if !strings.Contains(rootOutput, name+" — ") {
+				t.Errorf("tree output missing built-in command %q", name)
 			}
 		}
 	})
@@ -126,6 +139,15 @@ func TestTreeCommand(t *testing.T) {
 		for _, name := range []string{"self-signed", "csr"} {
 			if !strings.Contains(rootOutput, name+" — ") {
 				t.Errorf("tree output missing nested command %q", name)
+			}
+		}
+	})
+
+	t.Run("includes help and version flags", func(t *testing.T) {
+		t.Parallel()
+		for _, flag := range []string{"--help", "--version"} {
+			if !strings.Contains(rootOutput, flag) {
+				t.Errorf("tree output missing flag %q", flag)
 			}
 		}
 	})
@@ -146,13 +168,6 @@ func TestTreeCommand(t *testing.T) {
 			if !strings.Contains(rootOutput, connector) {
 				t.Errorf("tree output missing connector %q", connector)
 			}
-		}
-	})
-
-	t.Run("excludes help flag", func(t *testing.T) {
-		t.Parallel()
-		if strings.Contains(leafOutput, "--help") {
-			t.Error("tree output should not include --help flag")
 		}
 	})
 }

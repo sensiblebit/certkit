@@ -21,6 +21,10 @@ func init() {
 }
 
 func runTree(_ *cobra.Command, _ []string) error {
+	// Trigger Cobra's lazy flag registration so --help and --version appear.
+	rootCmd.InitDefaultHelpFlag()
+	rootCmd.InitDefaultVersionFlag()
+
 	var b strings.Builder
 	printCommandTree(&b, rootCmd, "")
 	fmt.Print(b.String())
@@ -35,10 +39,10 @@ func printCommandTree(b *strings.Builder, cmd *cobra.Command, prefix string) {
 		fmt.Fprintf(b, "%s — %s\n", cmd.Name(), cmd.Short)
 	}
 
-	// Collect local (non-inherited, non-hidden) flags, excluding --help.
+	// Collect local (non-inherited, non-hidden) flags.
 	var flags []string
 	cmd.Flags().VisitAll(func(f *pflag.Flag) {
-		if f.Hidden || f.Name == "help" {
+		if f.Hidden {
 			return
 		}
 		if cmd.InheritedFlags().Lookup(f.Name) != nil {
@@ -51,11 +55,10 @@ func printCommandTree(b *strings.Builder, cmd *cobra.Command, prefix string) {
 		flags = append(flags, name)
 	})
 
-	// Collect visible subcommands.
-	children := cmd.Commands()
+	// Collect non-hidden subcommands.
 	var visible []*cobra.Command
-	for _, child := range children {
-		if !child.Hidden && child.Name() != "help" && child.Name() != "completion" {
+	for _, child := range cmd.Commands() {
+		if !child.Hidden {
 			visible = append(visible, child)
 		}
 	}
