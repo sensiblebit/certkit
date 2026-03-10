@@ -119,16 +119,17 @@ func runBundle(cmd *cobra.Command, args []string) error {
 		Leaf:    leaf,
 		Options: opts,
 	})
+	if bundle != nil {
+		for _, w := range bundle.Warnings {
+			slog.Warn("bundle", "warning", w)
+		}
+	}
 	if err != nil {
 		wrapped := fmt.Errorf("building chain: %w", err)
 		if isChainValidationError(err) {
 			return &ValidationError{Message: wrapped.Error()}
 		}
 		return wrapped
-	}
-
-	for _, w := range bundle.Warnings {
-		slog.Warn("bundle", "warning", w)
 	}
 
 	exportPassword := ""

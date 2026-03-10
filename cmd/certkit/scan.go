@@ -238,12 +238,12 @@ func runScan(cmd *cobra.Command, args []string) error {
 	// Resolve missing intermediates via AIA before trust checking
 	if certstore.HasUnresolvedIssuers(store) {
 		slog.Debug("resolving certificate chains")
-		aiaWarnings := certstore.ResolveAIA(cmd.Context(), certstore.ResolveAIAInput{
+		aiaResult := certstore.ResolveAIA(cmd.Context(), certstore.ResolveAIAInput{
 			Store:                store,
 			Fetch:                httpAIAFetcher,
 			AllowPrivateNetworks: scanAllowPrivateNetwork,
 		})
-		for _, w := range aiaWarnings {
+		for _, w := range aiaResult.Warnings {
 			slog.Debug("AIA resolution", "warning", w)
 		}
 	}

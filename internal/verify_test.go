@@ -866,6 +866,76 @@ func TestVerifyCert_ExtraIntermediates(t *testing.T) {
 	}
 }
 
+func TestVerifyCert_AIAIncompleteSurfaced(t *testing.T) {
+	// WHY: When AIA issuer fetches fail, VerifyCert should report that failure
+	// directly instead of collapsing to a generic unknown authority error.
+	t.Parallel()
+
+	root := newRSACA(t)
+	intermediate := newRSAIntermediate(t, root)
+
+	aiaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "issuer unavailable", http.StatusInternalServerError)
+	}))
+	t.Cleanup(aiaServer.Close)
+
+	leafKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafTemplate := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "aia-incomplete.example.com", Organization: []string{"TestOrg"}},
+		DNSNames:              []string{"aia-incomplete.example.com"},
+		NotBefore:             time.Now().Add(-1 * time.Hour),
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		SubjectKeyId:          []byte{0xc1, 0xc2, 0xc3, 0xc4, 0xc5, 0xc6, 0xc7, 0xc8, 0xc9, 0xca, 0xcb, 0xcc, 0xcd, 0xce, 0xcf, 0xd0, 0xd1, 0xd2, 0xd3, 0xd4},
+		AuthorityKeyId:        intermediate.cert.SubjectKeyId,
+		IssuingCertificateURL: []string{aiaServer.URL + "/issuer.cer"},
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, intermediate.cert, &leafKey.PublicKey, intermediate.key.(*rsa.PrivateKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafCert, err := x509.ParseCertificate(leafDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := VerifyCert(context.Background(), &VerifyInput{
+		Cert:                 leafCert,
+		CheckChain:           true,
+		TrustStore:           "custom",
+		CustomRoots:          []*x509.Certificate{root.cert},
+		AllowPrivateNetworks: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ChainValid == nil || *result.ChainValid {
+		t.Fatalf("expected invalid chain, got %v", result.ChainValid)
+	}
+	if !strings.Contains(result.ChainErr, "AIA resolution incomplete") {
+		t.Fatalf("expected ChainErr to mention AIA resolution incomplete, got %q", result.ChainErr)
+	}
+	if !strings.Contains(result.ChainErr, "HTTP 500") {
+		t.Fatalf("expected ChainErr to mention the AIA fetch failure, got %q", result.ChainErr)
+	}
+
+	found := false
+	for _, errMsg := range result.Errors {
+		if strings.Contains(errMsg, "AIA resolution incomplete") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected Errors to preserve the AIA failure context, got %v", result.Errors)
+	}
+}
+
 func TestVerifyCert_ExpiredIntermediate(t *testing.T) {
 	// WHY: VerifyCert must surface an expired intermediate as a chain failure.
 	t.Parallel()

@@ -335,6 +335,12 @@ type BundleResult struct {
 	Roots []*x509.Certificate
 	// Warnings are non-fatal issues found during chain resolution.
 	Warnings []string
+	// AIAIncomplete reports that AIA was attempted but the issuer chain still
+	// could not be fully resolved from the fetched certificates.
+	AIAIncomplete bool
+	// AIAUnresolvedCount is the number of certificates in the AIA walk whose
+	// issuer still was not found after fetching completed.
+	AIAUnresolvedCount int
 }
 
 // BundleOptions configures chain resolution.
@@ -436,6 +442,10 @@ func FetchLeafFromURL(ctx context.Context, input FetchLeafFromURLInput) (*x509.C
 type FetchAIACertificatesInput struct {
 	// Cert is the leaf or intermediate whose AIA URLs will be followed.
 	Cert *x509.Certificate
+	// KnownIntermediates are caller-supplied intermediates that already
+	// participate in chain building and should count toward unresolved issuer
+	// detection even if they were not AIA-fetched.
+	KnownIntermediates []*x509.Certificate
 	// Timeout is the HTTP request timeout for AIA fetches.
 	Timeout time.Duration
 	// MaxDepth is the maximum number of AIA hops to follow.
@@ -447,12 +457,26 @@ type FetchAIACertificatesInput struct {
 	AllowPrivateNetworks bool
 }
 
+type aiaFetchCertificatesResult struct {
+	certs           []*x509.Certificate
+	warnings        []string
+	incomplete      bool
+	unresolvedCount int
+}
+
 // FetchAIACertificates follows AIA CA Issuers URLs to fetch intermediate certificates.
 func FetchAIACertificates(ctx context.Context, input FetchAIACertificatesInput) ([]*x509.Certificate, []string) {
+	result := fetchAIACertificatesDetailed(ctx, input)
+	return result.certs, result.warnings
+}
+
+func fetchAIACertificatesDetailed(ctx context.Context, input FetchAIACertificatesInput) aiaFetchCertificatesResult {
 	var fetched []*x509.Certificate
 	var warnings []string
 	if input.Cert == nil {
-		return nil, []string{"AIA fetch skipped: certificate is nil"}
+		return aiaFetchCertificatesResult{
+			warnings: []string{"AIA fetch skipped: certificate is nil"},
+		}
 	}
 	maxTotalCerts := input.MaxTotalCerts
 	if maxTotalCerts <= 0 {
@@ -517,7 +541,87 @@ func FetchAIACertificates(ctx context.Context, input FetchAIACertificatesInput) 
 			}
 		}
 	}
-	return fetched, warnings
+	allCerts := make([]*x509.Certificate, 0, 1+len(input.KnownIntermediates)+len(fetched))
+	allCerts = append(allCerts, input.Cert)
+	allCerts = append(allCerts, input.KnownIntermediates...)
+	allCerts = append(allCerts, fetched...)
+	unresolvedCount := countAIAUnresolvedIssuers(allCerts, nil)
+
+	return aiaFetchCertificatesResult{
+		certs:           fetched,
+		warnings:        warnings,
+		incomplete:      unresolvedCount > 0,
+		unresolvedCount: unresolvedCount,
+	}
+}
+
+func countAIAUnresolvedIssuers(certs []*x509.Certificate, roots *x509.CertPool) int {
+	unresolved := 0
+	for _, cert := range certs {
+		if cert == nil {
+			continue
+		}
+		if len(cert.IssuingCertificateURL) == 0 {
+			continue
+		}
+		if IsMozillaRoot(cert) {
+			continue
+		}
+		if bytes.Equal(cert.RawSubject, cert.RawIssuer) {
+			continue
+		}
+		if hasIssuerInSet(cert, certs) {
+			continue
+		}
+		if roots != nil && chainsToTrustedRoot(cert, certs, roots) {
+			continue
+		}
+		if roots == nil && IsIssuedByMozillaRoot(cert) {
+			continue
+		}
+		unresolved++
+	}
+	return unresolved
+}
+
+func chainsToTrustedRoot(cert *x509.Certificate, certs []*x509.Certificate, roots *x509.CertPool) bool {
+	if roots == nil {
+		return false
+	}
+	intermediates := x509.NewCertPool()
+	for _, candidate := range certs {
+		if candidate == nil || candidate == cert {
+			continue
+		}
+		intermediates.AddCert(candidate)
+	}
+	return VerifyChainTrust(VerifyChainTrustInput{
+		Cert:          cert,
+		Roots:         roots,
+		Intermediates: intermediates,
+	})
+}
+
+func hasIssuerInSet(cert *x509.Certificate, candidates []*x509.Certificate) bool {
+	for _, candidate := range candidates {
+		if candidate == nil || candidate == cert {
+			continue
+		}
+		if bytes.Equal(candidate.RawSubject, cert.RawIssuer) {
+			return true
+		}
+	}
+	return false
+}
+
+func summarizeAIAWarnings(warnings []string) string {
+	if len(warnings) == 0 {
+		return "issuer fetch did not complete"
+	}
+	if len(warnings) == 1 {
+		return warnings[0]
+	}
+	return fmt.Sprintf("%s (%d additional warning(s))", warnings[0], len(warnings)-1)
 }
 
 type fetchCertificatesFromURLInput struct {
@@ -701,15 +805,18 @@ func Bundle(ctx context.Context, input BundleInput) (*BundleResult, error) {
 	}
 
 	if opts.FetchAIA {
-		aiaCerts, warnings := FetchAIACertificates(ctx, FetchAIACertificatesInput{
+		aiaResult := fetchAIACertificatesDetailed(ctx, FetchAIACertificatesInput{
 			Cert:                 leaf,
+			KnownIntermediates:   opts.ExtraIntermediates,
 			Timeout:              opts.AIATimeout,
 			MaxDepth:             opts.AIAMaxDepth,
 			MaxTotalCerts:        opts.AIAMaxTotalCerts,
 			AllowPrivateNetworks: opts.AllowPrivateNetworks,
 		})
-		result.Warnings = append(result.Warnings, warnings...)
-		for _, cert := range aiaCerts {
+		result.Warnings = append(result.Warnings, aiaResult.warnings...)
+		result.AIAIncomplete = aiaResult.incomplete
+		result.AIAUnresolvedCount = aiaResult.unresolvedCount
+		for _, cert := range aiaResult.certs {
 			intermediatePool.AddCert(cert)
 			allIntermediates = append(allIntermediates, cert)
 		}
@@ -739,6 +846,14 @@ func Bundle(ctx context.Context, input BundleInput) (*BundleResult, error) {
 		return nil, fmt.Errorf("%w: %q", errBundleUnknownTrustStore, opts.TrustStore)
 	}
 
+	if opts.FetchAIA {
+		allCerts := make([]*x509.Certificate, 0, 1+len(allIntermediates))
+		allCerts = append(allCerts, leaf)
+		allCerts = append(allCerts, allIntermediates...)
+		result.AIAUnresolvedCount = countAIAUnresolvedIssuers(allCerts, rootPool)
+		result.AIAIncomplete = result.AIAUnresolvedCount > 0
+	}
+
 	// Verify
 	if opts.Verify {
 		verifyOpts := x509.VerifyOptions{
@@ -747,7 +862,16 @@ func Bundle(ctx context.Context, input BundleInput) (*BundleResult, error) {
 		}
 		chains, err := leaf.Verify(verifyOpts)
 		if err != nil {
-			return nil, fmt.Errorf("%w: %w", ErrChainVerificationFailed, err)
+			if result.AIAIncomplete {
+				return result, fmt.Errorf(
+					"%w: AIA resolution incomplete (%d issuer(s) still unresolved): %s; verification error: %w",
+					ErrChainVerificationFailed,
+					result.AIAUnresolvedCount,
+					summarizeAIAWarnings(result.Warnings),
+					err,
+				)
+			}
+			return result, fmt.Errorf("%w: %w", ErrChainVerificationFailed, err)
 		}
 
 		// Pick shortest valid chain
