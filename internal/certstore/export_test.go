@@ -337,6 +337,93 @@ func TestGenerateBundleFiles_RequiresP12Password(t *testing.T) {
 	}
 }
 
+func TestExportAPIs_NilInput(t *testing.T) {
+	// WHY: Export-facing APIs are library entry points. Nil bundles or leaf
+	// certificates must return clear errors instead of panicking.
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		run     func() error
+		wantErr error
+	}{
+		{
+			name: "GenerateBundleFiles nil bundle",
+			run: func() error {
+				_, err := GenerateBundleFiles(BundleExportInput{
+					KeyPEM:      []byte("unused"),
+					P12Password: "testpass",
+				})
+				return err
+			},
+			wantErr: errBundleNil,
+		},
+		{
+			name: "GenerateBundleFiles nil leaf",
+			run: func() error {
+				_, err := GenerateBundleFiles(BundleExportInput{
+					Bundle: &certkit.BundleResult{},
+				})
+				return err
+			},
+			wantErr: errBundleLeafCertNil,
+		},
+		{
+			name: "GenerateJSON nil bundle",
+			run: func() error {
+				_, err := GenerateJSON(nil)
+				return err
+			},
+			wantErr: errBundleNil,
+		},
+		{
+			name: "GenerateJSON nil leaf",
+			run: func() error {
+				_, err := GenerateJSON(&certkit.BundleResult{})
+				return err
+			},
+			wantErr: errBundleLeafCertNil,
+		},
+		{
+			name: "GenerateYAML nil bundle",
+			run: func() error {
+				_, err := GenerateYAML(nil, nil, "RSA", 2048)
+				return err
+			},
+			wantErr: errBundleNil,
+		},
+		{
+			name: "GenerateYAML nil leaf",
+			run: func() error {
+				_, err := GenerateYAML(&certkit.BundleResult{}, nil, "RSA", 2048)
+				return err
+			},
+			wantErr: errBundleLeafCertNil,
+		},
+		{
+			name: "GenerateCSR nil leaf",
+			run: func() error {
+				_, _, err := GenerateCSR(nil, nil, nil)
+				return err
+			},
+			wantErr: errLeafCertificateNil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := tt.run()
+			if err == nil {
+				t.Fatal("expected error")
+			}
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("error = %v, want %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestGenerateBundleFiles_PEMFilesAreParseable(t *testing.T) {
 	// WHY: Validates that PEM output files contain valid, parseable certificates —
 	// not just non-empty bytes. Guards against encoding bugs that produce garbage PEM.

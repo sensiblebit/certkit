@@ -76,6 +76,20 @@ func TestGenerateCSR_nonSignerKey(t *testing.T) {
 	}
 }
 
+func TestGenerateCSR_NilLeaf(t *testing.T) {
+	// WHY: Nil leaf input is an API misuse case; GenerateCSR must return a
+	// descriptive error instead of panicking while copying cert fields.
+	t.Parallel()
+
+	_, _, err := GenerateCSR(nil, nil)
+	if err == nil {
+		t.Fatal("expected error for nil leaf certificate")
+	}
+	if !errors.Is(err, errCertificateNil) {
+		t.Fatalf("error = %v, want errCertificateNil", err)
+	}
+}
+
 // --- ClassifyHosts tests ---
 
 func TestClassifyHosts(t *testing.T) {
