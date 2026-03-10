@@ -83,18 +83,18 @@ func (w sqliteLoadWarnings) logIfAny(dbPath string) {
 }
 
 var (
-	errSQLiteDestinationIsDir = errors.New("destination path is a directory")
+	errSQLiteDestinationIsDir           = errors.New("destination path is a directory")
 	errSQLiteNoReplaceRenameUnsupported = errors.New("no-replace rename unsupported")
 
-	sqliteOpenFile   = os.OpenFile
-	sqliteMkdirTemp  = os.MkdirTemp
-	sqliteLink       = os.Link
-	sqliteRename     = os.Rename
+	sqliteOpenFile        = os.OpenFile
+	sqliteMkdirTemp       = os.MkdirTemp
+	sqliteLink            = os.Link
+	sqliteRename          = os.Rename
 	sqliteRenameNoReplace = renameSQLiteFileNoReplace
-	sqliteRemoveAll  = os.RemoveAll
-	sqliteStat       = os.Stat
-	sqliteChmod      = os.Chmod
-	sqliteVacuumInto = func(db *sqlx.DB, path string) error {
+	sqliteRemoveAll       = os.RemoveAll
+	sqliteStat            = os.Stat
+	sqliteChmod           = os.Chmod
+	sqliteVacuumInto      = func(db *sqlx.DB, path string) error {
 		_, err := db.Exec("VACUUM INTO ?", path)
 		if err != nil {
 			return fmt.Errorf("vacuum into %s: %w", path, err)
