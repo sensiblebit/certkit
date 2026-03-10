@@ -213,6 +213,7 @@ func TestSaveToSQLite_ReplaceRaceKeepsCompetingWriter(t *testing.T) {
 		t.Fatalf("SaveToSQLite error = %v, want wrapped %v", err, os.ErrExist)
 	}
 
+	//nolint:gosec // dbPath is created inside the test temp dir for this test only.
 	data, readErr := os.ReadFile(dbPath)
 	if readErr != nil {
 		t.Fatalf("read competing database: %v", readErr)
