@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/x509"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,6 +13,8 @@ import (
 	"github.com/sensiblebit/certkit"
 	"github.com/sensiblebit/certkit/internal/certstore"
 )
+
+var errInjectedWriteFailure = errors.New("injected write failure")
 
 func TestExportBundles_EndToEnd(t *testing.T) {
 	// WHY: Integration test for the full export pipeline (store -> chain resolution -> file writing); verifies the bundle directory is created and populated.
@@ -150,6 +153,89 @@ func TestExportBundles_EndToEnd(t *testing.T) {
 	}
 }
 
+func TestFilesystemWriter_WriteBundleFilesPreservesExistingBundleOnFailure(t *testing.T) {
+	outDir := t.TempDir()
+	bundleDir := filepath.Join(outDir, "bundle")
+	if err := os.MkdirAll(bundleDir, 0o700); err != nil {
+		t.Fatalf("create bundle dir: %v", err)
+	}
+	existingPath := filepath.Join(bundleDir, "existing.pem")
+	if err := os.WriteFile(existingPath, []byte("existing"), 0o600); err != nil {
+		t.Fatalf("seed existing file: %v", err)
+	}
+
+	originalWriteFile := exporterWriteFile
+	t.Cleanup(func() {
+		exporterWriteFile = originalWriteFile
+	})
+
+	writeCount := 0
+	exporterWriteFile = func(name string, data []byte, perm os.FileMode) error {
+		writeCount++
+		if writeCount == 2 {
+			return errInjectedWriteFailure
+		}
+		return originalWriteFile(name, data, perm)
+	}
+
+	writer := &filesystemWriter{outDir: outDir}
+	err := writer.WriteBundleFiles("bundle", []certstore.BundleFile{
+		{Name: "new.pem", Data: []byte("new")},
+		{Name: "new.key", Data: []byte("secret"), Sensitive: true},
+	})
+	if err == nil {
+		t.Fatal("expected WriteBundleFiles error, got nil")
+	}
+	if !strings.Contains(err.Error(), "writing new.key") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	//nolint:gosec // Test reads from a tempdir path controlled entirely by the test.
+	got, err := os.ReadFile(existingPath)
+	if err != nil {
+		t.Fatalf("read existing file after failure: %v", err)
+	}
+	if string(got) != "existing" {
+		t.Fatalf("existing bundle content changed: got %q, want %q", string(got), "existing")
+	}
+	if _, err := os.Stat(filepath.Join(bundleDir, "new.pem")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("new bundle file should not exist after failure, stat err = %v", err)
+	}
+
+	entries, err := os.ReadDir(outDir)
+	if err != nil {
+		t.Fatalf("read out dir: %v", err)
+	}
+	if len(entries) != 1 || entries[0].Name() != "bundle" {
+		t.Fatalf("unexpected output entries after failure: %+v", entries)
+	}
+}
+
+func TestFilesystemWriter_WriteBundleFilesPreservesExistingBundlePermissions(t *testing.T) {
+	outDir := t.TempDir()
+	bundleDir := filepath.Join(outDir, "bundle")
+	if err := os.MkdirAll(bundleDir, 0o700); err != nil {
+		t.Fatalf("create bundle dir: %v", err)
+	}
+
+	writer := &filesystemWriter{outDir: outDir}
+	err := writer.WriteBundleFiles("bundle", []certstore.BundleFile{
+		{Name: "bundle.pem", Data: []byte("public")},
+		{Name: "bundle.key", Data: []byte("secret"), Sensitive: true},
+	})
+	if err != nil {
+		t.Fatalf("WriteBundleFiles: %v", err)
+	}
+
+	info, err := os.Stat(bundleDir)
+	if err != nil {
+		t.Fatalf("stat bundle dir: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o700 {
+		t.Fatalf("bundle directory permissions = %04o, want 0700", perm)
+	}
+}
+
 func TestSafeJoin(t *testing.T) {
 	// WHY: safeJoin is the path-traversal guard for bundle exports and must reject
 	// empty/absolute/escaping paths while allowing normal relative folders.
@@ -189,6 +275,36 @@ func TestSafeJoin(t *testing.T) {
 				t.Fatalf("safeJoin(%q) = %q, want %q", tt.folder, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestFilesystemWriter_WriteBundleFiles_CleansUpOnFailure(t *testing.T) {
+	// WHY: Bundle exports must not leave a partially-written bundle directory
+	// behind when one file in the batch fails to write.
+	t.Parallel()
+
+	outDir := t.TempDir()
+	writer := &filesystemWriter{outDir: outDir}
+
+	err := writer.WriteBundleFiles("atomic-bundle", []certstore.BundleFile{
+		{Name: "ok.txt", Data: []byte("ok")},
+		{Name: filepath.Join("missing-parent", "blocked.txt"), Data: []byte("blocked")},
+	})
+	if err == nil {
+		t.Fatal("expected bundle write failure, got nil")
+	}
+
+	bundleDir := filepath.Join(outDir, "atomic-bundle")
+	if _, statErr := os.Stat(bundleDir); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("bundle dir stat error = %v, want not exists", statErr)
+	}
+
+	entries, readErr := os.ReadDir(outDir)
+	if readErr != nil {
+		t.Fatalf("read outDir: %v", readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected no leftover entries after failed export, got %d", len(entries))
 	}
 }
 
