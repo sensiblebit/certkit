@@ -246,6 +246,16 @@ func assertPKCS12RoundTrip(t *testing.T, pfxData []byte, password string, origin
 	if !matches {
 		t.Fatal("decoded key does not match original certificate")
 	}
+	type privateKeyEqualer interface {
+		Equal(crypto.PrivateKey) bool
+	}
+	equaler, ok := normalizeKey(originalKey).(privateKeyEqualer)
+	if !ok {
+		t.Fatalf("original key type %T does not support private-key equality", originalKey)
+	}
+	if !equaler.Equal(normalizeKey(decodedKey)) {
+		t.Fatal("decoded private key does not match original")
+	}
 	if got := KeyAlgorithmName(decodedKey); got != wantKeyName {
 		t.Fatalf("decoded key algorithm = %q, want %q", got, wantKeyName)
 	}
