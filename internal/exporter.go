@@ -23,11 +23,11 @@ var (
 	errExportBundlePathNotDir      = errors.New("existing bundle path is not a directory")
 
 	exporterMkdirAll  = os.MkdirAll
+	exporterMkdir     = os.Mkdir
 	exporterMkdirTemp = os.MkdirTemp
 	exporterWriteFile = os.WriteFile
 	exporterRename    = os.Rename
 	exporterRemoveAll = os.RemoveAll
-	exporterChmod     = os.Chmod
 	exporterStat      = os.Stat
 )
 
@@ -48,10 +48,24 @@ func (w *filesystemWriter) WriteBundleFiles(folder string, files []certstore.Bun
 		return fmt.Errorf("creating bundle parent directory %s: %w", parentDir, err)
 	}
 
-	tempDir, err := exporterMkdirTemp(parentDir, "."+filepath.Base(folderPath)+".tmp-*")
+	dirMode := os.FileMode(0o755)
+	if info, statErr := exporterStat(folderPath); statErr == nil {
+		if !info.IsDir() {
+			return fmt.Errorf("%w: %s", errExportBundlePathNotDir, folderPath)
+		}
+		dirMode = info.Mode().Perm()
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return fmt.Errorf("checking existing bundle directory: %w", statErr)
+	}
+
+	tempDir, err := reserveTemporaryPath(parentDir, "."+filepath.Base(folderPath)+".tmp-")
 	if err != nil {
+		return fmt.Errorf("reserving temporary bundle directory for %s: %w", folderPath, err)
+	}
+	if err := exporterMkdir(tempDir, dirMode); err != nil {
 		return fmt.Errorf("creating temporary bundle directory for %s: %w", folderPath, err)
 	}
+
 	committed := false
 	defer func() {
 		if committed {
@@ -61,10 +75,6 @@ func (w *filesystemWriter) WriteBundleFiles(folder string, files []certstore.Bun
 			slog.Warn("removing temporary bundle directory", "path", tempDir, "error", removeErr)
 		}
 	}()
-
-	if err := exporterChmod(tempDir, 0o755); err != nil {
-		return fmt.Errorf("setting temporary bundle directory permissions on %s: %w", tempDir, err)
-	}
 
 	for _, f := range files {
 		mode := os.FileMode(0644)

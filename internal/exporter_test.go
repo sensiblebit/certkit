@@ -211,6 +211,31 @@ func TestFilesystemWriter_WriteBundleFilesPreservesExistingBundleOnFailure(t *te
 	}
 }
 
+func TestFilesystemWriter_WriteBundleFilesPreservesExistingBundlePermissions(t *testing.T) {
+	outDir := t.TempDir()
+	bundleDir := filepath.Join(outDir, "bundle")
+	if err := os.MkdirAll(bundleDir, 0o700); err != nil {
+		t.Fatalf("create bundle dir: %v", err)
+	}
+
+	writer := &filesystemWriter{outDir: outDir}
+	err := writer.WriteBundleFiles("bundle", []certstore.BundleFile{
+		{Name: "bundle.pem", Data: []byte("public")},
+		{Name: "bundle.key", Data: []byte("secret"), Sensitive: true},
+	})
+	if err != nil {
+		t.Fatalf("WriteBundleFiles: %v", err)
+	}
+
+	info, err := os.Stat(bundleDir)
+	if err != nil {
+		t.Fatalf("stat bundle dir: %v", err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o700 {
+		t.Fatalf("bundle directory permissions = %04o, want 0700", perm)
+	}
+}
+
 func TestSafeJoin(t *testing.T) {
 	// WHY: safeJoin is the path-traversal guard for bundle exports and must reject
 	// empty/absolute/escaping paths while allowing normal relative folders.
