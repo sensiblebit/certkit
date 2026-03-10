@@ -444,7 +444,10 @@ var (
 	oidAES256CBC      = asn1.ObjectIdentifier{2, 16, 840, 1, 101, 3, 4, 1, 42}
 )
 
-const pkcs8EncryptIterations = 600_000
+// pkcs8EncryptIterations controls the PBKDF2 iteration count for PKCS#8 v2
+// key encryption. 210,000 balances security with performance in constrained
+// environments (WASM). OWASP minimum for PBKDF2-SHA-256 (2023).
+const pkcs8EncryptIterations = 210_000
 
 type asn1AlgorithmIdentifier struct {
 	Algorithm  asn1.ObjectIdentifier

@@ -1212,7 +1212,12 @@ exportBtn.addEventListener("click", async () => {
 
   exportBtn.disabled = true;
   exportBtn.textContent = "Exporting...";
-  showStatus(`Building ${skis.length} bundle(s) and ZIP...`, false, true);
+  const encryptingNote = password ? " (encrypting keys\u2026)" : "";
+  showStatus(
+    `Building ${skis.length} bundle(s) and ZIP${encryptingNote}`,
+    false,
+    true,
+  );
 
   try {
     const payload = await certkitExportBundles(skis, password || undefined);
