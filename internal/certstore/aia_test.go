@@ -884,18 +884,21 @@ func TestResolveAIA_MaxTotalCerts(t *testing.T) {
 		}
 	}
 
-	warnings := ResolveAIA(context.Background(), ResolveAIAInput{
+	result := ResolveAIA(context.Background(), ResolveAIAInput{
 		Store:                store,
 		Fetch:                fetcher,
 		MaxTotalCerts:        2,
 		AllowPrivateNetworks: true,
 	})
 
-	if len(warnings) != 1 {
-		t.Fatalf("warnings = %d, want 1: %v", len(warnings), warnings)
+	if len(result.Warnings) != 1 {
+		t.Fatalf("warnings = %d, want 1: %v", len(result.Warnings), result.Warnings)
 	}
-	if !strings.Contains(warnings[0], "maximum is 2") {
-		t.Errorf("warning = %q, want max-total-certs message", warnings[0])
+	if !strings.Contains(result.Warnings[0], "maximum is 2") {
+		t.Errorf("warning = %q, want max-total-certs message", result.Warnings[0])
+	}
+	if !result.Incomplete {
+		t.Fatal("expected incomplete result when max total certs is hit")
 	}
 	if got := len(store.AllCertsFlat()); got != 3 {
 		t.Fatalf("store cert count = %d, want 3 (leaf + 2 fetched intermediates)", got)
@@ -1045,7 +1048,7 @@ func TestResolveAIA_CancelledContextMidFetch(t *testing.T) {
 		return []byte{}, fctx.Err()
 	}
 
-	done := make(chan []string, 1)
+	done := make(chan ResolveAIAResult, 1)
 	go func() {
 		done <- ResolveAIA(ctx, ResolveAIAInput{
 			Store:                store,
@@ -1063,12 +1066,12 @@ func TestResolveAIA_CancelledContextMidFetch(t *testing.T) {
 	cancel()
 
 	select {
-	case warnings := <-done:
-		if len(warnings) == 0 {
+	case result := <-done:
+		if len(result.Warnings) == 0 {
 			t.Fatal("expected at least one warning from cancelled mid-fetch context")
 		}
-		if !strings.Contains(warnings[0], context.Canceled.Error()) {
-			t.Fatalf("expected cancellation warning, got %q", warnings[0])
+		if !strings.Contains(result.Warnings[0], context.Canceled.Error()) {
+			t.Fatalf("expected cancellation warning, got %q", result.Warnings[0])
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatal("ResolveAIA did not return promptly after context cancellation")

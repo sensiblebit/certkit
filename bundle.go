@@ -533,7 +533,20 @@ func fetchAIACertificatesDetailed(ctx context.Context, input FetchAIACertificate
 						"%v: reached %d unique certificate(s) while following AIA for %q",
 						errAIAMaxTotalCertsExceeded, maxTotalCerts, input.Cert.Subject.CommonName,
 					))
-					return fetched, warnings
+					allCerts := make([]*x509.Certificate, 0, 1+len(input.KnownIntermediates)+len(fetched))
+					allCerts = append(allCerts, input.Cert)
+					allCerts = append(allCerts, input.KnownIntermediates...)
+					allCerts = append(allCerts, fetched...)
+					unresolvedCount := countAIAUnresolvedIssuers(allCerts, nil)
+					if unresolvedCount == 0 {
+						unresolvedCount = 1
+					}
+					return aiaFetchCertificatesResult{
+						certs:           fetched,
+						warnings:        warnings,
+						incomplete:      true,
+						unresolvedCount: unresolvedCount,
+					}
 				}
 				seenCerts[certID] = true
 				fetched = append(fetched, cert)
@@ -556,6 +569,17 @@ func fetchAIACertificatesDetailed(ctx context.Context, input FetchAIACertificate
 }
 
 func countAIAUnresolvedIssuers(certs []*x509.Certificate, roots *x509.CertPool) int {
+	var intermediates *x509.CertPool
+	if roots != nil {
+		intermediates = x509.NewCertPool()
+		for _, candidate := range certs {
+			if candidate == nil {
+				continue
+			}
+			intermediates.AddCert(candidate)
+		}
+	}
+
 	unresolved := 0
 	for _, cert := range certs {
 		if cert == nil {
@@ -570,10 +594,14 @@ func countAIAUnresolvedIssuers(certs []*x509.Certificate, roots *x509.CertPool) 
 		if bytes.Equal(cert.RawSubject, cert.RawIssuer) {
 			continue
 		}
-		if hasIssuerInSet(cert, certs) {
+		if roots != nil && VerifyChainTrust(VerifyChainTrustInput{
+			Cert:          cert,
+			Roots:         roots,
+			Intermediates: intermediates,
+		}) {
 			continue
 		}
-		if roots != nil && chainsToTrustedRoot(cert, certs, roots) {
+		if hasIssuerInSet(cert, certs) {
 			continue
 		}
 		if roots == nil && IsIssuedByMozillaRoot(cert) {
@@ -582,24 +610,6 @@ func countAIAUnresolvedIssuers(certs []*x509.Certificate, roots *x509.CertPool) 
 		unresolved++
 	}
 	return unresolved
-}
-
-func chainsToTrustedRoot(cert *x509.Certificate, certs []*x509.Certificate, roots *x509.CertPool) bool {
-	if roots == nil {
-		return false
-	}
-	intermediates := x509.NewCertPool()
-	for _, candidate := range certs {
-		if candidate == nil || candidate == cert {
-			continue
-		}
-		intermediates.AddCert(candidate)
-	}
-	return VerifyChainTrust(VerifyChainTrustInput{
-		Cert:          cert,
-		Roots:         roots,
-		Intermediates: intermediates,
-	})
 }
 
 func hasIssuerInSet(cert *x509.Certificate, candidates []*x509.Certificate) bool {
@@ -804,6 +814,7 @@ func Bundle(ctx context.Context, input BundleInput) (*BundleResult, error) {
 		allIntermediates = append(allIntermediates, cert)
 	}
 
+	var aiaWarnings []string
 	if opts.FetchAIA {
 		aiaResult := fetchAIACertificatesDetailed(ctx, FetchAIACertificatesInput{
 			Cert:                 leaf,
@@ -813,7 +824,8 @@ func Bundle(ctx context.Context, input BundleInput) (*BundleResult, error) {
 			MaxTotalCerts:        opts.AIAMaxTotalCerts,
 			AllowPrivateNetworks: opts.AllowPrivateNetworks,
 		})
-		result.Warnings = append(result.Warnings, aiaResult.warnings...)
+		aiaWarnings = append(aiaWarnings, aiaResult.warnings...)
+		result.Warnings = append(result.Warnings, aiaWarnings...)
 		result.AIAIncomplete = aiaResult.incomplete
 		result.AIAUnresolvedCount = aiaResult.unresolvedCount
 		for _, cert := range aiaResult.certs {
@@ -867,7 +879,7 @@ func Bundle(ctx context.Context, input BundleInput) (*BundleResult, error) {
 					"%w: AIA resolution incomplete (%d issuer(s) still unresolved): %s; verification error: %w",
 					ErrChainVerificationFailed,
 					result.AIAUnresolvedCount,
-					summarizeAIAWarnings(result.Warnings),
+					summarizeAIAWarnings(aiaWarnings),
 					err,
 				)
 			}

@@ -372,7 +372,7 @@ func legacyFallbackConnect(ctx context.Context, input legacyFallbackInput) (*leg
 	}
 	defer func() { _ = conn.Close() }()
 
-	if err := setProbeConnDeadline(ctx, conn, time.Now); err != nil {
+	if err := setProbeConnDeadline(ctx, setProbeConnDeadlineInput{conn: conn, now: time.Now}); err != nil {
 		return nil, fmt.Errorf("setting legacy fallback deadline: %w", err)
 	}
 
@@ -414,12 +414,17 @@ type deadlineConn interface {
 	SetDeadline(time.Time) error
 }
 
-func setProbeConnDeadline(ctx context.Context, conn deadlineConn, now func() time.Time) error {
-	deadline := now().Add(defaultConnectTimeout)
+type setProbeConnDeadlineInput struct {
+	conn deadlineConn
+	now  func() time.Time
+}
+
+func setProbeConnDeadline(ctx context.Context, input setProbeConnDeadlineInput) error {
+	deadline := input.now().Add(defaultConnectTimeout)
 	if ctxDeadline, ok := ctx.Deadline(); ok {
 		deadline = ctxDeadline
 	}
-	if err := conn.SetDeadline(deadline); err != nil {
+	if err := input.conn.SetDeadline(deadline); err != nil {
 		return fmt.Errorf("setting probe connection deadline: %w", err)
 	}
 	return nil

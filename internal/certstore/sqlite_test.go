@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -171,6 +172,41 @@ func TestSaveToSQLite_ReplacesExistingFile(t *testing.T) {
 	}
 }
 
+func TestSaveToSQLite_FallsBackWhenHardLinksUnsupported(t *testing.T) {
+	// WHY: Some filesystems reject hard links; SaveToSQLite must still publish a
+	// valid database when link-based staging is unavailable.
+	t.Parallel()
+
+	store := NewMemStore()
+	ca := newRSACA(t)
+	if err := store.HandleCertificate(ca.cert, "ca.pem"); err != nil {
+		t.Fatalf("store cert: %v", err)
+	}
+
+	originalLink := sqliteLink
+	t.Cleanup(func() {
+		sqliteLink = originalLink
+	})
+	sqliteLink = func(oldPath, newPath string) error {
+		_ = oldPath
+		_ = newPath
+		return syscall.EXDEV
+	}
+
+	dbPath := filepath.Join(t.TempDir(), "fallback.db")
+	if err := SaveToSQLite(store, dbPath); err != nil {
+		t.Fatalf("SaveToSQLite with hard-link fallback: %v", err)
+	}
+
+	loaded := NewMemStore()
+	if err := LoadFromSQLite(loaded, dbPath); err != nil {
+		t.Fatalf("LoadFromSQLite: %v", err)
+	}
+	if got := len(loaded.AllCertsFlat()); got != 1 {
+		t.Fatalf("loaded cert count = %d, want 1", got)
+	}
+}
+
 func TestSaveToSQLite_CommitFailureLeavesNoPartialFile(t *testing.T) {
 	// WHY: If the final commit into place fails, SaveToSQLite must clean up its temporary
 	// output and leave the destination path untouched.
@@ -185,15 +221,23 @@ func TestSaveToSQLite_CommitFailureLeavesNoPartialFile(t *testing.T) {
 	dbPath := filepath.Join(dir, "atomic.db")
 
 	originalLink := sqliteLink
+	originalOpenFile := sqliteOpenFile
 	t.Cleanup(func() {
 		sqliteLink = originalLink
+		sqliteOpenFile = originalOpenFile
 	})
 	sqliteLink = func(oldPath, newPath string) error {
 		_ = oldPath
-		if newPath == dbPath {
-			return os.ErrPermission
+		_ = newPath
+		return syscall.EXDEV
+	}
+	sqliteOpenFile = func(name string, flag int, perm os.FileMode) (*os.File, error) {
+		_ = flag
+		_ = perm
+		if name == dbPath {
+			return nil, os.ErrPermission
 		}
-		return originalLink(oldPath, newPath)
+		return originalOpenFile(name, flag, perm)
 	}
 
 	err := SaveToSQLite(store, dbPath)
@@ -253,6 +297,7 @@ func TestSaveToSQLite_CommitRaceReturnsExist(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
+	//nolint:gosec // dbPath is created inside the test temp dir for this test only.
 	data, readErr := os.ReadFile(dbPath)
 	if readErr != nil {
 		t.Fatalf("read competing database: %v", readErr)

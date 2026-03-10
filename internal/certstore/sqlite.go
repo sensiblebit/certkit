@@ -12,11 +12,13 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/jmoiron/sqlx"
@@ -83,11 +85,13 @@ func (w sqliteLoadWarnings) logIfAny(dbPath string) {
 var (
 	errSQLiteDestinationIsDir = errors.New("destination path is a directory")
 
+	sqliteOpenFile   = os.OpenFile
 	sqliteMkdirTemp  = os.MkdirTemp
 	sqliteLink       = os.Link
 	sqliteRename     = os.Rename
 	sqliteRemoveAll  = os.RemoveAll
 	sqliteStat       = os.Stat
+	sqliteChmod      = os.Chmod
 	sqliteVacuumInto = func(db *sqlx.DB, path string) error {
 		_, err := db.Exec("VACUUM INTO ?", path)
 		if err != nil {
@@ -349,17 +353,122 @@ func replaceSQLiteFileAtomically(tempPath, dbPath string) error {
 		if info.IsDir() {
 			return fmt.Errorf("%w: %s", errSQLiteDestinationIsDir, dbPath)
 		}
-		return os.ErrExist
+		return replaceExistingSQLiteFile(tempPath, dbPath, info.Mode().Perm())
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("checking existing database: %w", err)
 	}
-	if err := sqliteLink(tempPath, dbPath); err != nil {
+	return publishSQLiteFile(tempPath, dbPath, 0, false)
+}
+
+func replaceExistingSQLiteFile(tempPath, dbPath string, mode os.FileMode) error {
+	parentDir := filepath.Dir(dbPath)
+	backupPath, err := reserveSQLiteTemporaryPath(parentDir, "."+filepath.Base(dbPath)+".bak-*")
+	if err != nil {
+		return fmt.Errorf("creating backup path for %s: %w", dbPath, err)
+	}
+	if err := sqliteRename(dbPath, backupPath); err != nil {
+		return fmt.Errorf("moving existing database aside: %w", err)
+	}
+
+	restoreBackup := true
+	defer func() {
+		if !restoreBackup {
+			return
+		}
+		if _, err := sqliteStat(dbPath); err == nil {
+			_ = sqliteRemoveAll(dbPath)
+		}
+		if err := sqliteRename(backupPath, dbPath); err != nil {
+			slog.Warn("restoring original database", "from", backupPath, "to", dbPath, "error", err)
+		}
+	}()
+
+	if err := publishSQLiteFile(tempPath, dbPath, mode, true); err != nil {
+		return err
+	}
+
+	restoreBackup = false
+	if err := sqliteRemoveAll(backupPath); err != nil {
+		return fmt.Errorf("removing backup database %s: %w", backupPath, err)
+	}
+	return nil
+}
+
+func publishSQLiteFile(tempPath, dbPath string, mode os.FileMode, allowRename bool) error {
+	linkErr := sqliteLink(tempPath, dbPath)
+	switch {
+	case linkErr == nil:
+		if mode != 0 {
+			if err := sqliteChmod(dbPath, mode); err != nil {
+				_ = sqliteRemoveAll(dbPath)
+				return fmt.Errorf("restoring database file mode: %w", err)
+			}
+		}
+		return nil
+	case os.IsExist(linkErr):
+		return os.ErrExist
+	case isHardLinkUnsupported(linkErr):
+		if allowRename {
+			if err := sqliteRename(tempPath, dbPath); err != nil {
+				if os.IsExist(err) {
+					return os.ErrExist
+				}
+				return fmt.Errorf("renaming staged database into place: %w", err)
+			}
+			if mode != 0 {
+				if err := sqliteChmod(dbPath, mode); err != nil {
+					return fmt.Errorf("restoring database file mode: %w", err)
+				}
+			}
+			return nil
+		}
+		return copySQLiteFileExclusive(tempPath, dbPath, mode)
+	default:
+		return fmt.Errorf("linking staged database into place: %w", linkErr)
+	}
+}
+
+func copySQLiteFileExclusive(tempPath, dbPath string, mode os.FileMode) error {
+	//nolint:gosec // tempPath is produced by our own staging path logic inside the parent directory.
+	src, err := os.Open(tempPath)
+	if err != nil {
+		return fmt.Errorf("opening staged database: %w", err)
+	}
+	defer func() { _ = src.Close() }()
+
+	createMode := mode
+	if createMode == 0 {
+		info, err := sqliteStat(tempPath)
+		if err != nil {
+			return fmt.Errorf("stat staged database: %w", err)
+		}
+		createMode = info.Mode().Perm()
+	}
+
+	dst, err := sqliteOpenFile(dbPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, createMode)
+	if err != nil {
 		if os.IsExist(err) {
 			return os.ErrExist
 		}
-		return fmt.Errorf("linking staged database into place: %w", err)
+		return fmt.Errorf("creating destination database: %w", err)
+	}
+	if _, err := io.Copy(dst, src); err != nil {
+		_ = dst.Close()
+		_ = sqliteRemoveAll(dbPath)
+		return fmt.Errorf("copying staged database into place: %w", err)
+	}
+	if err := dst.Close(); err != nil {
+		_ = sqliteRemoveAll(dbPath)
+		return fmt.Errorf("closing destination database: %w", err)
 	}
 	return nil
+}
+
+func isHardLinkUnsupported(err error) bool {
+	return errors.Is(err, syscall.EXDEV) ||
+		errors.Is(err, syscall.EPERM) ||
+		errors.Is(err, syscall.ENOTSUP) ||
+		errors.Is(err, syscall.EOPNOTSUPP)
 }
 
 func reserveSQLiteTemporaryPath(parentDir, pattern string) (string, error) {

@@ -89,7 +89,7 @@ func ProbeSSH(ctx context.Context, input SSHProbeInput) (*SSHProbeResult, error)
 	}
 	defer sshProbeConnCloser(ctx, conn)()
 
-	if err := setProbeConnDeadline(ctx, conn, time.Now); err != nil {
+	if err := setProbeConnDeadline(ctx, setProbeConnDeadlineInput{conn: conn, now: time.Now}); err != nil {
 		return nil, fmt.Errorf("setting SSH probe deadline: %w", err)
 	}
 

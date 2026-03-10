@@ -396,8 +396,11 @@ func TestLegacyFallbackConnect_DefaultDeadlineWithoutContextDeadline(t *testing.
 	conn := &recordingDeadlineConn{}
 	baseTime := time.Date(2026, time.March, 9, 12, 0, 0, 0, time.UTC)
 
-	err := setProbeConnDeadline(context.Background(), conn, func() time.Time {
-		return baseTime
+	err := setProbeConnDeadline(context.Background(), setProbeConnDeadlineInput{
+		conn: conn,
+		now: func() time.Time {
+			return baseTime
+		},
 	})
 	if err != nil {
 		t.Fatalf("setProbeConnDeadline: %v", err)

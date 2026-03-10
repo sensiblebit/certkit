@@ -226,7 +226,7 @@ func ResolveAIA(ctx context.Context, input ResolveAIAInput) ResolveAIAResult {
 			}
 			for _, issuer := range r.certs {
 				id := certID(issuer)
-				if input.Store.certsByID[id] != nil || addedByAIA[id] {
+				if input.Store.hasCertID(id) || addedByAIA[id] {
 					continue
 				}
 				if len(addedByAIA) >= maxTotalCerts {

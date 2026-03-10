@@ -303,6 +303,12 @@ func (s *MemStore) HasIssuer(cert *x509.Certificate) bool {
 	return false
 }
 
+func (s *MemStore) hasCertID(id string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.certsByID[id] != nil
+}
+
 // CertsByBundleName returns all certificates with the given bundle name,
 // sorted by NotAfter descending (newest first).
 func (s *MemStore) CertsByBundleName(name string) []*CertRecord {
