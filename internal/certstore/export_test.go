@@ -524,12 +524,15 @@ func TestGenerateJSON_FieldNames(t *testing.T) {
 
 	requiredKeys := []string{
 		"authority_key_id", "issuer", "not_after", "not_before",
-		"pem", "sans", "serial_number", "sigalg", "subject", "subject_key_id",
+		"pem", "sans", "serial", "sigalg", "subject", "subject_key_id",
 	}
 	for _, key := range requiredKeys {
 		if _, ok := result[key]; !ok {
 			t.Errorf("missing required JSON key: %s", key)
 		}
+	}
+	if _, ok := result["serial_number"]; ok {
+		t.Errorf("unexpected legacy JSON key: serial_number")
 	}
 
 	// Verify RFC 3339 timestamps

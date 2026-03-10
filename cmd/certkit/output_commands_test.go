@@ -1041,12 +1041,37 @@ func TestRunCRL_CommandSurfaceOutput(t *testing.T) {
 		if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
 			t.Fatalf("crl json unmarshal: %v\noutput:\n%s", err, stdout)
 		}
+		thisUpdate, ok := payload["this_update"].(string)
+		if !ok || thisUpdate == "" {
+			t.Fatalf("crl json missing this_update timestamp: %v", payload)
+		}
+		nextUpdate, ok := payload["next_update"].(string)
+		if !ok || nextUpdate == "" {
+			t.Fatalf("crl json missing CRL freshness timestamps: %v", payload)
+		}
+		if _, ok := payload["not_before"]; ok {
+			t.Fatalf("crl json should not expose certificate validity keys for CRL freshness: %v", payload)
+		}
+		if _, ok := payload["not_after"]; ok {
+			t.Fatalf("crl json should not expose certificate validity keys for CRL freshness: %v", payload)
+		}
 		checkResult, ok := payload["check_result"].(map[string]any)
 		if !ok {
 			t.Fatalf("crl json missing check_result object: %v", payload)
 		}
-		if revoked, _ := checkResult["revoked"].(bool); revoked {
+		revoked, ok := checkResult["revoked"].(bool)
+		if !ok {
+			t.Fatalf("crl json missing check_result.revoked: %v", checkResult)
+		}
+		if revoked {
 			t.Fatalf("crl json expected non-revoked check result: %v", checkResult)
+		}
+		serial, ok := checkResult["serial"].(string)
+		if !ok || serial == "" {
+			t.Fatalf("crl json missing check_result.serial: %v", checkResult)
+		}
+		if _, ok := checkResult["serial_number"]; ok {
+			t.Fatalf("crl json contains legacy check_result.serial_number: %v", checkResult)
 		}
 	})
 
@@ -1157,8 +1182,38 @@ func TestRunOCSP_CommandSurfaceOutput(t *testing.T) {
 		if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
 			t.Fatalf("ocsp json unmarshal: %v\noutput:\n%s", err, stdout)
 		}
-		if payload["status"] != "good" || payload["subject"] == "" || payload["issuer"] == "" {
+		status, ok := payload["status"].(string)
+		if !ok || status != "good" {
+			t.Fatalf("ocsp json missing or invalid status: %v", payload)
+		}
+		subject, ok := payload["subject"].(string)
+		if !ok || subject == "" {
+			t.Fatalf("ocsp json missing subject: %v", payload)
+		}
+		issuer, ok := payload["issuer"].(string)
+		if !ok || issuer == "" {
 			t.Fatalf("ocsp json contract mismatch: %v", payload)
+		}
+		serial, ok := payload["serial"].(string)
+		if !ok || serial == "" {
+			t.Fatalf("ocsp json missing serial field: %v", payload)
+		}
+		if _, ok := payload["serial_number"]; ok {
+			t.Fatalf("ocsp json contains legacy serial_number field: %v", payload)
+		}
+		thisUpdate, ok := payload["this_update"].(string)
+		if !ok || thisUpdate == "" {
+			t.Fatalf("ocsp json missing this_update timestamp: %v", payload)
+		}
+		nextUpdate, ok := payload["next_update"].(string)
+		if !ok || nextUpdate == "" {
+			t.Fatalf("ocsp json missing OCSP freshness timestamps: %v", payload)
+		}
+		if _, ok := payload["not_before"]; ok {
+			t.Fatalf("ocsp json should not expose certificate validity keys for OCSP freshness: %v", payload)
+		}
+		if _, ok := payload["not_after"]; ok {
+			t.Fatalf("ocsp json should not expose certificate validity keys for OCSP freshness: %v", payload)
 		}
 	})
 

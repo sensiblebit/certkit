@@ -27,9 +27,11 @@ var (
 type CRLInfo struct {
 	// Issuer is the CRL issuer distinguished name.
 	Issuer string `json:"issuer"`
-	// ThisUpdate is when the CRL was generated (RFC 3339).
+	// ThisUpdate is when the CRL was generated (RFC 3339). CRLs keep RFC
+	// freshness terminology instead of certificate validity keys.
 	ThisUpdate string `json:"this_update"`
-	// NextUpdate is when the CRL expires (RFC 3339).
+	// NextUpdate is when the CRL expires (RFC 3339). CRLs keep RFC freshness
+	// terminology instead of certificate validity keys.
 	NextUpdate string `json:"next_update"`
 	// NumEntries is the number of revoked certificate entries.
 	NumEntries int `json:"num_entries"`

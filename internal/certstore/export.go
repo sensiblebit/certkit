@@ -244,7 +244,7 @@ func GenerateJSON(bundle *certkit.BundleResult) ([]byte, error) {
 		"not_before":       bundle.Leaf.NotBefore.Format(time.RFC3339),
 		"pem":              string(chainPEM),
 		"sans":             sans,
-		"serial_number":    certkit.FormatSerialNumber(bundle.Leaf.SerialNumber),
+		"serial":           certkit.FormatSerialNumber(bundle.Leaf.SerialNumber),
 		"sigalg":           bundle.Leaf.SignatureAlgorithm.String(),
 		"subject": map[string]any{
 			"common_name": bundle.Leaf.Subject.CommonName,

@@ -16,22 +16,59 @@ func TestJSONSchemaConsistency(t *testing.T) {
 	t.Run("ocsp verbose uses subject and issuer keys", func(t *testing.T) {
 		t.Parallel()
 		data, err := json.Marshal(ocspVerboseJSON{
-			OCSPResult: &certkit.OCSPResult{Status: "good"},
-			Subject:    "CN=leaf",
-			Issuer:     "CN=issuer",
+			OCSPResult: &certkit.OCSPResult{
+				Status:       "good",
+				SerialNumber: "0x2a",
+				ThisUpdate:   "2026-03-09T12:00:00Z",
+				NextUpdate:   "2026-03-10T12:00:00Z",
+			},
+			Subject: "CN=leaf",
+			Issuer:  "CN=issuer",
 		})
 		if err != nil {
 			t.Fatalf("marshal ocsp verbose: %v", err)
 		}
 		jsonText := string(data)
-		for _, key := range []string{`"subject"`, `"issuer"`} {
+		for _, key := range []string{`"subject"`, `"issuer"`, `"serial"`, `"this_update"`, `"next_update"`} {
 			if !strings.Contains(jsonText, key) {
 				t.Fatalf("ocsp verbose json missing %s: %s", key, jsonText)
 			}
 		}
-		for _, key := range []string{`"cert_subject"`, `"cert_issuer"`} {
+		for _, key := range []string{`"cert_subject"`, `"cert_issuer"`, `"serial_number"`, `"not_before"`, `"not_after"`} {
 			if strings.Contains(jsonText, key) {
 				t.Fatalf("ocsp verbose json contains legacy key %s: %s", key, jsonText)
+			}
+		}
+	})
+
+	t.Run("crl info uses protocol update keys", func(t *testing.T) {
+		t.Parallel()
+		data, err := json.Marshal(crlOutputJSON{
+			CRLInfo: &certkit.CRLInfo{
+				Issuer:             "CN=issuer",
+				ThisUpdate:         "2026-03-09T12:00:00Z",
+				NextUpdate:         "2026-03-10T12:00:00Z",
+				NumEntries:         1,
+				SignatureAlgorithm: "SHA256-RSA",
+				CRLNumber:          "7",
+			},
+			CheckResult: &crlCheckResult{
+				Serial:  "0x2a",
+				Revoked: true,
+			},
+		})
+		if err != nil {
+			t.Fatalf("marshal crl json: %v", err)
+		}
+		jsonText := string(data)
+		for _, key := range []string{`"issuer"`, `"this_update"`, `"next_update"`, `"num_entries"`, `"signature_algorithm"`, `"check_result"`, `"serial"`} {
+			if !strings.Contains(jsonText, key) {
+				t.Fatalf("crl json missing %s: %s", key, jsonText)
+			}
+		}
+		for _, key := range []string{`"not_before"`, `"not_after"`, `"serial_number"`} {
+			if strings.Contains(jsonText, key) {
+				t.Fatalf("crl json contains inconsistent key %s: %s", key, jsonText)
 			}
 		}
 	})
