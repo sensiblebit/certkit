@@ -368,6 +368,7 @@ window.certkitOnAIAProgress = function (completed, total) {
   const pct = total > 0 ? Math.round((completed / total) * 100) : 0;
   statusText.textContent = `Resolving certificate chains via AIA... (${completed} of ${total})`;
   progressContainer.hidden = false;
+  progressFill.classList.remove("indeterminate");
   progressFill.style.width = `${pct}%`;
   progressFill.setAttribute("aria-valuenow", String(pct));
   progressLabel.textContent = `${pct}%`;
@@ -1313,17 +1314,27 @@ function showStatus(message, isError = false, isProcessing = false) {
   statusBar.hidden = false;
   statusText.textContent = message;
   statusBar.className = "status-bar";
-  progressContainer.hidden = true;
+  progressFill.classList.remove("indeterminate");
   progressFill.style.width = "0%";
   progressFill.setAttribute("aria-valuenow", "0");
   statusBar.style.color = "";
-  if (isError) statusBar.style.color = "var(--danger)";
-  else if (isProcessing) statusBar.classList.add("processing");
+  if (isError) {
+    statusBar.style.color = "var(--danger)";
+    progressContainer.hidden = true;
+  } else if (isProcessing) {
+    statusBar.classList.add("processing");
+    progressContainer.hidden = false;
+    progressLabel.textContent = "";
+    progressFill.classList.add("indeterminate");
+  } else {
+    progressContainer.hidden = true;
+  }
 }
 
 function hideStatus() {
   statusBar.hidden = true;
   progressContainer.hidden = true;
+  progressFill.classList.remove("indeterminate");
   progressFill.style.width = "0%";
   progressFill.setAttribute("aria-valuenow", "0");
 }
