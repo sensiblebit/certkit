@@ -1,4 +1,4 @@
-import { formatDate, escapeHTML } from "./utils.js";
+import { decodeBase64ToUint8Array, formatDate, escapeHTML } from "./utils.js";
 
 // DOM references — Scan page
 const dropZone = document.getElementById("drop-zone");
@@ -1208,9 +1208,14 @@ exportBtn.addEventListener("click", async () => {
   showStatus(`Building ${skis.length} bundle(s) and ZIP...`, false, true);
 
   try {
-    const zipData = await certkitExportBundles(skis);
+    const payload = JSON.parse(await certkitExportBundles(skis));
+    const zipData = decodeBase64ToUint8Array(payload.data);
     downloadBlob(zipData, "certkit-bundles.zip", "application/zip");
-    hideStatus();
+    if (payload.warning) {
+      showStatus(payload.warning, false, false);
+    } else {
+      hideStatus();
+    }
   } catch (err) {
     if (
       err?.code === "VERIFY_FAILED" &&
@@ -1219,12 +1224,17 @@ exportBtn.addEventListener("click", async () => {
       )
     ) {
       try {
-        const zipData = await certkitExportBundles(skis, undefined, true);
-        downloadBlob(zipData, "certkit-bundles.zip", "application/zip");
-        showStatus(
-          "Export completed without chain verification. Verify trust before use.",
-          false,
+        const payload = JSON.parse(
+          await certkitExportBundles(skis, undefined, true),
         );
+        const zipData = decodeBase64ToUint8Array(payload.data);
+        downloadBlob(zipData, "certkit-bundles.zip", "application/zip");
+        const messages = [];
+        if (payload.warning) messages.push(payload.warning);
+        messages.push(
+          "Export completed without chain verification. Verify trust before use.",
+        );
+        showStatus(messages.join(" "), false);
       } catch (retryErr) {
         showStatus(`Export error: ${retryErr.message}`, true);
       }

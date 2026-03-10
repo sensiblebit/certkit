@@ -17,6 +17,13 @@ type PasswordSets struct {
 	Export []string
 }
 
+const (
+	// DefaultExportPassword preserves current PKCS#12/JKS export compatibility.
+	DefaultExportPassword = "changeit"
+	// DefaultExportPasswordWarning explains the risk of relying on the fallback.
+	DefaultExportPasswordWarning = "Using default password 'changeit'. Use --passwords or --password-file for production exports."
+)
+
 // LoadPasswordsFromFile loads passwords from a file, one password per line.
 func LoadPasswordsFromFile(filename string) ([]string, error) {
 	file, err := os.Open(filename) //nolint:gosec // This helper intentionally opens a caller-provided password file path.
@@ -80,6 +87,19 @@ func ProcessUserPasswords(passwordList []string, passwordFile string) ([]string,
 		return nil, err
 	}
 	return sets.Export, nil
+}
+
+// ResolveExportPassword returns the first non-empty explicit export password.
+// If none are provided, it falls back to DefaultExportPassword and reports
+// that the insecure default was used.
+func ResolveExportPassword(passwords []string) (string, bool) {
+	for _, password := range passwords {
+		password = strings.TrimSpace(password)
+		if password != "" {
+			return password, false
+		}
+	}
+	return DefaultExportPassword, true
 }
 
 func deduplicateNonEmptyPasswords(passwords []string) []string {
