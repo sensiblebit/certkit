@@ -384,7 +384,7 @@ func ResolveInspectAIA(ctx context.Context, input ResolveInspectAIAInput) ([]Ins
 		existing[certkit.CertFingerprint(rec.Cert)] = true
 	}
 
-	warnings := certstore.ResolveAIA(ctx, certstore.ResolveAIAInput{
+	aiaResult := certstore.ResolveAIA(ctx, certstore.ResolveAIAInput{
 		Store:                store,
 		Fetch:                input.Fetch,
 		AllowPrivateNetworks: input.AllowPrivateNetworks,
@@ -400,7 +400,7 @@ func ResolveInspectAIA(ctx context.Context, input ResolveInspectAIAInput) ([]Ins
 		results = append(results, r)
 	}
 
-	return results, warnings
+	return results, aiaResult.Warnings
 }
 
 // AnnotateInspectTrust sets the Expired and Trusted fields on certificate

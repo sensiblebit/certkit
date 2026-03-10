@@ -312,6 +312,61 @@ func TestFetchAIACertificates_maxDepthZero(t *testing.T) {
 	}
 }
 
+func TestBundle_AIAIncompleteError(t *testing.T) {
+	// WHY: When AIA fetching is attempted but the issuer endpoint fails, Bundle
+	// must preserve that context instead of returning only a generic unknown
+	// authority error.
+	t.Parallel()
+
+	root := generateTestCA(t, "Bundle AIA Root CA")
+	intermediate := generateIntermediateCA(t, root, "Bundle AIA Intermediate CA")
+
+	aiaServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "upstream unavailable", http.StatusInternalServerError)
+	}))
+	t.Cleanup(aiaServer.Close)
+
+	leaf := generateTestLeafCert(t, intermediate, withAIA(aiaServer.URL+"/issuer.cer"))
+	leafCert, err := x509.ParseCertificate(leaf.DER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := Bundle(context.Background(), BundleInput{
+		Leaf: leafCert,
+		Options: BundleOptions{
+			FetchAIA:             true,
+			AIATimeout:           2 * time.Second,
+			AIAMaxDepth:          5,
+			TrustStore:           "custom",
+			CustomRoots:          []*x509.Certificate{root.Cert},
+			Verify:               true,
+			AllowPrivateNetworks: true,
+		},
+	})
+	if err == nil {
+		t.Fatal("expected bundle error when AIA fetch fails")
+	}
+	if result == nil {
+		t.Fatal("expected partial bundle result on verification failure")
+	}
+	if !result.AIAIncomplete {
+		t.Fatal("expected AIAIncomplete=true")
+	}
+	if result.AIAUnresolvedCount != 1 {
+		t.Fatalf("expected 1 unresolved AIA issuer, got %d", result.AIAUnresolvedCount)
+	}
+	if len(result.Warnings) == 0 {
+		t.Fatal("expected AIA warning to be preserved")
+	}
+	if !strings.Contains(err.Error(), "AIA resolution incomplete") {
+		t.Fatalf("expected error to mention incomplete AIA resolution, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "HTTP 500") {
+		t.Fatalf("expected error to mention the AIA fetch failure, got %v", err)
+	}
+}
+
 func TestBundle_ReversedChainDetection(t *testing.T) {
 	// WHY: Users sometimes pass certs in reversed order (CA first); the swap
 	// heuristic must detect this and reorder to produce a valid chain.

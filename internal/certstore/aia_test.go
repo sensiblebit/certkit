@@ -231,14 +231,17 @@ func TestResolveAIA_FetchesMissingIssuer(t *testing.T) {
 		return nil, fmt.Errorf("%w: %s", errUnexpectedURL, url)
 	}
 
-	warnings := ResolveAIA(context.Background(), ResolveAIAInput{
+	result := ResolveAIA(context.Background(), ResolveAIAInput{
 		Store:                store,
 		Fetch:                fetcher,
 		AllowPrivateNetworks: true,
 	})
 
-	if len(warnings) != 0 {
-		t.Errorf("expected 0 warnings, got %v", warnings)
+	if len(result.Warnings) != 0 {
+		t.Errorf("expected 0 warnings, got %v", result.Warnings)
+	}
+	if result.Incomplete {
+		t.Fatalf("expected complete resolution, got %+v", result)
 	}
 
 	// CA should now be in the store
@@ -339,13 +342,16 @@ func TestResolveAIA_SkipsResolvedAndRoots(t *testing.T) {
 				return nil, errFetcherUnused
 			}
 
-			warnings := ResolveAIA(context.Background(), ResolveAIAInput{
+			result := ResolveAIA(context.Background(), ResolveAIAInput{
 				Store: store,
 				Fetch: fetcher,
 			})
 
-			if len(warnings) != 0 {
-				t.Errorf("expected 0 warnings, got %v", warnings)
+			if len(result.Warnings) != 0 {
+				t.Errorf("expected 0 warnings, got %v", result.Warnings)
+			}
+			if result.Incomplete {
+				t.Fatalf("expected complete resolution, got %+v", result)
 			}
 			if fetchCount.Load() != 0 {
 				t.Errorf("expected 0 fetches, got %d", fetchCount.Load())
@@ -423,13 +429,22 @@ func TestResolveAIA_FailureProducesWarning(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			warnings := ResolveAIA(context.Background(), ResolveAIAInput{
+			result := ResolveAIA(context.Background(), ResolveAIAInput{
 				Store: store,
 				Fetch: tt.fetcher,
 			})
 
-			if len(warnings) != 1 {
-				t.Fatalf("expected 1 warning, got %d: %v", len(warnings), warnings)
+			if len(result.Warnings) != 1 {
+				t.Fatalf("expected 1 warning, got %d: %v", len(result.Warnings), result.Warnings)
+			}
+			if !result.Incomplete {
+				t.Fatal("expected incomplete resolution when all fetches fail")
+			}
+			if result.FetchedCount != 0 {
+				t.Fatalf("expected 0 fetched certs, got %d", result.FetchedCount)
+			}
+			if result.UnresolvedCount != 1 {
+				t.Fatalf("expected 1 unresolved cert, got %d", result.UnresolvedCount)
 			}
 			if len(store.AllCertsFlat()) != 1 {
 				t.Errorf("store should still have only the leaf, got %d certs", len(store.AllCertsFlat()))
@@ -498,7 +513,7 @@ func TestResolveAIA_DeduplicatesURLs(t *testing.T) {
 		return caDER, nil
 	}
 
-	ResolveAIA(context.Background(), ResolveAIAInput{
+	_ = ResolveAIA(context.Background(), ResolveAIAInput{
 		Store: store,
 		Fetch: fetcher,
 	})
@@ -528,9 +543,11 @@ func TestResolveAIA_MaxDepth(t *testing.T) {
 		maxDepth       int
 		wantFetchCount int
 		wantStoreCount int // leaf + fetched certs
+		wantIncomplete bool
+		wantUnresolved int
 	}{
-		{"default (0) resolves full chain", 0, 2, 3},
-		{"depth 1 fetches only immediate issuer", 1, 1, 2},
+		{"default (0) resolves full chain", 0, 2, 3, false, 0},
+		{"depth 1 fetches only immediate issuer", 1, 1, 2, true, 1},
 	}
 
 	for _, tt := range tests {
@@ -617,7 +634,7 @@ func TestResolveAIA_MaxDepth(t *testing.T) {
 				return rootDER, nil
 			}
 
-			ResolveAIA(context.Background(), ResolveAIAInput{
+			result := ResolveAIA(context.Background(), ResolveAIAInput{
 				Store:    store,
 				Fetch:    fetcher,
 				MaxDepth: tt.maxDepth,
@@ -629,6 +646,15 @@ func TestResolveAIA_MaxDepth(t *testing.T) {
 			allCerts := store.AllCertsFlat()
 			if len(allCerts) != tt.wantStoreCount {
 				t.Errorf("expected %d certs in store, got %d", tt.wantStoreCount, len(allCerts))
+			}
+			if result.Incomplete != tt.wantIncomplete {
+				t.Errorf("Incomplete = %v, want %v", result.Incomplete, tt.wantIncomplete)
+			}
+			if result.UnresolvedCount != tt.wantUnresolved {
+				t.Errorf("UnresolvedCount = %d, want %d", result.UnresolvedCount, tt.wantUnresolved)
+			}
+			if result.FetchedCount != tt.wantFetchCount {
+				t.Errorf("FetchedCount = %d, want %d", result.FetchedCount, tt.wantFetchCount)
 			}
 		})
 	}
@@ -722,14 +748,17 @@ func TestResolveAIA_PKCS7Response(t *testing.T) {
 		return nil, fmt.Errorf("%w: %s", errUnexpectedURL, url)
 	}
 
-	warnings := ResolveAIA(context.Background(), ResolveAIAInput{
+	result := ResolveAIA(context.Background(), ResolveAIAInput{
 		Store:                store,
 		Fetch:                fetcher,
 		AllowPrivateNetworks: true,
 	})
 
-	if len(warnings) != 0 {
-		t.Errorf("expected 0 warnings, got %v", warnings)
+	if len(result.Warnings) != 0 {
+		t.Errorf("expected 0 warnings, got %v", result.Warnings)
+	}
+	if result.Incomplete {
+		t.Fatalf("expected complete resolution, got %+v", result)
 	}
 
 	// All three certs should be in the store: leaf + intermediate + root from p7c
@@ -807,7 +836,7 @@ func TestResolveAIA_CancelledContext(t *testing.T) {
 		return nil, fctx.Err()
 	}
 
-	warnings := ResolveAIA(ctx, ResolveAIAInput{
+	result := ResolveAIA(ctx, ResolveAIAInput{
 		Store: store,
 		Fetch: fetcher,
 	})
@@ -815,7 +844,7 @@ func TestResolveAIA_CancelledContext(t *testing.T) {
 	// With a pre-cancelled context, the semaphore select may short-circuit
 	// before calling the fetcher, or the fetcher may run and return ctx.Err().
 	// Either path produces a warning — assert that.
-	if len(warnings) == 0 {
+	if len(result.Warnings) == 0 {
 		t.Error("expected at least one warning from cancelled context")
 	}
 }
@@ -893,7 +922,7 @@ func TestResolveAIA_RejectsSSRFURL(t *testing.T) {
 				return caDER, nil
 			}
 
-			warnings := ResolveAIA(context.Background(), ResolveAIAInput{
+			result := ResolveAIA(context.Background(), ResolveAIAInput{
 				Store: store,
 				Fetch: fetcher,
 			})
@@ -901,11 +930,14 @@ func TestResolveAIA_RejectsSSRFURL(t *testing.T) {
 			if fetchCount.Load() != 0 {
 				t.Errorf("fetcher should not be called for SSRF URL, got %d calls", fetchCount.Load())
 			}
-			if len(warnings) != 1 {
-				t.Fatalf("expected 1 warning, got %d: %v", len(warnings), warnings)
+			if len(result.Warnings) != 1 {
+				t.Fatalf("expected 1 warning, got %d: %v", len(result.Warnings), result.Warnings)
 			}
-			if !strings.Contains(warnings[0], tt.errSub) {
-				t.Errorf("warning = %q, want substring %q", warnings[0], tt.errSub)
+			if !strings.Contains(result.Warnings[0], tt.errSub) {
+				t.Errorf("warning = %q, want substring %q", result.Warnings[0], tt.errSub)
+			}
+			if !result.Incomplete {
+				t.Fatal("expected incomplete resolution for rejected AIA URL")
 			}
 			if len(store.AllCertsFlat()) != 1 {
 				t.Errorf("store should still have only the leaf, got %d certs", len(store.AllCertsFlat()))
@@ -1040,7 +1072,7 @@ func TestResolveAIA_ProgressNoDuplicateCounting(t *testing.T) {
 		mu.Unlock()
 	}
 
-	ResolveAIA(context.Background(), ResolveAIAInput{
+	_ = ResolveAIA(context.Background(), ResolveAIAInput{
 		Store:      store,
 		Fetch:      fetcher,
 		OnProgress: onProgress,

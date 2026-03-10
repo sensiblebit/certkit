@@ -19,7 +19,7 @@ import (
 // Progress is dispatched to JS via setTimeout so the browser event loop can
 // update the progress bar without blocking the AIA goroutine.
 func resolveAIA(ctx context.Context, s *certstore.MemStore, allowPrivateNetworks bool) []string {
-	return certstore.ResolveAIA(ctx, certstore.ResolveAIAInput{
+	result := certstore.ResolveAIA(ctx, certstore.ResolveAIAInput{
 		Store:                s,
 		Fetch:                jsFetchURL,
 		Concurrency:          50,
@@ -37,6 +37,7 @@ func resolveAIA(ctx context.Context, s *certstore.MemStore, allowPrivateNetworks
 			js.Global().Call("setTimeout", cb, 0)
 		},
 	})
+	return result.Warnings
 }
 
 // jsFetchURL calls the JavaScript certkitFetchURL function which handles

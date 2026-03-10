@@ -203,7 +203,7 @@ func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) 
 		} else {
 			// Chain validation failed or issuer not found — report skipped.
 			skipDetail := "no issuer certificate found in chain"
-			if bundle == nil && input.CheckChain {
+			if input.CheckChain && result.ChainValid != nil && !*result.ChainValid {
 				skipDetail = "chain validation failed; cannot determine issuer"
 			}
 			if input.CheckOCSP {
