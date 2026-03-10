@@ -376,7 +376,9 @@ func replaceExistingSQLiteFile(tempPath, dbPath string, mode os.FileMode) error 
 			return
 		}
 		if _, err := sqliteStat(dbPath); err == nil {
-			_ = sqliteRemoveAll(dbPath)
+			if removeErr := sqliteRemoveAll(dbPath); removeErr != nil {
+				slog.Warn("removing failed database publish before restore", "path", dbPath, "error", removeErr)
+			}
 		}
 		if err := sqliteRename(backupPath, dbPath); err != nil {
 			slog.Warn("restoring original database", "from", backupPath, "to", dbPath, "error", err)
@@ -408,7 +410,9 @@ func publishSQLiteFile(tempPath, dbPath string, mode os.FileMode, allowRename bo
 	case linkErr == nil:
 		if mode != 0 {
 			if err := sqliteChmod(dbPath, mode); err != nil {
-				_ = sqliteRemoveAll(dbPath)
+				if removeErr := sqliteRemoveAll(dbPath); removeErr != nil {
+					slog.Warn("removing database after chmod failure", "path", dbPath, "error", removeErr)
+				}
 				return fmt.Errorf("restoring database file mode: %w", err)
 			}
 		}
@@ -416,20 +420,7 @@ func publishSQLiteFile(tempPath, dbPath string, mode os.FileMode, allowRename bo
 	case os.IsExist(linkErr):
 		return os.ErrExist
 	case isHardLinkUnsupported(linkErr):
-		if allowRename {
-			if err := sqliteRename(tempPath, dbPath); err != nil {
-				if os.IsExist(err) {
-					return os.ErrExist
-				}
-				return fmt.Errorf("renaming staged database into place: %w", err)
-			}
-			if mode != 0 {
-				if err := sqliteChmod(dbPath, mode); err != nil {
-					return fmt.Errorf("restoring database file mode: %w", err)
-				}
-			}
-			return nil
-		}
+		_ = allowRename
 		return copySQLiteFileExclusive(tempPath, dbPath, mode)
 	default:
 		return fmt.Errorf("linking staged database into place: %w", linkErr)

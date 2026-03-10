@@ -284,6 +284,65 @@ func TestSaveToSQLite_ReplaceRaceRestoresBackupWhenWinnerIsDirectory(t *testing.
 	}
 }
 
+func TestSaveToSQLite_ReplaceRaceKeepsCompetingWriterWhenHardLinksUnsupported(t *testing.T) {
+	// WHY: On filesystems without hard-link support, replacement should still
+	// preserve a competing writer that recreates the destination before publish.
+	storeA := NewMemStore()
+	caA := newRSACA(t)
+	if err := storeA.HandleCertificate(caA.cert, "ca-a.pem"); err != nil {
+		t.Fatalf("store cert A: %v", err)
+	}
+
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "replace-race-copy.db")
+	if err := SaveToSQLite(storeA, dbPath); err != nil {
+		t.Fatalf("initial SaveToSQLite: %v", err)
+	}
+
+	storeB := NewMemStore()
+	caB := newECDSACA(t)
+	if err := storeB.HandleCertificate(caB.cert, "ca-b.pem"); err != nil {
+		t.Fatalf("store cert B: %v", err)
+	}
+
+	originalLink := sqliteLink
+	originalOpenFile := sqliteOpenFile
+	t.Cleanup(func() {
+		sqliteLink = originalLink
+		sqliteOpenFile = originalOpenFile
+	})
+	sqliteLink = func(oldPath, newPath string) error {
+		_ = oldPath
+		_ = newPath
+		return syscall.EXDEV
+	}
+	sqliteOpenFile = func(name string, flag int, perm os.FileMode) (*os.File, error) {
+		if name == dbPath && flag == os.O_CREATE|os.O_EXCL|os.O_WRONLY {
+			if err := os.WriteFile(name, []byte("winner"), perm); err != nil {
+				return nil, fmt.Errorf("injecting competing database: %w", err)
+			}
+			return nil, os.ErrExist
+		}
+		return os.OpenFile(name, flag, perm)
+	}
+
+	err := SaveToSQLite(storeB, dbPath)
+	if err == nil {
+		t.Fatal("expected SaveToSQLite race failure, got nil")
+	}
+	if !errors.Is(err, os.ErrExist) {
+		t.Fatalf("SaveToSQLite error = %v, want wrapped %v", err, os.ErrExist)
+	}
+
+	data, readErr := os.ReadFile(dbPath)
+	if readErr != nil {
+		t.Fatalf("read competing database: %v", readErr)
+	}
+	if string(data) != "winner" {
+		t.Fatalf("destination contents = %q, want competing writer contents", string(data))
+	}
+}
+
 func TestSaveToSQLite_FallsBackWhenHardLinksUnsupported(t *testing.T) {
 	// WHY: Some filesystems reject hard links; SaveToSQLite must still publish a
 	// valid database when link-based staging is unavailable.

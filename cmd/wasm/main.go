@@ -29,6 +29,8 @@ const (
 	wasmMaxInputTotalBytes = 50 * 1024 * 1024
 )
 
+const wasmDefaultExportPasswordWarning = "export used the default PKCS#12 password 'changeit'; pass a custom password to certkitExportBundles to avoid shipping insecure .p12 files"
+
 var errWASMTotalInputBytesExceeded = errors.New("total upload size limit exceeded")
 
 func isWASMTotalInputBytesExceeded(err error) bool {
@@ -399,7 +401,7 @@ func exportBundlesJS(_ js.Value, args []js.Value) any {
 	}
 
 	p12Password := internal.DefaultExportPassword
-	defaultPasswordWarning := internal.DefaultExportPasswordWarning
+	defaultPasswordWarning := wasmDefaultExportPasswordWarning
 	if len(args) >= 2 && args[1].Type() != js.TypeUndefined && args[1].Type() != js.TypeNull {
 		if candidate := strings.TrimSpace(args[1].String()); candidate != "" {
 			p12Password = candidate
