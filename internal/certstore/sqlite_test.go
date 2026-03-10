@@ -172,6 +172,58 @@ func TestSaveToSQLite_ReplacesExistingFile(t *testing.T) {
 	}
 }
 
+func TestSaveToSQLite_ReplaceRaceKeepsCompetingWriter(t *testing.T) {
+	// WHY: If another writer recreates the destination after the original file is
+	// moved aside, rollback must not delete the competing winner.
+	t.Parallel()
+
+	storeA := NewMemStore()
+	caA := newRSACA(t)
+	if err := storeA.HandleCertificate(caA.cert, "ca-a.pem"); err != nil {
+		t.Fatalf("store cert A: %v", err)
+	}
+
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "replace-race.db")
+	if err := SaveToSQLite(storeA, dbPath); err != nil {
+		t.Fatalf("initial SaveToSQLite: %v", err)
+	}
+
+	storeB := NewMemStore()
+	caB := newECDSACA(t)
+	if err := storeB.HandleCertificate(caB.cert, "ca-b.pem"); err != nil {
+		t.Fatalf("store cert B: %v", err)
+	}
+
+	originalLink := sqliteLink
+	t.Cleanup(func() {
+		sqliteLink = originalLink
+	})
+	sqliteLink = func(oldPath, newPath string) error {
+		_ = oldPath
+		if err := os.WriteFile(newPath, []byte("winner"), 0o600); err != nil {
+			return fmt.Errorf("injecting competing database: %w", err)
+		}
+		return os.ErrExist
+	}
+
+	err := SaveToSQLite(storeB, dbPath)
+	if err == nil {
+		t.Fatal("expected SaveToSQLite race failure, got nil")
+	}
+	if !errors.Is(err, os.ErrExist) {
+		t.Fatalf("SaveToSQLite error = %v, want wrapped %v", err, os.ErrExist)
+	}
+
+	data, readErr := os.ReadFile(dbPath)
+	if readErr != nil {
+		t.Fatalf("read competing database: %v", readErr)
+	}
+	if string(data) != "winner" {
+		t.Fatalf("destination contents = %q, want competing writer contents", string(data))
+	}
+}
+
 func TestSaveToSQLite_FallsBackWhenHardLinksUnsupported(t *testing.T) {
 	// WHY: Some filesystems reject hard links; SaveToSQLite must still publish a
 	// valid database when link-based staging is unavailable.
