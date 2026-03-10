@@ -783,7 +783,7 @@ func TestResolveAIA_CancelledContext(t *testing.T) {
 		NotBefore:             time.Now().Add(-time.Hour),
 		NotAfter:              time.Now().Add(24 * time.Hour),
 		KeyUsage:              x509.KeyUsageDigitalSignature,
-		IssuingCertificateURL: []string{"http://127.0.0.1/issuer.cer"},
+		IssuingCertificateURL: []string{"http://ca.example.com/issuer.cer"},
 		AuthorityKeyId:        caCert.SubjectKeyId,
 	}
 	leafBytes, err := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
