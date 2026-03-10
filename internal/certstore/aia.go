@@ -12,6 +12,8 @@ import (
 
 // AIAFetcher fetches raw certificate bytes from a URL. Implementations handle
 // transport details: CLI uses net/http, WASM delegates to JavaScript fetch.
+// Implementations must honor ctx cancellation promptly so ResolveAIA can abort
+// in-flight fetches on timeout or user cancellation.
 type AIAFetcher func(ctx context.Context, url string) ([]byte, error)
 
 // ResolveAIAInput holds parameters for ResolveAIA.
