@@ -1219,6 +1219,11 @@ exportBtn.addEventListener("click", async () => {
     true,
   );
 
+  // Yield to the browser so the status bar paints before WASM blocks.
+  await new Promise((r) =>
+    requestAnimationFrame(() => requestAnimationFrame(r)),
+  );
+
   try {
     const payload = await certkitExportBundles(skis, password || undefined);
     downloadBlob(payload.data, "certkit-bundles.zip", "application/zip");
@@ -1235,6 +1240,14 @@ exportBtn.addEventListener("click", async () => {
       )
     ) {
       try {
+        showStatus(
+          `Retrying ${skis.length} bundle(s) without verification${encryptingNote}`,
+          false,
+          true,
+        );
+        await new Promise((r) =>
+          requestAnimationFrame(() => requestAnimationFrame(r)),
+        );
         const payload = await certkitExportBundles(
           skis,
           password || undefined,
