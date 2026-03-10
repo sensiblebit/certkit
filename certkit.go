@@ -478,6 +478,16 @@ type pbkdf2Params struct {
 	PRF            asn1AlgorithmIdentifier `asn1:"optional"`
 }
 
+// pkcs8MaxDecryptIterations is the maximum PBKDF2 iteration count accepted
+// when decrypting PKCS#8 keys. This prevents CPU-DoS from crafted ASN.1 with
+// extreme iteration values. 10 million is generous for any legitimate use.
+const pkcs8MaxDecryptIterations = 10_000_000
+
+// pkcs8MaxKeyLength is the maximum PBKDF2-derived key length (in bytes)
+// accepted when decrypting PKCS#8 keys. 64 bytes (512 bits) covers all
+// standard ciphers and prevents memory abuse from crafted ASN.1.
+const pkcs8MaxKeyLength = 64
+
 var (
 	errDecryptPKCS8UnsupportedAlgorithm = errors.New("unsupported PKCS#8 encryption algorithm: expected PBES2")
 	errDecryptPKCS8UnsupportedKDF       = errors.New("unsupported PKCS#8 KDF: expected PBKDF2")
@@ -486,6 +496,9 @@ var (
 	errDecryptPKCS8InvalidPadding       = errors.New("invalid PKCS#7 padding in decrypted PKCS#8 key")
 	errDecryptPKCS8InvalidIVLength      = errors.New("invalid IV length for cipher")
 	errDecryptPKCS8InvalidCiphertext    = errors.New("ciphertext is not a multiple of cipher block size")
+	errDecryptPKCS8ExcessiveIterations  = errors.New("PBKDF2 iteration count exceeds safety limit")
+	errDecryptPKCS8InvalidKeyLength     = errors.New("PBKDF2 key length exceeds safety limit")
+	errEncryptPKCS8EmptyPassword        = errors.New("password must not be empty")
 )
 
 // pbes2CipherConfig describes a supported PBES2 encryption scheme.
@@ -531,6 +544,10 @@ func lookupPBKDF2PRF(oid asn1.ObjectIdentifier) (crypto.Hash, error) {
 // (PBES2 with PBKDF2-HMAC-SHA-256 and AES-256-CBC) and returns it as a PEM
 // string with block type "ENCRYPTED PRIVATE KEY".
 func MarshalEncryptedPrivateKeyToPEM(key crypto.PrivateKey, password string) (string, error) {
+	if strings.TrimSpace(password) == "" {
+		return "", errEncryptPKCS8EmptyPassword
+	}
+
 	pkcs8DER, err := x509.MarshalPKCS8PrivateKey(normalizeKey(key))
 	if err != nil {
 		return "", fmt.Errorf("marshaling private key to PKCS#8: %w", err)
@@ -662,8 +679,15 @@ func decryptPKCS8PrivateKey(encryptedDER []byte, password string) (crypto.Privat
 		}
 	}
 
+	if kdfParams.IterationCount <= 0 || kdfParams.IterationCount > pkcs8MaxDecryptIterations {
+		return nil, errDecryptPKCS8ExcessiveIterations
+	}
+
 	keyLen := cipherCfg.keyLen
 	if kdfParams.KeyLength > 0 {
+		if kdfParams.KeyLength > pkcs8MaxKeyLength {
+			return nil, errDecryptPKCS8InvalidKeyLength
+		}
 		keyLen = kdfParams.KeyLength
 	}
 

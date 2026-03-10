@@ -18,9 +18,13 @@ func derivePBKDF2Key(h crypto.Hash, password string, salt []byte, iterations, ke
 		return nil, err
 	}
 
-	subtle := js.Global().Get("crypto").Get("subtle")
+	cryptoObj := js.Global().Get("crypto")
+	if cryptoObj.IsUndefined() || cryptoObj.IsNull() {
+		return nil, errors.New("web crypto API unavailable")
+	}
+	subtle := cryptoObj.Get("subtle")
 	if subtle.IsUndefined() || subtle.IsNull() {
-		return nil, errors.New("Web Crypto API unavailable")
+		return nil, errors.New("web crypto API unavailable")
 	}
 
 	// Import the password as a raw CryptoKey.
@@ -93,7 +97,11 @@ func awaitPromise(p js.Value) (js.Value, error) {
 		return nil
 	})
 	onReject := js.FuncOf(func(_ js.Value, args []js.Value) any {
-		ch <- promiseResult{err: errors.New(args[0].Call("toString").String())}
+		msg := "promise rejected"
+		if len(args) > 0 && !args[0].IsUndefined() && !args[0].IsNull() {
+			msg = args[0].Call("toString").String()
+		}
+		ch <- promiseResult{err: errors.New(msg)}
 		return nil
 	})
 	defer onResolve.Release()

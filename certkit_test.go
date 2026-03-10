@@ -7,8 +7,12 @@ import (
 	"crypto/cipher"
 	"crypto/des" //nolint:gosec // Testing 3DES-CBC PKCS#8 decryption.
 	"crypto/ecdsa"
+
+	// crypto/pbkdf2 is used directly in the combination test to derive keys
+	// independently of the production derivePBKDF2Key helper (T-9 compliance).
 	"crypto/ed25519"
 	"crypto/elliptic"
+	"crypto/pbkdf2"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/sha1" //nolint:gosec // Test coverage for legacy X.509 SHA-1 compatibility paths.
@@ -1516,6 +1520,24 @@ func TestMarshalEncryptedPrivateKeyToPEM_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestMarshalEncryptedPrivateKeyToPEM_EmptyPassword(t *testing.T) {
+	// WHY: An empty or whitespace-only password produces a key that is
+	// technically encrypted but offers no protection. The API must reject it.
+	t.Parallel()
+
+	_, edKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, pw := range []string{"", "   ", "\t"} {
+		_, err := MarshalEncryptedPrivateKeyToPEM(edKey, pw)
+		if err == nil {
+			t.Errorf("expected error for password %q, got nil", pw)
+		}
+	}
+}
+
 func TestDecryptPKCS8PrivateKey_MalformedIV(t *testing.T) {
 	// WHY: A short or missing IV in the ASN.1 EncryptedPrivateKeyInfo must
 	// produce an error, not panic in cipher.NewCBCDecrypter.
@@ -1560,11 +1582,20 @@ func TestDecryptPKCS8PrivateKey_MalformedIV(t *testing.T) {
 	}
 
 	// Replace the cipher params with a 1-byte IV (too short for AES).
-	shortIV, _ := asn1.Marshal([]byte{0x42})
+	shortIV, err := asn1.Marshal([]byte{0x42})
+	if err != nil {
+		t.Fatalf("marshalling short IV: %v", err)
+	}
 	params.Cipher.Parameters = asn1.RawValue{FullBytes: shortIV}
-	newParams, _ := asn1.Marshal(params)
+	newParams, err := asn1.Marshal(params)
+	if err != nil {
+		t.Fatalf("marshalling PBES2 params: %v", err)
+	}
 	outer.Algorithm.Parameters = asn1.RawValue{FullBytes: newParams}
-	corrupted, _ := asn1.Marshal(outer)
+	corrupted, err := asn1.Marshal(outer)
+	if err != nil {
+		t.Fatalf("marshalling corrupted PKCS#8: %v", err)
+	}
 
 	corruptedPEM := pem.EncodeToMemory(&pem.Block{
 		Type:  "ENCRYPTED PRIVATE KEY",
@@ -1574,6 +1605,151 @@ func TestDecryptPKCS8PrivateKey_MalformedIV(t *testing.T) {
 	_, err = ParsePEMPrivateKeyWithPasswords(corruptedPEM, []string{"password"})
 	if err == nil {
 		t.Fatal("expected error for short IV, got nil")
+	}
+}
+
+func TestDecryptPKCS8PrivateKey_ExcessiveIterations(t *testing.T) {
+	// WHY: A crafted ENCRYPTED PRIVATE KEY with an extreme PBKDF2 iteration
+	// count could cause CPU-DoS. The decoder must reject it before deriving.
+	t.Parallel()
+
+	_, edKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Build a minimal valid encrypted key, then patch the iteration count.
+	encPEM, err := MarshalEncryptedPrivateKeyToPEM(edKey, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _ := pem.Decode([]byte(encPEM))
+
+	// Replace iteration count in the ASN.1 with something over the cap.
+	// We re-encode with 20 million iterations.
+	type algID struct {
+		Algorithm  asn1.ObjectIdentifier
+		Parameters asn1.RawValue `asn1:"optional"`
+	}
+	type epkiT struct {
+		Algorithm     algID
+		EncryptedData []byte
+	}
+	type pbes2P struct {
+		KDF    algID
+		Cipher algID
+	}
+	type pbkdf2P struct {
+		Salt           []byte
+		IterationCount int
+		KeyLength      int   `asn1:"optional"`
+		PRF            algID `asn1:"optional"`
+	}
+
+	var outer epkiT
+	if _, err := asn1.Unmarshal(block.Bytes, &outer); err != nil {
+		t.Fatal(err)
+	}
+	var params pbes2P
+	if _, err := asn1.Unmarshal(outer.Algorithm.Parameters.FullBytes, &params); err != nil {
+		t.Fatal(err)
+	}
+	var kdfParams pbkdf2P
+	if _, err := asn1.Unmarshal(params.KDF.Parameters.FullBytes, &kdfParams); err != nil {
+		t.Fatal(err)
+	}
+
+	kdfParams.IterationCount = 20_000_000
+	newKDFDER, err := asn1.Marshal(kdfParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	params.KDF.Parameters = asn1.RawValue{FullBytes: newKDFDER}
+	newParamsDER, err := asn1.Marshal(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outer.Algorithm.Parameters = asn1.RawValue{FullBytes: newParamsDER}
+	craftedDER, err := asn1.Marshal(outer)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	craftedPEM := pem.EncodeToMemory(&pem.Block{Type: "ENCRYPTED PRIVATE KEY", Bytes: craftedDER})
+	_, err = ParsePEMPrivateKeyWithPasswords(craftedPEM, []string{"test"})
+	if err == nil {
+		t.Fatal("expected error for excessive iterations, got nil")
+	}
+}
+
+func TestDecryptPKCS8PrivateKey_ExcessiveKeyLength(t *testing.T) {
+	// WHY: A crafted ENCRYPTED PRIVATE KEY with an extreme PBKDF2 key length
+	// could cause memory/CPU abuse. The decoder must reject it.
+	t.Parallel()
+
+	_, edKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	encPEM, err := MarshalEncryptedPrivateKeyToPEM(edKey, "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _ := pem.Decode([]byte(encPEM))
+
+	type algID struct {
+		Algorithm  asn1.ObjectIdentifier
+		Parameters asn1.RawValue `asn1:"optional"`
+	}
+	type epkiT struct {
+		Algorithm     algID
+		EncryptedData []byte
+	}
+	type pbes2P struct {
+		KDF    algID
+		Cipher algID
+	}
+	type pbkdf2P struct {
+		Salt           []byte
+		IterationCount int
+		KeyLength      int   `asn1:"optional"`
+		PRF            algID `asn1:"optional"`
+	}
+
+	var outer epkiT
+	if _, err := asn1.Unmarshal(block.Bytes, &outer); err != nil {
+		t.Fatal(err)
+	}
+	var params pbes2P
+	if _, err := asn1.Unmarshal(outer.Algorithm.Parameters.FullBytes, &params); err != nil {
+		t.Fatal(err)
+	}
+	var kdfParams pbkdf2P
+	if _, err := asn1.Unmarshal(params.KDF.Parameters.FullBytes, &kdfParams); err != nil {
+		t.Fatal(err)
+	}
+
+	kdfParams.KeyLength = 1024 // Way over the 64-byte cap.
+	newKDFDER, err := asn1.Marshal(kdfParams)
+	if err != nil {
+		t.Fatal(err)
+	}
+	params.KDF.Parameters = asn1.RawValue{FullBytes: newKDFDER}
+	newParamsDER, err := asn1.Marshal(params)
+	if err != nil {
+		t.Fatal(err)
+	}
+	outer.Algorithm.Parameters = asn1.RawValue{FullBytes: newParamsDER}
+	craftedDER, err := asn1.Marshal(outer)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	craftedPEM := pem.EncodeToMemory(&pem.Block{Type: "ENCRYPTED PRIVATE KEY", Bytes: craftedDER})
+	_, err = ParsePEMPrivateKeyWithPasswords(craftedPEM, []string{"test"})
+	if err == nil {
+		t.Fatal("expected error for excessive key length, got nil")
 	}
 }
 
@@ -1661,7 +1837,9 @@ func TestDecryptPKCS8PrivateKey_CipherPRFCombinations(t *testing.T) {
 					t.Fatal(err)
 				}
 
-				derivedKey, err := derivePBKDF2Key(ps.hash, password, salt, 1000, cs.keyLen)
+				// Use stdlib pbkdf2 directly (not derivePBKDF2Key) so the test
+				// validates the production code against an independent KDF impl.
+				derivedKey, err := pbkdf2.Key(ps.hash.New, password, salt, 1000, cs.keyLen)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -1683,28 +1861,45 @@ func TestDecryptPKCS8PrivateKey_CipherPRFCombinations(t *testing.T) {
 				// Build PBKDF2 params — omit PRF field when testing the default.
 				var kdfParamsDER []byte
 				if ps.oid == nil {
-					kdfParamsDER, _ = asn1.Marshal(pbkdf2NoPRF{
+					var err error
+					kdfParamsDER, err = asn1.Marshal(pbkdf2NoPRF{
 						Salt: salt, IterationCount: 1000, KeyLength: cs.keyLen,
 					})
+					if err != nil {
+						t.Fatalf("marshalling PBKDF2 params (no PRF): %v", err)
+					}
 				} else {
-					kdfParamsDER, _ = asn1.Marshal(pbkdf2WithPRF{
+					var err error
+					kdfParamsDER, err = asn1.Marshal(pbkdf2WithPRF{
 						Salt: salt, IterationCount: 1000, KeyLength: cs.keyLen,
 						PRF: algID{Algorithm: ps.oid},
 					})
+					if err != nil {
+						t.Fatalf("marshalling PBKDF2 params (with PRF): %v", err)
+					}
 				}
 
-				ivDER, _ := asn1.Marshal(iv)
-				pbes2ParamsDER, _ := asn1.Marshal(pbes2P{
+				ivDER, err := asn1.Marshal(iv)
+				if err != nil {
+					t.Fatalf("marshalling IV: %v", err)
+				}
+				pbes2ParamsDER, err := asn1.Marshal(pbes2P{
 					KDF:    algID{Algorithm: asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 5, 12}, Parameters: asn1.RawValue{FullBytes: kdfParamsDER}},
 					Cipher: algID{Algorithm: cs.oid, Parameters: asn1.RawValue{FullBytes: ivDER}},
 				})
-				encDER, _ := asn1.Marshal(epki{
+				if err != nil {
+					t.Fatalf("marshalling PBES2 params: %v", err)
+				}
+				encDER, err := asn1.Marshal(epki{
 					Algorithm: algID{
 						Algorithm:  asn1.ObjectIdentifier{1, 2, 840, 113549, 1, 5, 13},
 						Parameters: asn1.RawValue{FullBytes: pbes2ParamsDER},
 					},
 					EncryptedData: ciphertext,
 				})
+				if err != nil {
+					t.Fatalf("marshalling encrypted PKCS#8: %v", err)
+				}
 
 				encPEM := pem.EncodeToMemory(&pem.Block{Type: "ENCRYPTED PRIVATE KEY", Bytes: encDER})
 
