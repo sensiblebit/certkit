@@ -22,6 +22,12 @@ import (
 
 var errP12PasswordRequired = errors.New("PKCS#12 export password is required")
 
+var (
+	errBundleNil          = errors.New("bundle is nil")
+	errBundleLeafCertNil  = errors.New("bundle leaf certificate is nil")
+	errLeafCertificateNil = errors.New("leaf certificate is nil")
+)
+
 // BundleFile represents a single output file in a bundle export.
 type BundleFile struct {
 	Name      string
@@ -74,6 +80,9 @@ type K8sMetadata struct {
 // root) are only included when the corresponding certificates exist.
 func GenerateBundleFiles(input BundleExportInput) ([]BundleFile, error) {
 	bundle := input.Bundle
+	if err := validateBundle(bundle); err != nil {
+		return nil, err
+	}
 	prefix := input.Prefix
 
 	leafPEM := []byte(certkit.CertToPEM(bundle.Leaf))
@@ -176,8 +185,14 @@ func bundleRoot(b *certkit.BundleResult) *x509.Certificate {
 
 // earliestExpiry returns the earliest NotAfter from the leaf, intermediates, and root.
 func earliestExpiry(b *certkit.BundleResult) time.Time {
+	if b == nil || b.Leaf == nil {
+		return time.Time{}
+	}
 	earliest := b.Leaf.NotAfter
 	for _, c := range b.Intermediates {
+		if c == nil {
+			continue
+		}
 		if c.NotAfter.Before(earliest) {
 			earliest = c.NotAfter
 		}
@@ -201,6 +216,9 @@ func FormatIPAddresses(ips []net.IP) []string {
 // GenerateJSON creates a JSON representation of the certificate bundle.
 // The PEM field contains leaf + intermediates only (no root).
 func GenerateJSON(bundle *certkit.BundleResult) ([]byte, error) {
+	if err := validateBundle(bundle); err != nil {
+		return nil, err
+	}
 	chainPEM := []byte(certkit.CertToPEM(bundle.Leaf))
 	for _, c := range bundle.Intermediates {
 		chainPEM = slices.Concat(chainPEM, []byte(certkit.CertToPEM(c)))
@@ -242,6 +260,9 @@ func GenerateJSON(bundle *certkit.BundleResult) ([]byte, error) {
 
 // GenerateYAML creates a YAML representation of the certificate bundle.
 func GenerateYAML(bundle *certkit.BundleResult, keyPEM []byte, keyType string, bitLength int) ([]byte, error) {
+	if err := validateBundle(bundle); err != nil {
+		return nil, err
+	}
 	leafPEM := []byte(certkit.CertToPEM(bundle.Leaf))
 
 	var intermediatePEM []byte
@@ -419,6 +440,10 @@ func ExportMatchedBundles(ctx context.Context, input ExportMatchedBundleInput) e
 // GenerateCSR creates a CSR using the certificate's details and private key.
 // The subject parameter optionally overrides the certificate's subject fields.
 func GenerateCSR(leaf *x509.Certificate, keyPEM []byte, subject *CSRSubjectOverride) (csrPEM []byte, csrJSON []byte, err error) {
+	if leaf == nil {
+		return nil, nil, errLeafCertificateNil
+	}
+
 	privKey, err := certkit.ParsePEMPrivateKey(keyPEM)
 	if err != nil {
 		return nil, nil, fmt.Errorf("parsing private key: %w", err)
@@ -495,4 +520,14 @@ func GenerateCSR(leaf *x509.Certificate, keyPEM []byte, subject *CSRSubjectOverr
 	}
 
 	return csrPEM, csrJSON, nil
+}
+
+func validateBundle(bundle *certkit.BundleResult) error {
+	if bundle == nil {
+		return errBundleNil
+	}
+	if bundle.Leaf == nil {
+		return errBundleLeafCertNil
+	}
+	return nil
 }

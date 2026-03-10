@@ -774,6 +774,37 @@ func TestGetCertificateType(t *testing.T) {
 	}
 }
 
+func TestCertificateHelpers_NilInput(t *testing.T) {
+	// WHY: Nil certificates can flow in from library callers. Helper functions
+	// must degrade safely instead of panicking on exported API boundaries.
+	t.Parallel()
+
+	if got := CertToPEM(nil); got != "" {
+		t.Errorf("CertToPEM(nil) = %q, want empty string", got)
+	}
+	if got := CertFingerprint(nil); got != "" {
+		t.Errorf("CertFingerprint(nil) = %q, want empty string", got)
+	}
+	if got := CertFingerprintSHA1(nil); got != "" {
+		t.Errorf("CertFingerprintSHA1(nil) = %q, want empty string", got)
+	}
+	if got := CertFingerprintColonSHA256(nil); got != "" {
+		t.Errorf("CertFingerprintColonSHA256(nil) = %q, want empty string", got)
+	}
+	if got := CertFingerprintColonSHA1(nil); got != "" {
+		t.Errorf("CertFingerprintColonSHA1(nil) = %q, want empty string", got)
+	}
+	if got := CertSKI(nil); got != "" {
+		t.Errorf("CertSKI(nil) = %q, want empty string", got)
+	}
+	if got := GetCertificateType(nil); got != "" {
+		t.Errorf("GetCertificateType(nil) = %q, want empty string", got)
+	}
+	if got := CertExpiresWithin(nil, time.Hour); got {
+		t.Error("CertExpiresWithin(nil, time.Hour) = true, want false")
+	}
+}
+
 func TestGetPublicKey_NilKey(t *testing.T) {
 	// WHY: GetPublicKey with nil must return a clear error, not panic.
 	// Happy path is covered transitively by TestKeyMatchesCert and
