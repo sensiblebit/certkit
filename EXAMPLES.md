@@ -337,13 +337,13 @@ Going the other direction -- you have PEM files and need a `.p12` for a Java app
 certkit bundle cert.pem --key key.pem --format p12 -p "your-password" -o bundle.p12
 ```
 
-PKCS#12/JKS exports use the first non-empty password from `-p`/`--password-file`. When an export password is supplied, the `.key` PEM output is also encrypted (PKCS#8 v2, PBES2/AES-256-CBC, written as an `ENCRYPTED PRIVATE KEY` block):
+PKCS#12/JKS exports use the first non-empty password from `-p`/`--password-file`:
 
 ```sh
 certkit bundle cert.pem --key key.pem --format jks -p "your-password" -o keystore.jks
 ```
 
-If no non-empty export password is provided, certkit defaults to `changeit` for PKCS#12/JKS and writes an unencrypted `PRIVATE KEY` block for `.key` files. A warning is emitted on stderr so production exports do not silently rely on the well-known default.
+If no non-empty export password is provided, certkit defaults to `changeit` for PKCS#12/JKS. A warning is emitted on stderr so production exports do not silently rely on the well-known default.
 
 ---
 
@@ -469,6 +469,8 @@ certkit scan /path/to/certs/ --bundle-path ./bundles -c bundles.yaml
 ```
 
 This creates a directory per bundle with every format you might need: PEM (leaf, chain, fullchain, intermediates, root), private key, PKCS#12, JKS, Kubernetes Secret, and a CSR for renewal.
+
+When an export password is supplied via `-p`/`--password-file`, the `.key` PEM output is encrypted (PKCS#8 v2, PBES2/AES-256-CBC, written as an `ENCRYPTED PRIVATE KEY` block). Without an explicit password, `.key` files are written as unencrypted PKCS#8 (`PRIVATE KEY`). Kubernetes TLS secrets always contain unencrypted keys regardless of the password setting.
 
 ---
 
