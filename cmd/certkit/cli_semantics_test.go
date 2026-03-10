@@ -92,8 +92,11 @@ func TestJSONSchemaConsistency(t *testing.T) {
 }
 
 func TestTreeCommand(t *testing.T) {
-	t.Parallel()
+	state := snapshotReadonlyGlobals()
+	defer restoreReadonlyGlobals(state)
 
+	// This test mutates the shared Cobra command graph to force default
+	// help/version/completion registration, so it must stay serialized.
 	rootCmd.Version = "test"
 	initTreeSurface(rootCmd)
 
@@ -112,7 +115,6 @@ func TestTreeCommand(t *testing.T) {
 	}
 
 	t.Run("includes all non-hidden commands", func(t *testing.T) {
-		t.Parallel()
 		for _, entry := range expectedCommands {
 			if !strings.Contains(rootOutput, entry) {
 				t.Errorf("tree output missing command %q", entry)
@@ -121,7 +123,6 @@ func TestTreeCommand(t *testing.T) {
 	})
 
 	t.Run("includes help and completion", func(t *testing.T) {
-		t.Parallel()
 		for _, name := range []string{"help", "completion"} {
 			if !strings.Contains(rootOutput, name+" — ") {
 				t.Errorf("tree output missing built-in command %q", name)
@@ -130,7 +131,6 @@ func TestTreeCommand(t *testing.T) {
 	})
 
 	t.Run("includes nested subcommands", func(t *testing.T) {
-		t.Parallel()
 		for _, name := range []string{"self-signed", "csr"} {
 			if !strings.Contains(rootOutput, name+" — ") {
 				t.Errorf("tree output missing nested command %q", name)
@@ -139,7 +139,6 @@ func TestTreeCommand(t *testing.T) {
 	})
 
 	t.Run("includes help and version flags", func(t *testing.T) {
-		t.Parallel()
 		for _, flag := range []string{"--help", "--version"} {
 			if !strings.Contains(rootOutput, flag) {
 				t.Errorf("tree output missing flag %q", flag)
@@ -148,7 +147,6 @@ func TestTreeCommand(t *testing.T) {
 	})
 
 	t.Run("includes subcommand help and inherited global flags", func(t *testing.T) {
-		t.Parallel()
 		start := strings.Index(rootOutput, "bundle — ")
 		if start == -1 {
 			t.Fatal("tree output missing bundle command")
@@ -166,7 +164,6 @@ func TestTreeCommand(t *testing.T) {
 	})
 
 	t.Run("rejects arguments", func(t *testing.T) {
-		t.Parallel()
 		if treeCmd.Args == nil {
 			t.Fatal("treeCmd.Args is nil; expected cobra.NoArgs")
 		}
@@ -176,7 +173,6 @@ func TestTreeCommand(t *testing.T) {
 	})
 
 	t.Run("uses box-drawing connectors", func(t *testing.T) {
-		t.Parallel()
 		for _, connector := range []string{"├── ", "└── ", "│   "} {
 			if !strings.Contains(rootOutput, connector) {
 				t.Errorf("tree output missing connector %q", connector)
