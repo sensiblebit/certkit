@@ -477,6 +477,7 @@ var (
 	errDecryptPKCS8UnsupportedCipher    = errors.New("unsupported PKCS#8 cipher: expected AES-256-CBC")
 	errDecryptPKCS8UnsupportedPRF       = errors.New("unsupported PKCS#8 PRF: expected HMAC-SHA-256")
 	errDecryptPKCS8InvalidPadding       = errors.New("invalid PKCS#7 padding in decrypted PKCS#8 key")
+	errDecryptPKCS8InvalidIVLength      = errors.New("invalid AES IV length")
 	errDecryptPKCS8InvalidCiphertext    = errors.New("ciphertext is not a multiple of AES block size")
 )
 
@@ -621,6 +622,9 @@ func decryptPKCS8PrivateKey(encryptedDER []byte, password string) (crypto.Privat
 	var iv []byte
 	if _, err := asn1.Unmarshal(params.EncryptionScheme.Parameters.FullBytes, &iv); err != nil {
 		return nil, fmt.Errorf("parsing AES IV: %w", err)
+	}
+	if len(iv) != aes.BlockSize {
+		return nil, errDecryptPKCS8InvalidIVLength
 	}
 
 	if len(epki.EncryptedData)%aes.BlockSize != 0 {

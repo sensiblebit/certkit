@@ -181,8 +181,8 @@ func GenerateBundleFiles(input BundleExportInput) ([]BundleFile, error) {
 	}
 	files = append(files, BundleFile{Name: prefix + ".json", Data: jsonData})
 
-	// YAML
-	yamlData, err := GenerateYAML(bundle, pkcs8Bytes, input.KeyType, input.BitLength)
+	// YAML — use encrypted key when requested so the YAML doesn't leak plaintext.
+	yamlData, err := GenerateYAML(bundle, keyOutput, input.KeyType, input.BitLength)
 	if err != nil {
 		return nil, fmt.Errorf("generating YAML: %w", err)
 	}

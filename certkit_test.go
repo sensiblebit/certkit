@@ -1513,6 +1513,67 @@ func TestMarshalEncryptedPrivateKeyToPEM_RoundTrip(t *testing.T) {
 	}
 }
 
+func TestDecryptPKCS8PrivateKey_MalformedIV(t *testing.T) {
+	// WHY: A short or missing IV in the ASN.1 EncryptedPrivateKeyInfo must
+	// produce an error, not panic in cipher.NewCBCDecrypter.
+	t.Parallel()
+
+	// Build a valid encrypted key first, then corrupt the IV.
+	_, edKey, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encPEM, err := MarshalEncryptedPrivateKeyToPEM(edKey, "password")
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _ := pem.Decode([]byte(encPEM))
+	if block == nil {
+		t.Fatal("no PEM block")
+	}
+
+	// Parse the outer EncryptedPrivateKeyInfo and re-encode with a 1-byte IV.
+	type algID struct {
+		Algorithm  asn1.ObjectIdentifier
+		Parameters asn1.RawValue `asn1:"optional"`
+	}
+	type epki struct {
+		Algorithm     algID
+		EncryptedData []byte
+	}
+	var outer epki
+	if _, err := asn1.Unmarshal(block.Bytes, &outer); err != nil {
+		t.Fatalf("parsing outer: %v", err)
+	}
+
+	// Parse PBES2 params to find and corrupt the IV.
+	type pbes2 struct {
+		KDF    algID
+		Cipher algID
+	}
+	var params pbes2
+	if _, err := asn1.Unmarshal(outer.Algorithm.Parameters.FullBytes, &params); err != nil {
+		t.Fatalf("parsing PBES2 params: %v", err)
+	}
+
+	// Replace the cipher params with a 1-byte IV (too short for AES).
+	shortIV, _ := asn1.Marshal([]byte{0x42})
+	params.Cipher.Parameters = asn1.RawValue{FullBytes: shortIV}
+	newParams, _ := asn1.Marshal(params)
+	outer.Algorithm.Parameters = asn1.RawValue{FullBytes: newParams}
+	corrupted, _ := asn1.Marshal(outer)
+
+	corruptedPEM := pem.EncodeToMemory(&pem.Block{
+		Type:  "ENCRYPTED PRIVATE KEY",
+		Bytes: corrupted,
+	})
+
+	_, err = ParsePEMPrivateKeyWithPasswords(corruptedPEM, []string{"password"})
+	if err == nil {
+		t.Fatal("expected error for short IV, got nil")
+	}
+}
+
 func TestMarshalPublicKeyToPEM_RoundTrip(t *testing.T) {
 	// WHY: MarshalPublicKeyToPEM serializes public keys to PKIX PEM; a round-
 	// trip through x509.ParsePKIXPublicKey proves the PEM wrapper and DER

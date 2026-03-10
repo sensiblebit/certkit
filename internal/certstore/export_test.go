@@ -1574,32 +1574,52 @@ func TestGenerateBundleFiles_EncryptedKey(t *testing.T) {
 		t.Fatalf("GenerateBundleFiles: %v", err)
 	}
 
+	fileMap := make(map[string][]byte)
 	for _, f := range files {
-		if f.Name != "enc.example.com.key" {
-			continue
-		}
-		block, _ := pem.Decode(f.Data)
-		if block == nil {
-			t.Fatal(".key file has no PEM block")
-		}
-		if block.Type != "ENCRYPTED PRIVATE KEY" {
-			t.Errorf(".key PEM type = %q, want \"ENCRYPTED PRIVATE KEY\"", block.Type)
-		}
-		// Decrypt and verify
-		parsed, parseErr := certkit.ParsePEMPrivateKeyWithPasswords(f.Data, []string{password})
-		if parseErr != nil {
-			t.Fatalf("decrypting .key file: %v", parseErr)
-		}
-		matches, matchErr := certkit.KeyMatchesCert(parsed, leaf.cert)
-		if matchErr != nil {
-			t.Fatalf("key-cert match check: %v", matchErr)
-		}
-		if !matches {
-			t.Error("decrypted .key does not match leaf certificate")
-		}
-		return
+		fileMap[f.Name] = f.Data
 	}
-	t.Fatal("no .key file in output")
+
+	// .key must be encrypted
+	keyData, ok := fileMap["enc.example.com.key"]
+	if !ok {
+		t.Fatal("no .key file in output")
+	}
+	block, _ := pem.Decode(keyData)
+	if block == nil {
+		t.Fatal(".key file has no PEM block")
+	}
+	if block.Type != "ENCRYPTED PRIVATE KEY" {
+		t.Errorf(".key PEM type = %q, want \"ENCRYPTED PRIVATE KEY\"", block.Type)
+	}
+	parsed, parseErr := certkit.ParsePEMPrivateKeyWithPasswords(keyData, []string{password})
+	if parseErr != nil {
+		t.Fatalf("decrypting .key file: %v", parseErr)
+	}
+	matches, matchErr := certkit.KeyMatchesCert(parsed, leaf.cert)
+	if matchErr != nil {
+		t.Fatalf("key-cert match check: %v", matchErr)
+	}
+	if !matches {
+		t.Error("decrypted .key does not match leaf certificate")
+	}
+
+	// .yaml key field must also be encrypted — not plaintext
+	yamlData, ok := fileMap["enc.example.com.yaml"]
+	if !ok {
+		t.Fatal("no .yaml file in output")
+	}
+	var yamlContent map[string]any
+	if err := yaml.Unmarshal(yamlData, &yamlContent); err != nil {
+		t.Fatalf("parsing .yaml: %v", err)
+	}
+	yamlKey, _ := yamlContent["key"].(string)
+	yamlBlock, _ := pem.Decode([]byte(yamlKey))
+	if yamlBlock == nil {
+		t.Fatal(".yaml key field has no PEM block")
+	}
+	if yamlBlock.Type != "ENCRYPTED PRIVATE KEY" {
+		t.Errorf(".yaml key PEM type = %q, want \"ENCRYPTED PRIVATE KEY\"", yamlBlock.Type)
+	}
 }
 
 func TestGenerateBundleFiles_K8sKeyUnencrypted(t *testing.T) {
