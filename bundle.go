@@ -428,6 +428,10 @@ func FetchLeafFromURL(ctx context.Context, input FetchLeafFromURLInput) (*x509.C
 type FetchAIACertificatesInput struct {
 	// Cert is the leaf or intermediate whose AIA URLs will be followed.
 	Cert *x509.Certificate
+	// KnownIntermediates are caller-supplied intermediates that already
+	// participate in chain building and should count toward unresolved issuer
+	// detection even if they were not AIA-fetched.
+	KnownIntermediates []*x509.Certificate
 	// Timeout is the HTTP request timeout for AIA fetches.
 	Timeout time.Duration
 	// MaxDepth is the maximum number of AIA hops to follow.
@@ -501,7 +505,10 @@ func fetchAIACertificatesDetailed(ctx context.Context, input FetchAIACertificate
 			queue = append(queue, certs...)
 		}
 	}
-	allCerts := append([]*x509.Certificate{input.Cert}, fetched...)
+	allCerts := make([]*x509.Certificate, 0, 1+len(input.KnownIntermediates)+len(fetched))
+	allCerts = append(allCerts, input.Cert)
+	allCerts = append(allCerts, input.KnownIntermediates...)
+	allCerts = append(allCerts, fetched...)
 	unresolvedCount := countAIAUnresolvedIssuers(allCerts)
 
 	return aiaFetchCertificatesResult{
@@ -684,6 +691,7 @@ func Bundle(ctx context.Context, input BundleInput) (*BundleResult, error) {
 	if opts.FetchAIA {
 		aiaResult := fetchAIACertificatesDetailed(ctx, FetchAIACertificatesInput{
 			Cert:                 leaf,
+			KnownIntermediates:   opts.ExtraIntermediates,
 			Timeout:              opts.AIATimeout,
 			MaxDepth:             opts.AIAMaxDepth,
 			AllowPrivateNetworks: opts.AllowPrivateNetworks,
