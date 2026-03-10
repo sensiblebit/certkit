@@ -1041,12 +1041,27 @@ func TestRunCRL_CommandSurfaceOutput(t *testing.T) {
 		if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
 			t.Fatalf("crl json unmarshal: %v\noutput:\n%s", err, stdout)
 		}
+		if payload["this_update"] == "" || payload["next_update"] == "" {
+			t.Fatalf("crl json missing CRL freshness timestamps: %v", payload)
+		}
+		if _, ok := payload["not_before"]; ok {
+			t.Fatalf("crl json should not expose certificate validity keys for CRL freshness: %v", payload)
+		}
+		if _, ok := payload["not_after"]; ok {
+			t.Fatalf("crl json should not expose certificate validity keys for CRL freshness: %v", payload)
+		}
 		checkResult, ok := payload["check_result"].(map[string]any)
 		if !ok {
 			t.Fatalf("crl json missing check_result object: %v", payload)
 		}
 		if revoked, _ := checkResult["revoked"].(bool); revoked {
 			t.Fatalf("crl json expected non-revoked check result: %v", checkResult)
+		}
+		if checkResult["serial"] == "" {
+			t.Fatalf("crl json missing check_result.serial: %v", checkResult)
+		}
+		if _, ok := checkResult["serial_number"]; ok {
+			t.Fatalf("crl json contains legacy check_result.serial_number: %v", checkResult)
 		}
 	})
 
@@ -1159,6 +1174,21 @@ func TestRunOCSP_CommandSurfaceOutput(t *testing.T) {
 		}
 		if payload["status"] != "good" || payload["subject"] == "" || payload["issuer"] == "" {
 			t.Fatalf("ocsp json contract mismatch: %v", payload)
+		}
+		if payload["serial"] == "" {
+			t.Fatalf("ocsp json missing serial field: %v", payload)
+		}
+		if _, ok := payload["serial_number"]; ok {
+			t.Fatalf("ocsp json contains legacy serial_number field: %v", payload)
+		}
+		if payload["this_update"] == "" || payload["next_update"] == "" {
+			t.Fatalf("ocsp json missing OCSP freshness timestamps: %v", payload)
+		}
+		if _, ok := payload["not_before"]; ok {
+			t.Fatalf("ocsp json should not expose certificate validity keys for OCSP freshness: %v", payload)
+		}
+		if _, ok := payload["not_after"]; ok {
+			t.Fatalf("ocsp json should not expose certificate validity keys for OCSP freshness: %v", payload)
 		}
 	})
 

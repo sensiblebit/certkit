@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add nil guards to exported certificate helper functions (`CertToPEM`, `CertFingerprint`, `CertFingerprintSHA1`, `CertFingerprintColonSHA256`, `CertFingerprintColonSHA1`, `CertSKI`, `GetCertificateType`, `CertExpiresWithin`) so they return safe zero values instead of panicking on nil input. ([#145])
 - Return a descriptive `errCertificateNil` error from `GenerateCSR` and `internal/certstore.GenerateCSR` when a nil leaf certificate is passed, instead of panicking. ([#145])
 - Return descriptive errors from `internal/certstore.GenerateBundleFiles`, `GenerateJSON`, and `GenerateYAML` when a nil bundle or nil leaf certificate is provided. ([#145])
+- Lock OCSP/CRL JSON schema consistency with contract tests: OCSP exposes `serial`, and OCSP/CRL freshness timestamps remain `this_update`/`next_update` instead of certificate validity keys. ([#138])
 
 ## [0.8.3] - 2026-03-09
 
