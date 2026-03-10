@@ -2,8 +2,15 @@
 
 package certstore
 
-import "golang.org/x/sys/unix"
+import (
+	"fmt"
+
+	"golang.org/x/sys/unix"
+)
 
 func renameSQLiteFileNoReplace(oldPath, newPath string) error {
-	return unix.RenamexNp(oldPath, newPath, unix.RENAME_EXCL)
+	if err := unix.RenamexNp(oldPath, newPath, unix.RENAME_EXCL); err != nil {
+		return fmt.Errorf("no-replace rename %s: %w", newPath, err)
+	}
+	return nil
 }

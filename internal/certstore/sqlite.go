@@ -424,7 +424,7 @@ func publishSQLiteFile(tempPath, dbPath string, mode os.FileMode, allowRename bo
 	case isHardLinkUnsupported(linkErr):
 		if allowRename {
 			if err := sqliteRenameNoReplace(tempPath, dbPath); err != nil {
-				if os.IsExist(err) {
+				if errors.Is(err, os.ErrExist) {
 					return os.ErrExist
 				}
 				if !errors.Is(err, errSQLiteNoReplaceRenameUnsupported) {
