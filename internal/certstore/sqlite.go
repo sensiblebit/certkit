@@ -456,7 +456,6 @@ type copySQLiteFileExclusiveInput struct {
 }
 
 func copySQLiteFileExclusive(input copySQLiteFileExclusiveInput) error {
-	//nolint:gosec // tempPath is produced by our own staging path logic inside the parent directory.
 	src, err := os.Open(input.TempPath)
 	if err != nil {
 		return fmt.Errorf("opening staged database: %w", err)

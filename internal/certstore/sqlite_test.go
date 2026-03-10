@@ -213,7 +213,7 @@ func TestSaveToSQLite_ReplaceRaceKeepsCompetingWriter(t *testing.T) {
 		t.Fatalf("SaveToSQLite error = %v, want wrapped %v", err, os.ErrExist)
 	}
 
-	data, readErr := os.ReadFile(dbPath)
+	data, readErr := os.ReadFile(dbPath) //nolint:gosec // dbPath is created inside the test temp dir.
 	if readErr != nil {
 		t.Fatalf("read competing database: %v", readErr)
 	}
@@ -249,7 +249,7 @@ func TestSaveToSQLite_ReplaceRaceRestoresBackupWhenWinnerIsDirectory(t *testing.
 	})
 	sqliteLink = func(oldPath, newPath string) error {
 		_ = oldPath
-		if err := os.Mkdir(newPath, 0o755); err != nil {
+		if err := os.Mkdir(newPath, 0o750); err != nil {
 			return fmt.Errorf("injecting competing directory: %w", err)
 		}
 		return os.ErrExist
@@ -332,7 +332,7 @@ func TestSaveToSQLite_ReplaceRaceKeepsCompetingWriterWhenHardLinksUnsupported(t 
 		t.Fatalf("SaveToSQLite error = %v, want wrapped %v", err, os.ErrExist)
 	}
 
-	data, readErr := os.ReadFile(dbPath)
+	data, readErr := os.ReadFile(dbPath) //nolint:gosec // dbPath is created inside the test temp dir.
 	if readErr != nil {
 		t.Fatalf("read competing database: %v", readErr)
 	}
