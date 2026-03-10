@@ -84,6 +84,7 @@ var (
 	errSQLiteDestinationIsDir = errors.New("destination path is a directory")
 
 	sqliteMkdirTemp  = os.MkdirTemp
+	sqliteLink       = os.Link
 	sqliteRename     = os.Rename
 	sqliteRemoveAll  = os.RemoveAll
 	sqliteStat       = os.Stat
@@ -351,10 +352,12 @@ func replaceSQLiteFileAtomically(tempPath, dbPath string) error {
 	}
 
 	hadExisting := false
+	var existingMode os.FileMode
 	if info, err := sqliteStat(dbPath); err == nil {
 		if info.IsDir() {
 			return fmt.Errorf("%w: %s", errSQLiteDestinationIsDir, dbPath)
 		}
+		existingMode = info.Mode().Perm()
 		if err := sqliteRename(dbPath, backupPath); err != nil {
 			return fmt.Errorf("moving existing database aside: %w", err)
 		}
@@ -363,22 +366,38 @@ func replaceSQLiteFileAtomically(tempPath, dbPath string) error {
 		return fmt.Errorf("checking existing database: %w", err)
 	}
 
-	if err := sqliteRename(tempPath, dbPath); err != nil {
-		if hadExisting {
-			if restoreErr := sqliteRename(backupPath, dbPath); restoreErr != nil {
-				return fmt.Errorf(
-					"moving staged database into place: %w",
-					errors.Join(err, fmt.Errorf("restoring previous database: %w", restoreErr)),
-				)
+	if !hadExisting {
+		if err := sqliteLink(tempPath, dbPath); err != nil {
+			if os.IsExist(err) {
+				return os.ErrExist
 			}
+			return fmt.Errorf("linking staged database into place: %w", err)
+		}
+		return nil
+	}
+
+	if err := os.Chmod(tempPath, existingMode); err != nil {
+		if restoreErr := sqliteRename(backupPath, dbPath); restoreErr != nil {
+			return fmt.Errorf(
+				"preserving existing database mode: %w",
+				errors.Join(err, fmt.Errorf("restoring previous database: %w", restoreErr)),
+			)
+		}
+		return fmt.Errorf("preserving existing database mode: %w", err)
+	}
+
+	if err := sqliteRename(tempPath, dbPath); err != nil {
+		if restoreErr := sqliteRename(backupPath, dbPath); restoreErr != nil {
+			return fmt.Errorf(
+				"moving staged database into place: %w",
+				errors.Join(err, fmt.Errorf("restoring previous database: %w", restoreErr)),
+			)
 		}
 		return fmt.Errorf("moving staged database into place: %w", err)
 	}
 
-	if hadExisting {
-		if err := sqliteRemoveAll(backupPath); err != nil {
-			return fmt.Errorf("removing replaced database backup: %w", err)
-		}
+	if err := sqliteRemoveAll(backupPath); err != nil {
+		return fmt.Errorf("removing replaced database backup: %w", err)
 	}
 	return nil
 }
