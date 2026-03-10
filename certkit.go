@@ -444,9 +444,10 @@ var (
 )
 
 // pkcs8EncryptIterations controls the PBKDF2 iteration count for PKCS#8 v2
-// key encryption. 210,000 balances security with performance in constrained
-// environments (WASM). OWASP minimum for PBKDF2-SHA-256 (2023).
-const pkcs8EncryptIterations = 210_000
+// key encryption. 600,000 matches the OWASP recommendation for
+// PBKDF2-HMAC-SHA-256 (2023). WASM builds use the browser's Web Crypto API
+// to run key derivation off the main thread.
+const pkcs8EncryptIterations = 600_000
 
 type asn1AlgorithmIdentifier struct {
 	Algorithm  asn1.ObjectIdentifier
