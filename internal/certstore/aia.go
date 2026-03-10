@@ -49,7 +49,6 @@ type ResolveAIAResult struct {
 	FetchedCount    int
 	Incomplete      bool
 	UnresolvedCount int
-	ResolvedCount   int
 }
 
 func certNeedsAIAResolution(store *MemStore, rec *CertRecord) bool {
@@ -101,7 +100,6 @@ func ResolveAIA(ctx context.Context, input ResolveAIAInput) ResolveAIAResult {
 	var warnings []string
 	seen := make(map[string]bool)
 	fetchedTotal := 0
-	initialUnresolvedCount := len(unresolvedIssuerQueue(input.Store))
 
 	progressTotal := 0
 	processed := make(map[string]bool)
@@ -252,6 +250,5 @@ func ResolveAIA(ctx context.Context, input ResolveAIAInput) ResolveAIAResult {
 		FetchedCount:    fetchedTotal,
 		Incomplete:      unresolvedCount > 0,
 		UnresolvedCount: unresolvedCount,
-		ResolvedCount:   initialUnresolvedCount - unresolvedCount,
 	}
 }
