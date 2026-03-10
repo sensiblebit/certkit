@@ -744,6 +744,138 @@ func TestResolveAIA_PKCS7Response(t *testing.T) {
 	}
 }
 
+func TestResolveAIA_MaxTotalCerts(t *testing.T) {
+	// WHY: AIA resolution must stop after a bounded number of unique
+	// certificates so a malicious issuer chain cannot keep expanding the store.
+	t.Parallel()
+
+	store := NewMemStore()
+
+	rootKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootTmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "AIA Limit Root"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	rootDER, err := x509.CreateCertificate(rand.Reader, rootTmpl, rootTmpl, &rootKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rootCert, err := x509.ParseCertificate(rootDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	int2Key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	int2Tmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "AIA Limit Intermediate 2"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		IssuingCertificateURL: []string{"http://example.com/root.cer"},
+	}
+	int2DER, err := x509.CreateCertificate(rand.Reader, int2Tmpl, rootCert, &int2Key.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	int2Cert, err := x509.ParseCertificate(int2DER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	int1Key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	int1Tmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "AIA Limit Intermediate 1"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+		IssuingCertificateURL: []string{"http://example.com/int2.cer"},
+	}
+	int1DER, err := x509.CreateCertificate(rand.Reader, int1Tmpl, int2Cert, &int1Key.PublicKey, int2Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	int1Cert, err := x509.ParseCertificate(int1DER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafTmpl := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "aia-limit.example.com"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IssuingCertificateURL: []string{"http://example.com/int1.cer"},
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, int1Cert, &leafKey.PublicKey, int1Key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafCert, err := x509.ParseCertificate(leafDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HandleCertificate(leafCert, "leaf.pem"); err != nil {
+		t.Fatal(err)
+	}
+
+	fetcher := func(_ context.Context, url string) ([]byte, error) {
+		switch url {
+		case "http://example.com/int1.cer":
+			return int1DER, nil
+		case "http://example.com/int2.cer":
+			return int2DER, nil
+		case "http://example.com/root.cer":
+			return rootDER, nil
+		default:
+			return nil, fmt.Errorf("%w: %s", errUnexpectedURL, url)
+		}
+	}
+
+	warnings := ResolveAIA(context.Background(), ResolveAIAInput{
+		Store:                store,
+		Fetch:                fetcher,
+		MaxTotalCerts:        2,
+		AllowPrivateNetworks: true,
+	})
+
+	if len(warnings) != 1 {
+		t.Fatalf("warnings = %d, want 1: %v", len(warnings), warnings)
+	}
+	if !strings.Contains(warnings[0], "maximum is 2") {
+		t.Errorf("warning = %q, want max-total-certs message", warnings[0])
+	}
+	if got := len(store.AllCertsFlat()); got != 3 {
+		t.Fatalf("store cert count = %d, want 3 (leaf + 2 fetched intermediates)", got)
+	}
+	if store.HasIssuer(int2Cert) {
+		t.Error("int2 should remain unresolved after the AIA certificate limit is hit")
+	}
+}
+
 func TestResolveAIA_CancelledContext(t *testing.T) {
 	// WHY: A cancelled context must propagate to the fetcher, producing a
 	// warning rather than hanging — ensures Ctrl+C during AIA resolution

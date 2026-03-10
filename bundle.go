@@ -43,7 +43,9 @@ var (
 	errFetchLeafNoCerts         = errors.New("no certificates returned by TLS server")
 	errAIAFetchRedirects        = errors.New("AIA redirect limit exceeded")
 	errAIAHTTPStatus            = errors.New("AIA server returned non-200 status")
+	errAIAMaxTotalCertsExceeded = errors.New("AIA resolution exceeded maximum certificate limit")
 	errBundleLeafNil            = errors.New("leaf certificate is nil")
+	errBundleMaxChainExceeded   = errors.New("certificate chain exceeded maximum intermediate limit")
 	errBundleUnknownTrustStore  = errors.New("unknown trust_store")
 )
 
@@ -51,7 +53,11 @@ var (
 // address space. Parsed once at init to avoid repeated net.ParseCIDR calls.
 var privateNetworks []*net.IPNet
 
-const aiaURLResolveTimeout = 2 * time.Second
+const (
+	aiaURLResolveTimeout          = 2 * time.Second
+	defaultAIAMaxTotalCerts       = 100
+	defaultBundleMaxIntermediates = 20
+)
 
 func init() {
 	for _, cidr := range []string{
@@ -341,6 +347,9 @@ type BundleOptions struct {
 	AIATimeout time.Duration
 	// AIAMaxDepth is the maximum number of AIA hops to follow.
 	AIAMaxDepth int
+	// AIAMaxTotalCerts caps the total number of unique certificates discovered
+	// via AIA during bundle resolution. Zero uses the default limit.
+	AIAMaxTotalCerts int
 	// TrustStore selects the root certificate pool: "system", "mozilla", or "custom".
 	TrustStore string
 	// CustomRoots are root certificates used when TrustStore is "custom".
@@ -351,16 +360,21 @@ type BundleOptions struct {
 	ExcludeRoot bool
 	// AllowPrivateNetworks allows AIA fetches to private/internal endpoints.
 	AllowPrivateNetworks bool
+	// MaxIntermediates caps the resolved chain length for bundle building.
+	// Zero uses the default limit.
+	MaxIntermediates int
 }
 
 // DefaultOptions returns sensible defaults.
 func DefaultOptions() BundleOptions {
 	return BundleOptions{
-		FetchAIA:    true,
-		AIATimeout:  2 * time.Second,
-		AIAMaxDepth: 5,
-		TrustStore:  "system",
-		Verify:      true,
+		FetchAIA:         true,
+		AIATimeout:       2 * time.Second,
+		AIAMaxDepth:      5,
+		AIAMaxTotalCerts: defaultAIAMaxTotalCerts,
+		TrustStore:       "system",
+		Verify:           true,
+		MaxIntermediates: defaultBundleMaxIntermediates,
 	}
 }
 
@@ -426,6 +440,9 @@ type FetchAIACertificatesInput struct {
 	Timeout time.Duration
 	// MaxDepth is the maximum number of AIA hops to follow.
 	MaxDepth int
+	// MaxTotalCerts caps the total number of unique certificates discovered
+	// during AIA resolution. Zero uses the default limit.
+	MaxTotalCerts int
 	// AllowPrivateNetworks allows AIA fetches to private/internal endpoints.
 	AllowPrivateNetworks bool
 }
@@ -436,6 +453,10 @@ func FetchAIACertificates(ctx context.Context, input FetchAIACertificatesInput) 
 	var warnings []string
 	if input.Cert == nil {
 		return nil, []string{"AIA fetch skipped: certificate is nil"}
+	}
+	maxTotalCerts := input.MaxTotalCerts
+	if maxTotalCerts <= 0 {
+		maxTotalCerts = defaultAIAMaxTotalCerts
 	}
 
 	const maxRedirects = 3
@@ -452,6 +473,7 @@ func FetchAIACertificates(ctx context.Context, input FetchAIACertificatesInput) 
 		},
 	}
 	seen := make(map[string]bool)
+	seenCerts := map[string]bool{certificateIdentity(input.Cert): true}
 	queue := []*x509.Certificate{input.Cert}
 
 	for depth := 0; depth < input.MaxDepth && len(queue) > 0; depth++ {
@@ -477,8 +499,22 @@ func FetchAIACertificates(ctx context.Context, input FetchAIACertificatesInput) 
 				warnings = append(warnings, fmt.Sprintf("AIA fetch failed: %v", err))
 				continue
 			}
-			fetched = append(fetched, certs...)
-			queue = append(queue, certs...)
+			for _, cert := range certs {
+				certID := certificateIdentity(cert)
+				if seenCerts[certID] {
+					continue
+				}
+				if len(fetched) >= maxTotalCerts {
+					warnings = append(warnings, fmt.Sprintf(
+						"%v: reached %d unique certificate(s) while following AIA for %q",
+						errAIAMaxTotalCertsExceeded, maxTotalCerts, input.Cert.Subject.CommonName,
+					))
+					return fetched, warnings
+				}
+				seenCerts[certID] = true
+				fetched = append(fetched, cert)
+				queue = append(queue, cert)
+			}
 		}
 	}
 	return fetched, warnings
@@ -574,6 +610,64 @@ func checkExpiryWarnings(chain []*x509.Certificate) []string {
 	return warnings
 }
 
+func certificateIdentity(cert *x509.Certificate) string {
+	if cert == nil {
+		return ""
+	}
+	if len(cert.AuthorityKeyId) > 0 {
+		return cert.SerialNumber.String() + "\x00" + string(cert.AuthorityKeyId)
+	}
+	return cert.SerialNumber.String() + "\x00" + string(cert.RawIssuer)
+}
+
+func maxIntermediatesLimit(limit int) int {
+	if limit <= 0 {
+		return defaultBundleMaxIntermediates
+	}
+	return limit
+}
+
+func bestEffortIntermediates(leaf *x509.Certificate, candidates []*x509.Certificate, maxIntermediates int) ([]*x509.Certificate, error) {
+	if leaf == nil {
+		return nil, nil
+	}
+
+	current := leaf
+	seen := map[string]bool{certificateIdentity(leaf): true}
+	chain := make([]*x509.Certificate, 0, min(len(candidates), maxIntermediates))
+	intermediateCount := 0
+
+	for !bytes.Equal(current.RawIssuer, current.RawSubject) {
+		issuer := SelectIssuerCertificate(current, candidates)
+		if issuer == nil {
+			return chain, nil
+		}
+
+		issuerID := certificateIdentity(issuer)
+		if seen[issuerID] {
+			return chain, nil
+		}
+		seen[issuerID] = true
+
+		if !bytes.Equal(issuer.RawIssuer, issuer.RawSubject) {
+			if intermediateCount >= maxIntermediates {
+				return nil, fmt.Errorf("%w: certificate %q requires more than %d intermediate(s)", errBundleMaxChainExceeded, leaf.Subject.CommonName, maxIntermediates)
+			}
+			intermediateCount++
+		}
+
+		chain = append(chain, issuer)
+
+		// No-verify mode preserves the prior contract of leaving Roots empty.
+		if bytes.Equal(issuer.RawIssuer, issuer.RawSubject) {
+			return chain, nil
+		}
+		current = issuer
+	}
+
+	return chain, nil
+}
+
 // BundleInput holds parameters for Bundle.
 type BundleInput struct {
 	// Leaf is the end-entity certificate to resolve.
@@ -589,6 +683,7 @@ func Bundle(ctx context.Context, input BundleInput) (*BundleResult, error) {
 	}
 	leaf := input.Leaf
 	opts := input.Options
+	maxIntermediates := maxIntermediatesLimit(opts.MaxIntermediates)
 	// Detect reversed chain order
 	var swapWarnings []string
 	leaf, opts.ExtraIntermediates, swapWarnings = detectAndSwapLeaf(leaf, opts.ExtraIntermediates)
@@ -610,6 +705,7 @@ func Bundle(ctx context.Context, input BundleInput) (*BundleResult, error) {
 			Cert:                 leaf,
 			Timeout:              opts.AIATimeout,
 			MaxDepth:             opts.AIAMaxDepth,
+			MaxTotalCerts:        opts.AIAMaxTotalCerts,
 			AllowPrivateNetworks: opts.AllowPrivateNetworks,
 		})
 		result.Warnings = append(result.Warnings, warnings...)
@@ -664,6 +760,9 @@ func Bundle(ctx context.Context, input BundleInput) (*BundleResult, error) {
 
 		// Extract intermediates and root from verified chain
 		// Chain order: [leaf, intermediate1, ..., root]
+		if len(best) > maxIntermediates+2 {
+			return nil, fmt.Errorf("%w: certificate %q requires %d intermediate(s), limit is %d", errBundleMaxChainExceeded, leaf.Subject.CommonName, len(best)-2, maxIntermediates)
+		}
 		if len(best) > 2 {
 			result.Intermediates = best[1 : len(best)-1]
 		}
@@ -676,8 +775,12 @@ func Bundle(ctx context.Context, input BundleInput) (*BundleResult, error) {
 			}
 		}
 	} else {
-		// No verification — just pass through what we have
-		result.Intermediates = allIntermediates
+		// No verification — walk the candidate pool and keep only the apparent chain.
+		chain, err := bestEffortIntermediates(leaf, allIntermediates, maxIntermediates)
+		if err != nil {
+			return nil, err
+		}
+		result.Intermediates = chain
 	}
 
 	// Build full chain for warning checks, deduplicating self-signed leaf
