@@ -820,6 +820,100 @@ func TestResolveAIA_CancelledContext(t *testing.T) {
 	}
 }
 
+func TestResolveAIA_CancelledContextMidFetch(t *testing.T) {
+	// WHY: Cancellation must also stop in-flight AIA fetches after work has
+	// started, not just when the context is already cancelled before the round.
+	t.Parallel()
+
+	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caTemplate := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "AIA Cancel Mid-Fetch CA"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		IsCA:                  true,
+		BasicConstraintsValid: true,
+		KeyUsage:              x509.KeyUsageCertSign,
+	}
+	caBytes, err := x509.CreateCertificate(rand.Reader, caTemplate, caTemplate, &caKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	caCert, err := x509.ParseCertificate(caBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafTemplate := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "cancel-mid-fetch.example.com"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		IssuingCertificateURL: []string{"http://ca.example.com/issuer.cer"},
+		AuthorityKeyId:        caCert.SubjectKeyId,
+	}
+	leafBytes, err := x509.CreateCertificate(rand.Reader, leafTemplate, caCert, &leafKey.PublicKey, caKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafCert, err := x509.ParseCertificate(leafBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	store := NewMemStore()
+	if err := store.HandleCertificate(leafCert, "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	fetchStarted := make(chan struct{})
+	fetcher := func(fctx context.Context, _ string) ([]byte, error) {
+		close(fetchStarted)
+		<-fctx.Done()
+		return []byte{}, fctx.Err()
+	}
+
+	done := make(chan []string, 1)
+	go func() {
+		done <- ResolveAIA(ctx, ResolveAIAInput{
+			Store:                store,
+			Fetch:                fetcher,
+			AllowPrivateNetworks: true,
+		})
+	}()
+
+	select {
+	case <-fetchStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for AIA fetch to start")
+	}
+
+	cancel()
+
+	select {
+	case warnings := <-done:
+		if len(warnings) == 0 {
+			t.Fatal("expected at least one warning from cancelled mid-fetch context")
+		}
+		if !strings.Contains(warnings[0], context.Canceled.Error()) {
+			t.Fatalf("expected cancellation warning, got %q", warnings[0])
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("ResolveAIA did not return promptly after context cancellation")
+	}
+}
+
 func TestResolveAIA_RejectsSSRFURL(t *testing.T) {
 	// WHY: When a certificate has a private/loopback AIA URL, ResolveAIA must
 	// reject it with a warning before invoking the fetcher — this is the
