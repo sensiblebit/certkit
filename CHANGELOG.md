@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `tree` subcommand to display the full CLI command, subcommand, and flag surface in a tree layout ([#169])
 - Encrypt PEM private key output (`.key`) using PKCS#8 v2 (AES-256-CBC) when an explicit export password is supplied ([#167])
 - Support decryption of PKCS#8 v2 encrypted private keys (`ENCRYPTED PRIVATE KEY` PEM blocks) with all PBES2 cipher (AES-128/192/256-CBC, 3DES-CBC) and PRF (HMAC-SHA-1/256/384/512) combinations ([#167])
-- Add `trust_anchors` reporting across `inspect`, `verify`, and `connect` JSON output so certificates show which of `mozilla`, `system`, and optional `file` roots trust them ([`0ee41ad`])
+- Add `trust_anchors` reporting across `inspect`, `verify`, and `connect` JSON output so certificates show which trust sources validate them (`mozilla`/`system` everywhere, plus optional `file` roots in `verify`) ([`0ee41ad`])
 - Add per-store Mozilla/system trust counts to `scan` JSON summaries alongside the existing aggregate `untrusted_*` counts ([`0ee41ad`])
 - Add `verify --roots <file>` to include PEM/DER/PKCS#7/PKCS#12/JKS certificates as an additional file-backed trust source ([`0ee41ad`])
 
