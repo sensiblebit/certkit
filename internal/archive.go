@@ -326,8 +326,17 @@ func processTarArchive(input ProcessArchiveInput, gzipped bool) (int, error) {
 			slog.Debug("skipping oversized TAR entry",
 				"archive", input.ArchivePath, "entry", header.Name,
 				"size", header.Size, "limit", input.Limits.MaxEntrySize)
-			// Drain the entry data. tar.Reader.Next() would skip unread data
-			// automatically, but explicit draining makes the skip visible in logs.
+			// Continuing through a gzip-compressed tar requires draining the rest
+			// of the current member, which can force arbitrary decompression work
+			// after the entry is already known to violate limits.
+			if gzipped {
+				slog.Warn("stopping tar.gz scan after oversized entry to avoid draining compressed payload",
+					"archive", input.ArchivePath, "entry", header.Name,
+					"size", header.Size, "limit", input.Limits.MaxEntrySize)
+				skipped.entryTooLarge++
+				break
+			}
+			// For plain tar, drain the member so scanning can continue.
 			if _, err := io.Copy(io.Discard, io.LimitReader(tr, header.Size)); err != nil {
 				slog.Debug("draining oversized tar entry", "error", err)
 			}

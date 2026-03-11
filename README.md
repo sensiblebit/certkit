@@ -49,7 +49,7 @@ sudo dpkg -i certkit_*.deb
 
 ### From source
 
-Requires Go 1.25+.
+Requires Go 1.26+.
 
 ```sh
 go build -o certkit ./cmd/certkit/
@@ -132,8 +132,8 @@ See [EXAMPLES.md](EXAMPLES.md) for a complete walkthrough of every command with 
 | `--allow-expired`   | `false` | Include expired certificates                                                                   |
 | `--json`            | `false` | Output in JSON format                                                                          |
 | `--log-level`, `-l` | `info`  | Log level: debug, info, warn, error                                                            |
-| `--password-file`   |         | File containing passwords, one per line                                                        |
-| `--passwords`, `-p` |         | Comma-separated passwords for encrypted keys                                                   |
+| `--password-file`   |         | File containing passwords, one per line, for encrypted keys and PKCS#12/JKS export output      |
+| `--passwords`, `-p` |         | Comma-separated passwords for encrypted keys and PKCS#12/JKS export output                     |
 | `--verbose`, `-v`   | `false` | Extended details in output (serial, key info, signature algorithm, key usage, EKU, extensions) |
 <!-- /certkit:flags -->
 
@@ -165,7 +165,7 @@ JSON certificate records include `trust_anchors` and `trust_warnings`.
 | `--roots`                 |         | Additional root certificates file (PEM, DER, PKCS#7, PKCS#12, or JKS) |
 <!-- /certkit:flags -->
 
-Chain verification is always performed against both the embedded Mozilla roots and the host system trust store. Use `--roots` to add a file-backed trust source for private PKI. When the input contains an embedded private key (PKCS#12, JKS), key match is checked automatically. Use `--ocsp` and/or `--crl` to check revocation status (requires network access and a valid chain).
+Chain verification is always performed against both the embedded Mozilla roots and the host system trust store. Use `--roots` to add a file-backed trust source for private PKI; the file must contain CA certificates, and leaf-only inputs are rejected. When the input contains an embedded private key (PKCS#12, JKS), key match is checked automatically. Use `--ocsp` and/or `--crl` to check revocation status (requires network access and a valid chain).
 
 JSON output includes `trust_anchors` and `trust_warnings` for the leaf and displayed chain entries.
 

@@ -16,6 +16,7 @@ import (
 )
 
 var errValidationCertNotFound = errors.New("certificate with SKI not found")
+var errValidationCertAmbiguous = errors.New("multiple certificates share SKI")
 
 // ValidationResult holds the outcome of validating a single certificate.
 type ValidationResult struct {
@@ -45,11 +46,14 @@ func RunValidation(ctx context.Context, input RunValidationInput) (*ValidationRe
 	skiHex := strings.ReplaceAll(input.SKIColon, ":", "")
 	skiHex = strings.ToLower(skiHex)
 
-	allCerts := input.Store.AllCerts()
-	rec, ok := allCerts[skiHex]
-	if !ok {
+	certs := input.Store.CertsForSKI(skiHex)
+	if len(certs) == 0 {
 		return nil, fmt.Errorf("%w: %s", errValidationCertNotFound, input.SKIColon)
 	}
+	if len(certs) > 1 {
+		return nil, fmt.Errorf("%w: %s", errValidationCertAmbiguous, input.SKIColon)
+	}
+	rec := certs[0]
 
 	leaf := rec.Cert
 	now := time.Now()

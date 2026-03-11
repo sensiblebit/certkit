@@ -159,6 +159,8 @@ By default this checks against both the embedded Mozilla roots and your OS trust
 certkit verify cert.pem --roots private-ca.pem
 ```
 
+The `--roots` file must contain CA certificates; leaf-only files are rejected.
+
 Combine all checks at once:
 
 ```sh
@@ -419,7 +421,7 @@ certkit scan /path/to/certs/
 Output looks like:
 
 ```text
-Found 12 certificate(s) and 3 key(s)
+Found 12 certificate(s) and 3 key(s) in 9 file(s)
   Roots:         2
   Intermediates: 4
   Leaves:        6 (2 expired, 1 untrusted)
@@ -508,10 +510,10 @@ Generate an ECDSA key (recommended, fast and secure):
 certkit keygen
 ```
 
-This prints the private key and public key to stdout in PEM format. Redirect to save:
+This prints the private key and public key to stdout in PEM format. Redirect to save both PEM blocks together:
 
 ```sh
-certkit keygen > key.pem
+certkit keygen > key-and-pub.pem
 ```
 
 Generate an RSA key (wider compatibility with older systems):
@@ -568,10 +570,10 @@ Generate a self-signed root CA certificate for internal use or testing:
 certkit sign self-signed --cn "My Root CA"
 ```
 
-This generates a new EC P-256 key and prints both the certificate and key to stdout. Customize the validity period and save to a file:
+This generates a new EC P-256 key and prints both the certificate and key to stdout. Customize the validity period and save them to one file:
 
 ```sh
-certkit sign self-signed --cn "My Root CA" --days 3650 -o ca.pem
+certkit sign self-signed --cn "My Root CA" --days 3650 -o ca-and-key.pem
 ```
 
 Create a non-CA leaf certificate (e.g., for testing):
@@ -664,10 +666,10 @@ For encrypted private keys, PKCS#12, or JKS files, pass passwords with `-p`:
 # Single password
 certkit inspect server.p12 -p "mysecret"
 
-# Multiple passwords (tries each one)
+# Multiple passwords (tries each one and uses the first explicit one as the default PKCS#12/JKS export password)
 certkit scan /path/to/certs/ -p "secret1,secret2,changeit"
 
-# Passwords from a file (one per line)
+# Passwords from a file (one per line, also used for PKCS#12/JKS export defaults)
 certkit scan /path/to/certs/ --password-file passwords.txt
 ```
 
@@ -704,7 +706,7 @@ certkit uses meaningful exit codes:
 | **1**     | General error (bad input, missing file, etc.)                      |
 | **2**     | Validation failure (chain invalid, key mismatch, expired, revoked) |
 
-Use `--json` on any command for machine-readable output. Display commands also accept `--format json`. Data always goes to stdout, warnings and progress to stderr, so piping works cleanly:
+Use `--json` on machine-readable commands for JSON output. Display commands also accept `--format json`. Data always goes to stdout, warnings and progress to stderr, so piping works cleanly:
 
 ```sh
 # Check cert in CI -- fails with exit code 2 if expiring within 30 days

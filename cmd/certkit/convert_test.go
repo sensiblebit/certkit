@@ -451,6 +451,88 @@ func TestBuildChainFromPool(t *testing.T) {
 			t.Fatalf("chain length = %d, cycle guard should limit to 1 (certB2 only)", len(chain))
 		}
 	})
+
+	t.Run("prefers valid issuer when subject names collide", func(t *testing.T) {
+		// WHY: Cross-signed or reissued issuers can share a subject DN. The
+		// chain builder must pick the cert that actually signed the leaf.
+		t.Parallel()
+
+		root1Key, root1Cert := generateKeyAndCert(t, "Root One", true)
+		root2Key, root2Cert := generateKeyAndCert(t, "Root Two", true)
+
+		sharedSubject := pkix.Name{CommonName: "Shared Intermediate"}
+		intermediateTemplate := func(serial int64) *x509.Certificate {
+			return &x509.Certificate{
+				SerialNumber:          big.NewInt(serial),
+				Subject:               sharedSubject,
+				NotBefore:             time.Now().Add(-time.Hour),
+				NotAfter:              time.Now().Add(24 * time.Hour),
+				BasicConstraintsValid: true,
+				IsCA:                  true,
+				KeyUsage:              x509.KeyUsageCertSign,
+			}
+		}
+
+		rightKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rightDER, err := x509.CreateCertificate(rand.Reader, intermediateTemplate(10), root1Cert, &rightKey.PublicKey, root1Key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rightIssuer, err := x509.ParseCertificate(rightDER)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		wrongKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wrongDER, err := x509.CreateCertificate(rand.Reader, intermediateTemplate(11), root2Cert, &wrongKey.PublicKey, root2Key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		wrongIssuer, err := x509.ParseCertificate(wrongDER)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		leafTemplate := &x509.Certificate{
+			SerialNumber:          big.NewInt(12),
+			Subject:               pkix.Name{CommonName: "leaf.example.com"},
+			NotBefore:             time.Now().Add(-time.Hour),
+			NotAfter:              time.Now().Add(24 * time.Hour),
+			KeyUsage:              x509.KeyUsageDigitalSignature,
+			ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+			AuthorityKeyId:        rightIssuer.SubjectKeyId,
+			BasicConstraintsValid: true,
+		}
+		leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, rightIssuer, &leafKey.PublicKey, rightKey)
+		if err != nil {
+			t.Fatal(err)
+		}
+		leaf, err := x509.ParseCertificate(leafDER)
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		chain := buildChainFromPool(leaf, []*x509.Certificate{leaf, wrongIssuer, rightIssuer, root1Cert, root2Cert})
+		if len(chain) < 2 {
+			t.Fatalf("chain length = %d, want at least intermediate + root", len(chain))
+		}
+		if chain[0].SerialNumber.Cmp(rightIssuer.SerialNumber) != 0 {
+			t.Fatalf("selected wrong intermediate serial %s, want %s", chain[0].SerialNumber, rightIssuer.SerialNumber)
+		}
+		if chain[1].Subject.CommonName != "Root One" {
+			t.Fatalf("chain[1] CN = %q, want Root One", chain[1].Subject.CommonName)
+		}
+	})
 }
 
 func TestBuildChainFromPool_ThreeTier(t *testing.T) {

@@ -3,6 +3,7 @@ package internal
 import (
 	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"log/slog"
 	"math"
 	"strings"
@@ -460,6 +461,75 @@ func TestProcessArchive_TarEntryExceedsMaxSize(t *testing.T) {
 	}
 	if certs[0].Cert.Subject.CommonName != "after-big.example.com" {
 		t.Errorf("cert CN = %q, want %q", certs[0].Cert.Subject.CommonName, "after-big.example.com")
+	}
+}
+
+func TestProcessArchive_TarGzOversizedEntryStopsWithoutScanningRemainder(t *testing.T) {
+	// WHY: Continuing past an oversized tar.gz member requires draining the rest
+	// of that compressed payload. Stop immediately instead of inflating the
+	// remainder just to discover later entries.
+	t.Parallel()
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "after-big-gz.example.com", []string{"after-big-gz.example.com"}, nil)
+	bigData := bytes.Repeat([]byte("0"), 128*1024)
+
+	var tarBuf bytes.Buffer
+	tw := tar.NewWriter(&tarBuf)
+	writeEntry := func(name string, data []byte) {
+		if err := tw.WriteHeader(&tar.Header{Name: name, Size: int64(len(data)), Mode: 0644}); err != nil {
+			t.Fatalf("write TAR header %s: %v", name, err)
+		}
+		if _, err := tw.Write(data); err != nil {
+			t.Fatalf("write TAR entry %s: %v", name, err)
+		}
+	}
+	writeEntry("big.bin", bigData)
+	writeEntry("certs/server.pem", leaf.certPEM)
+	if err := tw.Close(); err != nil {
+		t.Fatalf("close TAR: %v", err)
+	}
+
+	var gzBuf bytes.Buffer
+	gw := gzip.NewWriter(&gzBuf)
+	if _, err := gw.Write(tarBuf.Bytes()); err != nil {
+		t.Fatalf("write gzip payload: %v", err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatalf("close gzip writer: %v", err)
+	}
+
+	limits := DefaultArchiveLimits()
+	limits.MaxEntrySize = 10_000
+
+	cfg := newTestConfig(t)
+	var (
+		n   int
+		err error
+	)
+	logs := captureArchiveLogs(t, func() {
+		n, err = ProcessArchive(ProcessArchiveInput{
+			ArchivePath: "test.tar.gz",
+			Data:        gzBuf.Bytes(),
+			Format:      "tar.gz",
+			Limits:      limits,
+			Store:       cfg.Store,
+			Passwords:   cfg.Passwords,
+		})
+	})
+	if err != nil {
+		t.Fatalf("ProcessArchive: %v", err)
+	}
+	if n != 0 {
+		t.Fatalf("processed %d entries, want 0 (scan should stop at oversized tar.gz entry)", n)
+	}
+	if got := len(cfg.Store.AllCertsFlat()); got != 0 {
+		t.Fatalf("stored %d certs, want 0 (later tar.gz entries should not be reached)", got)
+	}
+	if !strings.Contains(logs, "stopping tar.gz scan after oversized entry to avoid draining compressed payload") {
+		t.Fatalf("expected tar.gz stop warning, got: %s", logs)
+	}
+	if !strings.Contains(logs, "skipped_entry_too_large=1") {
+		t.Fatalf("expected oversized entry summary, got: %s", logs)
 	}
 }
 

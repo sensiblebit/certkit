@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
 	"strings"
@@ -22,12 +23,29 @@ type printCommandTreeInput struct {
 	prefix string
 }
 
+type commandTreeJSON struct {
+	Name           string            `json:"name"`
+	Short          string            `json:"short"`
+	LocalFlags     []string          `json:"local_flags,omitempty"`
+	InheritedFlags []string          `json:"inherited_flags,omitempty"`
+	Subcommands    []commandTreeJSON `json:"subcommands,omitempty"`
+}
+
 func init() {
 	rootCmd.AddCommand(treeCmd)
 }
 
 func runTree(_ *cobra.Command, _ []string) error {
 	initTreeSurface(rootCmd)
+
+	if jsonOutput {
+		data, err := json.MarshalIndent(buildCommandTreeJSON(rootCmd), "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshaling JSON: %w", err)
+		}
+		fmt.Println(string(data))
+		return nil
+	}
 
 	var b strings.Builder
 	printCommandTree(&b, printCommandTreeInput{cmd: rootCmd})
@@ -121,4 +139,20 @@ func visibleFlagNames(flags *pflag.FlagSet) []string {
 	})
 	slices.Sort(names)
 	return names
+}
+
+func buildCommandTreeJSON(cmd *cobra.Command) commandTreeJSON {
+	node := commandTreeJSON{
+		Name:           cmd.Name(),
+		Short:          cmd.Short,
+		LocalFlags:     visibleFlagNames(cmd.LocalFlags()),
+		InheritedFlags: visibleFlagNames(cmd.InheritedFlags()),
+	}
+	for _, child := range cmd.Commands() {
+		if child.Hidden {
+			continue
+		}
+		node.Subcommands = append(node.Subcommands, buildCommandTreeJSON(child))
+	}
+	return node
 }

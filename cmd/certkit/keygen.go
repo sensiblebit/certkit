@@ -25,7 +25,7 @@ var keygenCmd = &cobra.Command{
 
 Output is printed to stdout by default (PEM format). Use -o to write files to a directory instead.`,
 	Example: `  certkit keygen
-  certkit keygen > key.pem
+  certkit keygen > key-and-pub.pem
   certkit keygen --algorithm rsa --bits 2048 -o ./keys
   certkit keygen --cn example.com --sans example.com,www.example.com`,
 	Args: cobra.NoArgs,

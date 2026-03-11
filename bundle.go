@@ -38,6 +38,7 @@ var (
 	errMozillaRootParse         = errors.New("parsing embedded Mozilla root certificates")
 	errAIAAddressBlocked        = errors.New("blocked address for AIA fetch")
 	errAIAPrivateAddress        = errors.New("blocked private address for AIA fetch")
+	errAIAHostnameBlocked       = errors.New("blocked hostname for AIA fetch")
 	errAIAUnsupportedScheme     = errors.New("unsupported scheme")
 	errAIAMissingHostname       = errors.New("missing hostname in URL")
 	errAIAResolveNoIPs          = errors.New("no IP addresses returned")
@@ -219,6 +220,7 @@ type ValidateAIAURLInput struct {
 	AllowPrivateNetworks bool
 
 	lookupIPAddresses lookupIPAddressesFunc
+	dnsResolutionOK   func() bool
 }
 
 type lookupIPAddressesFunc func(ctx context.Context, host string) ([]net.IP, error)
@@ -235,14 +237,32 @@ func ipBlockedForAIA(ip net.IP) error {
 	return nil
 }
 
+func hostnameBlockedForAIA(host string) error {
+	host = strings.ToLower(strings.TrimSuffix(host, "."))
+	switch host {
+	case "localhost", "localhost.localdomain", "local", "localdomain":
+		return fmt.Errorf("%w %q", errAIAHostnameBlocked, host)
+	}
+	if strings.HasSuffix(host, ".localhost") ||
+		strings.HasSuffix(host, ".local") ||
+		strings.HasSuffix(host, ".localdomain") ||
+		strings.HasSuffix(host, ".home.arpa") {
+		return fmt.Errorf("%w %q", errAIAHostnameBlocked, host)
+	}
+	if !strings.Contains(host, ".") {
+		return fmt.Errorf("%w %q (single-label hostname)", errAIAHostnameBlocked, host)
+	}
+	return nil
+}
+
 // ValidateAIAURLWithOptions checks whether a URL is safe to fetch for AIA,
 // OCSP, and CRL HTTP requests.
 //
-// By default, it rejects non-HTTP(S) schemes plus literal and DNS-resolved
-// private/loopback/link-local/unspecified addresses to reduce SSRF risk. Set
-// AllowPrivateNetworks to bypass IP restrictions. This check does not fully
-// prevent DNS-rebind TOCTOU attacks between validation-time DNS and dial-time
-// DNS.
+// By default, it rejects non-HTTP(S) schemes plus literal, hostname-pattern,
+// and DNS-resolved private/loopback/link-local/unspecified destinations to
+// reduce SSRF risk. Set AllowPrivateNetworks to bypass IP restrictions. This
+// check does not fully prevent DNS-rebind TOCTOU attacks between
+// validation-time DNS and dial-time DNS.
 func ValidateAIAURLWithOptions(ctx context.Context, input ValidateAIAURLInput) error {
 	parsed, err := url.Parse(input.URL)
 	if err != nil {
@@ -270,10 +290,17 @@ func ValidateAIAURLWithOptions(ctx context.Context, input ValidateAIAURLInput) e
 		}
 		return nil
 	}
+	if blockedErr := hostnameBlockedForAIA(host); blockedErr != nil {
+		return blockedErr
+	}
 
 	lookup := input.lookupIPAddresses
 	if lookup == nil {
-		if !aiaDNSResolutionAvailable() {
+		dnsResolutionOK := aiaDNSResolutionAvailable
+		if input.dnsResolutionOK != nil {
+			dnsResolutionOK = input.dnsResolutionOK
+		}
+		if !dnsResolutionOK() {
 			return nil
 		}
 		lookup = defaultLookupIPAddresses
@@ -483,6 +510,8 @@ type FetchLeafFromURLInput struct {
 	Timeout time.Duration
 }
 
+type fetchLeafDialTLSFuncKey struct{}
+
 // FetchLeafFromURL connects to the given HTTPS URL via TLS and returns the
 // leaf (server) certificate from the handshake.
 func FetchLeafFromURL(ctx context.Context, input FetchLeafFromURLInput) (*x509.Certificate, error) {
@@ -503,16 +532,21 @@ func FetchLeafFromURL(ctx context.Context, input FetchLeafFromURLInput) (*x509.C
 		port = "443"
 	}
 
-	dialer := &tls.Dialer{
-		Config: &tls.Config{
-			ServerName: host,
-		},
+	tlsConfig := &tls.Config{
+		ServerName: host,
 	}
-	dialer.NetDialer = &net.Dialer{
-		Timeout: input.Timeout,
-	}
+	dialAddr := net.JoinHostPort(host, port)
 
-	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, port))
+	var conn net.Conn
+	if testDialTLS, ok := ctx.Value(fetchLeafDialTLSFuncKey{}).(func(context.Context, string, string, *tls.Config, time.Duration) (net.Conn, error)); ok && testDialTLS != nil {
+		conn, err = testDialTLS(ctx, "tcp", dialAddr, tlsConfig, input.Timeout)
+	} else {
+		dialer := &tls.Dialer{Config: tlsConfig}
+		dialer.NetDialer = &net.Dialer{
+			Timeout: input.Timeout,
+		}
+		conn, err = dialer.DialContext(ctx, "tcp", dialAddr)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("TLS dial to %s:%s: %w", host, port, err)
 	}

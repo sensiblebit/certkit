@@ -50,11 +50,11 @@ func ProcessData(input ProcessInput) error {
 		return nil
 	}
 
-	// Non-PEM: try binary crypto formats only for recognized extensions.
-	if HasBinaryExtension(input.Path) {
-		slog.Debug("processing as binary crypto format", "path", input.Path)
-		processDER(input.Data, input.Path, input.Passwords, handler)
-	}
+	// Non-PEM: always try binary crypto formats. Real-world uploads and archive
+	// entries are often extensionless or renamed, so extension-based gating
+	// silently drops valid DER/PKCS#7/PKCS#12/JKS inputs.
+	slog.Debug("processing as binary crypto format", "path", input.Path)
+	processDER(input.Data, input.Path, input.Passwords, handler)
 
 	return nil
 }

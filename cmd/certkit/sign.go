@@ -42,7 +42,7 @@ var signSelfSignedCmd = &cobra.Command{
 A new EC P-256 key is generated unless --key provides an existing key.
 Output is PEM to stdout by default.`,
 	Example: `  certkit sign self-signed --cn "My Root CA"
-  certkit sign self-signed --cn "My Root CA" --days 3650 -o ca.pem
+  certkit sign self-signed --cn "My Root CA" --days 3650 -o ca-and-key.pem
   certkit sign self-signed --cn "Leaf" --is-ca=false --key existing.pem`,
 	Args: cobra.NoArgs,
 	RunE: runSignSelfSigned,

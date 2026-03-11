@@ -1,4 +1,8 @@
 import { formatDate, escapeHTML, normalizeExportPassword } from "./utils.js";
+import {
+  readResponseBytesWithLimit,
+  validateUploadSizes,
+} from "./browser_io.js";
 
 // DOM references — Scan page
 const dropZone = document.getElementById("drop-zone");
@@ -68,24 +72,37 @@ const STATUS_ICONS = {
 // Tries direct fetch first, then falls back to our own /api/fetch proxy
 // (same-origin, no CORS issues).
 window.certkitFetchURL = async function (url, timeoutMs = 10000) {
-  const fetchBytesWithTimeout = async (targetURL) => {
+  const fetchResponseWithTimeout = async (targetURL) => {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeoutMs);
     try {
       const resp = await fetch(targetURL, { signal: controller.signal });
-      const body = await resp.arrayBuffer();
-      return { resp, data: new Uint8Array(body) };
-    } finally {
+      return {
+        resp,
+        controller,
+        done() {
+          clearTimeout(timer);
+        },
+      };
+    } catch (err) {
       clearTimeout(timer);
+      throw err;
     }
   };
 
   // 1. Try direct fetch (works if CA serves CORS headers)
   try {
-    const { resp, data } = await fetchBytesWithTimeout(url);
-    if (resp.ok) {
-      console.log("certkit: AIA direct fetch succeeded:", url);
-      return data;
+    const direct = await fetchResponseWithTimeout(url);
+    try {
+      if (direct.resp.ok) {
+        const data = await readResponseBytesWithLimit(direct.resp, {
+          controller: direct.controller,
+        });
+        console.log("certkit: AIA direct fetch succeeded:", url);
+        return data;
+      }
+    } finally {
+      direct.done();
     }
   } catch (e) {
     console.log("certkit: AIA direct fetch failed:", url, e.message);
@@ -94,13 +111,20 @@ window.certkitFetchURL = async function (url, timeoutMs = 10000) {
   // 2. Proxy through our own /api/fetch endpoint
   const proxiedURL = "/api/fetch?url=" + encodeURIComponent(url);
   console.log("certkit: AIA proxy fetch:", proxiedURL);
-  const { resp, data } = await fetchBytesWithTimeout(proxiedURL);
-  if (!resp.ok) {
-    const body = new TextDecoder().decode(data);
-    throw new Error(`Proxy returned ${resp.status}: ${body}`);
+  const proxied = await fetchResponseWithTimeout(proxiedURL);
+  try {
+    const data = await readResponseBytesWithLimit(proxied.resp, {
+      controller: proxied.controller,
+    });
+    if (!proxied.resp.ok) {
+      const body = new TextDecoder().decode(data);
+      throw new Error(`Proxy returned ${proxied.resp.status}: ${body}`);
+    }
+    console.log("certkit: AIA proxy fetch succeeded for", url);
+    return data;
+  } finally {
+    proxied.done();
   }
-  console.log("certkit: AIA proxy fetch succeeded for", url);
-  return data;
 };
 
 // --- WASM Loading ---
@@ -284,6 +308,11 @@ async function readEntries(entries) {
 
 async function processFiles(files) {
   if (processing) return;
+  const sizeErr = validateUploadSizes(files);
+  if (sizeErr) {
+    showStatus(sizeErr, true);
+    return;
+  }
   let fileObjects;
   try {
     fileObjects = await Promise.all(
@@ -421,6 +450,11 @@ inspectDropZone.addEventListener("keydown", (e) => {
 
 async function processInspectFiles(files) {
   if (processing) return;
+  const sizeErr = validateUploadSizes(files);
+  if (sizeErr) {
+    showInspectStatus(sizeErr, true);
+    return;
+  }
   let fileObjects;
   try {
     fileObjects = await Promise.all(

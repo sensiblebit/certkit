@@ -348,6 +348,73 @@ func TestConnectTLS(t *testing.T) {
 	}
 }
 
+func TestDetectStartTLSServerName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		addr      string
+		explicit  string
+		wantValue string
+	}{
+		{name: "explicit wins", addr: "mail.example.com:25", explicit: "alt.example.com", wantValue: "alt.example.com"},
+		{name: "hostname preserved", addr: "mail.example.com:25", wantValue: "mail.example.com"},
+		{name: "scoped ipv6 strips zone", addr: "[fe80::1%en0]:389", wantValue: "fe80::1"},
+		{name: "plain ipv4 preserved", addr: "192.0.2.10:25", wantValue: "192.0.2.10"},
+		{name: "malformed address returns empty", addr: "not-an-addr", wantValue: ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := detectStartTLSServerName(tt.addr, tt.explicit); got != tt.wantValue {
+				t.Fatalf("detectStartTLSServerName(%q, %q) = %q, want %q", tt.addr, tt.explicit, got, tt.wantValue)
+			}
+		})
+	}
+}
+
+func TestLDAPBERLengthDecoding(t *testing.T) {
+	t.Parallel()
+
+	t.Run("multi-byte length", func(t *testing.T) {
+		t.Parallel()
+		got, used, err := readLDAPBERLengthBytes([]byte{0x82, 0x01, 0x23})
+		if err != nil {
+			t.Fatalf("readLDAPBERLengthBytes: %v", err)
+		}
+		if got != 0x123 || used != 3 {
+			t.Fatalf("got (%d, %d), want (%d, 3)", got, used, 0x123)
+		}
+	})
+
+	t.Run("rejects truncated multi-byte length", func(t *testing.T) {
+		t.Parallel()
+		if _, _, err := readLDAPBERLengthBytes([]byte{0x82, 0x01}); err == nil {
+			t.Fatal("expected truncated BER length to fail")
+		}
+	})
+
+	t.Run("rejects overflow length", func(t *testing.T) {
+		t.Parallel()
+		tooLarge := make([]byte, 8)
+		for i := range tooLarge {
+			tooLarge[i] = 0xff
+		}
+		if _, err := decodeLDAPBERLength(tooLarge); err == nil {
+			t.Fatal("expected overflow BER length to fail")
+		}
+	})
+
+	t.Run("reader helper rejects invalid length encoding", func(t *testing.T) {
+		t.Parallel()
+		reader := bufio.NewReader(bytes.NewReader([]byte{0x85}))
+		if _, err := readLDAPBERLength(reader); err == nil {
+			t.Fatal("expected invalid LDAP BER length encoding to fail")
+		}
+	})
+}
+
 func TestConnectTLS_ClientAuth(t *testing.T) {
 	// WHY: Verifies mTLS detection captures acceptable CAs and signature schemes
 	// when the server requests a client certificate.

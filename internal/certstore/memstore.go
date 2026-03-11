@@ -191,6 +191,14 @@ func (s *MemStore) GetCert(ski string) *CertRecord {
 	return latestCertRecord(certs)
 }
 
+// CertsForSKI returns all certificate records stored for the given SKI.
+func (s *MemStore) CertsForSKI(ski string) []*CertRecord {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	certs := s.certsBySKI[ski]
+	return append([]*CertRecord(nil), certs...)
+}
+
 // GetKey returns the key record for the given SKI, or nil.
 func (s *MemStore) GetKey(ski string) *KeyRecord {
 	s.mu.RLock()

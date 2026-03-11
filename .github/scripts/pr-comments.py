@@ -85,12 +85,18 @@ def load_graphql(name: str) -> str:
         raise CommandError(f"missing GraphQL template: {path}") from err
 
 
+def append_gh_field(cmd: list[str], key: str, value: Any) -> None:
+    """Append a gh api field without allowing @file expansion for strings."""
+    flag = "-f" if isinstance(value, str) else "-F"
+    cmd.extend([flag, f"{key}={value}"])
+
+
 def gh_graphql(document: str, **variables: Any) -> Any:
     """Run a GraphQL operation through gh."""
     query = load_graphql(document)
     cmd = ["gh", "api", "graphql", "-f", f"query={query}"]
     for key, value in variables.items():
-        cmd.extend(["-F", f"{key}={value}"])
+        append_gh_field(cmd, key, value)
     return run_json(cmd, context=f"running GraphQL {document}")
 
 

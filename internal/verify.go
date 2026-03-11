@@ -262,6 +262,7 @@ func verifyTrustAnchors(ctx context.Context, cert *x509.Certificate, input *Veri
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
+	normalizeVerifyBundleAIAState(resolvedBundle, sources)
 	intermediatePool := newCertPool(resolvedBundle.Intermediates)
 
 	attempts := make([]verifyAttempt, 0, len(sources))
@@ -341,15 +342,6 @@ func resolveVerifyBundle(ctx context.Context, cert *x509.Certificate, input *Ver
 	})
 	if err != nil {
 		return nil, fmt.Errorf("resolving certificate chain before trust checks: %w", err)
-	}
-	// The pre-verification walk uses an empty root pool (TrustStore="custom"
-	// with no custom roots), so Bundle recomputes AIAUnresolvedCount against
-	// that pool and marks issuers as unresolved even when AIA fetching
-	// succeeded. Clear the false positive unless there are genuine AIA fetch
-	// warnings (HTTP failures, URL rejections) that indicate real problems.
-	if !hasAIAWarnings(result.Warnings) {
-		result.AIAIncomplete = false
-		result.AIAUnresolvedCount = 0
 	}
 	return result, nil
 }
@@ -445,9 +437,81 @@ func shortestVerifiedChain(chains [][]*x509.Certificate) []*x509.Certificate {
 	return best
 }
 
-func hasAIAWarnings(warnings []string) bool {
-	for _, w := range warnings {
-		if strings.HasPrefix(w, "AIA ") {
+func normalizeVerifyBundleAIAState(bundle *certkit.BundleResult, sources []verifyTrustSource) {
+	if bundle == nil {
+		return
+	}
+
+	allCerts := make([]*x509.Certificate, 0, 1+len(bundle.Intermediates))
+	allCerts = append(allCerts, bundle.Leaf)
+	allCerts = append(allCerts, bundle.Intermediates...)
+
+	var intermediates *x509.CertPool
+	if len(allCerts) > 0 {
+		intermediates = x509.NewCertPool()
+		for _, candidate := range allCerts {
+			if candidate != nil {
+				intermediates.AddCert(candidate)
+			}
+		}
+	}
+
+	unresolved := 0
+	for _, cert := range allCerts {
+		if verifyCertAIAResolved(cert, allCerts, intermediates, sources) {
+			continue
+		}
+		unresolved++
+	}
+
+	bundle.AIAUnresolvedCount = unresolved
+	bundle.AIAIncomplete = unresolved > 0
+}
+
+func verifyCertAIAResolved(cert *x509.Certificate, allCerts []*x509.Certificate, intermediates *x509.CertPool, sources []verifyTrustSource) bool {
+	if cert == nil {
+		return true
+	}
+	if len(cert.IssuingCertificateURL) == 0 {
+		return true
+	}
+	if certkit.IsMozillaRoot(cert) {
+		return true
+	}
+	if bytes.Equal(cert.RawSubject, cert.RawIssuer) {
+		return true
+	}
+	if verifyHasIssuerInSet(cert, allCerts) {
+		return true
+	}
+	for _, source := range sources {
+		if source.loadErr != nil || source.roots == nil {
+			continue
+		}
+		if certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{
+			Cert:          cert,
+			Roots:         source.roots,
+			Intermediates: intermediates,
+		}) {
+			return true
+		}
+	}
+	return false
+}
+
+func verifyHasIssuerInSet(cert *x509.Certificate, candidates []*x509.Certificate) bool {
+	for _, candidate := range candidates {
+		if candidate == nil || candidate == cert {
+			continue
+		}
+		if !bytes.Equal(candidate.RawSubject, cert.RawIssuer) {
+			continue
+		}
+		if len(cert.AuthorityKeyId) > 0 && len(candidate.SubjectKeyId) > 0 &&
+			!bytes.Equal(candidate.SubjectKeyId, cert.AuthorityKeyId) {
+			continue
+		}
+		if cert.CheckSignatureFrom(candidate) == nil {
 			return true
 		}
 	}
@@ -602,6 +666,9 @@ func DiagnoseChain(input DiagnoseChainInput) []Diagnosis {
 
 	// Check intermediates for expiry
 	for _, extra := range input.ExtraCerts {
+		if extra == nil {
+			continue
+		}
 		if now.After(extra.NotAfter) {
 			diags = append(diags, Diagnosis{
 				Check:  "intermediate-expired",
@@ -615,6 +682,9 @@ func DiagnoseChain(input DiagnoseChainInput) []Diagnosis {
 	if !isSelfSigned(input.Cert) {
 		found := false
 		for _, extra := range input.ExtraCerts {
+			if extra == nil {
+				continue
+			}
 			if bytes.Equal(extra.RawSubject, input.Cert.RawIssuer) {
 				found = true
 				break

@@ -205,4 +205,25 @@ func TestTreeCommand(t *testing.T) {
 			}
 		}
 	})
+
+	t.Run("supports json output", func(t *testing.T) {
+		jsonOutput = true
+		stdout, stderr, err := captureOutput(t, func() error { return runTree(treeCmd, nil) })
+		if err != nil {
+			t.Fatalf("runTree json failed: %v", err)
+		}
+		if stderr != "" {
+			t.Fatalf("runTree json wrote unexpected stderr: %q", stderr)
+		}
+		var payload map[string]any
+		if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+			t.Fatalf("tree json unmarshal: %v\noutput:\n%s", err, stdout)
+		}
+		if payload["name"] != "certkit" {
+			t.Fatalf("tree json root name = %v, want certkit", payload["name"])
+		}
+		if _, ok := payload["subcommands"].([]any); !ok {
+			t.Fatalf("tree json missing subcommands array: %v", payload)
+		}
+	})
 }

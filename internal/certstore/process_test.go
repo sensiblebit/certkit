@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	ctx509 "github.com/google/certificate-transparency-go/x509"
 	"github.com/sensiblebit/certkit"
 	"golang.org/x/crypto/ssh"
 )
@@ -52,6 +53,58 @@ func TestProcessData_PEMCertificate(t *testing.T) {
 	}
 	if rec.Source != "cert.pem" {
 		t.Errorf("Source = %q, want cert.pem", rec.Source)
+	}
+}
+
+func TestConvertPublicKeyAlgorithm(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		input  ctx509.PublicKeyAlgorithm
+		want   x509.PublicKeyAlgorithm
+		wantOK bool
+	}{
+		{name: "rsa", input: ctx509.RSA, want: x509.RSA, wantOK: true},
+		{name: "ecdsa", input: ctx509.ECDSA, want: x509.ECDSA, wantOK: true},
+		{name: "ed25519", input: ctx509.Ed25519, want: x509.Ed25519, wantOK: true},
+		{name: "unknown", input: ctx509.UnknownPublicKeyAlgorithm, want: x509.UnknownPublicKeyAlgorithm, wantOK: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, ok := convertPublicKeyAlgorithm(tt.input)
+			if got != tt.want || ok != tt.wantOK {
+				t.Fatalf("convertPublicKeyAlgorithm(%v) = (%v, %v), want (%v, %v)", tt.input, got, ok, tt.want, tt.wantOK)
+			}
+		})
+	}
+}
+
+func TestConvertSignatureAlgorithm(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		input  ctx509.SignatureAlgorithm
+		want   x509.SignatureAlgorithm
+		wantOK bool
+	}{
+		{name: "sha256-rsa", input: ctx509.SHA256WithRSA, want: x509.SHA256WithRSA, wantOK: true},
+		{name: "ecdsa-sha384", input: ctx509.ECDSAWithSHA384, want: x509.ECDSAWithSHA384, wantOK: true},
+		{name: "md2-rsa rejected", input: ctx509.MD2WithRSA, want: x509.UnknownSignatureAlgorithm, wantOK: false},
+		{name: "unknown rejected", input: ctx509.UnknownSignatureAlgorithm, want: x509.UnknownSignatureAlgorithm, wantOK: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, ok := convertSignatureAlgorithm(tt.input)
+			if got != tt.want || ok != tt.wantOK {
+				t.Fatalf("convertSignatureAlgorithm(%v) = (%v, %v), want (%v, %v)", tt.input, got, ok, tt.want, tt.wantOK)
+			}
+		})
 	}
 }
 
@@ -486,11 +539,9 @@ func TestProcessData_GarbageBinary(t *testing.T) {
 }
 
 func TestProcessData_ValidDERKey_UnrecognizedExtension(t *testing.T) {
-	// WHY: ProcessData only tries binary format parsing for files with
-	// recognized crypto extensions (via HasBinaryExtension). A valid DER
-	// key in a file named "data.txt" must be silently skipped — this is
-	// intentional security behavior to avoid feeding arbitrary binary files
-	// to ASN.1 parsers. This test documents that design decision.
+	// WHY: Valid DER crypto objects must be ingested even when the filename is
+	// generic or extensionless, because archive entries and drag-dropped files
+	// are often renamed.
 	t.Parallel()
 
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -511,11 +562,8 @@ func TestProcessData_ValidDERKey_UnrecognizedExtension(t *testing.T) {
 		t.Fatalf("ProcessData: %v", err)
 	}
 
-	// Valid DER key should be skipped because .txt is not a crypto extension
-	if len(store.AllKeys()) != 0 {
-		t.Errorf("expected 0 keys for valid DER with .txt extension, got %d — "+
-			"ProcessData should only attempt binary parsing for recognized extensions",
-			len(store.AllKeys()))
+	if len(store.AllKeys()) != 1 {
+		t.Errorf("expected 1 key for valid DER with .txt extension, got %d", len(store.AllKeys()))
 	}
 }
 
@@ -611,6 +659,32 @@ func TestProcessData_MultipleCertsInPEM(t *testing.T) {
 		if !types[expected] {
 			t.Errorf("missing cert type %q in extracted chain", expected)
 		}
+	}
+}
+
+func TestProcessData_ExtensionlessDERCertificate(t *testing.T) {
+	// WHY: Users often drag/drop or archive extensionless blobs. Valid DER
+	// certificates should still be ingested without relying on the filename.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "extensionless.example.com", []string{"extensionless.example.com"})
+	store := NewMemStore()
+
+	if err := ProcessData(ProcessInput{
+		Data:    leaf.cert.Raw,
+		Path:    "extensionless",
+		Handler: store,
+	}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	allCerts := store.AllCertsFlat()
+	if len(allCerts) != 1 {
+		t.Fatalf("expected 1 cert, got %d", len(allCerts))
+	}
+	if allCerts[0].Cert.Subject.CommonName != "extensionless.example.com" {
+		t.Fatalf("CN = %q, want extensionless.example.com", allCerts[0].Cert.Subject.CommonName)
 	}
 }
 

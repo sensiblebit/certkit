@@ -2519,7 +2519,9 @@ func TestValidateAIAURL(t *testing.T) {
 		{"missing hostname rejected", "https:///issuer.cer", false, true, "missing hostname"},
 		{"loopback IPv4", "http://127.0.0.1/ca.cer", false, true, "loopback"},
 		{"loopback IPv6", "http://[::1]/ca.cer", false, true, "loopback"},
-		{"localhost hostname", "http://localhost/ca.cer", false, true, "resolved"},
+		{"localhost hostname", "http://localhost/ca.cer", false, true, "blocked hostname"},
+		{"localhost suffix hostname", "http://issuer.localhost/ca.cer", false, true, "blocked hostname"},
+		{"local suffix hostname", "http://issuer.local/ca.cer", false, true, "blocked hostname"},
 		{"link-local IPv4", "http://169.254.1.1/ca.cer", false, true, "loopback, link-local, or unspecified"},
 		{"unspecified IPv4", "http://0.0.0.0/ca.cer", false, true, "loopback, link-local, or unspecified"},
 		{"this network IPv4 range", "http://0.1.2.3/ca.cer", false, true, "blocked private"},
@@ -2664,6 +2666,77 @@ func TestValidateAIAURLWithOptions_ContextDeadline(t *testing.T) {
 	}
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("error = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+func TestValidateAIAURLWithOptions_DNSUnavailableStillBlocksInternalHostnames(t *testing.T) {
+	// WHY: Browser/WASM builds do not have DNS resolution. They must still
+	// reject obviously private/internal hostnames rather than failing open.
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		input   ValidateAIAURLInput
+		wantErr string
+	}{
+		{
+			name: "localhost blocked without DNS",
+			input: ValidateAIAURLInput{
+				URL:             "https://localhost/issuer.cer",
+				dnsResolutionOK: func() bool { return false },
+			},
+			wantErr: "blocked hostname",
+		},
+		{
+			name: "single-label hostname blocked without DNS",
+			input: ValidateAIAURLInput{
+				URL:             "https://issuer/issuer.cer",
+				dnsResolutionOK: func() bool { return false },
+			},
+			wantErr: "single-label hostname",
+		},
+		{
+			name: "home.arpa blocked without DNS",
+			input: ValidateAIAURLInput{
+				URL:             "https://ca.home.arpa/issuer.cer",
+				dnsResolutionOK: func() bool { return false },
+			},
+			wantErr: "blocked hostname",
+		},
+		{
+			name: "public fqdn remains allowed without DNS",
+			input: ValidateAIAURLInput{
+				URL:             "https://public.example/issuer.cer",
+				dnsResolutionOK: func() bool { return false },
+			},
+		},
+		{
+			name: "allow private bypasses hostname block",
+			input: ValidateAIAURLInput{
+				URL:                  "https://localhost/issuer.cer",
+				AllowPrivateNetworks: true,
+				dnsResolutionOK:      func() bool { return false },
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			err := ValidateAIAURLWithOptions(context.Background(), tt.input)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("expected error containing %q", tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Fatalf("error = %q, want substring %q", err.Error(), tt.wantErr)
+			}
+		})
 	}
 }
 
