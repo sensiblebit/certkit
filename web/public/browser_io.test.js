@@ -82,6 +82,14 @@ describe("validateUploadSizes", () => {
     expect(msg).toBe("Selected files are too large (max 50 MB total).");
   });
 
+  it("formats override limits in user-facing messages", () => {
+    const msg = validateUploadSizes([{ name: "huge.pem", size: 2049 }], {
+      maxFileBytes: 2048,
+      maxTotalBytes: 4096,
+    });
+    expect(msg).toBe("huge.pem is too large (max 2048 bytes per file).");
+  });
+
   it("accepts bounded uploads", () => {
     const msg = validateUploadSizes([
       { name: "leaf.pem", size: 1024 },

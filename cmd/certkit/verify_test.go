@@ -33,7 +33,7 @@ func TestParseDuration(t *testing.T) {
 	})
 }
 
-func TestLoadVerifyRoots_FiltersNonCAs(t *testing.T) {
+func TestLoadVerifyRoots_IncludesAllCertificates(t *testing.T) {
 	rootKey, rootCert := generateKeyAndCert(t, "Root CA", true)
 	_, leafCert := signCert(t, "leaf.example.com", false, rootKey, rootCert)
 
@@ -53,15 +53,18 @@ func TestLoadVerifyRoots_FiltersNonCAs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("loadVerifyRoots: %v", err)
 	}
-	if len(roots) != 1 {
-		t.Fatalf("roots length = %d, want 1", len(roots))
+	if len(roots) != 2 {
+		t.Fatalf("roots length = %d, want 2", len(roots))
 	}
-	if roots[0].Subject.CommonName != "Root CA" {
-		t.Fatalf("trusted root CN = %q, want Root CA", roots[0].Subject.CommonName)
+	if roots[0].Subject.CommonName != "leaf.example.com" {
+		t.Fatalf("roots[0] CN = %q, want leaf.example.com", roots[0].Subject.CommonName)
+	}
+	if roots[1].Subject.CommonName != "Root CA" {
+		t.Fatalf("roots[1] CN = %q, want Root CA", roots[1].Subject.CommonName)
 	}
 }
 
-func TestLoadVerifyRoots_RejectsLeafOnlyFile(t *testing.T) {
+func TestLoadVerifyRoots_AllowsLeafOnlyFile(t *testing.T) {
 	rootKey, rootCert := generateKeyAndCert(t, "Root CA", true)
 	_, leafCert := signCert(t, "leaf-only.example.com", false, rootKey, rootCert)
 
@@ -76,12 +79,15 @@ func TestLoadVerifyRoots_RejectsLeafOnlyFile(t *testing.T) {
 
 	verifyRootsPath = rootsPath
 
-	_, err := loadVerifyRoots(nil)
-	if err == nil {
-		t.Fatal("expected error for leaf-only roots file")
+	roots, err := loadVerifyRoots(nil)
+	if err != nil {
+		t.Fatalf("loadVerifyRoots: %v", err)
 	}
-	if !strings.Contains(err.Error(), "no CA certificates") {
-		t.Fatalf("unexpected error: %v", err)
+	if len(roots) != 1 {
+		t.Fatalf("roots length = %d, want 1", len(roots))
+	}
+	if roots[0].Subject.CommonName != "leaf-only.example.com" {
+		t.Fatalf("roots[0] CN = %q, want leaf-only.example.com", roots[0].Subject.CommonName)
 	}
 }
 
@@ -152,6 +158,40 @@ func TestRunVerify_ExplicitKeyOverridesEmbeddedKey(t *testing.T) {
 	var ve *ValidationError
 	if !errors.As(err, &ve) {
 		t.Fatalf("expected ValidationError, got %T (%v)", err, err)
+	}
+}
+
+func TestRunVerify_AllowsLeafTrustAnchorInRootsFile(t *testing.T) {
+	// Serial: runVerify mutates package-level Cobra flag globals guarded by
+	// snapshotReadonlyGlobals/restoreReadonlyGlobals.
+	snap := snapshotReadonlyGlobals()
+	defer restoreReadonlyGlobals(snap)
+
+	dir := t.TempDir()
+	leafKey, leafCert := generateKeyAndCert(t, "leaf-anchor.example.com", false)
+
+	certPath := filepath.Join(dir, "leaf.pem")
+	if err := os.WriteFile(certPath, []byte(certkit.CertToPEM(leafCert)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	keyPath := filepath.Join(dir, "leaf-key.pem")
+	if err := os.WriteFile(keyPath, marshalKeyPEM(t, leafKey), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rootsPath := filepath.Join(dir, "roots.pem")
+	if err := os.WriteFile(rootsPath, []byte(certkit.CertToPEM(leafCert)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	allowExpired = true
+	verifyFormat = "text"
+	verifyKeyPath = keyPath
+	verifyRootsPath = rootsPath
+
+	if err := runVerify(newCommandWithContext(), []string{certPath}); err != nil {
+		t.Fatalf("runVerify: %v", err)
 	}
 }
 

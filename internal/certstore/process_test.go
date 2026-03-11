@@ -17,7 +17,6 @@ import (
 	"testing"
 	"time"
 
-	ctx509 "github.com/google/certificate-transparency-go/x509"
 	"github.com/sensiblebit/certkit"
 	"golang.org/x/crypto/ssh"
 )
@@ -53,58 +52,6 @@ func TestProcessData_PEMCertificate(t *testing.T) {
 	}
 	if rec.Source != "cert.pem" {
 		t.Errorf("Source = %q, want cert.pem", rec.Source)
-	}
-}
-
-func TestConvertPublicKeyAlgorithm(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name   string
-		input  ctx509.PublicKeyAlgorithm
-		want   x509.PublicKeyAlgorithm
-		wantOK bool
-	}{
-		{name: "rsa", input: ctx509.RSA, want: x509.RSA, wantOK: true},
-		{name: "ecdsa", input: ctx509.ECDSA, want: x509.ECDSA, wantOK: true},
-		{name: "ed25519", input: ctx509.Ed25519, want: x509.Ed25519, wantOK: true},
-		{name: "unknown", input: ctx509.UnknownPublicKeyAlgorithm, want: x509.UnknownPublicKeyAlgorithm, wantOK: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got, ok := convertPublicKeyAlgorithm(tt.input)
-			if got != tt.want || ok != tt.wantOK {
-				t.Fatalf("convertPublicKeyAlgorithm(%v) = (%v, %v), want (%v, %v)", tt.input, got, ok, tt.want, tt.wantOK)
-			}
-		})
-	}
-}
-
-func TestConvertSignatureAlgorithm(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name   string
-		input  ctx509.SignatureAlgorithm
-		want   x509.SignatureAlgorithm
-		wantOK bool
-	}{
-		{name: "sha256-rsa", input: ctx509.SHA256WithRSA, want: x509.SHA256WithRSA, wantOK: true},
-		{name: "ecdsa-sha384", input: ctx509.ECDSAWithSHA384, want: x509.ECDSAWithSHA384, wantOK: true},
-		{name: "md2-rsa rejected", input: ctx509.MD2WithRSA, want: x509.UnknownSignatureAlgorithm, wantOK: false},
-		{name: "unknown rejected", input: ctx509.UnknownSignatureAlgorithm, want: x509.UnknownSignatureAlgorithm, wantOK: false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got, ok := convertSignatureAlgorithm(tt.input)
-			if got != tt.want || ok != tt.wantOK {
-				t.Fatalf("convertSignatureAlgorithm(%v) = (%v, %v), want (%v, %v)", tt.input, got, ok, tt.want, tt.wantOK)
-			}
-		})
 	}
 }
 
@@ -771,6 +718,12 @@ func TestProcessData_PEMCert_CompatRFC822NameConstraint(t *testing.T) {
 	}
 	if allCerts[0].Cert.Subject.CommonName != "compat-name-constraint-ca" {
 		t.Fatalf("subject CN = %q, want %q", allCerts[0].Cert.Subject.CommonName, "compat-name-constraint-ca")
+	}
+	if allCerts[0].Cert.PublicKeyAlgorithm != x509.RSA {
+		t.Fatalf("public key algorithm = %v, want %v", allCerts[0].Cert.PublicKeyAlgorithm, x509.RSA)
+	}
+	if allCerts[0].Cert.SignatureAlgorithm != x509.SHA256WithRSA {
+		t.Fatalf("signature algorithm = %v, want %v", allCerts[0].Cert.SignatureAlgorithm, x509.SHA256WithRSA)
 	}
 	if allCerts[0].Cert.KeyUsage != (x509.KeyUsageCertSign | x509.KeyUsageCRLSign) {
 		t.Fatalf("key usage = %v, want cert-sign+crl-sign", allCerts[0].Cert.KeyUsage)

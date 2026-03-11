@@ -165,7 +165,7 @@ JSON certificate records include `trust_anchors` and `trust_warnings`.
 | `--roots`                 |         | Additional root certificates file (PEM, DER, PKCS#7, PKCS#12, or JKS) |
 <!-- /certkit:flags -->
 
-Chain verification is always performed against both the embedded Mozilla roots and the host system trust store. Use `--roots` to add a file-backed trust source for private PKI; the file must contain CA certificates, and leaf-only inputs are rejected. When the input contains an embedded private key (PKCS#12, JKS), key match is checked automatically. Use `--ocsp` and/or `--crl` to check revocation status (requires network access and a valid chain).
+Chain verification is always performed against both the embedded Mozilla roots and the host system trust store. Use `--roots` to add a file-backed trust source for private PKI, including pinned or legacy trust anchors loaded from PEM, DER, PKCS#7, PKCS#12, or JKS. When the input contains an embedded private key (PKCS#12, JKS), key match is checked automatically. Use `--ocsp` and/or `--crl` to check revocation status (requires network access and a valid chain).
 
 JSON output includes `trust_anchors` and `trust_warnings` for the leaf and displayed chain entries.
 

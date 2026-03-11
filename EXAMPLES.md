@@ -159,8 +159,6 @@ By default this checks against both the embedded Mozilla roots and your OS trust
 certkit verify cert.pem --roots private-ca.pem
 ```
 
-The `--roots` file must contain CA certificates; leaf-only files are rejected.
-
 Combine all checks at once:
 
 ```sh

@@ -26,7 +26,6 @@ var (
 	verifyAllowPrivateNetwork bool
 	errVerifyNoCertificate    = errors.New("no certificate found")
 	errVerifyRootsNoCerts     = errors.New("roots file contains no certificates")
-	errVerifyRootsNoCA        = errors.New("roots file contains no CA certificates")
 )
 
 var verifyCmd = &cobra.Command{
@@ -207,19 +206,16 @@ func loadVerifyRoots(passwords []string) ([]*x509.Certificate, error) {
 	}
 
 	roots := make([]*x509.Certificate, 0, 1+len(contents.ExtraCerts))
-	if contents.Leaf != nil && contents.Leaf.IsCA {
+	if contents.Leaf != nil {
 		roots = append(roots, contents.Leaf)
 	}
 	for _, cert := range contents.ExtraCerts {
-		if cert != nil && cert.IsCA {
+		if cert != nil {
 			roots = append(roots, cert)
 		}
 	}
-	if contents.Leaf == nil && len(contents.ExtraCerts) == 0 {
-		return nil, fmt.Errorf("%w: %s", errVerifyRootsNoCerts, verifyRootsPath)
-	}
 	if len(roots) == 0 {
-		return nil, fmt.Errorf("%w: %s", errVerifyRootsNoCA, verifyRootsPath)
+		return nil, fmt.Errorf("%w: %s", errVerifyRootsNoCerts, verifyRootsPath)
 	}
 	return roots, nil
 }

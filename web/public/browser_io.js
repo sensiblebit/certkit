@@ -10,6 +10,13 @@ function tooLargeError(actualBytes, maxBytes) {
   );
 }
 
+function formatByteLimit(limitBytes) {
+  if (limitBytes % MB === 0) {
+    return `${limitBytes / MB} MB`;
+  }
+  return `${limitBytes} bytes`;
+}
+
 function parseContentLength(headers) {
   const raw = headers?.get?.("Content-Length");
   if (!raw) {
@@ -97,11 +104,11 @@ export function validateUploadSizes(
       return `Could not determine size for ${name}.`;
     }
     if (size > maxFileBytes) {
-      return `${name} is too large (max 10 MB per file).`;
+      return `${name} is too large (max ${formatByteLimit(maxFileBytes)} per file).`;
     }
     totalBytes += size;
     if (totalBytes > maxTotalBytes) {
-      return "Selected files are too large (max 50 MB total).";
+      return `Selected files are too large (max ${formatByteLimit(maxTotalBytes)} total).`;
     }
   }
   return "";
