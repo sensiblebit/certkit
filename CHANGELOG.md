@@ -12,20 +12,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `tree` subcommand to display the full CLI command, subcommand, and flag surface in a tree layout ([#169])
 - Encrypt PEM private key output (`.key`) using PKCS#8 v2 (AES-256-CBC) when an explicit export password is supplied ([#167])
 - Support decryption of PKCS#8 v2 encrypted private keys (`ENCRYPTED PRIVATE KEY` PEM blocks) with all PBES2 cipher (AES-128/192/256-CBC, 3DES-CBC) and PRF (HMAC-SHA-1/256/384/512) combinations ([#167])
-- Add `trust_anchors` reporting across `inspect`, `verify`, `connect`, and `scan` JSON output so certificates show which of `mozilla`, `system`, and optional `file` roots trust them ([#170])
-- Add `verify --roots <file>` to include PEM/DER/PKCS#7/PKCS#12/JKS certificates as an additional file-backed trust source ([#170])
+- Add `trust_anchors` reporting across `inspect`, `verify`, `connect`, and `scan` JSON output so certificates show which of `mozilla`, `system`, and optional `file` roots trust them ([0ee41ad])
+- Add `verify --roots <file>` to include PEM/DER/PKCS#7/PKCS#12/JKS certificates as an additional file-backed trust source ([0ee41ad])
 
 ### Changed
 
 - Normalize all exported private key PEM output (`.key`, K8s `tls.key`, YAML `key`) to PKCS#8 (`PRIVATE KEY`) regardless of input format ([#167])
 - Bundle export warns when Kubernetes TLS secret contains an unencrypted private key alongside encrypted outputs ([#167])
 - Use browser Web Crypto API for PBKDF2 key derivation in WASM builds to avoid blocking the main thread during encrypted key export ([#167])
-- `verify` now checks both Mozilla and system trust stores by default and treats a certificate as trusted when any available anchor source succeeds ([#170])
-- `scan` now counts `untrusted_*` certificates as trusted by neither Mozilla nor system, and exposes per-store trust counts in JSON output ([#170])
+- `verify` now checks both Mozilla and system trust stores by default and treats a certificate as trusted when any available anchor source succeeds ([0ee41ad])
+- `scan` now counts `untrusted_*` certificates as trusted by neither Mozilla nor system, and exposes per-store trust counts in JSON output ([0ee41ad])
 
 ### Removed
 
-- **Breaking:** Remove `verify --trust-store`; use the default Mozilla+system verification or `--roots` to add a file-backed trust source ([#170])
+- **Breaking:** Remove `verify --trust-store`; use the default Mozilla+system verification or `--roots` to add a file-backed trust source ([0ee41ad])
 
 ### Fixed
 
