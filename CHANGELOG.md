@@ -12,15 +12,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `tree` subcommand to display the full CLI command, subcommand, and flag surface in a tree layout ([#169])
 - Encrypt PEM private key output (`.key`) using PKCS#8 v2 (AES-256-CBC) when an explicit export password is supplied ([#167])
 - Support decryption of PKCS#8 v2 encrypted private keys (`ENCRYPTED PRIVATE KEY` PEM blocks) with all PBES2 cipher (AES-128/192/256-CBC, 3DES-CBC) and PRF (HMAC-SHA-1/256/384/512) combinations ([#167])
-<<<<<<< HEAD
 - Add `trust_anchors` reporting across `inspect`, `verify`, and `connect` JSON output so certificates show which trust sources validate them (`mozilla`/`system` everywhere, plus optional `file` roots in `verify`) ([`0ee41ad`])
 - Add per-store Mozilla/system trust counts to `scan` JSON summaries alongside the existing aggregate `untrusted_*` counts ([`0ee41ad`])
 - Add `verify --roots <file>` to include PEM/DER/PKCS#7/PKCS#12/JKS certificates as an additional file-backed trust source ([`0ee41ad`])
 - Add `CheckTrustAnchorsResult` so library callers can inspect `trust_anchors` plus trust-source load warnings from `CheckTrustAnchors` ([#171])
 - Display top-level X.509 certificate extensions with human-readable OID names in `inspect`, `verify --verbose`, and `connect --verbose`, including critical and unhandled-critical markers ([`512d96c`])
-=======
-- Display top-level X.509 certificate extensions with human-readable OID names in `inspect`, `verify --verbose`, and `connect --verbose`, including critical and unhandled-critical markers ([`512d96c`])
->>>>>>> 987e22b (docs: align extension output docs)
 
 ### Changed
 
@@ -1133,3 +1129,4 @@ Initial release.
 [`6492fa5`]: https://github.com/sensiblebit/certkit/commit/6492fa5
 [`772742c`]: https://github.com/sensiblebit/certkit/commit/772742c
 [`0ee41ad`]: https://github.com/sensiblebit/certkit/commit/0ee41ad
+[`512d96c`]: https://github.com/sensiblebit/certkit/commit/512d96c
