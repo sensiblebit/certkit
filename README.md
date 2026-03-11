@@ -110,7 +110,7 @@ See [EXAMPLES.md](EXAMPLES.md) for a walkthrough of the main certificate workflo
 | `certkit sign self-signed`  | Create a self-signed certificate                        |
 | `certkit sign csr <file>`   | Sign a CSR with a CA certificate and key                |
 | `certkit scan <path>`       | Scan a directory and catalog everything found           |
-| `certkit tree`              | Print the full CLI command and flag surface as a tree   |
+| `certkit tree`              | Print the full CLI command tree                         |
 | `certkit keygen`            | Generate a new key pair (and optionally a CSR)          |
 | `certkit csr`               | Generate a CSR from a template, cert, or existing CSR   |
 | `certkit ocsp <file>`       | Check certificate revocation status via OCSP            |

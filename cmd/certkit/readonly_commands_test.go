@@ -72,6 +72,10 @@ type readonlyGlobals struct {
 	// inspect flags
 	inspectFormat              string
 	inspectAllowPrivateNetwork bool
+
+	// tree flags
+	treeIncludeFlags     bool
+	treeIncludeInherited bool
 }
 
 func snapshotReadonlyGlobals() readonlyGlobals {
@@ -120,6 +124,9 @@ func snapshotReadonlyGlobals() readonlyGlobals {
 
 		inspectFormat:              inspectFormat,
 		inspectAllowPrivateNetwork: inspectAllowPrivateNetwork,
+
+		treeIncludeFlags:     treeIncludeFlags,
+		treeIncludeInherited: treeIncludeInherited,
 	}
 }
 
@@ -166,6 +173,9 @@ func restoreReadonlyGlobals(g readonlyGlobals) {
 
 	inspectFormat = g.inspectFormat
 	inspectAllowPrivateNetwork = g.inspectAllowPrivateNetwork
+
+	treeIncludeFlags = g.treeIncludeFlags
+	treeIncludeInherited = g.treeIncludeInherited
 	readonlyGlobalsMu.Unlock()
 }
 

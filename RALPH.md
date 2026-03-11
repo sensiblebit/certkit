@@ -231,3 +231,10 @@ Area: [internal/certstore/process_test.go](internal/certstore/process_test.go)
 Summary: direct unit tests of unexported algorithm-conversion helpers were too implementation-coupled for the compat parser behavior they were intended to protect.
 Source: Follow-up PR review
 Fix: Removed the helper-specific tests and asserted public-key/signature algorithm mapping through the compatibility ingestion path instead
+
+33. `tree-default-flags-noise`
+Status: fixed
+Area: [cmd/certkit/tree.go](cmd/certkit/tree.go), [cmd/certkit/cli_semantics_test.go](cmd/certkit/cli_semantics_test.go), [README.md](README.md), [EXAMPLES.md](EXAMPLES.md)
+Summary: the default `tree` output included every local and inherited flag, which made the command map harder to scan than a command-focused tree.
+Source: User feedback
+Fix: `tree` now defaults to commands-only text output, with `--flags` and `--inherited` opt-ins for text-mode flag detail; JSON output remains the detailed machine-readable surface

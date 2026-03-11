@@ -13,10 +13,15 @@ import (
 var treeCmd = &cobra.Command{
 	Use:   "tree",
 	Short: "Display the full command tree",
-	Long:  "Display every command, subcommand, and flag in a tree layout.",
+	Long:  "Display the command and subcommand tree. Use --flags to include flag details.",
 	Args:  cobra.NoArgs,
 	RunE:  runTree,
 }
+
+var (
+	treeIncludeFlags     bool
+	treeIncludeInherited bool
+)
 
 type printCommandTreeInput struct {
 	cmd    *cobra.Command
@@ -32,6 +37,8 @@ type commandTreeJSON struct {
 }
 
 func init() {
+	treeCmd.Flags().BoolVar(&treeIncludeFlags, "flags", false, "Include local flags in text tree output")
+	treeCmd.Flags().BoolVar(&treeIncludeInherited, "inherited", false, "Include inherited flags in text tree output")
 	rootCmd.AddCommand(treeCmd)
 }
 
@@ -66,7 +73,8 @@ func initTreeSurface(cmd *cobra.Command) {
 }
 
 // printCommandTree recursively prints a command and its children with
-// box-drawing connectors. Each command shows its flags indented beneath it.
+// box-drawing connectors. Flag details are opt-in so the default tree stays
+// focused on the command surface.
 func printCommandTree(b *strings.Builder, in printCommandTreeInput) {
 	cmd := in.cmd
 	prefix := in.prefix
@@ -87,23 +95,28 @@ func printCommandTree(b *strings.Builder, in printCommandTreeInput) {
 		}
 	}
 
-	total := len(localFlags) + len(visible)
-	if len(inheritedFlags) > 0 {
+	total := len(visible)
+	if treeIncludeFlags {
+		total += len(localFlags)
+	}
+	if treeIncludeInherited && len(inheritedFlags) > 0 {
 		total++
 	}
 	idx := 0
 
 	// Print local flags.
-	for _, flag := range localFlags {
-		idx++
-		connector := "├── "
-		if idx == total {
-			connector = "└── "
+	if treeIncludeFlags {
+		for _, flag := range localFlags {
+			idx++
+			connector := "├── "
+			if idx == total {
+				connector = "└── "
+			}
+			fmt.Fprintf(b, "%s%s%s\n", prefix, connector, flag)
 		}
-		fmt.Fprintf(b, "%s%s%s\n", prefix, connector, flag)
 	}
 
-	if len(inheritedFlags) > 0 {
+	if treeIncludeInherited && len(inheritedFlags) > 0 {
 		idx++
 		connector := "├── "
 		if idx == total {
