@@ -127,14 +127,14 @@ See [EXAMPLES.md](EXAMPLES.md) for a complete walkthrough of every command with 
 ### Global Flags
 
 <!-- certkit:flags:global -->
-| Flag                | Default | Description                                                                        |
-| ------------------- | ------- | ---------------------------------------------------------------------------------- |
-| `--allow-expired`   | `false` | Include expired certificates                                                       |
-| `--json`            | `false` | Output in JSON format                                                              |
-| `--log-level`, `-l` | `info`  | Log level: debug, info, warn, error                                                |
-| `--password-file`   |         | File containing passwords, one per line                                            |
-| `--passwords`, `-p` |         | Comma-separated passwords for encrypted keys                                       |
-| `--verbose`, `-v`   | `false` | Extended details in output (serial, key info, signature algorithm, key usage, EKU) |
+| Flag                | Default | Description                                                                                    |
+| ------------------- | ------- | ---------------------------------------------------------------------------------------------- |
+| `--allow-expired`   | `false` | Include expired certificates                                                                   |
+| `--json`            | `false` | Output in JSON format                                                                          |
+| `--log-level`, `-l` | `info`  | Log level: debug, info, warn, error                                                            |
+| `--password-file`   |         | File containing passwords, one per line                                                        |
+| `--passwords`, `-p` |         | Comma-separated passwords for encrypted keys                                                   |
+| `--verbose`, `-v`   | `false` | Extended details in output (serial, key info, signature algorithm, key usage, EKU, extensions) |
 <!-- /certkit:flags -->
 
 Common passwords (`""`, `"password"`, `"changeit"`, `"keypassword"`) are always tried automatically.
@@ -180,7 +180,7 @@ Chain verification is always performed against both the embedded Mozilla roots a
 | `--servername`            |         | Override SNI hostname (defaults to host)                                            |
 <!-- /certkit:flags -->
 
-Port defaults to 443 if not specified. OCSP revocation status is checked automatically (best-effort); use `--no-ocsp` to disable. Use `--verbose` for extended details (serial, key info, signature algorithm, key usage, EKU) plus a PEM-formatted copy of the server-sent certificate chain with `# Subject`, `# Issuer`, and validity headers.
+Port defaults to 443 if not specified. OCSP revocation status is checked automatically (best-effort); use `--no-ocsp` to disable. Use `--verbose` for extended details (serial, key info, signature algorithm, key usage, EKU, extensions) plus a PEM-formatted copy of the server-sent certificate chain with `# Subject`, `# Issuer`, and validity headers.
 
 ### Probe SSH Flags
 
