@@ -488,7 +488,7 @@ func TestRunValidation(t *testing.T) {
 					Subject:      pkix.Name{CommonName: "renewal-two.example.com"},
 					DNSNames:     []string{"renewal-two.example.com"},
 					NotBefore:    time.Now().Add(-time.Hour),
-					NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+					NotAfter:     time.Now().Add(366 * 24 * time.Hour),
 					KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 					ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 				}
@@ -516,8 +516,15 @@ func TestRunValidation(t *testing.T) {
 				}
 				return store, skiToColonHex(t, hexSKI)
 			},
-			wantErr:     true,
-			errContains: "multiple certificates share SKI",
+			validate: func(t *testing.T, result *ValidationResult) {
+				t.Helper()
+				if result.Subject != "renewal-two.example.com" {
+					t.Fatalf("Subject = %q, want renewal-two.example.com", result.Subject)
+				}
+				if result.NotAfter == "" {
+					t.Fatal("NotAfter should not be empty")
+				}
+			},
 		},
 	}
 

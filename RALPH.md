@@ -238,3 +238,10 @@ Area: [cmd/certkit/tree.go](cmd/certkit/tree.go), [cmd/certkit/cli_semantics_tes
 Summary: the default `tree` output included every local and inherited flag, which made the command map harder to scan than a command-focused tree.
 Source: User feedback
 Fix: `tree` now defaults to commands-only text output, with `--flags` and `--inherited` opt-ins for text-mode flag detail; JSON output remains the detailed machine-readable surface
+
+34. `validate-duplicate-ski-fallback`
+Status: fixed
+Area: [internal/certstore/validate.go](internal/certstore/validate.go), [internal/certstore/validate_test.go](internal/certstore/validate_test.go)
+Summary: validation errored on duplicate-SKI renewal sets even though the rest of the store/UI already presents one latest-expiring certificate per SKI.
+Source: Follow-up PR review
+Fix: `RunValidation()` now uses the store's latest-cert selection for a given SKI, and the regression test proves the later renewal is the record that gets validated
