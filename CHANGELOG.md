@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `trust_anchors` reporting across `inspect`, `verify`, and `connect` JSON output so certificates show which trust sources validate them (`mozilla`/`system` everywhere, plus optional `file` roots in `verify`) ([`0ee41ad`])
 - Add per-store Mozilla/system trust counts to `scan` JSON summaries alongside the existing aggregate `untrusted_*` counts ([`0ee41ad`])
 - Add `verify --roots <file>` to include PEM/DER/PKCS#7/PKCS#12/JKS certificates as an additional file-backed trust source ([`0ee41ad`])
+- Add `CheckTrustAnchorsResult` so library callers can inspect `trust_anchors` plus trust-source load warnings from `CheckTrustAnchors` ([#171])
 
 ### Changed
 
@@ -23,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Use browser Web Crypto API for PBKDF2 key derivation in WASM builds to avoid blocking the main thread during encrypted key export ([#167])
 - `verify` now checks both Mozilla and system trust stores by default and treats a certificate as trusted when any available anchor source succeeds ([`0ee41ad`])
 - `scan` now counts `untrusted_*` certificates as trusted by neither Mozilla nor system, and exposes per-store trust counts in JSON output ([`0ee41ad`])
+- Surface trust-source load warnings in `inspect`, `verify`, and `connect`, fail fast on invalid `verify` trust-store configuration, and stop reporting a synthetic `file` source when no file-backed roots were requested ([#171])
 
 ### Removed
 
@@ -1106,6 +1108,7 @@ Initial release.
 [#158]: https://github.com/sensiblebit/certkit/pull/158
 [#167]: https://github.com/sensiblebit/certkit/issues/167
 [#169]: https://github.com/sensiblebit/certkit/pull/169
+[#171]: https://github.com/sensiblebit/certkit/pull/171
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63

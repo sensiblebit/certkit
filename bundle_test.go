@@ -150,13 +150,16 @@ func TestCheckTrustAnchors_FileRoots(t *testing.T) {
 		intermediatePool.AddCert(intermediate)
 	}
 
-	anchors := CheckTrustAnchors(CheckTrustAnchorsInput{
+	result := CheckTrustAnchors(CheckTrustAnchorsInput{
 		Cert:          leaf,
 		Intermediates: intermediatePool,
 		FileRoots:     fileRoots,
 	})
-	if got, want := anchors, []string{"file"}; len(got) != len(want) || got[0] != want[0] {
+	if got, want := result.Anchors, []string{"file"}; len(got) != len(want) || got[0] != want[0] {
 		t.Fatalf("CheckTrustAnchors() = %v, want %v", got, want)
+	}
+	if len(result.Warnings) != 0 {
+		t.Fatalf("CheckTrustAnchors() warnings = %v, want none", result.Warnings)
 	}
 }
 

@@ -316,6 +316,8 @@ type ConnectResult struct {
 	PeerChain []*x509.Certificate `json:"-"`
 	// ChainTrustAnchors holds per-certificate trust sources for PeerChain.
 	ChainTrustAnchors [][]string `json:"-"`
+	// ChainTrustWarnings holds per-certificate trust-source load warnings for PeerChain.
+	ChainTrustWarnings [][]string `json:"-"`
 	// TLSSCTs contains serialized SCTs from the TLS handshake extension.
 	TLSSCTs [][]byte `json:"-"`
 	// VerifiedChains contains the verified certificate chains.
@@ -2830,6 +2832,9 @@ func FormatConnectResult(r *ConnectResult) string {
 		fmt.Fprintf(&out, "     Not After:   %s\n", cert.NotAfter.UTC().Format(time.RFC3339))
 		if i < len(r.ChainTrustAnchors) {
 			fmt.Fprintf(&out, "     Trust Anchors: %s\n", FormatTrustAnchors(r.ChainTrustAnchors[i]))
+		}
+		if i < len(r.ChainTrustWarnings) && len(r.ChainTrustWarnings[i]) > 0 {
+			fmt.Fprintf(&out, "     Trust Warnings: %s\n", strings.Join(r.ChainTrustWarnings[i], "; "))
 		}
 		fmt.Fprintf(&out, "     Fingerprint: %s\n", CertFingerprintColonSHA256(cert))
 		if sans := CollectCertificateSANs(cert); len(sans) > 0 {

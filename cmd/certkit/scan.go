@@ -294,11 +294,17 @@ func runScan(cmd *cobra.Command, args []string) error {
 
 				// Validate chain unless --force is set (uses same logic as summary)
 				if !scanForceExport {
-					if len(certkit.CheckTrustAnchors(certkit.CheckTrustAnchorsInput{
+					mozillaTrusted := trustPools.Mozilla != nil && certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{
 						Cert:          cert,
+						Roots:         trustPools.Mozilla,
 						Intermediates: intermediatePool,
-						FileRoots:     nil,
-					})) == 0 && (trustPools.Mozilla != nil || trustPools.System != nil) {
+					})
+					systemTrusted := trustPools.System != nil && certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{
+						Cert:          cert,
+						Roots:         trustPools.System,
+						Intermediates: intermediatePool,
+					})
+					if !mozillaTrusted && !systemTrusted && (trustPools.Mozilla != nil || trustPools.System != nil) {
 						slog.Debug("skipping untrusted certificate", "subject", cert.Subject)
 						skipped++
 						continue

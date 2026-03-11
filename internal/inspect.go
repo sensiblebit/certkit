@@ -29,29 +29,30 @@ var (
 
 // InspectResult holds the inspection details for a single certificate, key, or CSR.
 type InspectResult struct {
-	Type         string   `json:"type"`
-	Subject      string   `json:"subject,omitempty"`
-	Issuer       string   `json:"issuer,omitempty"`
-	Serial       string   `json:"serial,omitempty"`
-	NotBefore    string   `json:"not_before,omitempty"`
-	NotAfter     string   `json:"not_after,omitempty"`
-	CertType     string   `json:"cert_type,omitempty"`
-	Expired      *bool    `json:"expired,omitempty"`
-	Trusted      *bool    `json:"trusted,omitempty"`
-	TrustAnchors []string `json:"trust_anchors"`
-	IsCA         *bool    `json:"is_ca,omitempty"`
-	KeyAlgo      string   `json:"key_algorithm,omitempty"`
-	KeySize      string   `json:"key_size,omitempty"`
-	SANs         []string `json:"sans,omitempty"`
-	KeyUsages    []string `json:"key_usages,omitempty"`
-	EKUs         []string `json:"ekus,omitempty"`
-	SHA256       string   `json:"sha256_fingerprint,omitempty"`
-	SHA1         string   `json:"sha1_fingerprint,omitempty"`
-	SKI          string   `json:"subject_key_id,omitempty"`
-	SKILegacy    string   `json:"subject_key_id_sha1,omitempty"`
-	AKI          string   `json:"authority_key_id,omitempty"`
-	SigAlg       string   `json:"signature_algorithm,omitempty"`
-	KeyType      string   `json:"key_type,omitempty"`
+	Type          string   `json:"type"`
+	Subject       string   `json:"subject,omitempty"`
+	Issuer        string   `json:"issuer,omitempty"`
+	Serial        string   `json:"serial,omitempty"`
+	NotBefore     string   `json:"not_before,omitempty"`
+	NotAfter      string   `json:"not_after,omitempty"`
+	CertType      string   `json:"cert_type,omitempty"`
+	Expired       *bool    `json:"expired,omitempty"`
+	Trusted       *bool    `json:"trusted,omitempty"`
+	TrustAnchors  []string `json:"trust_anchors"`
+	TrustWarnings []string `json:"trust_warnings,omitempty"`
+	IsCA          *bool    `json:"is_ca,omitempty"`
+	KeyAlgo       string   `json:"key_algorithm,omitempty"`
+	KeySize       string   `json:"key_size,omitempty"`
+	SANs          []string `json:"sans,omitempty"`
+	KeyUsages     []string `json:"key_usages,omitempty"`
+	EKUs          []string `json:"ekus,omitempty"`
+	SHA256        string   `json:"sha256_fingerprint,omitempty"`
+	SHA1          string   `json:"sha1_fingerprint,omitempty"`
+	SKI           string   `json:"subject_key_id,omitempty"`
+	SKILegacy     string   `json:"subject_key_id_sha1,omitempty"`
+	AKI           string   `json:"authority_key_id,omitempty"`
+	SigAlg        string   `json:"signature_algorithm,omitempty"`
+	KeyType       string   `json:"key_type,omitempty"`
 
 	// AIAFetched indicates the certificate was resolved via AIA, not from user input.
 	AIAFetched bool `json:"aia_fetched,omitempty"`
@@ -428,10 +429,12 @@ func AnnotateInspectTrust(results []InspectResult) error {
 		expired := now.After(cert.NotAfter)
 		results[i].Expired = &expired
 
-		results[i].TrustAnchors = certkit.CheckTrustAnchors(certkit.CheckTrustAnchorsInput{
+		trustResult := certkit.CheckTrustAnchors(certkit.CheckTrustAnchorsInput{
 			Cert:          cert,
 			Intermediates: intermediatePool,
 		})
+		results[i].TrustAnchors = trustResult.Anchors
+		results[i].TrustWarnings = trustResult.Warnings
 		trusted := len(results[i].TrustAnchors) > 0
 		results[i].Trusted = &trusted
 	}
@@ -482,6 +485,9 @@ func formatInspectText(results []InspectResult) string {
 				fmt.Fprintf(&sb, "  Trusted:     %s\n", boolYesNo(*r.Trusted))
 			}
 			fmt.Fprintf(&sb, "  Trust Anchors: %s\n", certkit.FormatTrustAnchors(r.TrustAnchors))
+			if len(r.TrustWarnings) > 0 {
+				fmt.Fprintf(&sb, "  Trust Warnings: %s\n", strings.Join(r.TrustWarnings, "; "))
+			}
 			fmt.Fprintf(&sb, "  Key:         %s %s\n", r.KeyAlgo, r.KeySize)
 			fmt.Fprintf(&sb, "  Signature:   %s\n", r.SigAlg)
 			if len(r.KeyUsages) > 0 {

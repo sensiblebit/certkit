@@ -51,6 +51,8 @@ var (
 	errBundleLeafNil            = errors.New("leaf certificate is nil")
 	errBundleMaxChainExceeded   = errors.New("certificate chain exceeded maximum intermediate limit")
 	errBundleUnknownTrustStore  = errors.New("unknown trust_store")
+	errVerifyChainCertNil       = errors.New("certificate is nil")
+	errVerifyChainRootsNil      = errors.New("root pool is nil")
 )
 
 // privateNetworks contains CIDR ranges for private, reserved, and shared
@@ -317,6 +319,13 @@ type CheckTrustAnchorsInput struct {
 	FileRoots     *x509.CertPool
 }
 
+// CheckTrustAnchorsResult reports which trust sources validated a certificate
+// and any source-load warnings encountered while probing.
+type CheckTrustAnchorsResult struct {
+	Anchors  []string
+	Warnings []string
+}
+
 // VerifyChainTrust reports whether the given certificate chains to a trusted
 // root. Cross-signed roots (same Subject and public key as a Mozilla root)
 // are trusted directly. For expired certificates, verification is performed
@@ -330,11 +339,19 @@ type CheckTrustAnchorsInput struct {
 // invalid at the leaf's issuance time. This is an uncommon edge case in
 // practice (intermediates outlive the leaves they sign).
 func VerifyChainTrust(input VerifyChainTrustInput) bool {
+	chains, err := verifyChainTrustChains(input)
+	return err == nil && len(chains) > 0
+}
+
+func verifyChainTrustChains(input VerifyChainTrustInput) ([][]*x509.Certificate, error) {
+	if input.Cert == nil {
+		return nil, errVerifyChainCertNil
+	}
 	if input.Roots == nil {
-		return false
+		return nil, errVerifyChainRootsNil
 	}
 	if IsMozillaRoot(input.Cert) {
-		return true
+		return [][]*x509.Certificate{{input.Cert}}, nil
 	}
 	opts := x509.VerifyOptions{
 		Roots:         input.Roots,
@@ -345,40 +362,50 @@ func VerifyChainTrust(input VerifyChainTrustInput) bool {
 		// Use NotBefore + 1s: the issuing chain was necessarily valid at issuance.
 		opts.CurrentTime = input.Cert.NotBefore.Add(time.Second)
 	}
-	_, err := input.Cert.Verify(opts)
-	return err == nil
+	chains, err := input.Cert.Verify(opts)
+	if err != nil {
+		return nil, fmt.Errorf("verifying certificate against roots: %w", err)
+	}
+	return chains, nil
 }
 
 // CheckTrustAnchors reports which trust sources validate the certificate.
 // Results are returned in stable order: mozilla, system, file.
-func CheckTrustAnchors(input CheckTrustAnchorsInput) []string {
+func CheckTrustAnchors(input CheckTrustAnchorsInput) CheckTrustAnchorsResult {
 	if input.Cert == nil {
-		return []string{}
+		return CheckTrustAnchorsResult{Anchors: []string{}, Warnings: []string{}}
 	}
 
-	anchors := make([]string, 0, 3)
-	if mozillaPool, err := MozillaRootPool(); err == nil && VerifyChainTrust(VerifyChainTrustInput{
+	result := CheckTrustAnchorsResult{
+		Anchors:  make([]string, 0, 3),
+		Warnings: make([]string, 0, 2),
+	}
+	if mozillaPool, err := MozillaRootPool(); err != nil {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("mozilla trust source unavailable: %v", err))
+	} else if VerifyChainTrust(VerifyChainTrustInput{
 		Cert:          input.Cert,
 		Roots:         mozillaPool,
 		Intermediates: input.Intermediates,
 	}) {
-		anchors = append(anchors, "mozilla")
+		result.Anchors = append(result.Anchors, "mozilla")
 	}
-	if systemPool, err := SystemCertPoolCached(); err == nil && VerifyChainTrust(VerifyChainTrustInput{
+	if systemPool, err := SystemCertPoolCached(); err != nil {
+		result.Warnings = append(result.Warnings, fmt.Sprintf("system trust source unavailable: %v", err))
+	} else if VerifyChainTrust(VerifyChainTrustInput{
 		Cert:          input.Cert,
 		Roots:         systemPool,
 		Intermediates: input.Intermediates,
 	}) {
-		anchors = append(anchors, "system")
+		result.Anchors = append(result.Anchors, "system")
 	}
 	if input.FileRoots != nil && VerifyChainTrust(VerifyChainTrustInput{
 		Cert:          input.Cert,
 		Roots:         input.FileRoots,
 		Intermediates: input.Intermediates,
 	}) {
-		anchors = append(anchors, "file")
+		result.Anchors = append(result.Anchors, "file")
 	}
-	return anchors
+	return result
 }
 
 // FormatTrustAnchors renders trust anchor labels for display.
