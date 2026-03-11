@@ -148,6 +148,8 @@ Common passwords (`""`, `"password"`, `"changeit"`, `"keypassword"`) are always 
 | `--format`                | `text`  | Output format: text, json                       |
 <!-- /certkit:flags -->
 
+JSON certificate records include `trust_anchors` and `trust_warnings`.
+
 ### Verify Flags
 
 <!-- certkit:flags:verify -->
@@ -165,6 +167,8 @@ Common passwords (`""`, `"password"`, `"changeit"`, `"keypassword"`) are always 
 
 Chain verification is always performed against both the embedded Mozilla roots and the host system trust store. Use `--roots` to add a file-backed trust source for private PKI. When the input contains an embedded private key (PKCS#12, JKS), key match is checked automatically. Use `--ocsp` and/or `--crl` to check revocation status (requires network access and a valid chain).
 
+JSON output includes `trust_anchors` and `trust_warnings` for the leaf and displayed chain entries.
+
 ### Connect Flags
 
 <!-- certkit:flags:connect -->
@@ -181,6 +185,8 @@ Chain verification is always performed against both the embedded Mozilla roots a
 <!-- /certkit:flags -->
 
 Port defaults to 443 if not specified. OCSP revocation status is checked automatically (best-effort); use `--no-ocsp` to disable. Use `--verbose` for extended details (serial, key info, signature algorithm, key usage, EKU, extensions) plus a PEM-formatted copy of the server-sent certificate chain with `# Subject`, `# Issuer`, and validity headers.
+
+JSON output includes per-certificate `trust_anchors` and `trust_warnings`.
 
 ### Probe SSH Flags
 
