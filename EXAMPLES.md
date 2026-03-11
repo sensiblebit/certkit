@@ -74,8 +74,7 @@ A practical guide to common certificate tasks. No prior TLS/SSL knowledge requir
 
 ### See the full command surface
 
-Print the actual CLI command tree, including built-in Cobra commands and the
-flags each command accepts:
+Print the actual CLI command tree, including built-in Cobra commands:
 
 ```sh
 certkit tree
@@ -83,6 +82,12 @@ certkit tree
 
 This is useful when you want a quick map of the CLI without hopping through
 `--help` output command by command.
+
+If you also want the flag surface, opt in explicitly:
+
+```sh
+certkit tree --flags --inherited
+```
 
 ---
 

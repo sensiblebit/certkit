@@ -231,3 +231,38 @@ Area: [internal/certstore/process_test.go](internal/certstore/process_test.go)
 Summary: direct unit tests of unexported algorithm-conversion helpers were too implementation-coupled for the compat parser behavior they were intended to protect.
 Source: Follow-up PR review
 Fix: Removed the helper-specific tests and asserted public-key/signature algorithm mapping through the compatibility ingestion path instead
+
+33. `tree-default-flags-noise`
+Status: fixed
+Area: [cmd/certkit/tree.go](cmd/certkit/tree.go), [cmd/certkit/cli_semantics_test.go](cmd/certkit/cli_semantics_test.go), [README.md](README.md), [EXAMPLES.md](EXAMPLES.md)
+Summary: the default `tree` output included every local and inherited flag, which made the command map harder to scan than a command-focused tree.
+Source: User feedback
+Fix: `tree` now defaults to commands-only text output, with `--flags` and `--inherited` opt-ins for text-mode flag detail; JSON output remains the detailed machine-readable surface
+
+34. `validate-duplicate-ski-fallback`
+Status: fixed
+Area: [internal/certstore/validate.go](internal/certstore/validate.go), [internal/certstore/validate_test.go](internal/certstore/validate_test.go)
+Summary: validation errored on duplicate-SKI renewal sets even though the rest of the store/UI already presents one latest-expiring certificate per SKI.
+Source: Follow-up PR review
+Fix: `RunValidation()` now uses the store's latest-cert selection for a given SKI, and the regression test proves the later renewal is the record that gets validated
+
+35. `readme-tail-noise-and-command-overclaim`
+Status: fixed
+Area: [README.md](README.md)
+Summary: the README command index overclaimed the full CLI surface and the end-of-file mermaid diagram added noise without carrying much durable documentation value.
+Source: User feedback
+Fix: narrowed the section to “Common Commands”, clarified the `tree` entry, removed the low-value diagram, and kept the useful scan behavior notes as prose
+
+36. `validate-latest-fallback-assertion-gap`
+Status: fixed
+Area: [internal/certstore/validate_test.go](internal/certstore/validate_test.go)
+Summary: the duplicate-SKI regression only asserted the selected subject, so it could still pass if validation picked the wrong renewal by insertion order instead of latest `NotAfter`.
+Source: Follow-up PR review
+Fix: pinned the expected later renewal `NotAfter` and asserted the exact RFC3339 result emitted by `RunValidation()`
+
+37. `readme-followup-runtime-drift`
+Status: fixed
+Area: [README.md](README.md)
+Summary: several README details had drifted from current behavior, including `tree` flag wording, CRL URL schemes, duplicate bundle export paths, library `SignCSR` SAN copying, and scan issuer-linkage notes.
+Source: Follow-up docs audit finding
+Fix: aligned the README text and library example with the current command/runtime behavior

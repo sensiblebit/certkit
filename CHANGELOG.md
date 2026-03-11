@@ -39,6 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Parse extensionless or renamed DER/PKCS#7/PKCS#12/JKS inputs during certstore ingestion instead of skipping binary crypto content based on filename extension alone ([#172])
 - Harden browser/WASM AIA and upload handling by blocking obvious internal hostnames without DNS, streaming AIA response-size enforcement before buffering, and rejecting oversized uploads before `arrayBuffer()` reads them into JS memory ([#172])
 - Stop draining oversized `tar.gz` members after the size violation is already known, treat `gh api graphql` string variables literally in `pr-comments.py`, and add JSON output support for `certkit tree --json` so the global flag matches documented behavior ([#172])
+- Make `certkit tree` default to a command-focused text view, with `--flags` and `--inherited` available when you want flag detail in text mode ([#172])
 - Encrypt private key in YAML bundle output (`.yaml`) when an export password is supplied; previously leaked plaintext key ([#167])
 - Reject malformed `ENCRYPTED PRIVATE KEY` blocks with invalid AES IV length instead of panicking ([#167])
 - Trim whitespace from web UI export password so whitespace-only input is treated as blank ([#167])

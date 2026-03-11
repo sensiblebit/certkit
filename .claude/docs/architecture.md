@@ -72,7 +72,7 @@ Thin CLI layer. Each file is one Cobra command. Flag variables are package-level
 - `probe_ssh.go` — `probe ssh` subcommand. Connects without authenticating, prints banner/algorithm details, and supports `--fips-140-2` / `--fips-140-3` policy heuristics for SSH transport algorithms.
 - `policy.go` — Shared CLI flag-to-policy selection helper used by `connect` and `probe ssh`.
 - `sign.go` — Sign certificates. Parent command with `self-signed` and `csr` subcommands for creating self-signed certs and signing CSRs with a CA.
-- `tree.go` — `tree` subcommand. Renders the full Cobra command graph, including built-in commands plus local and inherited flags accepted by each command; honors the global `--json` flag with structured command/flag output.
+- `tree.go` — `tree` subcommand. Renders the full Cobra command graph with a command-focused default text view; `--flags` and `--inherited` opt into text-mode flag detail, and the global `--json` flag still returns the structured command/flag surface.
 - `ocsp.go` — Check certificate revocation status via OCSP; `--format` flag.
 - `crl.go` — Parse and inspect Certificate Revocation Lists; `--check` to verify a cert against the CRL; `--format` flag.
 - `convert.go` — Convert certificates and keys between PEM, DER, PKCS#12, JKS, and PKCS#7 formats; `--to`, `-o` flags.

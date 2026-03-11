@@ -334,14 +334,14 @@ func TestRunValidation(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		setup       func(t *testing.T) (store *MemStore, skiColon string)
+		setup       func(t *testing.T) (store *MemStore, skiColon string, expectedNotAfter string)
 		wantErr     bool
 		errContains string
-		validate    func(t *testing.T, result *ValidationResult)
+		validate    func(t *testing.T, result *ValidationResult, expectedNotAfter string)
 	}{
 		{
 			name: "valid leaf with matching key",
-			setup: func(t *testing.T) (*MemStore, string) {
+			setup: func(t *testing.T) (*MemStore, string, string) {
 				t.Helper()
 				ca := newRSACA(t)
 				leaf := newRSALeaf(t, ca, "test.example.com", []string{"test.example.com", "www.example.com"})
@@ -361,9 +361,9 @@ func TestRunValidation(t *testing.T) {
 					hexSKI = ski
 					break
 				}
-				return store, skiToColonHex(t, hexSKI)
+				return store, skiToColonHex(t, hexSKI), ""
 			},
-			validate: func(t *testing.T, result *ValidationResult) {
+			validate: func(t *testing.T, result *ValidationResult, _ string) {
 				t.Helper()
 
 				// Subject should be the leaf CN.
@@ -416,7 +416,7 @@ func TestRunValidation(t *testing.T) {
 		},
 		{
 			name: "expired cert",
-			setup: func(t *testing.T) (*MemStore, string) {
+			setup: func(t *testing.T) (*MemStore, string, string) {
 				t.Helper()
 				ca := newRSACA(t)
 				leaf := newExpiredLeaf(t, ca)
@@ -432,9 +432,9 @@ func TestRunValidation(t *testing.T) {
 					hexSKI = ski
 					break
 				}
-				return store, skiToColonHex(t, hexSKI)
+				return store, skiToColonHex(t, hexSKI), ""
 			},
-			validate: func(t *testing.T, result *ValidationResult) {
+			validate: func(t *testing.T, result *ValidationResult, _ string) {
 				t.Helper()
 
 				if result.Valid {
@@ -464,17 +464,17 @@ func TestRunValidation(t *testing.T) {
 		},
 		{
 			name: "nonexistent SKI",
-			setup: func(t *testing.T) (*MemStore, string) {
+			setup: func(t *testing.T) (*MemStore, string, string) {
 				t.Helper()
 				store := NewMemStore()
-				return store, "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd"
+				return store, "aa:bb:cc:dd:ee:ff:00:11:22:33:44:55:66:77:88:99:aa:bb:cc:dd", ""
 			},
 			wantErr:     true,
 			errContains: "not found",
 		},
 		{
 			name: "ambiguous reused SKI",
-			setup: func(t *testing.T) (*MemStore, string) {
+			setup: func(t *testing.T) (*MemStore, string, string) {
 				t.Helper()
 				ca := newRSACA(t)
 				store := NewMemStore()
@@ -483,12 +483,13 @@ func TestRunValidation(t *testing.T) {
 				if !ok {
 					t.Fatal("expected RSA key from newRSALeaf")
 				}
+				secondNotAfter := time.Now().UTC().Truncate(time.Second).Add(366 * 24 * time.Hour)
 				secondTemplate := &x509.Certificate{
 					SerialNumber: randomSerial(t),
 					Subject:      pkix.Name{CommonName: "renewal-two.example.com"},
 					DNSNames:     []string{"renewal-two.example.com"},
 					NotBefore:    time.Now().Add(-time.Hour),
-					NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+					NotAfter:     secondNotAfter,
 					KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
 					ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 				}
@@ -514,17 +515,24 @@ func TestRunValidation(t *testing.T) {
 					hexSKI = ski
 					break
 				}
-				return store, skiToColonHex(t, hexSKI)
+				return store, skiToColonHex(t, hexSKI), secondNotAfter.Format(time.RFC3339)
 			},
-			wantErr:     true,
-			errContains: "multiple certificates share SKI",
+			validate: func(t *testing.T, result *ValidationResult, expectedNotAfter string) {
+				t.Helper()
+				if result.Subject != "renewal-two.example.com" {
+					t.Fatalf("Subject = %q, want renewal-two.example.com", result.Subject)
+				}
+				if result.NotAfter != expectedNotAfter {
+					t.Fatalf("NotAfter = %q, want %q", result.NotAfter, expectedNotAfter)
+				}
+			},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			store, skiColon := tt.setup(t)
+			store, skiColon, expectedNotAfter := tt.setup(t)
 
 			result, err := RunValidation(context.Background(), RunValidationInput{
 				Store:    store,
@@ -544,7 +552,7 @@ func TestRunValidation(t *testing.T) {
 				t.Fatalf("unexpected error: %v", err)
 			}
 
-			tt.validate(t, result)
+			tt.validate(t, result, expectedNotAfter)
 		})
 	}
 }

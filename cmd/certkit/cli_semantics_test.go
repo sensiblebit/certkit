@@ -144,15 +144,23 @@ func TestTreeCommand(t *testing.T) {
 		}
 	})
 
-	t.Run("includes help and version flags", func(t *testing.T) {
+	t.Run("default text output omits flags", func(t *testing.T) {
 		for _, flag := range []string{"--help", "--version"} {
-			if !strings.Contains(rootOutput, flag) {
-				t.Errorf("tree output missing flag %q", flag)
+			if strings.Contains(rootOutput, flag) {
+				t.Errorf("default tree output should omit flag %q", flag)
 			}
 		}
 	})
 
-	t.Run("includes subcommand help and inherited global flags", func(t *testing.T) {
+	t.Run("includes subcommand help and inherited global flags when requested", func(t *testing.T) {
+		prevTreeIncludeFlags := treeIncludeFlags
+		prevTreeIncludeInherited := treeIncludeInherited
+		t.Cleanup(func() {
+			treeIncludeFlags = prevTreeIncludeFlags
+			treeIncludeInherited = prevTreeIncludeInherited
+		})
+		treeIncludeFlags = true
+		treeIncludeInherited = true
 		var bundleTree strings.Builder
 		fmt.Fprintf(&bundleTree, "%s — %s\n", bundleCmd.Name(), bundleCmd.Short)
 		printCommandTree(&bundleTree, printCommandTreeInput{cmd: bundleCmd})
@@ -173,19 +181,63 @@ func TestTreeCommand(t *testing.T) {
 	})
 
 	t.Run("prefers long flag names over shorthand pairs", func(t *testing.T) {
+		prevTreeIncludeFlags := treeIncludeFlags
+		prevTreeIncludeInherited := treeIncludeInherited
+		t.Cleanup(func() {
+			treeIncludeFlags = prevTreeIncludeFlags
+			treeIncludeInherited = prevTreeIncludeInherited
+		})
+		treeIncludeFlags = true
+		treeIncludeInherited = true
+		var flagsTree strings.Builder
+		printCommandTree(&flagsTree, printCommandTreeInput{cmd: rootCmd})
+		flagsOutput := flagsTree.String()
 		for _, flag := range []string{"-h, --help", "-l, --log-level", "-p, --passwords", "-v, --verbose"} {
-			if strings.Contains(rootOutput, flag) {
+			if strings.Contains(flagsOutput, flag) {
 				t.Errorf("tree output should omit shorthand pair %q", flag)
 			}
 		}
 	})
 
-	t.Run("collapses inherited flags to one summary line", func(t *testing.T) {
-		if strings.Count(rootOutput, "inherits: ") == 0 {
+	t.Run("collapses inherited flags to one summary line when requested", func(t *testing.T) {
+		prevTreeIncludeFlags := treeIncludeFlags
+		prevTreeIncludeInherited := treeIncludeInherited
+		t.Cleanup(func() {
+			treeIncludeFlags = prevTreeIncludeFlags
+			treeIncludeInherited = prevTreeIncludeInherited
+		})
+		treeIncludeFlags = true
+		treeIncludeInherited = true
+		var flagsTree strings.Builder
+		printCommandTree(&flagsTree, printCommandTreeInput{cmd: rootCmd})
+		flagsOutput := flagsTree.String()
+		if strings.Count(flagsOutput, "inherits: ") == 0 {
 			t.Fatal("tree output missing inherited flag summaries")
 		}
-		if strings.Count(rootOutput, "\n│   ├── --json\n")+strings.Count(rootOutput, "\n│   └── --json\n") != 0 {
+		if strings.Count(flagsOutput, "\n│   ├── --json\n")+strings.Count(flagsOutput, "\n│   └── --json\n") != 0 {
 			t.Fatal("tree output should not repeat inherited flags as standalone subcommand entries")
+		}
+	})
+
+	t.Run("includes local flags only when requested", func(t *testing.T) {
+		prevTreeIncludeFlags := treeIncludeFlags
+		prevTreeIncludeInherited := treeIncludeInherited
+		t.Cleanup(func() {
+			treeIncludeFlags = prevTreeIncludeFlags
+			treeIncludeInherited = prevTreeIncludeInherited
+		})
+		treeIncludeFlags = true
+		treeIncludeInherited = false
+		var flagsTree strings.Builder
+		printCommandTree(&flagsTree, printCommandTreeInput{cmd: rootCmd})
+		flagsOutput := flagsTree.String()
+		for _, flag := range []string{"--help", "--version"} {
+			if !strings.Contains(flagsOutput, flag) {
+				t.Errorf("tree output missing requested local flag %q", flag)
+			}
+		}
+		if strings.Contains(flagsOutput, "inherits: ") {
+			t.Fatal("tree output should omit inherited summaries unless requested")
 		}
 	})
 

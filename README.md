@@ -97,7 +97,7 @@ certkit bundle cert.pem -o chain.pem
 
 See [EXAMPLES.md](EXAMPLES.md) for a walkthrough of the main certificate workflows and real-world scenarios.
 
-## Commands
+## Common Commands
 
 | Command                     | What it does                                            |
 | --------------------------- | ------------------------------------------------------- |
@@ -110,7 +110,7 @@ See [EXAMPLES.md](EXAMPLES.md) for a walkthrough of the main certificate workflo
 | `certkit sign self-signed`  | Create a self-signed certificate                        |
 | `certkit sign csr <file>`   | Sign a CSR with a CA certificate and key                |
 | `certkit scan <path>`       | Scan a directory and catalog everything found           |
-| `certkit tree`              | Print the full CLI command and flag surface as a tree   |
+| `certkit tree`              | Print the full CLI command tree (`--flags`/`--inherited` for details) |
 | `certkit keygen`            | Generate a new key pair (and optionally a CSR)          |
 | `certkit csr`               | Generate a CSR from a template, cert, or existing CSR   |
 | `certkit ocsp <file>`       | Check certificate revocation status via OCSP            |
@@ -319,7 +319,7 @@ The OCSP responder URL is read from the certificate's AIA extension.
 | `--format` | `text`  | Output format: text, json                 |
 <!-- /certkit:flags -->
 
-Accepts local files (PEM or DER) or HTTP URLs.
+Accepts local files (PEM or DER) or HTTP/HTTPS URLs.
 
 ### Exit Codes
 
@@ -363,7 +363,7 @@ Bundles without an explicit `subject` block inherit from `defaultSubject`. Certi
 
 ### Bundle Output Files
 
-When running `certkit scan --bundle-path`, each bundle produces the following files under `<dir>/<bundleName>/`:
+When running `certkit scan --bundle-path`, each bundle produces the following files under `<dir>/<bundleName>/`. If `--duplicates` keeps older matching certificates, those extra exports are written under suffixed directories like `<bundleName>_<RFC3339>_<serial>/`:
 
 | File                     | Contents                                                                              |
 | ------------------------ | ------------------------------------------------------------------------------------- |
@@ -417,7 +417,7 @@ csrPEM, keyPEM, _ := certkit.GenerateCSR(leaf, nil) // auto-generates EC P-256 k
 
 // Sign certificates
 selfSigned, _ := certkit.CreateSelfSigned(certkit.SelfSignedInput{Signer: caKey, Subject: pkix.Name{CommonName: "My CA"}, IsCA: true})
-issued, _ := certkit.SignCSR(certkit.SignCSRInput{CSR: csr, CACert: caCert, CAKey: caKey, Days: 365})
+issued, _ := certkit.SignCSR(certkit.SignCSRInput{CSR: csr, CACert: caCert, CAKey: caKey, Days: 365, CopySANs: true})
 
 // TLS connection probing
 result, _ := certkit.ConnectTLS(ctx, certkit.ConnectTLSInput{Host: "example.com"})
@@ -434,17 +434,6 @@ jks, _ := certkit.EncodeJKS(key, leaf, intermediates, "changeit")
 encPEM, _ := certkit.MarshalEncryptedPrivateKeyToPEM(key, "secret")
 ```
 
-### How It Works
+### Scan Notes
 
-```mermaid
-flowchart TD
-    A[Input files / stdin] --> B[Format detection - PEM vs DER]
-    B --> C[Parse certs, keys, CSRs<br/>PKCS#12, PKCS#7, JKS, encrypted PEM, PKCS#8, SEC1, Ed25519]
-    C --> D[Catalog in MemStore<br/>certificates + keys indexed by SKI]
-    D --> E[Resolve AKIs<br/>match legacy SHA-1 AKIs to computed RFC 7093 M1 SKIs]
-    E --> F{--bundle-path?}
-    F -- yes --> G[Match keys to certs, build chains,<br/>write all output formats per bundle]
-    F -- no --> H[Print scan summary]
-```
-
-Expired certificates are always ingested; expiry filtering is output-only (`--allow-expired` overrides). SKI computation uses RFC 7093 Method 1 (SHA-256 truncated to 160 bits). Non-root certificate AKIs are resolved post-ingestion by matching against a multi-hash lookup (RFC 7093 M1 + legacy SHA-1) of all CA certificates.
+Expired certificates are always ingested; expiry filtering is output-only (`--allow-expired` overrides). SKI computation uses RFC 7093 Method 1 (SHA-256 truncated to 160 bits). Non-root issuer linkage is resolved after ingestion by checking for raw ASN.1 subject/issuer matches among CA certificates and falling back to AIA fetching when the issuer is still missing.
