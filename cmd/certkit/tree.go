@@ -16,6 +16,11 @@ var treeCmd = &cobra.Command{
 	RunE:  runTree,
 }
 
+type printCommandTreeInput struct {
+	cmd    *cobra.Command
+	prefix string
+}
+
 func init() {
 	rootCmd.AddCommand(treeCmd)
 }
@@ -24,7 +29,7 @@ func runTree(_ *cobra.Command, _ []string) error {
 	initTreeSurface(rootCmd)
 
 	var b strings.Builder
-	printCommandTree(&b, rootCmd, "")
+	printCommandTree(&b, printCommandTreeInput{cmd: rootCmd})
 	fmt.Print(b.String())
 	return nil
 }
@@ -43,7 +48,10 @@ func initTreeSurface(cmd *cobra.Command) {
 
 // printCommandTree recursively prints a command and its children with
 // box-drawing connectors. Each command shows its flags indented beneath it.
-func printCommandTree(b *strings.Builder, cmd *cobra.Command, prefix string) {
+func printCommandTree(b *strings.Builder, in printCommandTreeInput) {
+	cmd := in.cmd
+	prefix := in.prefix
+
 	// Print this command's name and short description.
 	if cmd == rootCmd {
 		fmt.Fprintf(b, "%s — %s\n", cmd.Name(), cmd.Short)
@@ -55,11 +63,7 @@ func printCommandTree(b *strings.Builder, cmd *cobra.Command, prefix string) {
 		if f.Hidden {
 			return
 		}
-		name := "--" + f.Name
-		if f.Name == "" && f.Shorthand != "" {
-			name = "-" + f.Shorthand
-		}
-		flags = append(flags, name)
+		flags = append(flags, "--"+f.Name)
 	})
 
 	// Collect non-hidden subcommands.
@@ -93,6 +97,9 @@ func printCommandTree(b *strings.Builder, cmd *cobra.Command, prefix string) {
 			childPrefix = prefix + "    "
 		}
 		fmt.Fprintf(b, "%s%s%s — %s\n", prefix, connector, child.Name(), child.Short)
-		printCommandTree(b, child, childPrefix)
+		printCommandTree(b, printCommandTreeInput{
+			cmd:    child,
+			prefix: childPrefix,
+		})
 	}
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -97,12 +98,16 @@ func TestTreeCommand(t *testing.T) {
 
 	// This test mutates the shared Cobra command graph to force default
 	// help/version/completion registration, so it must stay serialized.
+	prevVersion := rootCmd.Version
+	t.Cleanup(func() {
+		rootCmd.Version = prevVersion
+	})
 	rootCmd.Version = "test"
 	initTreeSurface(rootCmd)
 
 	// Build tree output once to avoid concurrent Cobra Commands() sorting.
 	var rootTree strings.Builder
-	printCommandTree(&rootTree, rootCmd, "")
+	printCommandTree(&rootTree, printCommandTreeInput{cmd: rootCmd})
 	rootOutput := rootTree.String()
 
 	// Snapshot every non-hidden command before subtests run.
@@ -147,15 +152,10 @@ func TestTreeCommand(t *testing.T) {
 	})
 
 	t.Run("includes subcommand help and inherited global flags", func(t *testing.T) {
-		start := strings.Index(rootOutput, "bundle — ")
-		if start == -1 {
-			t.Fatal("tree output missing bundle command")
-		}
-		end := strings.Index(rootOutput[start:], "\n├── completion — ")
-		if end == -1 {
-			t.Fatal("tree output missing completion command boundary")
-		}
-		bundleSection := rootOutput[start : start+end]
+		var bundleTree strings.Builder
+		fmt.Fprintf(&bundleTree, "%s — %s\n", bundleCmd.Name(), bundleCmd.Short)
+		printCommandTree(&bundleTree, printCommandTreeInput{cmd: bundleCmd})
+		bundleSection := bundleTree.String()
 		for _, flag := range []string{"--help", "--password-file", "--passwords", "--verbose", "--json", "--allow-expired"} {
 			if !strings.Contains(bundleSection, flag) {
 				t.Errorf("bundle subtree missing accepted flag %q", flag)
