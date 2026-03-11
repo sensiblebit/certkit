@@ -104,6 +104,8 @@ For machine-readable output:
 certkit inspect cert.pem --format json
 ```
 
+The JSON includes `trust_anchors` and `trust_warnings` for certificate entries.
+
 ### Inspecting keys and CSRs
 
 Works with private keys and CSRs too:
@@ -169,6 +171,8 @@ For machine-readable output:
 certkit verify cert.pem --format json
 ```
 
+The JSON includes `trust_anchors` and `trust_warnings` for the leaf and displayed chain entries.
+
 ### Diagnosing chain failures
 
 When chain verification fails, use `--diagnose` to understand why:
@@ -216,6 +220,8 @@ For machine-readable output:
 ```sh
 certkit connect example.com --format json
 ```
+
+The JSON includes per-certificate `trust_anchors` and `trust_warnings`.
 
 ### Check a non-standard port
 

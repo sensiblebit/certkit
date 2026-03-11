@@ -1,6 +1,8 @@
 package main
 
 import (
+	"crypto/ecdsa"
+	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
@@ -264,4 +266,69 @@ func TestConnectTrustIntermediates_PrefersVerifiedChains(t *testing.T) {
 	}) {
 		t.Fatal("expected trust verification to fail without the recovered intermediate")
 	}
+}
+
+func TestConnectTrustIntermediates_UsesAllVerifiedChains(t *testing.T) {
+	t.Parallel()
+
+	rootOneKey, rootOneCert := generateKeyAndCert(t, "Root One", true)
+	rootTwoKey, rootTwoCert := generateKeyAndCert(t, "Root Two", true)
+	intermediateKey, intermediateOneCert := signCert(t, "Intermediate Shared", true, rootOneKey, rootOneCert)
+	intermediateTwoCert := crossSignIntermediate(t, intermediateKey, intermediateOneCert, rootTwoKey, rootTwoCert)
+	_, leafCert := signCert(t, "leaf-shared.example.com", false, intermediateKey, intermediateOneCert)
+
+	result := &certkit.ConnectResult{
+		PeerChain: []*x509.Certificate{leafCert},
+		VerifiedChains: [][]*x509.Certificate{
+			{leafCert, intermediateOneCert, rootOneCert},
+			{leafCert, intermediateTwoCert, rootTwoCert},
+		},
+	}
+
+	pool := connectTrustIntermediates(result)
+
+	rootOnePool := x509.NewCertPool()
+	rootOnePool.AddCert(rootOneCert)
+	if !certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{
+		Cert:          leafCert,
+		Roots:         rootOnePool,
+		Intermediates: pool,
+	}) {
+		t.Fatal("expected first verified-chain intermediate to be included")
+	}
+
+	rootTwoPool := x509.NewCertPool()
+	rootTwoPool.AddCert(rootTwoCert)
+	if !certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{
+		Cert:          leafCert,
+		Roots:         rootTwoPool,
+		Intermediates: pool,
+	}) {
+		t.Fatal("expected second verified-chain intermediate to be included")
+	}
+}
+
+func crossSignIntermediate(t *testing.T, intermediateKey *ecdsa.PrivateKey, original *x509.Certificate, rootKey *ecdsa.PrivateKey, rootCert *x509.Certificate) *x509.Certificate {
+	t.Helper()
+
+	tmpl := &x509.Certificate{
+		SerialNumber:          big.NewInt(time.Now().UnixNano()),
+		Subject:               original.Subject,
+		NotBefore:             original.NotBefore,
+		NotAfter:              original.NotAfter,
+		KeyUsage:              original.KeyUsage,
+		BasicConstraintsValid: true,
+		IsCA:                  true,
+		SubjectKeyId:          original.SubjectKeyId,
+		AuthorityKeyId:        rootCert.SubjectKeyId,
+	}
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, rootCert, &intermediateKey.PublicKey, rootKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(certDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return cert
 }

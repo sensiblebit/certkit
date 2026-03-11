@@ -22,6 +22,8 @@ var (
 	errVerifyUnknownSource = errors.New("unknown trust_store")
 )
 
+type verifyBundleFuncKey struct{}
+
 // VerifyInput holds the parsed certificate data and verification options.
 type VerifyInput struct {
 	Cert                 *x509.Certificate
@@ -315,12 +317,25 @@ type verifyTrustSource struct {
 	loadErr error
 }
 
-func resolveVerifyBundle(ctx context.Context, cert *x509.Certificate, input *VerifyInput) (*certkit.BundleResult, error) {
+func resolveVerifyBundleOptions(input *VerifyInput) certkit.BundleOptions {
 	opts := certkit.DefaultOptions()
 	opts.Verify = false
+	// The pre-verification bundle walk only needs the assembled intermediate
+	// set; forcing system roots here can fail before we probe Mozilla/file
+	// trust sources.
+	opts.TrustStore = "custom"
 	opts.ExtraIntermediates = input.ExtraCerts
 	opts.AllowPrivateNetworks = input.AllowPrivateNetworks
-	result, err := certkit.Bundle(ctx, certkit.BundleInput{
+	return opts
+}
+
+func resolveVerifyBundle(ctx context.Context, cert *x509.Certificate, input *VerifyInput) (*certkit.BundleResult, error) {
+	opts := resolveVerifyBundleOptions(input)
+	bundleFn := certkit.Bundle
+	if testBundleFn, ok := ctx.Value(verifyBundleFuncKey{}).(func(context.Context, certkit.BundleInput) (*certkit.BundleResult, error)); ok && testBundleFn != nil {
+		bundleFn = testBundleFn
+	}
+	result, err := bundleFn(ctx, certkit.BundleInput{
 		Leaf:    cert,
 		Options: opts,
 	})

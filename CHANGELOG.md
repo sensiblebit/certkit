@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Deduplicate extension block formatting between `connect --verbose` and the shared internal formatter to prevent drift in extension flag rendering ([`30d67f8`])
+- Avoid loading system roots during the pre-verification AIA bundle walk in `verify`, and include intermediates from all verified connect chains when computing `trust_anchors` ([#172])
 - Encrypt private key in YAML bundle output (`.yaml`) when an export password is supplied; previously leaked plaintext key ([#167])
 - Reject malformed `ENCRYPTED PRIVATE KEY` blocks with invalid AES IV length instead of panicking ([#167])
 - Trim whitespace from web UI export password so whitespace-only input is treated as blank ([#167])

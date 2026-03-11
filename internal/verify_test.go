@@ -278,6 +278,42 @@ func TestVerifyCert_InvalidTrustStoreFailsBeforeAIA(t *testing.T) {
 	}
 }
 
+func TestVerifyCert_PreVerificationBundleIgnoresSystemTrustStore(t *testing.T) {
+	// WHY: The AIA/intermediate assembly pass should not require system roots
+	// before verify probes Mozilla/system/file trust sources explicitly.
+	root := newRSACA(t)
+	leaf := newRSALeaf(t, root, "prebundle.example.com", []string{"prebundle.example.com"}, nil)
+	ctx := context.WithValue(context.Background(), verifyBundleFuncKey{}, func(_ context.Context, input certkit.BundleInput) (*certkit.BundleResult, error) {
+		if input.Options.Verify {
+			t.Fatal("expected pre-verification bundle call to disable verification")
+		}
+		if input.Options.TrustStore != "custom" {
+			t.Fatalf("pre-verification bundle TrustStore = %q, want %q", input.Options.TrustStore, "custom")
+		}
+		if !input.Options.AllowPrivateNetworks {
+			t.Fatal("expected AllowPrivateNetworks to propagate into pre-verification bundle call")
+		}
+		if len(input.Options.CustomRoots) != 0 {
+			t.Fatalf("pre-verification bundle CustomRoots = %v, want empty", input.Options.CustomRoots)
+		}
+		return &certkit.BundleResult{Leaf: input.Leaf}, nil
+	})
+
+	result, err := VerifyCert(ctx, &VerifyInput{
+		Cert:                 leaf.cert,
+		CheckChain:           true,
+		TrustStore:           "custom",
+		CustomRoots:          []*x509.Certificate{root.cert},
+		AllowPrivateNetworks: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ChainValid == nil || !*result.ChainValid {
+		t.Fatalf("expected ChainValid true, got %v (err=%q)", result.ChainValid, result.ChainErr)
+	}
+}
+
 func TestVerifyCert_NoChainCheck_IgnoresTrustProbe(t *testing.T) {
 	// WHY: When CheckChain=false, VerifyCert should skip trust probing entirely.
 	t.Parallel()
