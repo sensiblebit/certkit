@@ -434,11 +434,17 @@ func collectConnectTrustStatus(result *certkit.ConnectResult) ([][]string, [][]s
 
 func connectTrustIntermediates(result *certkit.ConnectResult) *x509.CertPool {
 	pool := x509.NewCertPool()
-	source := result.PeerChain
 	if len(result.VerifiedChains) > 0 {
-		source = result.VerifiedChains[0]
+		for _, chain := range result.VerifiedChains {
+			for _, cert := range chain {
+				if cert != nil && certkit.GetCertificateType(cert) == "intermediate" {
+					pool.AddCert(cert)
+				}
+			}
+		}
+		return pool
 	}
-	for _, cert := range source {
+	for _, cert := range result.PeerChain {
 		if cert != nil && certkit.GetCertificateType(cert) == "intermediate" {
 			pool.AddCert(cert)
 		}

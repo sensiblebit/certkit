@@ -213,6 +213,15 @@ describe("origin validation", () => {
     expect(resp.status).toBe(403);
     expect(await errorMsg(resp)).toMatch(/Origin not allowed/);
   });
+
+  it("rejects malformed Referer with 403 instead of 500", async () => {
+    const resp = await callGet("https://cacerts.digicert.com/cert.crt", {
+      origin: null,
+      referer: "not a url",
+    });
+    expect(resp.status).toBe(403);
+    expect(await errorMsg(resp)).toMatch(/Origin not allowed/);
+  });
 });
 
 // ---------------------------------------------------------------------------

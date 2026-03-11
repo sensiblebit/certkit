@@ -486,11 +486,9 @@ func TestProcessData_GarbageBinary(t *testing.T) {
 }
 
 func TestProcessData_ValidDERKey_UnrecognizedExtension(t *testing.T) {
-	// WHY: ProcessData only tries binary format parsing for files with
-	// recognized crypto extensions (via HasBinaryExtension). A valid DER
-	// key in a file named "data.txt" must be silently skipped — this is
-	// intentional security behavior to avoid feeding arbitrary binary files
-	// to ASN.1 parsers. This test documents that design decision.
+	// WHY: Valid DER crypto objects must be ingested even when the filename is
+	// generic or extensionless, because archive entries and drag-dropped files
+	// are often renamed.
 	t.Parallel()
 
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -511,11 +509,8 @@ func TestProcessData_ValidDERKey_UnrecognizedExtension(t *testing.T) {
 		t.Fatalf("ProcessData: %v", err)
 	}
 
-	// Valid DER key should be skipped because .txt is not a crypto extension
-	if len(store.AllKeys()) != 0 {
-		t.Errorf("expected 0 keys for valid DER with .txt extension, got %d — "+
-			"ProcessData should only attempt binary parsing for recognized extensions",
-			len(store.AllKeys()))
+	if len(store.AllKeys()) != 1 {
+		t.Errorf("expected 1 key for valid DER with .txt extension, got %d", len(store.AllKeys()))
 	}
 }
 
@@ -614,6 +609,32 @@ func TestProcessData_MultipleCertsInPEM(t *testing.T) {
 	}
 }
 
+func TestProcessData_ExtensionlessDERCertificate(t *testing.T) {
+	// WHY: Users often drag/drop or archive extensionless blobs. Valid DER
+	// certificates should still be ingested without relying on the filename.
+	t.Parallel()
+
+	ca := newRSACA(t)
+	leaf := newRSALeaf(t, ca, "extensionless.example.com", []string{"extensionless.example.com"})
+	store := NewMemStore()
+
+	if err := ProcessData(ProcessInput{
+		Data:    leaf.cert.Raw,
+		Path:    "extensionless",
+		Handler: store,
+	}); err != nil {
+		t.Fatalf("ProcessData: %v", err)
+	}
+
+	allCerts := store.AllCertsFlat()
+	if len(allCerts) != 1 {
+		t.Fatalf("expected 1 cert, got %d", len(allCerts))
+	}
+	if allCerts[0].Cert.Subject.CommonName != "extensionless.example.com" {
+		t.Fatalf("CN = %q, want extensionless.example.com", allCerts[0].Cert.Subject.CommonName)
+	}
+}
+
 func TestProcessData_MalformedPEMCert(t *testing.T) {
 	// WHY: A PEM file with one valid cert and one malformed CERTIFICATE block
 	// must still ingest the valid cert — malformed blocks are skipped, not fatal.
@@ -697,6 +718,12 @@ func TestProcessData_PEMCert_CompatRFC822NameConstraint(t *testing.T) {
 	}
 	if allCerts[0].Cert.Subject.CommonName != "compat-name-constraint-ca" {
 		t.Fatalf("subject CN = %q, want %q", allCerts[0].Cert.Subject.CommonName, "compat-name-constraint-ca")
+	}
+	if allCerts[0].Cert.PublicKeyAlgorithm != x509.RSA {
+		t.Fatalf("public key algorithm = %v, want %v", allCerts[0].Cert.PublicKeyAlgorithm, x509.RSA)
+	}
+	if allCerts[0].Cert.SignatureAlgorithm != x509.SHA256WithRSA {
+		t.Fatalf("signature algorithm = %v, want %v", allCerts[0].Cert.SignatureAlgorithm, x509.SHA256WithRSA)
 	}
 	if allCerts[0].Cert.KeyUsage != (x509.KeyUsageCertSign | x509.KeyUsageCRLSign) {
 		t.Fatalf("key usage = %v, want cert-sign+crl-sign", allCerts[0].Cert.KeyUsage)

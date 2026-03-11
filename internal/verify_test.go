@@ -278,6 +278,142 @@ func TestVerifyCert_InvalidTrustStoreFailsBeforeAIA(t *testing.T) {
 	}
 }
 
+func TestVerifyCert_PreVerificationBundleIgnoresSystemTrustStore(t *testing.T) {
+	// WHY: The AIA/intermediate assembly pass should not require system roots
+	// before verify probes Mozilla/system/file trust sources explicitly.
+	root := newRSACA(t)
+	leaf := newRSALeaf(t, root, "prebundle.example.com", []string{"prebundle.example.com"}, nil)
+	ctx := context.WithValue(context.Background(), verifyBundleFuncKey{}, func(_ context.Context, input certkit.BundleInput) (*certkit.BundleResult, error) {
+		if input.Options.Verify {
+			t.Fatal("expected pre-verification bundle call to disable verification")
+		}
+		if input.Options.TrustStore != "custom" {
+			t.Fatalf("pre-verification bundle TrustStore = %q, want %q", input.Options.TrustStore, "custom")
+		}
+		if !input.Options.AllowPrivateNetworks {
+			t.Fatal("expected AllowPrivateNetworks to propagate into pre-verification bundle call")
+		}
+		if len(input.Options.CustomRoots) != 0 {
+			t.Fatalf("pre-verification bundle CustomRoots = %v, want empty", input.Options.CustomRoots)
+		}
+		return &certkit.BundleResult{Leaf: input.Leaf}, nil
+	})
+
+	result, err := VerifyCert(ctx, &VerifyInput{
+		Cert:                 leaf.cert,
+		CheckChain:           true,
+		TrustStore:           "custom",
+		CustomRoots:          []*x509.Certificate{root.cert},
+		AllowPrivateNetworks: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ChainValid == nil || !*result.ChainValid {
+		t.Fatalf("expected ChainValid true, got %v (err=%q)", result.ChainValid, result.ChainErr)
+	}
+}
+
+func TestVerifyCert_PreBundleAIAIncompleteNotMisreported(t *testing.T) {
+	// WHY: The pre-verification bundle walk uses TrustStore="custom" with no
+	// roots, so Bundle may set AIAIncomplete=true because
+	// countAIAUnresolvedIssuers cannot match against an empty root pool. When
+	// trust probing subsequently fails (e.g. custom store with wrong roots),
+	// the error should NOT say "AIA resolution incomplete" — it should report
+	// the real trust source failure.
+	t.Parallel()
+	root := newRSACA(t)
+	otherRoot := newRSACA(t) // wrong root — will not verify the leaf
+	leaf := newRSALeaf(t, root, "aia-misreport.example.com", []string{"aia-misreport.example.com"}, nil)
+
+	ctx := context.WithValue(context.Background(), verifyBundleFuncKey{}, func(_ context.Context, input certkit.BundleInput) (*certkit.BundleResult, error) {
+		// Simulate a bundle where AIA fetching succeeded but
+		// AIAIncomplete is set because the empty root pool caused a
+		// false positive.
+		return &certkit.BundleResult{
+			Leaf:               input.Leaf,
+			AIAIncomplete:      true,
+			AIAUnresolvedCount: 1,
+		}, nil
+	})
+
+	result, err := VerifyCert(ctx, &VerifyInput{
+		Cert:        leaf.cert,
+		CheckChain:  true,
+		TrustStore:  "custom",
+		CustomRoots: []*x509.Certificate{otherRoot.cert},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ChainValid != nil && *result.ChainValid {
+		t.Fatal("expected chain to be invalid with wrong roots")
+	}
+	if strings.Contains(result.ChainErr, "AIA resolution incomplete") {
+		t.Fatalf("error should not blame AIA resolution; got %q", result.ChainErr)
+	}
+}
+
+func TestVerifyCert_PreBundleAIAIncompletePreservedWithoutWarnings(t *testing.T) {
+	// WHY: A pre-bundle result can legitimately have unresolved issuers even
+	// when there were no AIA fetch warnings (for example, a fetched issuer did
+	// not complete the chain). VerifyCert must preserve that state instead of
+	// collapsing it into a generic trust-source failure.
+	t.Parallel()
+
+	root := newRSACA(t)
+	intermediate := newRSAIntermediate(t, root)
+	otherRoot := newRSACA(t)
+
+	leafKey, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafTemplate := &x509.Certificate{
+		SerialNumber:          randomSerial(t),
+		Subject:               pkix.Name{CommonName: "aia-still-incomplete.example.com", Organization: []string{"TestOrg"}},
+		DNSNames:              []string{"aia-still-incomplete.example.com"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(365 * 24 * time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		AuthorityKeyId:        intermediate.cert.SubjectKeyId,
+		IssuingCertificateURL: []string{"https://aia.example.test/issuer.cer"},
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTemplate, intermediate.cert, &leafKey.PublicKey, intermediate.key.(*rsa.PrivateKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	leafCert, err := x509.ParseCertificate(leafDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	ctx := context.WithValue(context.Background(), verifyBundleFuncKey{}, func(_ context.Context, input certkit.BundleInput) (*certkit.BundleResult, error) {
+		return &certkit.BundleResult{
+			Leaf:               input.Leaf,
+			AIAIncomplete:      true,
+			AIAUnresolvedCount: 1,
+		}, nil
+	})
+
+	result, err := VerifyCert(ctx, &VerifyInput{
+		Cert:        leafCert,
+		CheckChain:  true,
+		TrustStore:  "custom",
+		CustomRoots: []*x509.Certificate{otherRoot.cert},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ChainValid != nil && *result.ChainValid {
+		t.Fatal("expected chain to be invalid with wrong roots")
+	}
+	if !strings.Contains(result.ChainErr, "AIA resolution incomplete") {
+		t.Fatalf("expected AIA incomplete context to be preserved, got %q", result.ChainErr)
+	}
+}
+
 func TestVerifyCert_NoChainCheck_IgnoresTrustProbe(t *testing.T) {
 	// WHY: When CheckChain=false, VerifyCert should skip trust probing entirely.
 	t.Parallel()
@@ -1027,6 +1163,24 @@ func TestVerifyCert_AIAIncompleteSurfaced(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("expected Errors to preserve the AIA failure context, got %v", result.Errors)
+	}
+}
+
+func TestDiagnoseChain_IgnoresNilExtraCerts(t *testing.T) {
+	// WHY: DiagnoseChain is used on partially parsed inputs; nil entries in the
+	// extra-cert slice must be ignored instead of crashing diagnostics.
+	t.Parallel()
+
+	root := newRSACA(t)
+	leaf := newRSALeaf(t, root, "nil-extra.example.com", []string{"nil-extra.example.com"}, nil)
+
+	diags := DiagnoseChain(DiagnoseChainInput{
+		Cert:       leaf.cert,
+		ExtraCerts: []*x509.Certificate{nil},
+	})
+
+	if len(diags) == 0 {
+		t.Fatal("expected diagnostics for missing intermediate")
 	}
 }
 

@@ -378,7 +378,14 @@ export const onRequestGet: PagesFunction = async ({ request }) => {
 
   // Reject requests not originating from an allowed origin.
   // Check both Origin (set by fetch/XHR) and Referer (fallback).
-  const refererOrigin = referer ? new URL(referer).origin : null;
+  let refererOrigin: string | null = null;
+  if (!origin && referer) {
+    try {
+      refererOrigin = new URL(referer).origin;
+    } catch {
+      return errorResponse(403, "Origin not allowed", origin);
+    }
+  }
   if (!origin && !refererOrigin) {
     return errorResponse(403, "Missing Origin or Referer header", null);
   }

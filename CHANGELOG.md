@@ -34,6 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Deduplicate extension block formatting between `connect --verbose` and the shared internal formatter to prevent drift in extension flag rendering ([`30d67f8`])
+- Avoid loading system roots during the pre-verification AIA bundle walk in `verify`, and include intermediates from all verified connect chains when computing `trust_anchors` ([#172])
+- Preserve real pre-bundle AIA incomplete diagnostics in `verify`, resolve convert/export issuer chains with signature-aware issuer selection, and fail closed when certstore validation is ambiguous across same-SKI renewals ([#172])
+- Parse extensionless or renamed DER/PKCS#7/PKCS#12/JKS inputs during certstore ingestion instead of skipping binary crypto content based on filename extension alone ([#172])
+- Harden browser/WASM AIA and upload handling by blocking obvious internal hostnames without DNS, streaming AIA response-size enforcement before buffering, and rejecting oversized uploads before `arrayBuffer()` reads them into JS memory ([#172])
+- Stop draining oversized `tar.gz` members after the size violation is already known, treat `gh api graphql` string variables literally in `pr-comments.py`, and add JSON output support for `certkit tree --json` so the global flag matches documented behavior ([#172])
 - Encrypt private key in YAML bundle output (`.yaml`) when an export password is supplied; previously leaked plaintext key ([#167])
 - Reject malformed `ENCRYPTED PRIVATE KEY` blocks with invalid AES IV length instead of panicking ([#167])
 - Trim whitespace from web UI export password so whitespace-only input is treated as blank ([#167])
@@ -1111,6 +1116,7 @@ Initial release.
 [#167]: https://github.com/sensiblebit/certkit/issues/167
 [#169]: https://github.com/sensiblebit/certkit/pull/169
 [#171]: https://github.com/sensiblebit/certkit/pull/171
+[#172]: https://github.com/sensiblebit/certkit/pull/172
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63

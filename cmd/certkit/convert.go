@@ -380,24 +380,24 @@ func findAllKeyLeafPairs(keyData []byte, passwords []string, certs []*x509.Certi
 
 // buildChainFromPool walks the issuer chain from leaf through a pool of
 // candidate certificates. Returns the chain certs (intermediates + root) in
-// order, excluding the leaf itself. Uses RawIssuer/RawSubject byte comparison
-// for matching. Terminates on self-signed roots, missing issuers, or cycles.
+// order, excluding the leaf itself. It requires a valid signature
+// relationship and prefers AKI/SKI matches when multiple certificates share
+// the same subject. Terminates on self-signed roots, missing issuers, or
+// cycles.
 func buildChainFromPool(leaf *x509.Certificate, pool []*x509.Certificate) []*x509.Certificate {
 	var chain []*x509.Certificate
 	seen := make(map[*x509.Certificate]bool)
 	seen[leaf] = true
 	current := leaf
 	for !bytes.Equal(current.RawIssuer, current.RawSubject) {
-		var issuer *x509.Certificate
+		candidates := make([]*x509.Certificate, 0, len(pool))
 		for _, c := range pool {
 			if c == nil || seen[c] {
 				continue
 			}
-			if bytes.Equal(current.RawIssuer, c.RawSubject) {
-				issuer = c
-				break
-			}
+			candidates = append(candidates, c)
 		}
+		issuer := certkit.SelectIssuerCertificate(current, candidates)
 		if issuer == nil {
 			break // issuer not in pool
 		}

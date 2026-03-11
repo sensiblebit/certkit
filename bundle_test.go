@@ -5,9 +5,11 @@ import (
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -139,6 +141,35 @@ func TestBundle_unknownTrustStore(t *testing.T) {
 	}
 }
 
+func TestDefaultOptions(t *testing.T) {
+	// WHY: DefaultOptions is shared by bundle/verify/export flows; pinning the
+	// baseline prevents silent repo-wide behavior drift.
+	t.Parallel()
+
+	opts := DefaultOptions()
+	if !opts.FetchAIA {
+		t.Fatal("FetchAIA = false, want true")
+	}
+	if opts.AIATimeout != 2*time.Second {
+		t.Fatalf("AIATimeout = %v, want 2s", opts.AIATimeout)
+	}
+	if opts.AIAMaxDepth != 5 {
+		t.Fatalf("AIAMaxDepth = %d, want 5", opts.AIAMaxDepth)
+	}
+	if opts.AIAMaxTotalCerts != defaultAIAMaxTotalCerts {
+		t.Fatalf("AIAMaxTotalCerts = %d, want %d", opts.AIAMaxTotalCerts, defaultAIAMaxTotalCerts)
+	}
+	if opts.TrustStore != "system" {
+		t.Fatalf("TrustStore = %q, want system", opts.TrustStore)
+	}
+	if !opts.Verify {
+		t.Fatal("Verify = false, want true")
+	}
+	if opts.MaxIntermediates != defaultBundleMaxIntermediates {
+		t.Fatalf("MaxIntermediates = %d, want %d", opts.MaxIntermediates, defaultBundleMaxIntermediates)
+	}
+}
+
 func TestCheckTrustAnchors_FileRoots(t *testing.T) {
 	t.Parallel()
 
@@ -251,25 +282,34 @@ func TestBundle_verifyFalsePassthrough(t *testing.T) {
 
 func TestFetchLeafFromURL(t *testing.T) {
 	// WHY: FetchLeafFromURL is the entry point for remote cert inspection; must
-	// return the leaf (not a CA) with a populated CN. The explicit-port variant
-	// catches naive URL parsing that could double-append :443 (T-12).
+	// return the leaf (not a CA) with a populated CN. Keep this deterministic:
+	// use a local TLS server plus a test dial hook instead of live network.
 	t.Parallel()
+
+	ca := generateTestCA(t, "Fetch Leaf Root CA")
+	leaf := generateTestLeafCert(t, ca)
+	serverPort := startTLSServer(t, [][]byte{leaf.DER, ca.CertDER}, leaf.Key)
+	testCtx := context.WithValue(context.Background(), fetchLeafDialTLSFuncKey{}, func(_ context.Context, network, _ string, _ *tls.Config, timeout time.Duration) (net.Conn, error) {
+		dialer := &net.Dialer{Timeout: timeout}
+		return tls.DialWithDialer(dialer, network, net.JoinHostPort("127.0.0.1", serverPort), &tls.Config{InsecureSkipVerify: true}) //nolint:gosec // test-only hook
+	})
+
 	tests := []struct {
 		name string
 		url  string
 	}{
-		{"without port", "https://google.com"},
-		{"with explicit port", "https://google.com:443"},
+		{"without port", "https://leaf.example.test"},
+		{"with explicit port", "https://leaf.example.test:443"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			cert, err := FetchLeafFromURL(context.Background(), FetchLeafFromURLInput{
+			cert, err := FetchLeafFromURL(testCtx, FetchLeafFromURLInput{
 				URL:     tt.url,
 				Timeout: 5 * time.Second,
 			})
 			if err != nil {
-				t.Skipf("cannot connect to %s: %v", tt.url, err)
+				t.Fatalf("FetchLeafFromURL(%s): %v", tt.url, err)
 			}
 			if cert.IsCA {
 				t.Error("expected leaf cert, got CA")

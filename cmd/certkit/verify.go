@@ -209,7 +209,11 @@ func loadVerifyRoots(passwords []string) ([]*x509.Certificate, error) {
 	if contents.Leaf != nil {
 		roots = append(roots, contents.Leaf)
 	}
-	roots = append(roots, contents.ExtraCerts...)
+	for _, cert := range contents.ExtraCerts {
+		if cert != nil {
+			roots = append(roots, cert)
+		}
+	}
 	if len(roots) == 0 {
 		return nil, fmt.Errorf("%w: %s", errVerifyRootsNoCerts, verifyRootsPath)
 	}

@@ -22,6 +22,8 @@ var (
 	errVerifyUnknownSource = errors.New("unknown trust_store")
 )
 
+type verifyBundleFuncKey struct{}
+
 // VerifyInput holds the parsed certificate data and verification options.
 type VerifyInput struct {
 	Cert                 *x509.Certificate
@@ -260,6 +262,7 @@ func verifyTrustAnchors(ctx context.Context, cert *x509.Certificate, input *Veri
 	if err != nil {
 		return nil, nil, nil, nil, err
 	}
+	normalizeVerifyBundleAIAState(resolvedBundle, sources)
 	intermediatePool := newCertPool(resolvedBundle.Intermediates)
 
 	attempts := make([]verifyAttempt, 0, len(sources))
@@ -315,12 +318,25 @@ type verifyTrustSource struct {
 	loadErr error
 }
 
-func resolveVerifyBundle(ctx context.Context, cert *x509.Certificate, input *VerifyInput) (*certkit.BundleResult, error) {
+func resolveVerifyBundleOptions(input *VerifyInput) certkit.BundleOptions {
 	opts := certkit.DefaultOptions()
 	opts.Verify = false
+	// The pre-verification bundle walk only needs the assembled intermediate
+	// set; forcing system roots here can fail before we probe Mozilla/file
+	// trust sources.
+	opts.TrustStore = "custom"
 	opts.ExtraIntermediates = input.ExtraCerts
 	opts.AllowPrivateNetworks = input.AllowPrivateNetworks
-	result, err := certkit.Bundle(ctx, certkit.BundleInput{
+	return opts
+}
+
+func resolveVerifyBundle(ctx context.Context, cert *x509.Certificate, input *VerifyInput) (*certkit.BundleResult, error) {
+	opts := resolveVerifyBundleOptions(input)
+	bundleFn := certkit.Bundle
+	if testBundleFn, ok := ctx.Value(verifyBundleFuncKey{}).(func(context.Context, certkit.BundleInput) (*certkit.BundleResult, error)); ok && testBundleFn != nil {
+		bundleFn = testBundleFn
+	}
+	result, err := bundleFn(ctx, certkit.BundleInput{
 		Leaf:    cert,
 		Options: opts,
 	})
@@ -419,6 +435,87 @@ func shortestVerifiedChain(chains [][]*x509.Certificate) []*x509.Certificate {
 		}
 	}
 	return best
+}
+
+func normalizeVerifyBundleAIAState(bundle *certkit.BundleResult, sources []verifyTrustSource) {
+	if bundle == nil {
+		return
+	}
+
+	allCerts := make([]*x509.Certificate, 0, 1+len(bundle.Intermediates))
+	allCerts = append(allCerts, bundle.Leaf)
+	allCerts = append(allCerts, bundle.Intermediates...)
+
+	var intermediates *x509.CertPool
+	if len(allCerts) > 0 {
+		intermediates = x509.NewCertPool()
+		for _, candidate := range allCerts {
+			if candidate != nil {
+				intermediates.AddCert(candidate)
+			}
+		}
+	}
+
+	unresolved := 0
+	for _, cert := range allCerts {
+		if verifyCertAIAResolved(cert, allCerts, intermediates, sources) {
+			continue
+		}
+		unresolved++
+	}
+
+	bundle.AIAUnresolvedCount = unresolved
+	bundle.AIAIncomplete = unresolved > 0
+}
+
+func verifyCertAIAResolved(cert *x509.Certificate, allCerts []*x509.Certificate, intermediates *x509.CertPool, sources []verifyTrustSource) bool {
+	if cert == nil {
+		return true
+	}
+	if len(cert.IssuingCertificateURL) == 0 {
+		return true
+	}
+	if certkit.IsMozillaRoot(cert) {
+		return true
+	}
+	if bytes.Equal(cert.RawSubject, cert.RawIssuer) {
+		return true
+	}
+	if verifyHasIssuerInSet(cert, allCerts) {
+		return true
+	}
+	for _, source := range sources {
+		if source.loadErr != nil || source.roots == nil {
+			continue
+		}
+		if certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{
+			Cert:          cert,
+			Roots:         source.roots,
+			Intermediates: intermediates,
+		}) {
+			return true
+		}
+	}
+	return false
+}
+
+func verifyHasIssuerInSet(cert *x509.Certificate, candidates []*x509.Certificate) bool {
+	for _, candidate := range candidates {
+		if candidate == nil || candidate == cert {
+			continue
+		}
+		if !bytes.Equal(candidate.RawSubject, cert.RawIssuer) {
+			continue
+		}
+		if len(cert.AuthorityKeyId) > 0 && len(candidate.SubjectKeyId) > 0 &&
+			!bytes.Equal(candidate.SubjectKeyId, cert.AuthorityKeyId) {
+			continue
+		}
+		if cert.CheckSignatureFrom(candidate) == nil {
+			return true
+		}
+	}
+	return false
 }
 
 func summarizeVerifyAIAWarnings(warnings []string) string {
@@ -569,6 +666,9 @@ func DiagnoseChain(input DiagnoseChainInput) []Diagnosis {
 
 	// Check intermediates for expiry
 	for _, extra := range input.ExtraCerts {
+		if extra == nil {
+			continue
+		}
 		if now.After(extra.NotAfter) {
 			diags = append(diags, Diagnosis{
 				Check:  "intermediate-expired",
@@ -582,6 +682,9 @@ func DiagnoseChain(input DiagnoseChainInput) []Diagnosis {
 	if !isSelfSigned(input.Cert) {
 		found := false
 		for _, extra := range input.ExtraCerts {
+			if extra == nil {
+				continue
+			}
 			if bytes.Equal(extra.RawSubject, input.Cert.RawIssuer) {
 				found = true
 				break

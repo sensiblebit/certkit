@@ -104,6 +104,8 @@ For machine-readable output:
 certkit inspect cert.pem --format json
 ```
 
+The JSON includes `trust_anchors` and `trust_warnings` for certificate entries.
+
 ### Inspecting keys and CSRs
 
 Works with private keys and CSRs too:
@@ -169,6 +171,8 @@ For machine-readable output:
 certkit verify cert.pem --format json
 ```
 
+The JSON includes `trust_anchors` and `trust_warnings` for the leaf and displayed chain entries.
+
 ### Diagnosing chain failures
 
 When chain verification fails, use `--diagnose` to understand why:
@@ -216,6 +220,8 @@ For machine-readable output:
 ```sh
 certkit connect example.com --format json
 ```
+
+The JSON includes per-certificate `trust_anchors` and `trust_warnings`.
 
 ### Check a non-standard port
 
@@ -413,7 +419,7 @@ certkit scan /path/to/certs/
 Output looks like:
 
 ```text
-Found 12 certificate(s) and 3 key(s)
+Found 12 certificate(s) and 3 key(s) in 9 file(s)
   Roots:         2
   Intermediates: 4
   Leaves:        6 (2 expired, 1 untrusted)
@@ -486,7 +492,7 @@ Then scan and export:
 certkit scan /path/to/certs/ --bundle-path ./bundles -c bundles.yaml
 ```
 
-This creates a directory per bundle with every format you might need: PEM (leaf, chain, fullchain, intermediates, root), private key, PKCS#12, JKS, Kubernetes Secret, and a CSR for renewal.
+This creates a directory per bundle with the exported formats certkit supports there: PEM (leaf, chain, fullchain, intermediates, root), private key, PKCS#12, Kubernetes Secret, JSON, YAML, and a CSR for renewal.
 
 When an export password is supplied via `-p`/`--password-file`, the `.key` PEM output is encrypted and the `.yaml` bundle's `key` field also contains an encrypted PKCS#8 v2 `ENCRYPTED PRIVATE KEY` block. Without an explicit password, those key outputs are written as unencrypted PKCS#8 (`PRIVATE KEY`). Kubernetes TLS secrets always contain unencrypted keys regardless of the password setting.
 
@@ -502,10 +508,10 @@ Generate an ECDSA key (recommended, fast and secure):
 certkit keygen
 ```
 
-This prints the private key and public key to stdout in PEM format. Redirect to save:
+This prints the private key and public key to stdout in PEM format. Redirect to save both PEM blocks together:
 
 ```sh
-certkit keygen > key.pem
+certkit keygen > key-and-pub.pem
 ```
 
 Generate an RSA key (wider compatibility with older systems):
@@ -562,10 +568,10 @@ Generate a self-signed root CA certificate for internal use or testing:
 certkit sign self-signed --cn "My Root CA"
 ```
 
-This generates a new EC P-256 key and prints both the certificate and key to stdout. Customize the validity period and save to a file:
+This generates a new EC P-256 key and prints both the certificate and key to stdout. Customize the validity period and save them to one file:
 
 ```sh
-certkit sign self-signed --cn "My Root CA" --days 3650 -o ca.pem
+certkit sign self-signed --cn "My Root CA" --days 3650 -o ca-and-key.pem
 ```
 
 Create a non-CA leaf certificate (e.g., for testing):
@@ -658,10 +664,10 @@ For encrypted private keys, PKCS#12, or JKS files, pass passwords with `-p`:
 # Single password
 certkit inspect server.p12 -p "mysecret"
 
-# Multiple passwords (tries each one)
+# Multiple passwords (tries each one and uses the first explicit one as the default PKCS#12/JKS export password)
 certkit scan /path/to/certs/ -p "secret1,secret2,changeit"
 
-# Passwords from a file (one per line)
+# Passwords from a file (one per line, also used for PKCS#12/JKS export defaults)
 certkit scan /path/to/certs/ --password-file passwords.txt
 ```
 
@@ -698,7 +704,7 @@ certkit uses meaningful exit codes:
 | **1**     | General error (bad input, missing file, etc.)                      |
 | **2**     | Validation failure (chain invalid, key mismatch, expired, revoked) |
 
-Use `--json` on any command for machine-readable output. Display commands also accept `--format json`. Data always goes to stdout, warnings and progress to stderr, so piping works cleanly:
+Use `--json` on machine-readable commands for JSON output. Display commands also accept `--format json`. Data always goes to stdout, warnings and progress to stderr, so piping works cleanly:
 
 ```sh
 # Check cert in CI -- fails with exit code 2 if expiring within 30 days

@@ -472,6 +472,53 @@ func TestRunValidation(t *testing.T) {
 			wantErr:     true,
 			errContains: "not found",
 		},
+		{
+			name: "ambiguous reused SKI",
+			setup: func(t *testing.T) (*MemStore, string) {
+				t.Helper()
+				ca := newRSACA(t)
+				store := NewMemStore()
+				first := newRSALeaf(t, ca, "renewal-one.example.com", []string{"renewal-one.example.com"})
+				firstKey, ok := first.key.(*rsa.PrivateKey)
+				if !ok {
+					t.Fatal("expected RSA key from newRSALeaf")
+				}
+				secondTemplate := &x509.Certificate{
+					SerialNumber: randomSerial(t),
+					Subject:      pkix.Name{CommonName: "renewal-two.example.com"},
+					DNSNames:     []string{"renewal-two.example.com"},
+					NotBefore:    time.Now().Add(-time.Hour),
+					NotAfter:     time.Now().Add(365 * 24 * time.Hour),
+					KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+					ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+				}
+				secondDER, err := x509.CreateCertificate(rand.Reader, secondTemplate, ca.cert, &firstKey.PublicKey, ca.key)
+				if err != nil {
+					t.Fatalf("CreateCertificate(second): %v", err)
+				}
+				secondCert, err := x509.ParseCertificate(secondDER)
+				if err != nil {
+					t.Fatalf("ParseCertificate(second): %v", err)
+				}
+
+				if err := store.HandleCertificate(first.cert, "first.pem"); err != nil {
+					t.Fatalf("HandleCertificate(first): %v", err)
+				}
+				if err := store.HandleCertificate(secondCert, "second.pem"); err != nil {
+					t.Fatalf("HandleCertificate(second): %v", err)
+				}
+
+				allCerts := store.AllCerts()
+				var hexSKI string
+				for ski := range allCerts {
+					hexSKI = ski
+					break
+				}
+				return store, skiToColonHex(t, hexSKI)
+			},
+			wantErr:     true,
+			errContains: "multiple certificates share SKI",
+		},
 	}
 
 	for _, tt := range tests {
