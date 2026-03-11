@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/sensiblebit/certkit"
+	"github.com/sensiblebit/certkit/internal"
 	"github.com/spf13/cobra"
 )
 
@@ -393,7 +394,7 @@ func formatConnectVerbose(r *certkit.ConnectResult, now time.Time) string {
 		if aki := certkit.CertAKIEmbedded(cert); aki != "" {
 			fmt.Fprintf(&out, "     AKI:         %s\n", aki)
 		}
-		out.WriteString(formatConnectExtensions(certkit.CollectCertificateExtensions(cert), "     "))
+		out.WriteString(internal.FormatCertificateExtensionsBlock(certkit.CollectCertificateExtensions(cert), "     "))
 	}
 	if len(r.PeerChain) > 0 {
 		out.WriteString("\nCertificate chain PEM:\n")
@@ -462,33 +463,6 @@ func publicKeySize(pub crypto.PublicKey) string {
 // formatSerial formats a certificate serial number as 0x-prefixed hex.
 func formatSerial(serial *big.Int) string {
 	return certkit.FormatSerialNumber(serial)
-}
-
-func formatConnectExtensions(exts []certkit.CertificateExtension, indent string) string {
-	if len(exts) == 0 {
-		return ""
-	}
-
-	var out strings.Builder
-	fmt.Fprintf(&out, "%sExtensions:\n", indent)
-	for _, ext := range exts {
-		fmt.Fprintf(&out, "%s  %s (%s)%s\n", indent, ext.Name, ext.OID, formatConnectExtensionFlags(ext))
-	}
-	return out.String()
-}
-
-func formatConnectExtensionFlags(ext certkit.CertificateExtension) string {
-	var flags []string
-	if ext.Critical {
-		flags = append(flags, "critical")
-	}
-	if ext.Unhandled {
-		flags = append(flags, "unhandled")
-	}
-	if len(flags) == 0 {
-		return ""
-	}
-	return " [" + strings.Join(flags, ", ") + "]"
 }
 
 // parseHostPort splits a host[:port] string, defaulting port to "443".

@@ -697,7 +697,7 @@ func FormatVerifyResult(r *VerifyResult) string {
 	if r.AKI != "" {
 		fmt.Fprintf(&sb, "        AKI: %s\n", r.AKI)
 	}
-	sb.WriteString(formatCertificateExtensionsBlock(r.Extensions, "  "))
+	sb.WriteString(FormatCertificateExtensionsBlock(r.Extensions, "  "))
 	if r.SHA256 != "" {
 		fmt.Fprintf(&sb, "     SHA-256: %s\n", r.SHA256)
 	}
@@ -756,7 +756,7 @@ func FormatVerifyResult(r *VerifyResult) string {
 				if c.AKI != "" {
 					fmt.Fprintf(&sb, "     AKI:       %s\n", c.AKI)
 				}
-				sb.WriteString(formatCertificateExtensionsBlock(c.Extensions, "     "))
+				sb.WriteString(FormatCertificateExtensionsBlock(c.Extensions, "     "))
 			}
 		}
 	}

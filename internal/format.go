@@ -58,7 +58,9 @@ func FormatScanTextSummary(input ScanTextSummaryInput) string {
 	return out.String()
 }
 
-func formatCertificateExtensionsBlock(exts []certkit.CertificateExtension, indent string) string {
+// FormatCertificateExtensionsBlock renders certificate extensions as an
+// indented text block for verbose CLI output.
+func FormatCertificateExtensionsBlock(exts []certkit.CertificateExtension, indent string) string {
 	if len(exts) == 0 {
 		return ""
 	}

@@ -506,7 +506,7 @@ func formatInspectText(results []InspectResult) string {
 			if r.AKI != "" {
 				fmt.Fprintf(&sb, "  AKI:         %s\n", r.AKI)
 			}
-			sb.WriteString(formatCertificateExtensionsBlock(r.Extensions, "  "))
+			sb.WriteString(FormatCertificateExtensionsBlock(r.Extensions, "  "))
 		case "csr":
 			fmt.Fprintf(&sb, "Certificate Signing Request:\n")
 			fmt.Fprintf(&sb, "  Subject:     %s\n", r.CSRSubject)
