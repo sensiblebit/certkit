@@ -5,6 +5,8 @@ A practical guide to common certificate tasks. No prior TLS/SSL knowledge requir
 ## Table of Contents
 
 - [Quick Glossary](#quick-glossary)
+- [CLI Discovery](#cli-discovery)
+  - [See the full command surface](#see-the-full-command-surface)
 - [Inspecting](#inspecting)
   - [What's in this certificate file?](#whats-in-this-certificate-file)
   - [Inspecting keys and CSRs](#inspecting-keys-and-csrs)
@@ -65,6 +67,22 @@ A practical guide to common certificate tasks. No prior TLS/SSL knowledge requir
 | **DER**                                       | Binary encoding of a certificate or key. Same data as PEM but without the base64 text wrapping.                                                                                                              |
 | **SAN** (Subject Alternative Name)            | The domain names a certificate covers. A single cert can cover `example.com`, `www.example.com`, `api.example.com`, etc.                                                                                     |
 | **AIA** (Authority Information Access)        | A certificate extension containing URLs where the issuer's certificate or OCSP responder can be found. certkit uses these to fetch missing intermediates automatically.                                      |
+
+---
+
+## CLI Discovery
+
+### See the full command surface
+
+Print the actual CLI command tree, including built-in Cobra commands and the
+flags each command accepts:
+
+```sh
+certkit tree
+```
+
+This is useful when you want a quick map of the CLI without hopping through
+`--help` output command by command.
 
 ---
 
