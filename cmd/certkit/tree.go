@@ -13,7 +13,7 @@ import (
 var treeCmd = &cobra.Command{
 	Use:   "tree",
 	Short: "Display the full command tree",
-	Long:  "Display the command and subcommand tree. Use --flags to include flag details.",
+	Long:  "Display the command and subcommand tree. Use --flags to include local flag details and --inherited to include inherited flag details.",
 	Args:  cobra.NoArgs,
 	RunE:  runTree,
 }

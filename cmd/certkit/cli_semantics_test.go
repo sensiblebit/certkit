@@ -153,6 +153,12 @@ func TestTreeCommand(t *testing.T) {
 	})
 
 	t.Run("includes subcommand help and inherited global flags when requested", func(t *testing.T) {
+		prevTreeIncludeFlags := treeIncludeFlags
+		prevTreeIncludeInherited := treeIncludeInherited
+		t.Cleanup(func() {
+			treeIncludeFlags = prevTreeIncludeFlags
+			treeIncludeInherited = prevTreeIncludeInherited
+		})
 		treeIncludeFlags = true
 		treeIncludeInherited = true
 		var bundleTree strings.Builder
@@ -175,6 +181,12 @@ func TestTreeCommand(t *testing.T) {
 	})
 
 	t.Run("prefers long flag names over shorthand pairs", func(t *testing.T) {
+		prevTreeIncludeFlags := treeIncludeFlags
+		prevTreeIncludeInherited := treeIncludeInherited
+		t.Cleanup(func() {
+			treeIncludeFlags = prevTreeIncludeFlags
+			treeIncludeInherited = prevTreeIncludeInherited
+		})
 		treeIncludeFlags = true
 		treeIncludeInherited = true
 		var flagsTree strings.Builder
@@ -188,6 +200,12 @@ func TestTreeCommand(t *testing.T) {
 	})
 
 	t.Run("collapses inherited flags to one summary line when requested", func(t *testing.T) {
+		prevTreeIncludeFlags := treeIncludeFlags
+		prevTreeIncludeInherited := treeIncludeInherited
+		t.Cleanup(func() {
+			treeIncludeFlags = prevTreeIncludeFlags
+			treeIncludeInherited = prevTreeIncludeInherited
+		})
 		treeIncludeFlags = true
 		treeIncludeInherited = true
 		var flagsTree strings.Builder
@@ -202,6 +220,12 @@ func TestTreeCommand(t *testing.T) {
 	})
 
 	t.Run("includes local flags only when requested", func(t *testing.T) {
+		prevTreeIncludeFlags := treeIncludeFlags
+		prevTreeIncludeInherited := treeIncludeInherited
+		t.Cleanup(func() {
+			treeIncludeFlags = prevTreeIncludeFlags
+			treeIncludeInherited = prevTreeIncludeInherited
+		})
 		treeIncludeFlags = true
 		treeIncludeInherited = false
 		var flagsTree strings.Builder
