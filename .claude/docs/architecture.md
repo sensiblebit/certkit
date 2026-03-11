@@ -19,7 +19,7 @@ Stateless utility functions. No database, no file I/O. This is the public librar
 - `sign.go` — Certificate signing. `CreateSelfSigned()` generates self-signed certificates. `SignCSR()` signs a CSR with a CA certificate and key. Types: `SelfSignedInput`, `SignCSRInput`.
 - `ocsp.go` — OCSP revocation checking. `CheckOCSP()` queries an OCSP responder. `FormatOCSPResult()` for text output. Types: `CheckOCSPInput`, `OCSPResult`.
 - `crl.go` — CRL parsing and inspection. `ParseCRL()` parses PEM/DER CRLs. `CRLContainsCertificate()` checks revocation. `CRLInfoFromList()` extracts display info. `FormatCRLInfo()` for text output. Type: `CRLInfo`.
-- `dn.go` — Distinguished name and extension formatting. `FormatDN()` renders `pkix.Name` with human-readable OID labels (e.g., `emailAddress`). `FormatEKUs()`, `FormatEKUOIDs()`, `FormatKeyUsage()`, `FormatKeyUsageBitString()`, `ParseOtherNameSANs()`, `CollectCertificateSANs()`.
+- `dn.go` — Distinguished name and extension formatting. `FormatDN()` renders `pkix.Name` with human-readable OID labels (e.g., `emailAddress`). `FormatEKUs()`, `FormatEKUOIDs()`, `FormatKeyUsage()`, `FormatKeyUsageBitString()`, `ParseOtherNameSANs()`, `CollectCertificateSANs()`, and `CollectCertificateExtensions()` expose SAN and top-level certificate extension summaries using shared OID-name registries.
 - `csr.go` — CSR generation from certs, templates, or existing CSRs. `MarshalSANExtension()` for OtherName SAN support.
 - `pkcs.go` — PKCS#12 and PKCS#7 encode/decode
 - `jks.go` — Java KeyStore encode/decode

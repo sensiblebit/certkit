@@ -3,6 +3,8 @@ package internal
 import (
 	"fmt"
 	"strings"
+
+	"github.com/sensiblebit/certkit"
 )
 
 // ScanTextSummaryInput holds fields needed for text scan summaries.
@@ -54,4 +56,31 @@ func FormatScanTextSummary(input ScanTextSummaryInput) string {
 		_, _ = fmt.Fprintf(&out, "  Key-cert pairs: %d\n", input.Matched)
 	}
 	return out.String()
+}
+
+func formatCertificateExtensionsBlock(exts []certkit.CertificateExtension, indent string) string {
+	if len(exts) == 0 {
+		return ""
+	}
+
+	var out strings.Builder
+	fmt.Fprintf(&out, "%sExtensions:\n", indent)
+	for _, ext := range exts {
+		fmt.Fprintf(&out, "%s  %s (%s)%s\n", indent, ext.Name, ext.OID, formatCertificateExtensionFlags(ext))
+	}
+	return out.String()
+}
+
+func formatCertificateExtensionFlags(ext certkit.CertificateExtension) string {
+	var flags []string
+	if ext.Critical {
+		flags = append(flags, "critical")
+	}
+	if ext.Unhandled {
+		flags = append(flags, "unhandled")
+	}
+	if len(flags) == 0 {
+		return ""
+	}
+	return " [" + strings.Join(flags, ", ") + "]"
 }

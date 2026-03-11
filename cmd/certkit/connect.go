@@ -107,17 +107,18 @@ type connectCertJSON struct {
 	SANs          []string `json:"sans,omitempty"`
 
 	// Verbose-only fields (populated when --verbose is set).
-	Serial    string   `json:"serial,omitempty"`
-	IsCA      *bool    `json:"is_ca,omitempty"`
-	Expired   *bool    `json:"expired,omitempty"`
-	KeyAlgo   string   `json:"key_algorithm,omitempty"`
-	KeySize   string   `json:"key_size,omitempty"`
-	SigAlg    string   `json:"signature_algorithm,omitempty"`
-	KeyUsages []string `json:"key_usages,omitempty"`
-	EKUs      []string `json:"ekus,omitempty"`
-	SHA1      string   `json:"sha1_fingerprint,omitempty"`
-	SKI       string   `json:"subject_key_id,omitempty"`
-	AKI       string   `json:"authority_key_id,omitempty"`
+	Serial     string                         `json:"serial,omitempty"`
+	IsCA       *bool                          `json:"is_ca,omitempty"`
+	Expired    *bool                          `json:"expired,omitempty"`
+	KeyAlgo    string                         `json:"key_algorithm,omitempty"`
+	KeySize    string                         `json:"key_size,omitempty"`
+	SigAlg     string                         `json:"signature_algorithm,omitempty"`
+	KeyUsages  []string                       `json:"key_usages,omitempty"`
+	EKUs       []string                       `json:"ekus,omitempty"`
+	Extensions []certkit.CertificateExtension `json:"extensions,omitempty"`
+	SHA1       string                         `json:"sha1_fingerprint,omitempty"`
+	SKI        string                         `json:"subject_key_id,omitempty"`
+	AKI        string                         `json:"authority_key_id,omitempty"`
 }
 
 func runConnect(cmd *cobra.Command, args []string) error {
@@ -283,6 +284,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 				cj.SigAlg = cert.SignatureAlgorithm.String()
 				cj.KeyUsages = certkit.FormatKeyUsage(cert.KeyUsage)
 				cj.EKUs = certkit.FormatEKUs(cert.ExtKeyUsage)
+				cj.Extensions = certkit.CollectCertificateExtensions(cert)
 				cj.SHA1 = certkit.CertFingerprintColonSHA1(cert)
 				cj.SKI = certkit.CertSKIEmbedded(cert)
 				cj.AKI = certkit.CertAKIEmbedded(cert)
@@ -391,6 +393,7 @@ func formatConnectVerbose(r *certkit.ConnectResult, now time.Time) string {
 		if aki := certkit.CertAKIEmbedded(cert); aki != "" {
 			fmt.Fprintf(&out, "     AKI:         %s\n", aki)
 		}
+		out.WriteString(formatConnectExtensions(certkit.CollectCertificateExtensions(cert), "     "))
 	}
 	if len(r.PeerChain) > 0 {
 		out.WriteString("\nCertificate chain PEM:\n")
@@ -459,6 +462,33 @@ func publicKeySize(pub crypto.PublicKey) string {
 // formatSerial formats a certificate serial number as 0x-prefixed hex.
 func formatSerial(serial *big.Int) string {
 	return certkit.FormatSerialNumber(serial)
+}
+
+func formatConnectExtensions(exts []certkit.CertificateExtension, indent string) string {
+	if len(exts) == 0 {
+		return ""
+	}
+
+	var out strings.Builder
+	fmt.Fprintf(&out, "%sExtensions:\n", indent)
+	for _, ext := range exts {
+		fmt.Fprintf(&out, "%s  %s (%s)%s\n", indent, ext.Name, ext.OID, formatConnectExtensionFlags(ext))
+	}
+	return out.String()
+}
+
+func formatConnectExtensionFlags(ext certkit.CertificateExtension) string {
+	var flags []string
+	if ext.Critical {
+		flags = append(flags, "critical")
+	}
+	if ext.Unhandled {
+		flags = append(flags, "unhandled")
+	}
+	if len(flags) == 0 {
+		return ""
+	}
+	return " [" + strings.Join(flags, ", ") + "]"
 }
 
 // parseHostPort splits a host[:port] string, defaulting port to "443".

@@ -5,10 +5,12 @@ import (
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
+	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -1329,22 +1331,26 @@ func TestFormatVerifyResult(t *testing.T) {
 		{
 			name: "verbose fields",
 			result: &VerifyResult{
-				Subject:    "CN=verbose.example.com",
-				NotAfter:   "2030-01-01T00:00:00Z",
-				SKI:        "aabbccdd",
-				Issuer:     "CN=Verbose CA",
-				Serial:     "0x1234",
-				NotBefore:  "2025-01-01T00:00:00Z",
-				CertType:   "leaf",
-				IsCA:       &isCAFalse,
-				KeyAlgo:    "RSA",
-				KeySize:    "2048",
-				SigAlg:     "SHA256-RSA",
-				KeyUsages:  []string{"Digital Signature"},
-				EKUs:       []string{"Server Authentication"},
-				SHA256:     "AA:BB",
-				SHA1:       "CC:DD",
-				AKI:        "EE:FF",
+				Subject:   "CN=verbose.example.com",
+				NotAfter:  "2030-01-01T00:00:00Z",
+				SKI:       "aabbccdd",
+				Issuer:    "CN=Verbose CA",
+				Serial:    "0x1234",
+				NotBefore: "2025-01-01T00:00:00Z",
+				CertType:  "leaf",
+				IsCA:      &isCAFalse,
+				KeyAlgo:   "RSA",
+				KeySize:   "2048",
+				SigAlg:    "SHA256-RSA",
+				KeyUsages: []string{"Digital Signature"},
+				EKUs:      []string{"Server Authentication"},
+				SHA256:    "AA:BB",
+				SHA1:      "CC:DD",
+				AKI:       "EE:FF",
+				Extensions: []certkit.CertificateExtension{
+					{Name: "Key Usage", OID: "2.5.29.15", Critical: true},
+					{Name: "Apple Push Notification Service", OID: "1.2.840.113635.100.6.27.3.2", Critical: true, Unhandled: true},
+				},
 				Errors:     nil,
 				ChainValid: &chainValid,
 			},
@@ -1361,6 +1367,9 @@ func TestFormatVerifyResult(t *testing.T) {
 				"SHA-256: AA:BB",
 				"SHA-1: CC:DD",
 				"AKI: EE:FF",
+				"Extensions:",
+				"Key Usage (2.5.29.15) [critical]",
+				"Apple Push Notification Service (1.2.840.113635.100.6.27.3.2) [critical, unhandled]",
 			},
 		},
 	}
@@ -1440,6 +1449,72 @@ func TestVerifyCert_ChainOnlyNoKeyMatch(t *testing.T) {
 	lastEntry := result.Chain[len(result.Chain)-1]
 	if !lastEntry.IsRoot {
 		t.Error("last chain entry should be marked as root")
+	}
+}
+
+func TestVerifyCert_VerboseIncludesExtensions(t *testing.T) {
+	// WHY: Verbose verify output should expose the raw top-level extensions on
+	// the certificate, including critical proprietary extensions Go did not
+	// handle.
+	t.Parallel()
+
+	ca := newECDSACA(t)
+	leafKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	appleOID := asn1.ObjectIdentifier{1, 2, 840, 113635, 100, 6, 27, 3, 2}
+	leafTmpl := &x509.Certificate{
+		SerialNumber: randomSerial(t),
+		Subject:      pkix.Name{CommonName: "verbose-ext.example.com", Organization: []string{"TestOrg"}},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		ExtraExtensions: []pkix.Extension{
+			{Id: appleOID, Critical: true, Value: []byte{0x05, 0x00}},
+		},
+	}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leafTmpl, ca.cert, &leafKey.PublicKey, ca.key.(*ecdsa.PrivateKey))
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf, err := x509.ParseCertificate(leafDER)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := VerifyCert(context.Background(), &VerifyInput{
+		Cert:       leaf,
+		CheckChain: false,
+		Verbose:    true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Extensions) == 0 {
+		t.Fatal("expected verbose verify result to include extensions")
+	}
+
+	found := false
+	for _, ext := range result.Extensions {
+		if ext.OID != appleOID.String() {
+			continue
+		}
+		found = true
+		if ext.Name != "Apple Push Notification Service" {
+			t.Fatalf("Apple extension name = %q, want %q", ext.Name, "Apple Push Notification Service")
+		}
+		if !ext.Critical {
+			t.Error("Apple extension should be marked critical")
+		}
+		if !ext.Unhandled {
+			t.Error("Apple extension should be marked unhandled")
+		}
+	}
+	if !found {
+		t.Fatalf("expected to find extension %s in verbose verify result", appleOID.String())
 	}
 }
 

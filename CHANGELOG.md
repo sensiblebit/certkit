@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add per-store Mozilla/system trust counts to `scan` JSON summaries alongside the existing aggregate `untrusted_*` counts ([`0ee41ad`])
 - Add `verify --roots <file>` to include PEM/DER/PKCS#7/PKCS#12/JKS certificates as an additional file-backed trust source ([`0ee41ad`])
 - Add `CheckTrustAnchorsResult` so library callers can inspect `trust_anchors` plus trust-source load warnings from `CheckTrustAnchors` ([#171])
+- Display top-level X.509 certificate extensions with human-readable OID names in `inspect`, `verify --verbose`, and `connect --verbose`, including critical and unhandled-critical markers
 
 ### Changed
 
