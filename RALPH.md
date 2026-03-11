@@ -252,3 +252,17 @@ Area: [README.md](README.md)
 Summary: the README command index overclaimed the full CLI surface and the end-of-file mermaid diagram added noise without carrying much durable documentation value.
 Source: User feedback
 Fix: narrowed the section to “Common Commands”, clarified the `tree` entry, removed the low-value diagram, and kept the useful scan behavior notes as prose
+
+36. `validate-latest-fallback-assertion-gap`
+Status: fixed
+Area: [internal/certstore/validate_test.go](internal/certstore/validate_test.go)
+Summary: the duplicate-SKI regression only asserted the selected subject, so it could still pass if validation picked the wrong renewal by insertion order instead of latest `NotAfter`.
+Source: Follow-up PR review
+Fix: pinned the expected later renewal `NotAfter` and asserted the exact RFC3339 result emitted by `RunValidation()`
+
+37. `readme-followup-runtime-drift`
+Status: fixed
+Area: [README.md](README.md)
+Summary: several README details had drifted from current behavior, including `tree` flag wording, CRL URL schemes, duplicate bundle export paths, library `SignCSR` SAN copying, and scan issuer-linkage notes.
+Source: Follow-up docs audit finding
+Fix: aligned the README text and library example with the current command/runtime behavior

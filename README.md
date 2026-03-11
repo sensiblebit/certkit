@@ -110,7 +110,7 @@ See [EXAMPLES.md](EXAMPLES.md) for a walkthrough of the main certificate workflo
 | `certkit sign self-signed`  | Create a self-signed certificate                        |
 | `certkit sign csr <file>`   | Sign a CSR with a CA certificate and key                |
 | `certkit scan <path>`       | Scan a directory and catalog everything found           |
-| `certkit tree`              | Print the full CLI command tree (`--flags` for details) |
+| `certkit tree`              | Print the full CLI command tree (`--flags`/`--inherited` for details) |
 | `certkit keygen`            | Generate a new key pair (and optionally a CSR)          |
 | `certkit csr`               | Generate a CSR from a template, cert, or existing CSR   |
 | `certkit ocsp <file>`       | Check certificate revocation status via OCSP            |
@@ -319,7 +319,7 @@ The OCSP responder URL is read from the certificate's AIA extension.
 | `--format` | `text`  | Output format: text, json                 |
 <!-- /certkit:flags -->
 
-Accepts local files (PEM or DER) or HTTP URLs.
+Accepts local files (PEM or DER) or HTTP/HTTPS URLs.
 
 ### Exit Codes
 
@@ -363,7 +363,7 @@ Bundles without an explicit `subject` block inherit from `defaultSubject`. Certi
 
 ### Bundle Output Files
 
-When running `certkit scan --bundle-path`, each bundle produces the following files under `<dir>/<bundleName>/`:
+When running `certkit scan --bundle-path`, each bundle produces the following files under `<dir>/<bundleName>/`. If `--duplicates` keeps older matching certificates, those extra exports are written under suffixed directories like `<bundleName>_<RFC3339>_<serial>/`:
 
 | File                     | Contents                                                                              |
 | ------------------------ | ------------------------------------------------------------------------------------- |
@@ -417,7 +417,7 @@ csrPEM, keyPEM, _ := certkit.GenerateCSR(leaf, nil) // auto-generates EC P-256 k
 
 // Sign certificates
 selfSigned, _ := certkit.CreateSelfSigned(certkit.SelfSignedInput{Signer: caKey, Subject: pkix.Name{CommonName: "My CA"}, IsCA: true})
-issued, _ := certkit.SignCSR(certkit.SignCSRInput{CSR: csr, CACert: caCert, CAKey: caKey, Days: 365})
+issued, _ := certkit.SignCSR(certkit.SignCSRInput{CSR: csr, CACert: caCert, CAKey: caKey, Days: 365, CopySANs: true})
 
 // TLS connection probing
 result, _ := certkit.ConnectTLS(ctx, certkit.ConnectTLSInput{Host: "example.com"})
@@ -436,4 +436,4 @@ encPEM, _ := certkit.MarshalEncryptedPrivateKeyToPEM(key, "secret")
 
 ### Scan Notes
 
-Expired certificates are always ingested; expiry filtering is output-only (`--allow-expired` overrides). SKI computation uses RFC 7093 Method 1 (SHA-256 truncated to 160 bits). Non-root certificate AKIs are resolved post-ingestion by matching against a multi-hash lookup of all CA certificates (RFC 7093 Method 1 plus legacy SHA-1 compatibility).
+Expired certificates are always ingested; expiry filtering is output-only (`--allow-expired` overrides). SKI computation uses RFC 7093 Method 1 (SHA-256 truncated to 160 bits). Non-root issuer linkage is resolved after ingestion by checking for raw ASN.1 subject/issuer matches among CA certificates and falling back to AIA fetching when the issuer is still missing.
