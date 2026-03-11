@@ -399,7 +399,7 @@ if certkit.CertExpiresWithin(cert, 30*24*time.Hour) {
 
 // Build verified chains (library defaults to system trust store)
 opts := certkit.DefaultOptions()
-opts.TrustStore = "mozilla" // or "system" (the default)
+opts.TrustStore = "mozilla" // override the default system trust store if needed
 bundle, _ := certkit.Bundle(ctx, certkit.BundleInput{Leaf: leaf, Options: opts})
 
 // Generate keys
