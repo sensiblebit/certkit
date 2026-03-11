@@ -136,10 +136,11 @@ func TestTreeCommand(t *testing.T) {
 	})
 
 	t.Run("includes nested subcommands", func(t *testing.T) {
-		for _, name := range []string{"self-signed", "csr"} {
-			if !strings.Contains(rootOutput, name+" — ") {
-				t.Errorf("tree output missing nested command %q", name)
-			}
+		if !strings.Contains(rootOutput, "self-signed — Create a self-signed certificate") {
+			t.Errorf("tree output missing nested command %q", "self-signed")
+		}
+		if !strings.Contains(rootOutput, "csr — Sign a CSR with a CA certificate and key") {
+			t.Errorf("tree output missing nested command %q", "csr")
 		}
 	})
 
