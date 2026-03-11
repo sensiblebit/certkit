@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,14 +17,15 @@ import (
 
 var (
 	verifyKeyPath             string
+	verifyRootsPath           string
 	verifyExpiry              string
-	verifyTrustStore          string
 	verifyFormat              string
 	verifyDiagnose            bool
 	verifyOCSP                bool
 	verifyCRL                 bool
 	verifyAllowPrivateNetwork bool
 	errVerifyNoCertificate    = errors.New("no certificate found")
+	errVerifyRootsNoCerts     = errors.New("roots file contains no certificates")
 )
 
 var verifyCmd = &cobra.Command{
@@ -32,9 +34,11 @@ var verifyCmd = &cobra.Command{
 	Long: `Verify a certificate's chain of trust, check if a key matches, or check
 if it expires within a given duration.
 
-Accepts PEM, DER, PKCS#12, JKS, or PKCS#7 input. The chain is always verified.
-When the input contains an embedded private key (PKCS#12, JKS), the key match
-is checked automatically. Use --key to check against an external key file.
+Accepts PEM, DER, PKCS#12, JKS, or PKCS#7 input. The chain is always verified
+against both the embedded Mozilla roots and the host system trust store. Use
+--roots to add a file-backed trust source. When the input contains an embedded
+private key (PKCS#12, JKS), the key match is checked automatically. Use --key
+to check against an external key file.
 
 Use --ocsp to check OCSP revocation status, and --crl to check CRL distribution
 points. Both require network access and a valid chain (the issuer certificate
@@ -43,6 +47,7 @@ private/internal endpoints by default; use --allow-private-network to opt in.
 Exits with code 2 if verification finds any errors (including revocation).`,
 	Example: `  certkit verify cert.pem
   certkit verify cert.pem --key key.pem
+  certkit verify cert.pem --roots private-ca.pem
   certkit verify cert.pem --expiry 30d
   certkit verify cert.pem --ocsp
   certkit verify cert.pem --ocsp --crl
@@ -55,8 +60,8 @@ Exits with code 2 if verification finds any errors (including revocation).`,
 
 func init() {
 	verifyCmd.Flags().StringVar(&verifyKeyPath, "key", "", "Private key file to check against the certificate")
+	verifyCmd.Flags().StringVar(&verifyRootsPath, "roots", "", "Additional root certificates file (PEM, DER, PKCS#7, PKCS#12, or JKS)")
 	verifyCmd.Flags().StringVarP(&verifyExpiry, "expiry", "e", "", "Check if cert expires within duration (e.g., 30d, 720h)")
-	verifyCmd.Flags().StringVar(&verifyTrustStore, "trust-store", "mozilla", "Trust store: system, mozilla")
 	verifyCmd.Flags().StringVar(&verifyFormat, "format", "text", "Output format: text, json")
 	verifyCmd.Flags().BoolVar(&verifyDiagnose, "diagnose", false, "Show diagnostics when chain verification fails")
 	verifyCmd.Flags().BoolVar(&verifyOCSP, "ocsp", false, "Check OCSP revocation status")
@@ -64,7 +69,6 @@ func init() {
 	verifyCmd.Flags().BoolVar(&verifyAllowPrivateNetwork, "allow-private-network", false, "Allow AIA/OCSP/CRL fetches to private/internal endpoints")
 
 	registerCompletion(verifyCmd, completionInput{"format", fixedCompletion("text", "json")})
-	registerCompletion(verifyCmd, completionInput{"trust-store", fixedCompletion("system", "mozilla")})
 }
 
 // parseDuration extends time.ParseDuration to support a "d" suffix for days.
@@ -136,14 +140,19 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		key = contents.Key
 	}
 
+	customRoots, err := loadVerifyRoots(passwords)
+	if err != nil {
+		return err
+	}
+
 	input := &internal.VerifyInput{
 		Cert:                 contents.Leaf,
 		Key:                  key,
 		ExtraCerts:           contents.ExtraCerts,
+		CustomRoots:          customRoots,
 		CheckKeyMatch:        key != nil,
 		CheckChain:           true, // Always verify chain
 		ExpiryDuration:       expiryDuration,
-		TrustStore:           verifyTrustStore,
 		Verbose:              verbose,
 		CheckOCSP:            verifyOCSP,
 		CheckCRL:             verifyCRL,
@@ -184,4 +193,25 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		return &ValidationError{Message: "verification failed", Quiet: quietValidation}
 	}
 	return nil
+}
+
+func loadVerifyRoots(passwords []string) ([]*x509.Certificate, error) {
+	if verifyRootsPath == "" {
+		return nil, nil
+	}
+
+	contents, err := internal.LoadContainerFile(verifyRootsPath, passwords)
+	if err != nil {
+		return nil, fmt.Errorf("loading roots file: %w", err)
+	}
+
+	roots := make([]*x509.Certificate, 0, 1+len(contents.ExtraCerts))
+	if contents.Leaf != nil {
+		roots = append(roots, contents.Leaf)
+	}
+	roots = append(roots, contents.ExtraCerts...)
+	if len(roots) == 0 {
+		return nil, fmt.Errorf("%w: %s", errVerifyRootsNoCerts, verifyRootsPath)
+	}
+	return roots, nil
 }

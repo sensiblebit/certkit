@@ -226,3 +226,33 @@ func TestFormatConnectVerbose_IncludesChainPEMWithMetadata(t *testing.T) {
 		t.Fatalf("verbose output missing PEM certificate:\n%s", got)
 	}
 }
+
+func TestConnectTrustIntermediates_PrefersVerifiedChains(t *testing.T) {
+	t.Parallel()
+
+	rootKey, rootCert := generateKeyAndCert(t, "Root CA", true)
+	intermediateKey, intermediateCert := signCert(t, "Intermediate CA", true, rootKey, rootCert)
+	_, leafCert := signCert(t, "leaf.example.com", false, intermediateKey, intermediateCert)
+
+	result := &certkit.ConnectResult{
+		PeerChain:      []*x509.Certificate{leafCert},
+		VerifiedChains: [][]*x509.Certificate{{leafCert, intermediateCert, rootCert}},
+	}
+
+	pool := connectTrustIntermediates(result)
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(rootCert)
+	if !certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{
+		Cert:          leafCert,
+		Roots:         rootPool,
+		Intermediates: pool,
+	}) {
+		t.Fatal("expected trust intermediates pool to contain the verified-chain intermediate")
+	}
+	if certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{
+		Cert:  leafCert,
+		Roots: rootPool,
+	}) {
+		t.Fatal("expected trust verification to fail without the recovered intermediate")
+	}
+}

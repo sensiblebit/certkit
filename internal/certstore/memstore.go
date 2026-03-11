@@ -350,9 +350,10 @@ func (s *MemStore) BundleNames() []string {
 }
 
 // ScanSummary returns aggregate counts of stored certificates and keys.
-// When input.RootPool is non-nil, it also counts expired and untrusted
-// certificates. Expired certificates are only counted as expired, never
-// as untrusted, to avoid misleading double-counts in the summary output.
+// When MozillaPool and/or SystemPool are non-nil, it also counts expired,
+// per-store trusted, and untrusted certificates. Expired certificates are only
+// counted as expired, never as untrusted, to avoid misleading double-counts in
+// the summary output.
 func (s *MemStore) ScanSummary(input ScanSummaryInput) ScanSummary {
 	s.mu.RLock()
 	keyCount := len(s.keys)
@@ -380,7 +381,7 @@ func (s *MemStore) ScanSummary(input ScanSummaryInput) ScanSummary {
 	}
 
 	var intermediatePool *x509.CertPool
-	if input.RootPool != nil {
+	if input.MozillaPool != nil || input.SystemPool != nil {
 		intermediatePool = x509.NewCertPool()
 		for _, rec := range certs {
 			if rec.CertType == "intermediate" {
@@ -392,6 +393,16 @@ func (s *MemStore) ScanSummary(input ScanSummaryInput) ScanSummary {
 	now := time.Now()
 	for _, rec := range certs {
 		expired := now.After(rec.NotAfter)
+		mozillaTrusted := false
+		systemTrusted := false
+		if !expired {
+			if input.MozillaPool != nil {
+				mozillaTrusted = certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{Cert: rec.Cert, Roots: input.MozillaPool, Intermediates: intermediatePool})
+			}
+			if input.SystemPool != nil {
+				systemTrusted = certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{Cert: rec.Cert, Roots: input.SystemPool, Intermediates: intermediatePool})
+			}
+		}
 
 		switch rec.CertType {
 		case "root":
@@ -399,30 +410,42 @@ func (s *MemStore) ScanSummary(input ScanSummaryInput) ScanSummary {
 			if expired {
 				summary.ExpiredRoots++
 			}
-			if input.RootPool != nil && !expired {
-				if !certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{Cert: rec.Cert, Roots: input.RootPool, Intermediates: intermediatePool}) {
-					summary.UntrustedRoots++
-				}
+			if mozillaTrusted {
+				summary.MozillaTrustedRoots++
+			}
+			if systemTrusted {
+				summary.SystemTrustedRoots++
+			}
+			if (input.MozillaPool != nil || input.SystemPool != nil) && !expired && !mozillaTrusted && !systemTrusted {
+				summary.UntrustedRoots++
 			}
 		case "intermediate":
 			summary.Intermediates++
 			if expired {
 				summary.ExpiredIntermediates++
 			}
-			if input.RootPool != nil && !expired {
-				if !certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{Cert: rec.Cert, Roots: input.RootPool, Intermediates: intermediatePool}) {
-					summary.UntrustedIntermediates++
-				}
+			if mozillaTrusted {
+				summary.MozillaTrustedIntermediates++
+			}
+			if systemTrusted {
+				summary.SystemTrustedIntermediates++
+			}
+			if (input.MozillaPool != nil || input.SystemPool != nil) && !expired && !mozillaTrusted && !systemTrusted {
+				summary.UntrustedIntermediates++
 			}
 		case "leaf":
 			summary.Leaves++
 			if expired {
 				summary.ExpiredLeaves++
 			}
-			if input.RootPool != nil && !expired {
-				if !certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{Cert: rec.Cert, Roots: input.RootPool, Intermediates: intermediatePool}) {
-					summary.UntrustedLeaves++
-				}
+			if mozillaTrusted {
+				summary.MozillaTrustedLeaves++
+			}
+			if systemTrusted {
+				summary.SystemTrustedLeaves++
+			}
+			if (input.MozillaPool != nil || input.SystemPool != nil) && !expired && !mozillaTrusted && !systemTrusted {
+				summary.UntrustedLeaves++
 			}
 		}
 	}

@@ -151,10 +151,10 @@ Chain verification happens automatically -- certkit always checks that a cert ch
 certkit verify cert.pem
 ```
 
-By default this checks against the Mozilla root store (embedded, works everywhere). To check against your OS trust store instead:
+By default this checks against both the embedded Mozilla roots and your OS trust store. To add a private root file as another trust source:
 
 ```sh
-certkit verify cert.pem --trust-store system
+certkit verify cert.pem --roots private-ca.pem
 ```
 
 Combine all checks at once:

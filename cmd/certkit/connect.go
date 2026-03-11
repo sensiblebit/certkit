@@ -96,13 +96,15 @@ type connectResultJSON struct {
 
 // connectCertJSON holds per-certificate fields for the connect command's JSON output.
 type connectCertJSON struct {
-	Subject   string   `json:"subject"`
-	Issuer    string   `json:"issuer"`
-	NotBefore string   `json:"not_before"`
-	NotAfter  string   `json:"not_after"`
-	SHA256    string   `json:"sha256_fingerprint"`
-	CertType  string   `json:"cert_type"`
-	SANs      []string `json:"sans,omitempty"`
+	Subject       string   `json:"subject"`
+	Issuer        string   `json:"issuer"`
+	NotBefore     string   `json:"not_before"`
+	NotAfter      string   `json:"not_after"`
+	SHA256        string   `json:"sha256_fingerprint"`
+	CertType      string   `json:"cert_type"`
+	TrustAnchors  []string `json:"trust_anchors"`
+	TrustWarnings []string `json:"trust_warnings,omitempty"`
+	SANs          []string `json:"sans,omitempty"`
 
 	// Verbose-only fields (populated when --verbose is set).
 	Serial    string   `json:"serial,omitempty"`
@@ -230,6 +232,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	}
 
 	certkit.SortDiagnostics(result.Diagnostics)
+	result.ChainTrustAnchors, result.ChainTrustWarnings = collectConnectTrustStatus(result)
 
 	format := connectFormat
 	if jsonOutput {
@@ -259,13 +262,15 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		}
 		for _, cert := range result.PeerChain {
 			cj := connectCertJSON{
-				Subject:   certkit.FormatDNFromRaw(cert.RawSubject, cert.Subject),
-				Issuer:    certkit.FormatDNFromRaw(cert.RawIssuer, cert.Issuer),
-				NotBefore: cert.NotBefore.UTC().Format(time.RFC3339),
-				NotAfter:  cert.NotAfter.UTC().Format(time.RFC3339),
-				SHA256:    certkit.CertFingerprintColonSHA256(cert),
-				CertType:  certkit.GetCertificateType(cert),
-				SANs:      certkit.CollectCertificateSANs(cert),
+				Subject:       certkit.FormatDNFromRaw(cert.RawSubject, cert.Subject),
+				Issuer:        certkit.FormatDNFromRaw(cert.RawIssuer, cert.Issuer),
+				NotBefore:     cert.NotBefore.UTC().Format(time.RFC3339),
+				NotAfter:      cert.NotAfter.UTC().Format(time.RFC3339),
+				SHA256:        certkit.CertFingerprintColonSHA256(cert),
+				CertType:      certkit.GetCertificateType(cert),
+				TrustAnchors:  result.ChainTrustAnchors[len(jr.Chain)],
+				TrustWarnings: result.ChainTrustWarnings[len(jr.Chain)],
+				SANs:          certkit.CollectCertificateSANs(cert),
 			}
 			if verbose {
 				isCA := cert.IsCA
@@ -359,6 +364,12 @@ func formatConnectVerbose(r *certkit.ConnectResult, now time.Time) string {
 		} else {
 			out.WriteString("     Expired:     no\n")
 		}
+		if i < len(r.ChainTrustAnchors) {
+			fmt.Fprintf(&out, "     Trust Anchors: %s\n", certkit.FormatTrustAnchors(r.ChainTrustAnchors[i]))
+		}
+		if i < len(r.ChainTrustWarnings) && len(r.ChainTrustWarnings[i]) > 0 {
+			fmt.Fprintf(&out, "     Trust Warnings: %s\n", strings.Join(r.ChainTrustWarnings[i], "; "))
+		}
 		fmt.Fprintf(&out, "     Key:         %s %s\n",
 			certkit.PublicKeyAlgorithmName(cert.PublicKey),
 			publicKeySize(cert.PublicKey))
@@ -399,6 +410,36 @@ func formatConnectChainPEM(chain []*x509.Certificate) string {
 		out.Write(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}))
 	}
 	return out.String()
+}
+
+func collectConnectTrustStatus(result *certkit.ConnectResult) ([][]string, [][]string) {
+	intermediates := connectTrustIntermediates(result)
+
+	anchors := make([][]string, 0, len(result.PeerChain))
+	warnings := make([][]string, 0, len(result.PeerChain))
+	for _, cert := range result.PeerChain {
+		trustResult := certkit.CheckTrustAnchors(certkit.CheckTrustAnchorsInput{
+			Cert:          cert,
+			Intermediates: intermediates,
+		})
+		anchors = append(anchors, trustResult.Anchors)
+		warnings = append(warnings, trustResult.Warnings)
+	}
+	return anchors, warnings
+}
+
+func connectTrustIntermediates(result *certkit.ConnectResult) *x509.CertPool {
+	pool := x509.NewCertPool()
+	source := result.PeerChain
+	if len(result.VerifiedChains) > 0 {
+		source = result.VerifiedChains[0]
+	}
+	for _, cert := range source {
+		if cert != nil && certkit.GetCertificateType(cert) == "intermediate" {
+			pool.AddCert(cert)
+		}
+	}
+	return pool
 }
 
 // publicKeySize returns the key size/curve name for a public key (e.g. "2048", "P-256", "256").

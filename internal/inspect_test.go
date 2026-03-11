@@ -671,16 +671,17 @@ func TestFormatInspectResults_JSON_ValidJSON(t *testing.T) {
 	t.Parallel()
 	results := []InspectResult{
 		{
-			Type:    "certificate",
-			Subject: "CN=json-test.example.com,O=TestOrg",
-			Issuer:  "CN=Test CA",
-			Serial:  "0x12345",
-			SHA256:  "AA:BB:CC:DD",
-			SHA1:    "11:22:33:44",
-			SANs:    []string{"json-test.example.com", "www.json-test.example.com"},
-			KeyAlgo: "RSA",
-			KeySize: "2048",
-			SKI:     "aabbccdd",
+			Type:         "certificate",
+			Subject:      "CN=json-test.example.com,O=TestOrg",
+			Issuer:       "CN=Test CA",
+			Serial:       "0x12345",
+			TrustAnchors: []string{"mozilla"},
+			SHA256:       "AA:BB:CC:DD",
+			SHA1:         "11:22:33:44",
+			SANs:         []string{"json-test.example.com", "www.json-test.example.com"},
+			KeyAlgo:      "RSA",
+			KeySize:      "2048",
+			SKI:          "aabbccdd",
 		},
 		{
 			Type:    "private_key",
@@ -723,6 +724,9 @@ func TestFormatInspectResults_JSON_ValidJSON(t *testing.T) {
 	}
 	if cert.KeyAlgo != "RSA" {
 		t.Errorf("parsed[0].KeyAlgo = %q, want %q", cert.KeyAlgo, "RSA")
+	}
+	if len(cert.TrustAnchors) != 1 || cert.TrustAnchors[0] != "mozilla" {
+		t.Errorf("parsed[0].TrustAnchors = %v, want [mozilla]", cert.TrustAnchors)
 	}
 	if len(cert.SANs) != 2 || cert.SANs[0] != "json-test.example.com" {
 		t.Errorf("parsed[0].SANs = %v, want [json-test.example.com www.json-test.example.com]", cert.SANs)

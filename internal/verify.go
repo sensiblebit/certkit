@@ -15,8 +15,11 @@ import (
 )
 
 var (
-	errVerifyInputNil = errors.New("verify input is nil")
-	errVerifyCertNil  = errors.New("certificate is nil")
+	errVerifyInputNil      = errors.New("verify input is nil")
+	errVerifyCertNil       = errors.New("certificate is nil")
+	errVerifyRootsNil      = errors.New("root pool is nil")
+	errVerifyNoTrustAnchor = errors.New("chain verification failed for all trust anchors")
+	errVerifyUnknownSource = errors.New("unknown trust_store")
 )
 
 // VerifyInput holds the parsed certificate data and verification options.
@@ -37,10 +40,12 @@ type VerifyInput struct {
 
 // ChainCert holds display information for one certificate in the chain.
 type ChainCert struct {
-	Subject  string `json:"subject"`
-	NotAfter string `json:"not_after"`
-	SKI      string `json:"subject_key_id,omitempty"`
-	IsRoot   bool   `json:"is_root,omitempty"`
+	Subject       string   `json:"subject"`
+	NotAfter      string   `json:"not_after"`
+	SKI           string   `json:"subject_key_id,omitempty"`
+	IsRoot        bool     `json:"is_root,omitempty"`
+	TrustAnchors  []string `json:"trust_anchors"`
+	TrustWarnings []string `json:"trust_warnings,omitempty"`
 
 	// Verbose-only fields (populated when VerifyInput.Verbose is true).
 	Issuer    string   `json:"issuer,omitempty"`
@@ -59,22 +64,24 @@ type ChainCert struct {
 
 // VerifyResult holds the results of certificate verification checks.
 type VerifyResult struct {
-	Subject     string                  `json:"subject"`
-	SANs        []string                `json:"sans,omitempty"`
-	NotAfter    string                  `json:"not_after"`
-	SKI         string                  `json:"subject_key_id,omitempty"`
-	KeyMatch    *bool                   `json:"key_match,omitempty"`
-	KeyMatchErr string                  `json:"key_match_error,omitempty"`
-	KeyInfo     string                  `json:"key_info,omitempty"`
-	ChainValid  *bool                   `json:"chain_valid,omitempty"`
-	ChainErr    string                  `json:"chain_error,omitempty"`
-	Chain       []ChainCert             `json:"chain,omitempty"`
-	OCSP        *certkit.OCSPResult     `json:"ocsp,omitempty"`
-	CRL         *certkit.CRLCheckResult `json:"crl,omitempty"`
-	Expiry      *bool                   `json:"expires_within,omitempty"`
-	ExpiryInfo  string                  `json:"expiry_info,omitempty"`
-	Errors      []string                `json:"errors,omitempty"`
-	Diagnostics []Diagnosis             `json:"diagnostics,omitempty"`
+	Subject       string                  `json:"subject"`
+	SANs          []string                `json:"sans,omitempty"`
+	NotAfter      string                  `json:"not_after"`
+	SKI           string                  `json:"subject_key_id,omitempty"`
+	TrustAnchors  []string                `json:"trust_anchors"`
+	TrustWarnings []string                `json:"trust_warnings,omitempty"`
+	KeyMatch      *bool                   `json:"key_match,omitempty"`
+	KeyMatchErr   string                  `json:"key_match_error,omitempty"`
+	KeyInfo       string                  `json:"key_info,omitempty"`
+	ChainValid    *bool                   `json:"chain_valid,omitempty"`
+	ChainErr      string                  `json:"chain_error,omitempty"`
+	Chain         []ChainCert             `json:"chain,omitempty"`
+	OCSP          *certkit.OCSPResult     `json:"ocsp,omitempty"`
+	CRL           *certkit.CRLCheckResult `json:"crl,omitempty"`
+	Expiry        *bool                   `json:"expires_within,omitempty"`
+	ExpiryInfo    string                  `json:"expiry_info,omitempty"`
+	Errors        []string                `json:"errors,omitempty"`
+	Diagnostics   []Diagnosis             `json:"diagnostics,omitempty"`
 
 	// Verbose-only fields (populated when VerifyInput.Verbose is true).
 	Issuer    string   `json:"issuer,omitempty"`
@@ -104,10 +111,11 @@ func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) 
 	cert := input.Cert
 
 	result := &VerifyResult{
-		Subject:  certkit.FormatDNFromRaw(cert.RawSubject, cert.Subject),
-		SANs:     cert.DNSNames,
-		NotAfter: cert.NotAfter.UTC().Format(time.RFC3339),
-		SKI:      certkit.CertSKIEmbedded(cert),
+		Subject:      certkit.FormatDNFromRaw(cert.RawSubject, cert.Subject),
+		SANs:         cert.DNSNames,
+		NotAfter:     cert.NotAfter.UTC().Format(time.RFC3339),
+		SKI:          certkit.CertSKIEmbedded(cert),
+		TrustAnchors: []string{},
 	}
 
 	if input.Verbose {
@@ -145,24 +153,22 @@ func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) 
 	// Chain validation
 	var bundle *certkit.BundleResult
 	if input.CheckChain {
-		opts := certkit.DefaultOptions()
-		opts.TrustStore = input.TrustStore
-		opts.ExtraIntermediates = input.ExtraCerts
-		opts.CustomRoots = input.CustomRoots
-		opts.AllowPrivateNetworks = input.AllowPrivateNetworks
-		var bundleErr error
-		bundle, bundleErr = certkit.Bundle(ctx, certkit.BundleInput{
-			Leaf:    cert,
-			Options: opts,
-		})
-		valid := bundleErr == nil
+		fileRootsPool := newCertPool(input.CustomRoots)
+		anchors, warnings, successfulBundle, fallbackBundle, bundleErr := verifyTrustAnchors(ctx, cert, input, fileRootsPool)
+		result.TrustAnchors = anchors
+		result.TrustWarnings = warnings
+		bundle = successfulBundle
+		if bundle == nil {
+			bundle = fallbackBundle
+		}
+		valid := len(anchors) > 0
 		result.ChainValid = &valid
 		if bundleErr != nil {
 			result.ChainErr = bundleErr.Error()
 			result.Errors = append(result.Errors, "chain validation: "+bundleErr.Error())
 		}
 		if bundle != nil {
-			result.Chain = buildChainDisplay(bundle, input.Verbose)
+			result.Chain = buildChainDisplay(bundle, input.Verbose, fileRootsPool)
 		}
 	}
 
@@ -236,6 +242,198 @@ func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) 
 	return result, nil
 }
 
+type verifyAttempt struct {
+	name   string
+	bundle *certkit.BundleResult
+	err    error
+}
+
+func verifyTrustAnchors(ctx context.Context, cert *x509.Certificate, input *VerifyInput, fileRootsPool *x509.CertPool) ([]string, []string, *certkit.BundleResult, *certkit.BundleResult, error) {
+	sources, err := verifyTrustSources(fileRootsPool, input.TrustStore)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	resolvedBundle, err := resolveVerifyBundle(ctx, cert, input)
+	if err != nil {
+		return nil, nil, nil, nil, err
+	}
+	intermediatePool := newCertPool(resolvedBundle.Intermediates)
+
+	attempts := make([]verifyAttempt, 0, len(sources))
+	warnings := make([]string, 0, len(sources))
+	for _, source := range sources {
+		if source.loadErr != nil {
+			warnings = append(warnings, fmt.Sprintf("%s trust source unavailable: %v", source.name, source.loadErr))
+			attempts = append(attempts, verifyAttempt{name: source.name, err: source.loadErr})
+			continue
+		}
+		chains, verifyErr := verifyChainsForSource(cert, intermediatePool, source.roots)
+		if verifyErr != nil {
+			attempts = append(attempts, verifyAttempt{name: source.name, err: verifyErr})
+			continue
+		}
+		attempts = append(attempts, verifyAttempt{
+			name:   source.name,
+			bundle: bundleFromVerifiedChain(resolvedBundle, shortestVerifiedChain(chains)),
+		})
+	}
+
+	anchors := make([]string, 0, len(attempts))
+	var successfulBundle *certkit.BundleResult
+	var errorParts []string
+	for _, attempt := range attempts {
+		if attempt.err == nil {
+			anchors = append(anchors, attempt.name)
+			if successfulBundle == nil {
+				successfulBundle = attempt.bundle
+			}
+			continue
+		}
+		errorParts = append(errorParts, fmt.Sprintf("%s: %v", attempt.name, attempt.err))
+	}
+	if len(anchors) > 0 {
+		return anchors, warnings, successfulBundle, resolvedBundle, nil
+	}
+	if resolvedBundle.AIAIncomplete {
+		return anchors, warnings, nil, resolvedBundle, fmt.Errorf(
+			"%w: AIA resolution incomplete (%d issuer(s) still unresolved): %s; %s",
+			errVerifyNoTrustAnchor,
+			resolvedBundle.AIAUnresolvedCount,
+			summarizeVerifyAIAWarnings(resolvedBundle.Warnings),
+			strings.Join(errorParts, "; "),
+		)
+	}
+	return anchors, warnings, nil, resolvedBundle, fmt.Errorf("%w: %s", errVerifyNoTrustAnchor, strings.Join(errorParts, "; "))
+}
+
+type verifyTrustSource struct {
+	name    string
+	roots   *x509.CertPool
+	loadErr error
+}
+
+func resolveVerifyBundle(ctx context.Context, cert *x509.Certificate, input *VerifyInput) (*certkit.BundleResult, error) {
+	opts := certkit.DefaultOptions()
+	opts.Verify = false
+	opts.ExtraIntermediates = input.ExtraCerts
+	opts.AllowPrivateNetworks = input.AllowPrivateNetworks
+	result, err := certkit.Bundle(ctx, certkit.BundleInput{
+		Leaf:    cert,
+		Options: opts,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("resolving certificate chain before trust checks: %w", err)
+	}
+	return result, nil
+}
+
+func verifyTrustSources(fileRootsPool *x509.CertPool, trustStore string) ([]verifyTrustSource, error) {
+	switch trustStore {
+	case "":
+		sources := []verifyTrustSource{
+			loadVerifyTrustSource("mozilla", certkit.MozillaRootPool),
+			loadVerifyTrustSource("system", certkit.SystemCertPoolCached),
+		}
+		if fileRootsPool != nil {
+			sources = append(sources, verifyTrustSource{name: "file", roots: fileRootsPool})
+		}
+		return sources, nil
+	case "mozilla":
+		return []verifyTrustSource{loadVerifyTrustSource("mozilla", certkit.MozillaRootPool)}, nil
+	case "system":
+		return []verifyTrustSource{loadVerifyTrustSource("system", certkit.SystemCertPoolCached)}, nil
+	case "custom", "file":
+		return []verifyTrustSource{{name: "file", roots: fileRootsPool}}, nil
+	default:
+		return nil, fmt.Errorf("%w: %q", errVerifyUnknownSource, trustStore)
+	}
+}
+
+func loadVerifyTrustSource(name string, load func() (*x509.CertPool, error)) verifyTrustSource {
+	roots, err := load()
+	if err != nil {
+		return verifyTrustSource{name: name, loadErr: err}
+	}
+	return verifyTrustSource{name: name, roots: roots}
+}
+
+func verifyChainsForSource(cert *x509.Certificate, intermediates *x509.CertPool, roots *x509.CertPool) ([][]*x509.Certificate, error) {
+	if cert == nil {
+		return nil, errVerifyCertNil
+	}
+	if roots == nil {
+		return nil, errVerifyRootsNil
+	}
+	if certkit.IsMozillaRoot(cert) {
+		return [][]*x509.Certificate{{cert}}, nil
+	}
+
+	opts := x509.VerifyOptions{
+		Roots:         roots,
+		Intermediates: intermediates,
+		KeyUsages:     []x509.ExtKeyUsage{x509.ExtKeyUsageAny},
+	}
+	if time.Now().After(cert.NotAfter) {
+		opts.CurrentTime = cert.NotBefore.Add(time.Second)
+	}
+	chains, err := cert.Verify(opts)
+	if err != nil {
+		return nil, fmt.Errorf("verifying certificate against trust roots: %w", err)
+	}
+	return chains, nil
+}
+
+func bundleFromVerifiedChain(resolved *certkit.BundleResult, chain []*x509.Certificate) *certkit.BundleResult {
+	if resolved == nil {
+		return nil
+	}
+
+	bundle := &certkit.BundleResult{
+		Leaf:               resolved.Leaf,
+		Warnings:           append([]string(nil), resolved.Warnings...),
+		AIAIncomplete:      resolved.AIAIncomplete,
+		AIAUnresolvedCount: resolved.AIAUnresolvedCount,
+	}
+	if len(chain) > 2 {
+		bundle.Intermediates = append(bundle.Intermediates, chain[1:len(chain)-1]...)
+	}
+	if len(chain) > 1 {
+		bundle.Roots = []*x509.Certificate{chain[len(chain)-1]}
+	} else if len(chain) == 1 {
+		bundle.Roots = []*x509.Certificate{chain[0]}
+	}
+	return bundle
+}
+
+func shortestVerifiedChain(chains [][]*x509.Certificate) []*x509.Certificate {
+	if len(chains) == 0 {
+		return nil
+	}
+	best := chains[0]
+	for _, chain := range chains[1:] {
+		if len(chain) < len(best) {
+			best = chain
+		}
+	}
+	return best
+}
+
+func summarizeVerifyAIAWarnings(warnings []string) string {
+	var aiaWarnings []string
+	for _, warning := range warnings {
+		if strings.HasPrefix(warning, "AIA ") {
+			aiaWarnings = append(aiaWarnings, warning)
+		}
+	}
+	if len(aiaWarnings) == 0 {
+		return "issuer fetch did not complete"
+	}
+	if len(aiaWarnings) == 1 {
+		return aiaWarnings[0]
+	}
+	return fmt.Sprintf("%s (%d additional warning(s))", aiaWarnings[0], len(aiaWarnings)-1)
+}
+
 // checkVerifyOCSP performs a best-effort OCSP check, returning a result that
 // is always non-nil. Mirrors the connect.go OCSP logic.
 func checkVerifyOCSP(ctx context.Context, input certkit.CheckOCSPInput) *certkit.OCSPResult {
@@ -259,13 +457,21 @@ func checkVerifyOCSP(ctx context.Context, input certkit.CheckOCSPInput) *certkit
 }
 
 // buildChainDisplay creates the display chain from a BundleResult.
-func buildChainDisplay(bundle *certkit.BundleResult, verbose bool) []ChainCert {
+func buildChainDisplay(bundle *certkit.BundleResult, verbose bool, fileRoots *x509.CertPool) []ChainCert {
+	intermediatePool := newCertPool(bundle.Intermediates)
 	buildEntry := func(c *x509.Certificate, isRoot bool) ChainCert {
+		trustResult := certkit.CheckTrustAnchors(certkit.CheckTrustAnchorsInput{
+			Cert:          c,
+			Intermediates: intermediatePool,
+			FileRoots:     fileRoots,
+		})
 		cc := ChainCert{
-			Subject:  certkit.FormatDNFromRaw(c.RawSubject, c.Subject),
-			NotAfter: c.NotAfter.UTC().Format(time.RFC3339),
-			SKI:      certkit.CertSKIEmbedded(c),
-			IsRoot:   isRoot,
+			Subject:       certkit.FormatDNFromRaw(c.RawSubject, c.Subject),
+			NotAfter:      c.NotAfter.UTC().Format(time.RFC3339),
+			SKI:           certkit.CertSKIEmbedded(c),
+			IsRoot:        isRoot,
+			TrustAnchors:  trustResult.Anchors,
+			TrustWarnings: trustResult.Warnings,
 		}
 		if verbose {
 			cc.Issuer = certkit.FormatDNFromRaw(c.RawIssuer, c.Issuer)
@@ -510,6 +716,10 @@ func FormatVerifyResult(r *VerifyResult) string {
 		} else {
 			fmt.Fprintf(&sb, "      Chain: INVALID (%s)\n", r.ChainErr)
 		}
+		fmt.Fprintf(&sb, "Trust Anchors: %s\n", certkit.FormatTrustAnchors(r.TrustAnchors))
+		if len(r.TrustWarnings) > 0 {
+			fmt.Fprintf(&sb, "Trust Warnings: %s\n", strings.Join(r.TrustWarnings, "; "))
+		}
 	}
 
 	if len(r.Chain) > 0 {
@@ -521,6 +731,10 @@ func FormatVerifyResult(r *VerifyResult) string {
 			}
 			fmt.Fprintf(&sb, "  %d: %s  (expires %s)%s\n", i, c.Subject, c.NotAfter, tag)
 			fmt.Fprintf(&sb, "     SKI: %s\n", c.SKI)
+			fmt.Fprintf(&sb, "     Trust Anchors: %s\n", certkit.FormatTrustAnchors(c.TrustAnchors))
+			if len(c.TrustWarnings) > 0 {
+				fmt.Fprintf(&sb, "     Trust Warnings: %s\n", strings.Join(c.TrustWarnings, "; "))
+			}
 			if c.Issuer != "" {
 				fmt.Fprintf(&sb, "     Issuer:    %s\n", c.Issuer)
 				fmt.Fprintf(&sb, "     Serial:    %s\n", c.Serial)
@@ -559,6 +773,19 @@ func FormatVerifyResult(r *VerifyResult) string {
 	}
 
 	return sb.String()
+}
+
+func newCertPool(certs []*x509.Certificate) *x509.CertPool {
+	if len(certs) == 0 {
+		return nil
+	}
+	pool := x509.NewCertPool()
+	for _, cert := range certs {
+		if cert != nil {
+			pool.AddCert(cert)
+		}
+	}
+	return pool
 }
 
 // formatVerifyOCSP formats an OCSP result line in verify output style.

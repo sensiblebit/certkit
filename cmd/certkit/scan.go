@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
@@ -272,10 +273,9 @@ func runScan(cmd *cobra.Command, args []string) error {
 	if scanDumpCerts != "" {
 		certs := store.AllCertsFlat()
 		if len(certs) > 0 {
-			// Build mozilla root pool for verification (consistent with summary)
-			mozillaPool, err := certkit.MozillaRootPool()
+			trustPools, err := loadScanTrustPools()
 			if err != nil {
-				return fmt.Errorf("loading Mozilla root pool: %w", err)
+				return err
 			}
 			intermediatePool := store.IntermediatePool()
 
@@ -294,7 +294,17 @@ func runScan(cmd *cobra.Command, args []string) error {
 
 				// Validate chain unless --force is set (uses same logic as summary)
 				if !scanForceExport {
-					if !certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{Cert: cert, Roots: mozillaPool, Intermediates: intermediatePool}) {
+					mozillaTrusted := trustPools.Mozilla != nil && certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{
+						Cert:          cert,
+						Roots:         trustPools.Mozilla,
+						Intermediates: intermediatePool,
+					})
+					systemTrusted := trustPools.System != nil && certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{
+						Cert:          cert,
+						Roots:         trustPools.System,
+						Intermediates: intermediatePool,
+					})
+					if !mozillaTrusted && !systemTrusted && (trustPools.Mozilla != nil || trustPools.System != nil) {
 						slog.Debug("skipping untrusted certificate", "subject", cert.Subject)
 						skipped++
 						continue
@@ -357,12 +367,13 @@ func runScan(cmd *cobra.Command, args []string) error {
 		store.DumpDebug()
 		switch format {
 		case "json":
-			mozillaPool, err := certkit.MozillaRootPool()
+			trustPools, err := loadScanTrustPools()
 			if err != nil {
-				return fmt.Errorf("loading Mozilla root pool: %w", err)
+				return err
 			}
 			summary := store.ScanSummary(certstore.ScanSummaryInput{
-				RootPool: mozillaPool,
+				MozillaPool: trustPools.Mozilla,
+				SystemPool:  trustPools.System,
 			})
 			output := scanExportJSON{
 				ScanSummary: summary,
@@ -374,12 +385,13 @@ func runScan(cmd *cobra.Command, args []string) error {
 			}
 			fmt.Println(string(data))
 		case "text":
-			mozillaPool, err := certkit.MozillaRootPool()
+			trustPools, err := loadScanTrustPools()
 			if err != nil {
-				return fmt.Errorf("loading Mozilla root pool: %w", err)
+				return err
 			}
 			summary := store.ScanSummary(certstore.ScanSummaryInput{
-				RootPool: mozillaPool,
+				MozillaPool: trustPools.Mozilla,
+				SystemPool:  trustPools.System,
 			})
 			fmt.Print(internal.FormatScanTextSummary(internal.ScanTextSummaryInput{
 				Files:                  scannedFiles,
@@ -408,12 +420,13 @@ func runScan(cmd *cobra.Command, args []string) error {
 			}
 		}
 		// Print summary with trust and expiry annotations
-		mozillaPool, err := certkit.MozillaRootPool()
+		trustPools, err := loadScanTrustPools()
 		if err != nil {
-			return fmt.Errorf("loading Mozilla root pool: %w", err)
+			return err
 		}
 		summary := store.ScanSummary(certstore.ScanSummaryInput{
-			RootPool: mozillaPool,
+			MozillaPool: trustPools.Mozilla,
+			SystemPool:  trustPools.System,
 		})
 		switch format {
 		case "json":
@@ -465,6 +478,26 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+type scanTrustPools struct {
+	Mozilla *x509.CertPool
+	System  *x509.CertPool
+}
+
+func loadScanTrustPools() (scanTrustPools, error) {
+	mozillaPool, err := certkit.MozillaRootPool()
+	if err != nil {
+		return scanTrustPools{}, fmt.Errorf("loading Mozilla root pool: %w", err)
+	}
+	systemPool, err := certkit.SystemCertPoolCached()
+	if err != nil {
+		slog.Debug("system cert pool unavailable for scan trust summary", "error", err)
+	}
+	return scanTrustPools{
+		Mozilla: mozillaPool,
+		System:  systemPool,
+	}, nil
 }
 
 // scanCertEntry holds per-certificate details for verbose scan output.

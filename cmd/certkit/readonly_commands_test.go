@@ -61,8 +61,8 @@ type readonlyGlobals struct {
 
 	// verify flags
 	verifyKeyPath             string
+	verifyRootsPath           string
 	verifyExpiry              string
-	verifyTrustStore          string
 	verifyFormat              string
 	verifyDiagnose            bool
 	verifyOCSP                bool
@@ -110,8 +110,8 @@ func snapshotReadonlyGlobals() readonlyGlobals {
 		probeSSHFIPS1403: probeSSHFIPS1403,
 
 		verifyKeyPath:             verifyKeyPath,
+		verifyRootsPath:           verifyRootsPath,
 		verifyExpiry:              verifyExpiry,
-		verifyTrustStore:          verifyTrustStore,
 		verifyFormat:              verifyFormat,
 		verifyDiagnose:            verifyDiagnose,
 		verifyOCSP:                verifyOCSP,
@@ -156,8 +156,8 @@ func restoreReadonlyGlobals(g readonlyGlobals) {
 	probeSSHFIPS1403 = g.probeSSHFIPS1403
 
 	verifyKeyPath = g.verifyKeyPath
+	verifyRootsPath = g.verifyRootsPath
 	verifyExpiry = g.verifyExpiry
-	verifyTrustStore = g.verifyTrustStore
 	verifyFormat = g.verifyFormat
 	verifyDiagnose = g.verifyDiagnose
 	verifyOCSP = g.verifyOCSP
@@ -374,8 +374,8 @@ func TestRunVerify_CommandSurfaceValidation(t *testing.T) {
 	jsonOutput = false
 	verifyFormat = "text"
 	verifyKeyPath = ""
+	verifyRootsPath = ""
 	verifyExpiry = ""
-	verifyTrustStore = "mozilla"
 	verifyDiagnose = false
 	verifyOCSP = false
 	verifyCRL = false
