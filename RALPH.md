@@ -245,3 +245,10 @@ Area: [internal/certstore/validate.go](internal/certstore/validate.go), [interna
 Summary: validation errored on duplicate-SKI renewal sets even though the rest of the store/UI already presents one latest-expiring certificate per SKI.
 Source: Follow-up PR review
 Fix: `RunValidation()` now uses the store's latest-cert selection for a given SKI, and the regression test proves the later renewal is the record that gets validated
+
+35. `readme-tail-noise-and-command-overclaim`
+Status: fixed
+Area: [README.md](README.md)
+Summary: the README command index overclaimed the full CLI surface and the end-of-file mermaid diagram added noise without carrying much durable documentation value.
+Source: User feedback
+Fix: narrowed the section to “Common Commands”, clarified the `tree` entry, removed the low-value diagram, and kept the useful scan behavior notes as prose

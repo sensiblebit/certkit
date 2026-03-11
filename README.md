@@ -97,7 +97,7 @@ certkit bundle cert.pem -o chain.pem
 
 See [EXAMPLES.md](EXAMPLES.md) for a walkthrough of the main certificate workflows and real-world scenarios.
 
-## Commands
+## Common Commands
 
 | Command                     | What it does                                            |
 | --------------------------- | ------------------------------------------------------- |
@@ -110,7 +110,7 @@ See [EXAMPLES.md](EXAMPLES.md) for a walkthrough of the main certificate workflo
 | `certkit sign self-signed`  | Create a self-signed certificate                        |
 | `certkit sign csr <file>`   | Sign a CSR with a CA certificate and key                |
 | `certkit scan <path>`       | Scan a directory and catalog everything found           |
-| `certkit tree`              | Print the full CLI command tree                         |
+| `certkit tree`              | Print the full CLI command tree (`--flags` for details) |
 | `certkit keygen`            | Generate a new key pair (and optionally a CSR)          |
 | `certkit csr`               | Generate a CSR from a template, cert, or existing CSR   |
 | `certkit ocsp <file>`       | Check certificate revocation status via OCSP            |
@@ -434,17 +434,6 @@ jks, _ := certkit.EncodeJKS(key, leaf, intermediates, "changeit")
 encPEM, _ := certkit.MarshalEncryptedPrivateKeyToPEM(key, "secret")
 ```
 
-### How It Works
+### Scan Notes
 
-```mermaid
-flowchart TD
-    A[Input files / stdin] --> B[Format detection - PEM vs DER]
-    B --> C[Parse certs, keys, CSRs<br/>PKCS#12, PKCS#7, JKS, encrypted PEM, PKCS#8, SEC1, Ed25519]
-    C --> D[Catalog in MemStore<br/>certificates + keys indexed by SKI]
-    D --> E[Resolve AKIs<br/>match legacy SHA-1 AKIs to computed RFC 7093 M1 SKIs]
-    E --> F{--bundle-path?}
-    F -- yes --> G[Match keys to certs, build chains,<br/>write all output formats per bundle]
-    F -- no --> H[Print scan summary]
-```
-
-Expired certificates are always ingested; expiry filtering is output-only (`--allow-expired` overrides). SKI computation uses RFC 7093 Method 1 (SHA-256 truncated to 160 bits). Non-root certificate AKIs are resolved post-ingestion by matching against a multi-hash lookup (RFC 7093 M1 + legacy SHA-1) of all CA certificates.
+Expired certificates are always ingested; expiry filtering is output-only (`--allow-expired` overrides). SKI computation uses RFC 7093 Method 1 (SHA-256 truncated to 160 bits). Non-root certificate AKIs are resolved post-ingestion by matching against a multi-hash lookup of all CA certificates (RFC 7093 Method 1 plus legacy SHA-1 compatibility).
