@@ -314,6 +314,46 @@ func TestVerifyCert_PreVerificationBundleIgnoresSystemTrustStore(t *testing.T) {
 	}
 }
 
+func TestVerifyCert_PreBundleAIAIncompleteNotMisreported(t *testing.T) {
+	// WHY: The pre-verification bundle walk uses TrustStore="custom" with no
+	// roots, so Bundle may set AIAIncomplete=true because
+	// countAIAUnresolvedIssuers cannot match against an empty root pool. When
+	// trust probing subsequently fails (e.g. custom store with wrong roots),
+	// the error should NOT say "AIA resolution incomplete" — it should report
+	// the real trust source failure.
+	t.Parallel()
+	root := newRSACA(t)
+	otherRoot := newRSACA(t) // wrong root — will not verify the leaf
+	leaf := newRSALeaf(t, root, "aia-misreport.example.com", []string{"aia-misreport.example.com"}, nil)
+
+	ctx := context.WithValue(context.Background(), verifyBundleFuncKey{}, func(_ context.Context, input certkit.BundleInput) (*certkit.BundleResult, error) {
+		// Simulate a bundle where AIA fetching succeeded but
+		// AIAIncomplete is set because the empty root pool caused a
+		// false positive.
+		return &certkit.BundleResult{
+			Leaf:               input.Leaf,
+			AIAIncomplete:      true,
+			AIAUnresolvedCount: 1,
+		}, nil
+	})
+
+	result, err := VerifyCert(ctx, &VerifyInput{
+		Cert:        leaf.cert,
+		CheckChain:  true,
+		TrustStore:  "custom",
+		CustomRoots: []*x509.Certificate{otherRoot.cert},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ChainValid != nil && *result.ChainValid {
+		t.Fatal("expected chain to be invalid with wrong roots")
+	}
+	if strings.Contains(result.ChainErr, "AIA resolution incomplete") {
+		t.Fatalf("error should not blame AIA resolution; got %q", result.ChainErr)
+	}
+}
+
 func TestVerifyCert_NoChainCheck_IgnoresTrustProbe(t *testing.T) {
 	// WHY: When CheckChain=false, VerifyCert should skip trust probing entirely.
 	t.Parallel()

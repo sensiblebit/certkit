@@ -342,6 +342,15 @@ func resolveVerifyBundle(ctx context.Context, cert *x509.Certificate, input *Ver
 	if err != nil {
 		return nil, fmt.Errorf("resolving certificate chain before trust checks: %w", err)
 	}
+	// The pre-verification walk uses an empty root pool (TrustStore="custom"
+	// with no custom roots), so Bundle recomputes AIAUnresolvedCount against
+	// that pool and marks issuers as unresolved even when AIA fetching
+	// succeeded. Clear the false positive unless there are genuine AIA fetch
+	// warnings (HTTP failures, URL rejections) that indicate real problems.
+	if !hasAIAWarnings(result.Warnings) {
+		result.AIAIncomplete = false
+		result.AIAUnresolvedCount = 0
+	}
 	return result, nil
 }
 
@@ -434,6 +443,15 @@ func shortestVerifiedChain(chains [][]*x509.Certificate) []*x509.Certificate {
 		}
 	}
 	return best
+}
+
+func hasAIAWarnings(warnings []string) bool {
+	for _, w := range warnings {
+		if strings.HasPrefix(w, "AIA ") {
+			return true
+		}
+	}
+	return false
 }
 
 func summarizeVerifyAIAWarnings(warnings []string) string {
