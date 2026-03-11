@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -24,6 +25,9 @@ var (
 	mozillaPoolOnce     sync.Once
 	mozillaPool         *x509.CertPool
 	errMozillaPool      error
+	systemPoolOnce      sync.Once
+	systemPool          *x509.CertPool
+	errSystemPool       error
 	mozillaSubjectsOnce sync.Once
 	mozillaSubjects     map[string]bool
 	mozillaRootKeysOnce sync.Once
@@ -95,6 +99,19 @@ func MozillaRootPool() (*x509.CertPool, error) {
 		mozillaPool = pool
 	})
 	return mozillaPool, errMozillaPool
+}
+
+// SystemCertPoolCached returns a shared x509.CertPool containing the host
+// system roots. The pool is initialized once and cached for the lifetime of
+// the process.
+func SystemCertPoolCached() (*x509.CertPool, error) {
+	systemPoolOnce.Do(func() {
+		systemPool, errSystemPool = x509.SystemCertPool()
+		if errSystemPool != nil {
+			errSystemPool = fmt.Errorf("loading system cert pool: %w", errSystemPool)
+		}
+	})
+	return systemPool, errSystemPool
 }
 
 // MozillaRootSubjects returns a set of raw ASN.1 subject byte strings from all
@@ -293,6 +310,13 @@ type VerifyChainTrustInput struct {
 	Intermediates *x509.CertPool
 }
 
+// CheckTrustAnchorsInput holds parameters for CheckTrustAnchors.
+type CheckTrustAnchorsInput struct {
+	Cert          *x509.Certificate
+	Intermediates *x509.CertPool
+	FileRoots     *x509.CertPool
+}
+
 // VerifyChainTrust reports whether the given certificate chains to a trusted
 // root. Cross-signed roots (same Subject and public key as a Mozilla root)
 // are trusted directly. For expired certificates, verification is performed
@@ -323,6 +347,46 @@ func VerifyChainTrust(input VerifyChainTrustInput) bool {
 	}
 	_, err := input.Cert.Verify(opts)
 	return err == nil
+}
+
+// CheckTrustAnchors reports which trust sources validate the certificate.
+// Results are returned in stable order: mozilla, system, file.
+func CheckTrustAnchors(input CheckTrustAnchorsInput) []string {
+	if input.Cert == nil {
+		return []string{}
+	}
+
+	anchors := make([]string, 0, 3)
+	if mozillaPool, err := MozillaRootPool(); err == nil && VerifyChainTrust(VerifyChainTrustInput{
+		Cert:          input.Cert,
+		Roots:         mozillaPool,
+		Intermediates: input.Intermediates,
+	}) {
+		anchors = append(anchors, "mozilla")
+	}
+	if systemPool, err := SystemCertPoolCached(); err == nil && VerifyChainTrust(VerifyChainTrustInput{
+		Cert:          input.Cert,
+		Roots:         systemPool,
+		Intermediates: input.Intermediates,
+	}) {
+		anchors = append(anchors, "system")
+	}
+	if input.FileRoots != nil && VerifyChainTrust(VerifyChainTrustInput{
+		Cert:          input.Cert,
+		Roots:         input.FileRoots,
+		Intermediates: input.Intermediates,
+	}) {
+		anchors = append(anchors, "file")
+	}
+	return anchors
+}
+
+// FormatTrustAnchors renders trust anchor labels for display.
+func FormatTrustAnchors(anchors []string) string {
+	if len(anchors) == 0 {
+		return "none"
+	}
+	return strings.Join(anchors, ", ")
 }
 
 // BundleResult holds the resolved chain and metadata.

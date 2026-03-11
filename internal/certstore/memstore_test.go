@@ -986,7 +986,7 @@ func TestMemStore_ScanSummaryTrust(t *testing.T) {
 			}
 
 			summary := store.ScanSummary(ScanSummaryInput{
-				RootPool: pool,
+				MozillaPool: pool,
 			})
 
 			if summary.ExpiredRoots != tt.wantExpiredRoots {
@@ -1303,7 +1303,7 @@ func TestMemStore_ConcurrentAccess(t *testing.T) {
 		_ = store.MatchedPairs()
 		_ = store.BundleNames()
 		_ = store.CertsByBundleName("bundle-a")
-		_ = store.ScanSummary(ScanSummaryInput{RootPool: rootPool})
+		_ = store.ScanSummary(ScanSummaryInput{MozillaPool: rootPool})
 		return nil
 	})
 

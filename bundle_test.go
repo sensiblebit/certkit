@@ -139,6 +139,38 @@ func TestBundle_unknownTrustStore(t *testing.T) {
 	}
 }
 
+func TestCheckTrustAnchors_FileRoots(t *testing.T) {
+	t.Parallel()
+
+	root, intermediates, leaf := buildChain(t, 3)
+	fileRoots := x509.NewCertPool()
+	fileRoots.AddCert(root)
+	intermediatePool := x509.NewCertPool()
+	for _, intermediate := range intermediates {
+		intermediatePool.AddCert(intermediate)
+	}
+
+	anchors := CheckTrustAnchors(CheckTrustAnchorsInput{
+		Cert:          leaf,
+		Intermediates: intermediatePool,
+		FileRoots:     fileRoots,
+	})
+	if got, want := anchors, []string{"file"}; len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("CheckTrustAnchors() = %v, want %v", got, want)
+	}
+}
+
+func TestFormatTrustAnchors(t *testing.T) {
+	t.Parallel()
+
+	if got := FormatTrustAnchors(nil); got != "none" {
+		t.Fatalf("FormatTrustAnchors(nil) = %q, want %q", got, "none")
+	}
+	if got := FormatTrustAnchors([]string{"mozilla", "system", "file"}); got != "mozilla, system, file" {
+		t.Fatalf("FormatTrustAnchors(list) = %q", got)
+	}
+}
+
 func TestBundle_verifyFalsePassthrough(t *testing.T) {
 	// WHY: When Verify=false, all supplied intermediates must pass through even if
 	// chain is incomplete -- callers may handle verification themselves.

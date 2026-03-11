@@ -314,6 +314,8 @@ type ConnectResult struct {
 	ClientAuth *ClientAuthInfo `json:"client_auth,omitempty"`
 	// PeerChain is the certificate chain presented by the server.
 	PeerChain []*x509.Certificate `json:"-"`
+	// ChainTrustAnchors holds per-certificate trust sources for PeerChain.
+	ChainTrustAnchors [][]string `json:"-"`
 	// TLSSCTs contains serialized SCTs from the TLS handshake extension.
 	TLSSCTs [][]byte `json:"-"`
 	// VerifiedChains contains the verified certificate chains.
@@ -2826,6 +2828,9 @@ func FormatConnectResult(r *ConnectResult) string {
 		fmt.Fprintf(&out, "     Issuer:      %s\n", FormatDNFromRaw(cert.RawIssuer, cert.Issuer))
 		fmt.Fprintf(&out, "     Not Before:  %s\n", cert.NotBefore.UTC().Format(time.RFC3339))
 		fmt.Fprintf(&out, "     Not After:   %s\n", cert.NotAfter.UTC().Format(time.RFC3339))
+		if i < len(r.ChainTrustAnchors) {
+			fmt.Fprintf(&out, "     Trust Anchors: %s\n", FormatTrustAnchors(r.ChainTrustAnchors[i]))
+		}
 		fmt.Fprintf(&out, "     Fingerprint: %s\n", CertFingerprintColonSHA256(cert))
 		if sans := CollectCertificateSANs(cert); len(sans) > 0 {
 			fmt.Fprintf(&out, "     SANs:        %s\n", strings.Join(sans, ", "))

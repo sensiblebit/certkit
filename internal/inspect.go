@@ -29,28 +29,29 @@ var (
 
 // InspectResult holds the inspection details for a single certificate, key, or CSR.
 type InspectResult struct {
-	Type      string   `json:"type"`
-	Subject   string   `json:"subject,omitempty"`
-	Issuer    string   `json:"issuer,omitempty"`
-	Serial    string   `json:"serial,omitempty"`
-	NotBefore string   `json:"not_before,omitempty"`
-	NotAfter  string   `json:"not_after,omitempty"`
-	CertType  string   `json:"cert_type,omitempty"`
-	Expired   *bool    `json:"expired,omitempty"`
-	Trusted   *bool    `json:"trusted,omitempty"`
-	IsCA      *bool    `json:"is_ca,omitempty"`
-	KeyAlgo   string   `json:"key_algorithm,omitempty"`
-	KeySize   string   `json:"key_size,omitempty"`
-	SANs      []string `json:"sans,omitempty"`
-	KeyUsages []string `json:"key_usages,omitempty"`
-	EKUs      []string `json:"ekus,omitempty"`
-	SHA256    string   `json:"sha256_fingerprint,omitempty"`
-	SHA1      string   `json:"sha1_fingerprint,omitempty"`
-	SKI       string   `json:"subject_key_id,omitempty"`
-	SKILegacy string   `json:"subject_key_id_sha1,omitempty"`
-	AKI       string   `json:"authority_key_id,omitempty"`
-	SigAlg    string   `json:"signature_algorithm,omitempty"`
-	KeyType   string   `json:"key_type,omitempty"`
+	Type         string   `json:"type"`
+	Subject      string   `json:"subject,omitempty"`
+	Issuer       string   `json:"issuer,omitempty"`
+	Serial       string   `json:"serial,omitempty"`
+	NotBefore    string   `json:"not_before,omitempty"`
+	NotAfter     string   `json:"not_after,omitempty"`
+	CertType     string   `json:"cert_type,omitempty"`
+	Expired      *bool    `json:"expired,omitempty"`
+	Trusted      *bool    `json:"trusted,omitempty"`
+	TrustAnchors []string `json:"trust_anchors"`
+	IsCA         *bool    `json:"is_ca,omitempty"`
+	KeyAlgo      string   `json:"key_algorithm,omitempty"`
+	KeySize      string   `json:"key_size,omitempty"`
+	SANs         []string `json:"sans,omitempty"`
+	KeyUsages    []string `json:"key_usages,omitempty"`
+	EKUs         []string `json:"ekus,omitempty"`
+	SHA256       string   `json:"sha256_fingerprint,omitempty"`
+	SHA1         string   `json:"sha1_fingerprint,omitempty"`
+	SKI          string   `json:"subject_key_id,omitempty"`
+	SKILegacy    string   `json:"subject_key_id_sha1,omitempty"`
+	AKI          string   `json:"authority_key_id,omitempty"`
+	SigAlg       string   `json:"signature_algorithm,omitempty"`
+	KeyType      string   `json:"key_type,omitempty"`
 
 	// AIAFetched indicates the certificate was resolved via AIA, not from user input.
 	AIAFetched bool `json:"aia_fetched,omitempty"`
@@ -220,25 +221,26 @@ func inspectCert(cert *x509.Certificate) InspectResult {
 	isCA := cert.IsCA
 
 	return InspectResult{
-		Type:      "certificate",
-		Subject:   certkit.FormatDNFromRaw(cert.RawSubject, cert.Subject),
-		Issuer:    certkit.FormatDNFromRaw(cert.RawIssuer, cert.Issuer),
-		Serial:    certkit.FormatSerialNumber(cert.SerialNumber),
-		NotBefore: cert.NotBefore.UTC().Format(time.RFC3339),
-		NotAfter:  cert.NotAfter.UTC().Format(time.RFC3339),
-		CertType:  certkit.GetCertificateType(cert),
-		IsCA:      &isCA,
-		KeyAlgo:   certkit.PublicKeyAlgorithmName(cert.PublicKey),
-		KeySize:   publicKeySize(cert.PublicKey),
-		SANs:      sans,
-		KeyUsages: certkit.FormatKeyUsage(cert.KeyUsage),
-		EKUs:      certkit.FormatEKUs(cert.ExtKeyUsage),
-		SHA256:    certkit.CertFingerprintColonSHA256(cert),
-		SHA1:      certkit.CertFingerprintColonSHA1(cert),
-		SKI:       certkit.CertSKIEmbedded(cert),
-		AKI:       certkit.CertAKIEmbedded(cert),
-		SigAlg:    cert.SignatureAlgorithm.String(),
-		cert:      cert,
+		Type:         "certificate",
+		Subject:      certkit.FormatDNFromRaw(cert.RawSubject, cert.Subject),
+		Issuer:       certkit.FormatDNFromRaw(cert.RawIssuer, cert.Issuer),
+		Serial:       certkit.FormatSerialNumber(cert.SerialNumber),
+		NotBefore:    cert.NotBefore.UTC().Format(time.RFC3339),
+		NotAfter:     cert.NotAfter.UTC().Format(time.RFC3339),
+		CertType:     certkit.GetCertificateType(cert),
+		TrustAnchors: []string{},
+		IsCA:         &isCA,
+		KeyAlgo:      certkit.PublicKeyAlgorithmName(cert.PublicKey),
+		KeySize:      publicKeySize(cert.PublicKey),
+		SANs:         sans,
+		KeyUsages:    certkit.FormatKeyUsage(cert.KeyUsage),
+		EKUs:         certkit.FormatEKUs(cert.ExtKeyUsage),
+		SHA256:       certkit.CertFingerprintColonSHA256(cert),
+		SHA1:         certkit.CertFingerprintColonSHA1(cert),
+		SKI:          certkit.CertSKIEmbedded(cert),
+		AKI:          certkit.CertAKIEmbedded(cert),
+		SigAlg:       cert.SignatureAlgorithm.String(),
+		cert:         cert,
 	}
 }
 
@@ -258,12 +260,13 @@ func inspectCSR(csr *x509.CertificateRequest) InspectResult {
 	sans = append(sans, certkit.ParseOtherNameSANs(csr.Extensions)...)
 
 	r := InspectResult{
-		Type:       "csr",
-		CSRSubject: certkit.FormatDNFromRaw(csr.RawSubject, csr.Subject),
-		KeyAlgo:    certkit.PublicKeyAlgorithmName(csr.PublicKey),
-		KeySize:    publicKeySize(csr.PublicKey),
-		SigAlg:     csr.SignatureAlgorithm.String(),
-		SANs:       sans,
+		Type:         "csr",
+		CSRSubject:   certkit.FormatDNFromRaw(csr.RawSubject, csr.Subject),
+		TrustAnchors: []string{},
+		KeyAlgo:      certkit.PublicKeyAlgorithmName(csr.PublicKey),
+		KeySize:      publicKeySize(csr.PublicKey),
+		SigAlg:       csr.SignatureAlgorithm.String(),
+		SANs:         sans,
 	}
 
 	// Compute SKI from the CSR's public key.
@@ -302,9 +305,10 @@ func parseBasicConstraintsCA(raw []byte) bool {
 
 func inspectKey(key any) InspectResult {
 	r := InspectResult{
-		Type:    "private_key",
-		KeyType: certkit.KeyAlgorithmName(key),
-		KeySize: privateKeySize(key),
+		Type:         "private_key",
+		TrustAnchors: []string{},
+		KeyType:      certkit.KeyAlgorithmName(key),
+		KeySize:      privateKeySize(key),
 	}
 	if signer, ok := key.(crypto.Signer); ok {
 		pub := signer.Public()
@@ -403,15 +407,10 @@ func ResolveInspectAIA(ctx context.Context, input ResolveInspectAIAInput) ([]Ins
 	return results, aiaResult.Warnings
 }
 
-// AnnotateInspectTrust sets the Expired and Trusted fields on certificate
-// results using Mozilla roots for chain verification. Intermediate certificates
-// found in the results are used to build chains.
+// AnnotateInspectTrust sets the Expired, Trusted, and TrustAnchors fields on
+// certificate results. Intermediate certificates found in the results are used
+// to build chains.
 func AnnotateInspectTrust(results []InspectResult) error {
-	mozillaPool, err := certkit.MozillaRootPool()
-	if err != nil {
-		return fmt.Errorf("loading Mozilla root pool: %w", err)
-	}
-
 	// Build intermediate pool from all certs in the results
 	intermediatePool := x509.NewCertPool()
 	for i := range results {
@@ -429,7 +428,11 @@ func AnnotateInspectTrust(results []InspectResult) error {
 		expired := now.After(cert.NotAfter)
 		results[i].Expired = &expired
 
-		trusted := certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{Cert: cert, Roots: mozillaPool, Intermediates: intermediatePool})
+		results[i].TrustAnchors = certkit.CheckTrustAnchors(certkit.CheckTrustAnchorsInput{
+			Cert:          cert,
+			Intermediates: intermediatePool,
+		})
+		trusted := len(results[i].TrustAnchors) > 0
 		results[i].Trusted = &trusted
 	}
 	return nil
@@ -478,6 +481,7 @@ func formatInspectText(results []InspectResult) string {
 			if r.Trusted != nil {
 				fmt.Fprintf(&sb, "  Trusted:     %s\n", boolYesNo(*r.Trusted))
 			}
+			fmt.Fprintf(&sb, "  Trust Anchors: %s\n", certkit.FormatTrustAnchors(r.TrustAnchors))
 			fmt.Fprintf(&sb, "  Key:         %s %s\n", r.KeyAlgo, r.KeySize)
 			fmt.Fprintf(&sb, "  Signature:   %s\n", r.SigAlg)
 			if len(r.KeyUsages) > 0 {

@@ -2255,6 +2255,7 @@ func TestFormatConnectResult(t *testing.T) {
 		crl            *CRLCheckResult
 		ct             *CTResult
 		peerChain      []*x509.Certificate
+		chainAnchors   [][]string
 		usePeerChain   bool
 		wantStrings    []string
 		notWantStrings []string
@@ -2402,6 +2403,11 @@ func TestFormatConnectResult(t *testing.T) {
 			usePeerChain: true,
 			wantStrings:  []string{"Certificate chain (0 certificate(s))"},
 		},
+		{
+			name:         "trust anchors rendered per certificate",
+			chainAnchors: [][]string{{"mozilla", "system"}},
+			wantStrings:  []string{"Trust Anchors: mozilla, system"},
+		},
 	}
 
 	// LegacyProbe: Note shows key-possession caveat; Verify shows real chain result.
@@ -2439,19 +2445,20 @@ func TestFormatConnectResult(t *testing.T) {
 			// WHY: Ensures FormatConnectResult handles this result permutation.
 			t.Parallel()
 			result := &ConnectResult{
-				Host:        "test.example.com",
-				Port:        "443",
-				Protocol:    "TLS 1.3",
-				CipherSuite: "TLS_AES_128_GCM_SHA256",
-				ServerName:  "test.example.com",
-				PeerChain:   []*x509.Certificate{cert},
-				Diagnostics: tt.diagnostics,
-				AIAFetched:  tt.aiaFetched,
-				VerifyError: tt.verifyError,
-				ClientAuth:  tt.clientAuth,
-				OCSP:        tt.ocsp,
-				CRL:         tt.crl,
-				CT:          tt.ct,
+				Host:              "test.example.com",
+				Port:              "443",
+				Protocol:          "TLS 1.3",
+				CipherSuite:       "TLS_AES_128_GCM_SHA256",
+				ServerName:        "test.example.com",
+				PeerChain:         []*x509.Certificate{cert},
+				ChainTrustAnchors: tt.chainAnchors,
+				Diagnostics:       tt.diagnostics,
+				AIAFetched:        tt.aiaFetched,
+				VerifyError:       tt.verifyError,
+				ClientAuth:        tt.clientAuth,
+				OCSP:              tt.ocsp,
+				CRL:               tt.crl,
+				CT:                tt.ct,
 			}
 			if tt.usePeerChain {
 				result.PeerChain = tt.peerChain

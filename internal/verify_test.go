@@ -161,8 +161,8 @@ func TestVerifyCert_NilInputs(t *testing.T) {
 	}
 }
 
-func TestVerifyCert_InvalidTrustStore(t *testing.T) {
-	// WHY: VerifyCert should surface invalid trust store values as chain errors.
+func TestVerifyCert_NoTrustAnchors(t *testing.T) {
+	// WHY: VerifyCert should report chain failure when no trust source validates the leaf.
 	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "invalid-store.example.com", []string{"invalid-store.example.com"}, nil)
@@ -170,7 +170,6 @@ func TestVerifyCert_InvalidTrustStore(t *testing.T) {
 	result, err := VerifyCert(context.Background(), &VerifyInput{
 		Cert:       leaf.cert,
 		CheckChain: true,
-		TrustStore: "invalid",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -178,13 +177,16 @@ func TestVerifyCert_InvalidTrustStore(t *testing.T) {
 	if result.ChainValid == nil || *result.ChainValid {
 		t.Fatalf("expected ChainValid false, got %v", result.ChainValid)
 	}
-	if !strings.Contains(result.ChainErr, "unknown trust_store") {
-		t.Errorf("expected ChainErr to mention unknown trust_store, got %q", result.ChainErr)
+	if !strings.Contains(result.ChainErr, "mozilla:") || !strings.Contains(result.ChainErr, "system:") {
+		t.Errorf("expected ChainErr to mention mozilla and system attempts, got %q", result.ChainErr)
+	}
+	if len(result.TrustAnchors) != 0 {
+		t.Errorf("expected no trust anchors, got %v", result.TrustAnchors)
 	}
 }
 
-func TestVerifyCert_InvalidTrustStore_NoChainCheck(t *testing.T) {
-	// WHY: Invalid trust store values should be ignored when CheckChain=false.
+func TestVerifyCert_NoChainCheck_IgnoresTrustProbe(t *testing.T) {
+	// WHY: When CheckChain=false, VerifyCert should skip trust probing entirely.
 	t.Parallel()
 	ca := newRSACA(t)
 	leaf := newRSALeaf(t, ca, "invalid-store-nochain.example.com", []string{"invalid-store-nochain.example.com"}, nil)
@@ -192,7 +194,6 @@ func TestVerifyCert_InvalidTrustStore_NoChainCheck(t *testing.T) {
 	result, err := VerifyCert(context.Background(), &VerifyInput{
 		Cert:       leaf.cert,
 		CheckChain: false,
-		TrustStore: "invalid",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -1138,18 +1139,20 @@ func TestFormatVerifyResult(t *testing.T) {
 		{
 			name: "chain display",
 			result: &VerifyResult{
-				Subject:    "CN=leaf.example.com",
-				NotAfter:   "2030-01-01T00:00:00Z",
-				SKI:        "aabbccdd",
-				ChainValid: &chainValid,
+				Subject:      "CN=leaf.example.com",
+				NotAfter:     "2030-01-01T00:00:00Z",
+				SKI:          "aabbccdd",
+				TrustAnchors: []string{"mozilla", "file"},
+				ChainValid:   &chainValid,
 				Chain: []ChainCert{
-					{Subject: "CN=leaf.example.com", NotAfter: "2030-01-01", SKI: "aabbccdd"},
-					{Subject: "CN=Intermediate CA", NotAfter: "2035-01-01", SKI: "11223344"},
-					{Subject: "CN=Root CA", NotAfter: "2040-01-01", SKI: "55667788", IsRoot: true},
+					{Subject: "CN=leaf.example.com", NotAfter: "2030-01-01", SKI: "aabbccdd", TrustAnchors: []string{"file"}},
+					{Subject: "CN=Intermediate CA", NotAfter: "2035-01-01", SKI: "11223344", TrustAnchors: []string{"file"}},
+					{Subject: "CN=Root CA", NotAfter: "2040-01-01", SKI: "55667788", IsRoot: true, TrustAnchors: []string{"file"}},
 				},
 			},
-			mustContain: []string{"Chain:", "[root]", "CN=leaf.example.com", "CN=Intermediate CA", "CN=Root CA", "0:", "2:"},
+			mustContain: []string{"Chain:", "[root]", "CN=leaf.example.com", "CN=Intermediate CA", "CN=Root CA", "0:", "2:", "Trust Anchors: mozilla, file", "Trust Anchors: file"},
 			mustAppearInOrder: []string{
+				"Trust Anchors: mozilla, file",
 				"\nChain:\n",
 				"0: CN=leaf.example.com",
 				"1: CN=Intermediate CA",

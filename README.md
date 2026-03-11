@@ -151,19 +151,19 @@ Common passwords (`""`, `"password"`, `"changeit"`, `"keypassword"`) are always 
 ### Verify Flags
 
 <!-- certkit:flags:verify -->
-| Flag                      | Default   | Description                                              |
-| ------------------------- | --------- | -------------------------------------------------------- |
-| `--allow-private-network` | `false`   | Allow AIA/OCSP/CRL fetches to private/internal endpoints |
-| `--crl`                   | `false`   | Check CRL distribution points for revocation             |
-| `--diagnose`              | `false`   | Show diagnostics when chain verification fails           |
-| `--expiry`, `-e`          |           | Check if cert expires within duration (e.g., 30d, 720h)  |
-| `--format`                | `text`    | Output format: text, json                                |
-| `--key`                   |           | Private key file to check against the certificate        |
-| `--ocsp`                  | `false`   | Check OCSP revocation status                             |
-| `--trust-store`           | `mozilla` | Trust store: system, mozilla                             |
+| Flag                      | Default | Description                                                           |
+| ------------------------- | ------- | --------------------------------------------------------------------- |
+| `--allow-private-network` | `false` | Allow AIA/OCSP/CRL fetches to private/internal endpoints              |
+| `--crl`                   | `false` | Check CRL distribution points for revocation                          |
+| `--diagnose`              | `false` | Show diagnostics when chain verification fails                        |
+| `--expiry`, `-e`          |         | Check if cert expires within duration (e.g., 30d, 720h)               |
+| `--format`                | `text`  | Output format: text, json                                             |
+| `--key`                   |         | Private key file to check against the certificate                     |
+| `--ocsp`                  | `false` | Check OCSP revocation status                                          |
+| `--roots`                 |         | Additional root certificates file (PEM, DER, PKCS#7, PKCS#12, or JKS) |
 <!-- /certkit:flags -->
 
-Chain verification is always performed. When the input contains an embedded private key (PKCS#12, JKS), key match is checked automatically. Use `--ocsp` and/or `--crl` to check revocation status (requires network access and a valid chain).
+Chain verification is always performed against both the embedded Mozilla roots and the host system trust store. Use `--roots` to add a file-backed trust source for private PKI. When the input contains an embedded private key (PKCS#12, JKS), key match is checked automatically. Use `--ocsp` and/or `--crl` to check revocation status (requires network access and a valid chain).
 
 ### Connect Flags
 
