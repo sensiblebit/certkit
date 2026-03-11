@@ -56,8 +56,8 @@ func printCommandTree(b *strings.Builder, cmd *cobra.Command, prefix string) {
 			return
 		}
 		name := "--" + f.Name
-		if f.Shorthand != "" {
-			name = "-" + f.Shorthand + ", " + name
+		if f.Name == "" && f.Shorthand != "" {
+			name = "-" + f.Shorthand
 		}
 		flags = append(flags, name)
 	})

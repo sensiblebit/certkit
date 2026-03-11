@@ -156,9 +156,17 @@ func TestTreeCommand(t *testing.T) {
 			t.Fatal("tree output missing completion command boundary")
 		}
 		bundleSection := rootOutput[start : start+end]
-		for _, flag := range []string{"-h, --help", "--password-file", "-p, --passwords", "-v, --verbose", "--json", "--allow-expired"} {
+		for _, flag := range []string{"--help", "--password-file", "--passwords", "--verbose", "--json", "--allow-expired"} {
 			if !strings.Contains(bundleSection, flag) {
 				t.Errorf("bundle subtree missing accepted flag %q", flag)
+			}
+		}
+	})
+
+	t.Run("prefers long flag names over shorthand pairs", func(t *testing.T) {
+		for _, flag := range []string{"-h, --help", "-l, --log-level", "-p, --passwords", "-v, --verbose"} {
+			if strings.Contains(rootOutput, flag) {
+				t.Errorf("tree output should omit shorthand pair %q", flag)
 			}
 		}
 	})

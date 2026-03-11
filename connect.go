@@ -546,7 +546,8 @@ func startTLSFallbackContext(parent context.Context, connectTimeout time.Duratio
 	if connectTimeout == 0 {
 		connectTimeout = defaultConnectTimeout
 	}
-	ctx, cancel := context.WithTimeout(parent, connectTimeout) //nolint:gosec // G118: cancel is returned to the caller.
+	//nolint:gosec // G118: the cancel func is intentionally returned to the caller.
+	ctx, cancel := context.WithTimeout(parent, connectTimeout)
 	return ctx, cancel
 }
 
