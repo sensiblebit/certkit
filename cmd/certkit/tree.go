@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -57,14 +58,8 @@ func printCommandTree(b *strings.Builder, in printCommandTreeInput) {
 		fmt.Fprintf(b, "%s — %s\n", cmd.Name(), cmd.Short)
 	}
 
-	// Collect every visible flag the command accepts, including inherited ones.
-	var flags []string
-	cmd.Flags().VisitAll(func(f *pflag.Flag) {
-		if f.Hidden {
-			return
-		}
-		flags = append(flags, "--"+f.Name)
-	})
+	localFlags := visibleFlagNames(cmd.LocalFlags())
+	inheritedFlags := visibleFlagNames(cmd.InheritedFlags())
 
 	// Collect non-hidden subcommands.
 	var visible []*cobra.Command
@@ -74,17 +69,29 @@ func printCommandTree(b *strings.Builder, in printCommandTreeInput) {
 		}
 	}
 
-	total := len(flags) + len(visible)
+	total := len(localFlags) + len(visible)
+	if len(inheritedFlags) > 0 {
+		total++
+	}
 	idx := 0
 
-	// Print flags.
-	for _, flag := range flags {
+	// Print local flags.
+	for _, flag := range localFlags {
 		idx++
 		connector := "├── "
 		if idx == total {
 			connector = "└── "
 		}
 		fmt.Fprintf(b, "%s%s%s\n", prefix, connector, flag)
+	}
+
+	if len(inheritedFlags) > 0 {
+		idx++
+		connector := "├── "
+		if idx == total {
+			connector = "└── "
+		}
+		fmt.Fprintf(b, "%s%sinherits: %s\n", prefix, connector, strings.Join(inheritedFlags, ", "))
 	}
 
 	// Print subcommands.
@@ -102,4 +109,16 @@ func printCommandTree(b *strings.Builder, in printCommandTreeInput) {
 			prefix: childPrefix,
 		})
 	}
+}
+
+func visibleFlagNames(flags *pflag.FlagSet) []string {
+	var names []string
+	flags.VisitAll(func(f *pflag.Flag) {
+		if f.Hidden {
+			return
+		}
+		names = append(names, "--"+f.Name)
+	})
+	slices.Sort(names)
+	return names
 }

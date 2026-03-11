@@ -156,9 +156,17 @@ func TestTreeCommand(t *testing.T) {
 		fmt.Fprintf(&bundleTree, "%s — %s\n", bundleCmd.Name(), bundleCmd.Short)
 		printCommandTree(&bundleTree, printCommandTreeInput{cmd: bundleCmd})
 		bundleSection := bundleTree.String()
+		if !strings.Contains(bundleSection, "inherits: ") {
+			t.Fatal("bundle subtree missing inherited flag summary")
+		}
 		for _, flag := range []string{"--help", "--password-file", "--passwords", "--verbose", "--json", "--allow-expired"} {
 			if !strings.Contains(bundleSection, flag) {
-				t.Errorf("bundle subtree missing accepted flag %q", flag)
+				t.Errorf("bundle subtree missing inherited flag %q", flag)
+			}
+		}
+		for _, localFlag := range []string{"--format", "--out-file", "--trust-store"} {
+			if !strings.Contains(bundleSection, localFlag) {
+				t.Errorf("bundle subtree missing local flag %q", localFlag)
 			}
 		}
 	})
@@ -168,6 +176,15 @@ func TestTreeCommand(t *testing.T) {
 			if strings.Contains(rootOutput, flag) {
 				t.Errorf("tree output should omit shorthand pair %q", flag)
 			}
+		}
+	})
+
+	t.Run("collapses inherited flags to one summary line", func(t *testing.T) {
+		if strings.Count(rootOutput, "inherits: ") == 0 {
+			t.Fatal("tree output missing inherited flag summaries")
+		}
+		if strings.Count(rootOutput, "\n│   ├── --json\n")+strings.Count(rootOutput, "\n│   └── --json\n") != 0 {
+			t.Fatal("tree output should not repeat inherited flags as standalone subcommand entries")
 		}
 	})
 
