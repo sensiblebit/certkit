@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Deduplicate extension block formatting between `connect --verbose` and the shared internal formatter to prevent drift in extension flag rendering ([`30d67f8`])
 - Encrypt private key in YAML bundle output (`.yaml`) when an export password is supplied; previously leaked plaintext key ([#167])
 - Reject malformed `ENCRYPTED PRIVATE KEY` blocks with invalid AES IV length instead of panicking ([#167])
 - Trim whitespace from web UI export password so whitespace-only input is treated as blank ([#167])
@@ -1130,3 +1131,4 @@ Initial release.
 [`772742c`]: https://github.com/sensiblebit/certkit/commit/772742c
 [`0ee41ad`]: https://github.com/sensiblebit/certkit/commit/0ee41ad
 [`512d96c`]: https://github.com/sensiblebit/certkit/commit/512d96c
+[`30d67f8`]: https://github.com/sensiblebit/certkit/commit/30d67f8
