@@ -196,3 +196,17 @@ Area: [.claude/docs/architecture.md](/Users/daniel.wood/code/github/sensiblebit/
 Summary: the architecture/changelog docs did not mention the new `browser_io.js` helper or the user-visible certstore ingestion fix for extensionless binary crypto content.
 Source: Pre-push docs audit finding
 Fix: Added the `browser_io.js` architecture entry, updated `app.js` architecture notes, and added the missing changelog bullet for extensionless binary ingestion
+
+28. `examples-bundle-jks-drift`
+Status: fixed
+Area: [EXAMPLES.md](/Users/daniel.wood/code/github/sensiblebit/certkit/EXAMPLES.md)
+Summary: the bundle export example still claimed `scan --bundle-path` writes JKS output even though the current exporter does not emit `.jks`.
+Source: Follow-up docs audit finding
+Fix: Updated the example text to list only the currently exported bundle formats
+
+29. `readme-examples-overclaim`
+Status: fixed
+Area: [README.md](/Users/daniel.wood/code/github/sensiblebit/certkit/README.md)
+Summary: README claimed EXAMPLES covered every command even though built-in `completion` subcommands are not documented there.
+Source: Follow-up docs audit finding
+Fix: Narrowed the README wording to describe the examples as the main certificate workflows rather than every command

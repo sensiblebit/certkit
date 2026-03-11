@@ -95,7 +95,7 @@ Build the full chain your web server needs:
 certkit bundle cert.pem -o chain.pem
 ```
 
-See [EXAMPLES.md](EXAMPLES.md) for a complete walkthrough of every command with real-world scenarios.
+See [EXAMPLES.md](EXAMPLES.md) for a walkthrough of the main certificate workflows and real-world scenarios.
 
 ## Commands
 
