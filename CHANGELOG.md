@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add per-store Mozilla/system trust counts to `scan` JSON summaries alongside the existing aggregate `untrusted_*` counts ([`0ee41ad`])
 - Add `verify --roots <file>` to include PEM/DER/PKCS#7/PKCS#12/JKS certificates as an additional file-backed trust source ([`0ee41ad`])
 - Add `CheckTrustAnchorsResult` so library callers can inspect `trust_anchors` plus trust-source load warnings from `CheckTrustAnchors` ([#171])
+- Display top-level X.509 certificate extensions with human-readable OID names in `inspect`, `verify --verbose`, and `connect --verbose`, including critical and unhandled-critical markers ([`512d96c`])
 
 ### Changed
 
@@ -32,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Deduplicate extension block formatting between `connect --verbose` and the shared internal formatter to prevent drift in extension flag rendering ([`30d67f8`])
 - Encrypt private key in YAML bundle output (`.yaml`) when an export password is supplied; previously leaked plaintext key ([#167])
 - Reject malformed `ENCRYPTED PRIVATE KEY` blocks with invalid AES IV length instead of panicking ([#167])
 - Trim whitespace from web UI export password so whitespace-only input is treated as blank ([#167])
@@ -1128,3 +1130,5 @@ Initial release.
 [`6492fa5`]: https://github.com/sensiblebit/certkit/commit/6492fa5
 [`772742c`]: https://github.com/sensiblebit/certkit/commit/772742c
 [`0ee41ad`]: https://github.com/sensiblebit/certkit/commit/0ee41ad
+[`512d96c`]: https://github.com/sensiblebit/certkit/commit/512d96c
+[`30d67f8`]: https://github.com/sensiblebit/certkit/commit/30d67f8

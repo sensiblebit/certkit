@@ -719,7 +719,7 @@ certkit keygen --json | jq '.key_pem'
 
 ### Verbose output
 
-Add `--verbose` to see extended details like serial number, key algorithm and size, signature algorithm, key usages, and extended key usages. For `certkit connect`, verbose mode also appends the server-sent certificate chain in PEM with metadata headers so you can copy the exact chain without rerunning another command:
+Add `--verbose` to see extended details like serial number, key algorithm and size, signature algorithm, key usages, extended key usages, and the full top-level certificate extension list with critical and unhandled markers. For `certkit connect`, verbose mode also appends the server-sent certificate chain in PEM with metadata headers so you can copy the exact chain without rerunning another command:
 
 ```sh
 certkit verify cert.pem --verbose

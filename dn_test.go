@@ -961,6 +961,167 @@ func TestParseOtherNameSANs_FromCertificate(t *testing.T) {
 	}
 }
 
+func TestCollectCertificateExtensions(t *testing.T) {
+	// WHY: Users need visibility into every top-level extension on a
+	// certificate, including proprietary critical extensions that Go leaves
+	// in UnhandledCriticalExtensions.
+	t.Parallel()
+
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	appleOID := asn1.ObjectIdentifier{1, 2, 840, 113635, 100, 6, 27, 3, 2}
+	unknownOID := asn1.ObjectIdentifier{1, 2, 3, 4, 5}
+	template := &x509.Certificate{
+		SerialNumber: randomSerial(t),
+		Subject:      pkix.Name{CommonName: "extensions.example.com"},
+		NotBefore:    time.Now().Add(-time.Hour),
+		NotAfter:     time.Now().Add(24 * time.Hour),
+		KeyUsage:     x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		DNSNames:     []string{"extensions.example.com"},
+		ExtraExtensions: []pkix.Extension{
+			{Id: appleOID, Critical: true, Value: []byte{0x05, 0x00}},
+			{Id: unknownOID, Value: []byte{0x05, 0x00}},
+		},
+	}
+
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	got := CollectCertificateExtensions(cert)
+	if len(got) == 0 {
+		t.Fatal("CollectCertificateExtensions returned no extensions")
+	}
+
+	findByOID := func(oid string) *CertificateExtension {
+		t.Helper()
+		for i := range got {
+			if got[i].OID == oid {
+				return &got[i]
+			}
+		}
+		return nil
+	}
+
+	keyUsage := findByOID("2.5.29.15")
+	if keyUsage == nil {
+		t.Fatal("missing key usage extension")
+	}
+	if keyUsage.Name != "Key Usage" {
+		t.Fatalf("key usage name = %q, want %q", keyUsage.Name, "Key Usage")
+	}
+	if !keyUsage.Critical {
+		t.Error("key usage should be marked critical")
+	}
+	if keyUsage.Unhandled {
+		t.Error("key usage should not be marked unhandled")
+	}
+
+	subjectAltName := findByOID("2.5.29.17")
+	if subjectAltName == nil {
+		t.Fatal("missing subject alternative name extension")
+	}
+	if subjectAltName.Name != "Subject Alternative Name" {
+		t.Fatalf("SAN name = %q, want %q", subjectAltName.Name, "Subject Alternative Name")
+	}
+
+	apple := findByOID(appleOID.String())
+	if apple == nil {
+		t.Fatal("missing Apple proprietary extension")
+	}
+	if apple.Name != "Apple Push Notification Service" {
+		t.Fatalf("Apple extension name = %q, want %q", apple.Name, "Apple Push Notification Service")
+	}
+	if !apple.Critical {
+		t.Error("Apple extension should be marked critical")
+	}
+	if !apple.Unhandled {
+		t.Error("Apple extension should be marked unhandled")
+	}
+
+	unknown := findByOID(unknownOID.String())
+	if unknown == nil {
+		t.Fatal("missing unknown extension")
+	}
+	if unknown.Name != unknownOID.String() {
+		t.Fatalf("unknown extension name = %q, want dotted OID %q", unknown.Name, unknownOID.String())
+	}
+	if unknown.Unhandled {
+		t.Error("non-critical unknown extension should not be marked unhandled")
+	}
+}
+
+func TestCollectCertificateExtensions_Nil(t *testing.T) {
+	t.Parallel()
+
+	if got := CollectCertificateExtensions(nil); got != nil {
+		t.Fatalf("CollectCertificateExtensions(nil) = %v, want nil", got)
+	}
+}
+
+func TestExtensionOIDName(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		oid  string
+		want string
+	}{
+		{
+			name: "known standard extension",
+			oid:  "2.5.29.15",
+			want: "Key Usage",
+		},
+		{
+			name: "known proprietary extension",
+			oid:  "1.2.840.113635.100.6.27.3.2",
+			want: "Apple Push Notification Service",
+		},
+		{
+			name: "known Apple marker extension",
+			oid:  "1.2.840.113635.100.6.2.12",
+			want: "Apple Server Authentication Intermediate Marker",
+		},
+		{
+			name: "Apple proprietary fallback",
+			oid:  "1.2.840.113635.100.6.86",
+			want: "Apple Proprietary Extension 86",
+		},
+		{
+			name: "Microsoft proprietary fallback",
+			oid:  "1.3.6.1.4.1.311.999",
+			want: "Microsoft Proprietary Extension 999",
+		},
+		{
+			name: "Netscape proprietary fallback",
+			oid:  "2.16.840.1.113730.99",
+			want: "Netscape Proprietary Extension 99",
+		},
+		{
+			name: "unknown extension",
+			oid:  "1.2.3.4.5",
+			want: "1.2.3.4.5",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			if got := ExtensionOIDName(tt.oid); got != tt.want {
+				t.Fatalf("ExtensionOIDName(%q) = %q, want %q", tt.oid, got, tt.want)
+			}
+		})
+	}
+}
+
 // buildSANWithOtherName constructs raw SAN extension bytes containing a single
 // OtherName GeneralName with the given OID and UTF8String value.
 func buildSANWithOtherName(t *testing.T, oid asn1.ObjectIdentifier, value string) []byte {

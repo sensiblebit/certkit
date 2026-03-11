@@ -48,18 +48,19 @@ type ChainCert struct {
 	TrustWarnings []string `json:"trust_warnings,omitempty"`
 
 	// Verbose-only fields (populated when VerifyInput.Verbose is true).
-	Issuer    string   `json:"issuer,omitempty"`
-	Serial    string   `json:"serial,omitempty"`
-	NotBefore string   `json:"not_before,omitempty"`
-	CertType  string   `json:"cert_type,omitempty"`
-	KeyAlgo   string   `json:"key_algorithm,omitempty"`
-	KeySize   string   `json:"key_size,omitempty"`
-	SigAlg    string   `json:"signature_algorithm,omitempty"`
-	KeyUsages []string `json:"key_usages,omitempty"`
-	EKUs      []string `json:"ekus,omitempty"`
-	SHA256    string   `json:"sha256_fingerprint,omitempty"`
-	SHA1      string   `json:"sha1_fingerprint,omitempty"`
-	AKI       string   `json:"authority_key_id,omitempty"`
+	Issuer     string                         `json:"issuer,omitempty"`
+	Serial     string                         `json:"serial,omitempty"`
+	NotBefore  string                         `json:"not_before,omitempty"`
+	CertType   string                         `json:"cert_type,omitempty"`
+	KeyAlgo    string                         `json:"key_algorithm,omitempty"`
+	KeySize    string                         `json:"key_size,omitempty"`
+	SigAlg     string                         `json:"signature_algorithm,omitempty"`
+	KeyUsages  []string                       `json:"key_usages,omitempty"`
+	EKUs       []string                       `json:"ekus,omitempty"`
+	Extensions []certkit.CertificateExtension `json:"extensions,omitempty"`
+	SHA256     string                         `json:"sha256_fingerprint,omitempty"`
+	SHA1       string                         `json:"sha1_fingerprint,omitempty"`
+	AKI        string                         `json:"authority_key_id,omitempty"`
 }
 
 // VerifyResult holds the results of certificate verification checks.
@@ -84,19 +85,20 @@ type VerifyResult struct {
 	Diagnostics   []Diagnosis             `json:"diagnostics,omitempty"`
 
 	// Verbose-only fields (populated when VerifyInput.Verbose is true).
-	Issuer    string   `json:"issuer,omitempty"`
-	Serial    string   `json:"serial,omitempty"`
-	NotBefore string   `json:"not_before,omitempty"`
-	CertType  string   `json:"cert_type,omitempty"`
-	IsCA      *bool    `json:"is_ca,omitempty"`
-	KeyAlgo   string   `json:"key_algorithm,omitempty"`
-	KeySize   string   `json:"key_size,omitempty"`
-	SigAlg    string   `json:"signature_algorithm,omitempty"`
-	KeyUsages []string `json:"key_usages,omitempty"`
-	EKUs      []string `json:"ekus,omitempty"`
-	SHA256    string   `json:"sha256_fingerprint,omitempty"`
-	SHA1      string   `json:"sha1_fingerprint,omitempty"`
-	AKI       string   `json:"authority_key_id,omitempty"`
+	Issuer     string                         `json:"issuer,omitempty"`
+	Serial     string                         `json:"serial,omitempty"`
+	NotBefore  string                         `json:"not_before,omitempty"`
+	CertType   string                         `json:"cert_type,omitempty"`
+	IsCA       *bool                          `json:"is_ca,omitempty"`
+	KeyAlgo    string                         `json:"key_algorithm,omitempty"`
+	KeySize    string                         `json:"key_size,omitempty"`
+	SigAlg     string                         `json:"signature_algorithm,omitempty"`
+	KeyUsages  []string                       `json:"key_usages,omitempty"`
+	EKUs       []string                       `json:"ekus,omitempty"`
+	Extensions []certkit.CertificateExtension `json:"extensions,omitempty"`
+	SHA256     string                         `json:"sha256_fingerprint,omitempty"`
+	SHA1       string                         `json:"sha1_fingerprint,omitempty"`
+	AKI        string                         `json:"authority_key_id,omitempty"`
 }
 
 // VerifyCert verifies a certificate with optional key matching, chain validation, and expiry checking.
@@ -130,6 +132,7 @@ func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) 
 		result.SigAlg = cert.SignatureAlgorithm.String()
 		result.KeyUsages = certkit.FormatKeyUsage(cert.KeyUsage)
 		result.EKUs = certkit.FormatEKUs(cert.ExtKeyUsage)
+		result.Extensions = certkit.CollectCertificateExtensions(cert)
 		result.SHA256 = certkit.CertFingerprintColonSHA256(cert)
 		result.SHA1 = certkit.CertFingerprintColonSHA1(cert)
 		result.AKI = certkit.CertAKIEmbedded(cert)
@@ -483,6 +486,7 @@ func buildChainDisplay(bundle *certkit.BundleResult, verbose bool, fileRoots *x5
 			cc.SigAlg = c.SignatureAlgorithm.String()
 			cc.KeyUsages = certkit.FormatKeyUsage(c.KeyUsage)
 			cc.EKUs = certkit.FormatEKUs(c.ExtKeyUsage)
+			cc.Extensions = certkit.CollectCertificateExtensions(c)
 			cc.SHA256 = certkit.CertFingerprintColonSHA256(c)
 			cc.SHA1 = certkit.CertFingerprintColonSHA1(c)
 			cc.AKI = certkit.CertAKIEmbedded(c)
@@ -693,6 +697,7 @@ func FormatVerifyResult(r *VerifyResult) string {
 	if r.AKI != "" {
 		fmt.Fprintf(&sb, "        AKI: %s\n", r.AKI)
 	}
+	sb.WriteString(FormatCertificateExtensionsBlock(r.Extensions, "  "))
 	if r.SHA256 != "" {
 		fmt.Fprintf(&sb, "     SHA-256: %s\n", r.SHA256)
 	}
@@ -751,6 +756,7 @@ func FormatVerifyResult(r *VerifyResult) string {
 				if c.AKI != "" {
 					fmt.Fprintf(&sb, "     AKI:       %s\n", c.AKI)
 				}
+				sb.WriteString(FormatCertificateExtensionsBlock(c.Extensions, "     "))
 			}
 		}
 	}

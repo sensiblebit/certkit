@@ -48,6 +48,14 @@ var extKeyUsageNames = map[x509.ExtKeyUsage]string{
 	x509.ExtKeyUsageNetscapeServerGatedCrypto:  "Netscape Server Gated Crypto",
 }
 
+// CertificateExtension summarizes one top-level X.509 certificate extension.
+type CertificateExtension struct {
+	OID       string `json:"oid"`
+	Name      string `json:"name"`
+	Critical  bool   `json:"critical"`
+	Unhandled bool   `json:"unhandled"`
+}
+
 // FormatEKUs returns human-readable names for extended key usages.
 func FormatEKUs(ekus []x509.ExtKeyUsage) []string {
 	var out []string
@@ -74,6 +82,114 @@ var ekuOIDNames = map[string]string{
 	"1.3.6.1.4.1.311.10.3.3": "Microsoft Server Gated Crypto",
 	"2.16.840.1.113730.4.1":  "Netscape Server Gated Crypto",
 	"2.5.29.37.0":            "Any",
+}
+
+// extensionOIDNames maps well-known top-level certificate extension OIDs to
+// human-readable names. This intentionally covers extension OIDs only, not
+// policy or EKU OIDs embedded inside extension values.
+var extensionOIDNames = map[string]string{
+	// RFC 5280 core and CRL-related extensions.
+	"2.5.29.9":  "Subject Directory Attributes",
+	"2.5.29.14": "Subject Key Identifier",
+	"2.5.29.15": "Key Usage",
+	"2.5.29.16": "Private Key Usage Period",
+	"2.5.29.17": "Subject Alternative Name",
+	"2.5.29.18": "Issuer Alternative Name",
+	"2.5.29.19": "Basic Constraints",
+	"2.5.29.20": "CRL Number",
+	"2.5.29.21": "Reason Code",
+	"2.5.29.23": "Hold Instruction Code",
+	"2.5.29.24": "Invalidity Date",
+	"2.5.29.27": "Delta CRL Indicator",
+	"2.5.29.28": "Issuing Distribution Point",
+	"2.5.29.29": "Certificate Issuer",
+	"2.5.29.30": "Name Constraints",
+	"2.5.29.31": "CRL Distribution Points",
+	"2.5.29.32": "Certificate Policies",
+	"2.5.29.33": "Policy Mappings",
+	"2.5.29.35": "Authority Key Identifier",
+	"2.5.29.36": "Policy Constraints",
+	"2.5.29.37": "Extended Key Usage",
+	"2.5.29.46": "Freshest CRL",
+	"2.5.29.54": "Inhibit Any Policy",
+
+	// PKIX.
+	"1.3.6.1.5.5.7.1.1":       "Authority Information Access",
+	"1.3.6.1.5.5.7.1.3":       "QC Statements",
+	"1.3.6.1.5.5.7.1.11":      "Subject Information Access",
+	"1.3.6.1.5.5.7.1.24":      "TLS Feature",
+	"1.3.6.1.5.5.7.48.1.5":    "OCSP No Check",
+	"0.4.0.1862.1.1":          "QC Statements",
+	"0.4.0.1862.1.3":          "QC Retention Period",
+	"0.4.0.1862.1.4":          "QC SSCD",
+	"0.4.0.1862.1.6":          "QC Type",
+	"1.3.6.1.4.1.44947.1.1.1": "ACME Identifier",
+
+	// Certificate Transparency.
+	"1.3.6.1.4.1.11129.2.4.2": "Signed Certificate Timestamp List",
+	"1.3.6.1.4.1.11129.2.4.3": "CT Precertificate Poison",
+	"1.3.6.1.4.1.11129.2.4.5": "CT Embedded SCT List",
+
+	// Netscape.
+	"2.16.840.1.113730.1.1":  "Netscape Certificate Type",
+	"2.16.840.1.113730.1.2":  "Netscape Base URL",
+	"2.16.840.1.113730.1.3":  "Netscape Revocation URL",
+	"2.16.840.1.113730.1.4":  "Netscape CA Revocation URL",
+	"2.16.840.1.113730.1.7":  "Netscape Renewal URL",
+	"2.16.840.1.113730.1.8":  "Netscape CA Policy URL",
+	"2.16.840.1.113730.1.12": "Netscape SSL Server Name",
+	"2.16.840.1.113730.1.13": "Netscape Certificate Comment",
+
+	// Microsoft.
+	"1.3.6.1.4.1.311.20.2":  "Microsoft Certificate Template Name",
+	"1.3.6.1.4.1.311.21.1":  "Microsoft CA Version",
+	"1.3.6.1.4.1.311.21.7":  "Microsoft Certificate Template Information",
+	"1.3.6.1.4.1.311.21.10": "Microsoft Application Policies",
+
+	// Apple proprietary certificate extensions.
+	"1.2.840.113635.100.6.1":       "Apple Signing",
+	"1.2.840.113635.100.6.1.4":     "Apple iPhone Developer",
+	"1.2.840.113635.100.6.1.13":    "Apple Mac App Signing",
+	"1.2.840.113635.100.6.2":       "Apple Intermediate Markers",
+	"1.2.840.113635.100.6.2.1":     "Apple IST CA",
+	"1.2.840.113635.100.6.2.10":    "Apple System Integration 2 Intermediate Marker",
+	"1.2.840.113635.100.6.2.12":    "Apple Server Authentication Intermediate Marker",
+	"1.2.840.113635.100.6.2.13":    "Apple System Integration G3 Intermediate Marker",
+	"1.2.840.113635.100.6.2.6":     "Apple WWDR Intermediate",
+	"1.2.840.113635.100.6.24.17":   "Apple Corporate Signing Sub-CA Marker",
+	"1.2.840.113635.100.6.26.6.1":  "Apple Measured Boot Policy Signing",
+	"1.2.840.113635.100.6.27":      "Apple Certificate Policy",
+	"1.2.840.113635.100.6.27.1":    "Apple Server Authentication",
+	"1.2.840.113635.100.6.27.1.2":  "Apple Server Authentication v2",
+	"1.2.840.113635.100.6.27.2":    "Apple Client Authentication",
+	"1.2.840.113635.100.6.27.3":    "Apple Push Service",
+	"1.2.840.113635.100.6.27.3.2":  "Apple Push Notification Service",
+	"1.2.840.113635.100.6.27.4":    "Apple Code Signing",
+	"1.2.840.113635.100.6.27.5":    "Apple Timestamping",
+	"1.2.840.113635.100.6.27.7.1":  "Apple Escrow Proxy Server Authentication (QA)",
+	"1.2.840.113635.100.6.27.7.2":  "Apple Escrow Proxy Server Authentication",
+	"1.2.840.113635.100.6.27.8.1":  "Apple System Integration 2",
+	"1.2.840.113635.100.6.27.11":   "Apple PPQ Signing",
+	"1.2.840.113635.100.6.27.11.1": "Apple MMCS Server Authentication (QA)",
+	"1.2.840.113635.100.6.27.11.2": "Apple MMCS Server Authentication",
+	"1.2.840.113635.100.6.27.12":   "Apple TestFlight",
+	"1.2.840.113635.100.6.27.14":   "Apple Provisioning Profile Signing",
+	"1.2.840.113635.100.6.27.15.1": "Apple iCloud Setup Server Authentication (QA)",
+	"1.2.840.113635.100.6.27.15.2": "Apple iCloud Setup Server Authentication",
+	"1.2.840.113635.100.6.27.17":   "Apple Configuration Profile Signing",
+	"1.2.840.113635.100.6.27.25":   "Apple Developer Authentication",
+	"1.2.840.113635.100.6.29":      "Apple Certificate Transparency Policy",
+	"1.2.840.113635.100.6.30":      "Apple SMP Encryption",
+	"1.2.840.113635.100.6.38.1":    "Apple PPQ Signing Test",
+	"1.2.840.113635.100.6.38.2":    "Apple PPQ Signing",
+	"1.2.840.113635.100.6.39":      "Apple Pay Issuer Encryption",
+	"1.2.840.113635.100.6.43":      "Apple ATV VPN Profile Signing",
+	"1.2.840.113635.100.6.50":      "Apple Static IO",
+	"1.2.840.113635.100.6.61":      "Apple Asset Receipt",
+
+	// Google / Android.
+	"1.3.6.1.4.1.11129.2.1.17": "Android Key Attestation",
+	"1.3.6.1.4.1.11129.2.1.22": "Google Challenge Password",
 }
 
 // FormatEKUOIDs returns human-readable names for EKU OIDs extracted from
@@ -509,6 +625,52 @@ func ParseOtherNameSANs(extensions []pkix.Extension) []string {
 		return nil
 	}
 	return sans
+}
+
+// ExtensionOIDName returns the human-readable name for a certificate
+// extension OID, or the dotted-decimal OID string if it is not in the
+// registry.
+func ExtensionOIDName(oid string) string {
+	if name, ok := extensionOIDNames[oid]; ok {
+		return name
+	}
+	if suffix, ok := strings.CutPrefix(oid, "1.2.840.113635.100.6."); ok {
+		return "Apple Proprietary Extension " + suffix
+	}
+	if suffix, ok := strings.CutPrefix(oid, "1.3.6.1.4.1.311."); ok {
+		return "Microsoft Proprietary Extension " + suffix
+	}
+	if suffix, ok := strings.CutPrefix(oid, "2.16.840.1.113730."); ok {
+		return "Netscape Proprietary Extension " + suffix
+	}
+	return oid
+}
+
+// CollectCertificateExtensions returns a summary of every top-level X.509
+// certificate extension on cert. Unhandled is sourced from Go's
+// UnhandledCriticalExtensions slice.
+func CollectCertificateExtensions(cert *x509.Certificate) []CertificateExtension {
+	if cert == nil || len(cert.Extensions) == 0 {
+		return nil
+	}
+
+	unhandled := make(map[string]struct{}, len(cert.UnhandledCriticalExtensions))
+	for _, oid := range cert.UnhandledCriticalExtensions {
+		unhandled[oid.String()] = struct{}{}
+	}
+
+	exts := make([]CertificateExtension, 0, len(cert.Extensions))
+	for _, ext := range cert.Extensions {
+		oid := ext.Id.String()
+		_, isUnhandled := unhandled[oid]
+		exts = append(exts, CertificateExtension{
+			OID:       oid,
+			Name:      ExtensionOIDName(oid),
+			Critical:  ext.Critical,
+			Unhandled: isUnhandled,
+		})
+	}
+	return exts
 }
 
 // CollectCertificateSANs returns all Subject Alternative Names from a

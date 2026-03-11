@@ -682,6 +682,9 @@ func TestFormatInspectResults_JSON_ValidJSON(t *testing.T) {
 			KeyAlgo:      "RSA",
 			KeySize:      "2048",
 			SKI:          "aabbccdd",
+			Extensions: []certkit.CertificateExtension{
+				{Name: "Key Usage", OID: "2.5.29.15", Critical: true},
+			},
 		},
 		{
 			Type:    "private_key",
@@ -730,6 +733,9 @@ func TestFormatInspectResults_JSON_ValidJSON(t *testing.T) {
 	}
 	if len(cert.SANs) != 2 || cert.SANs[0] != "json-test.example.com" {
 		t.Errorf("parsed[0].SANs = %v, want [json-test.example.com www.json-test.example.com]", cert.SANs)
+	}
+	if len(cert.Extensions) != 1 || cert.Extensions[0].OID != "2.5.29.15" || !cert.Extensions[0].Critical {
+		t.Errorf("parsed[0].Extensions = %#v, want key usage extension", cert.Extensions)
 	}
 
 	// Verify private key entry
@@ -796,10 +802,29 @@ func TestFormatInspectResults_Text(t *testing.T) {
 		{
 			name: "certificate and key",
 			results: []InspectResult{
-				{Type: "certificate", Subject: "CN=test", SHA256: "AA:BB", KeyAlgo: "RSA", KeySize: "2048"},
+				{
+					Type:    "certificate",
+					Subject: "CN=test",
+					SHA256:  "AA:BB",
+					KeyAlgo: "RSA",
+					KeySize: "2048",
+					Extensions: []certkit.CertificateExtension{
+						{Name: "Key Usage", OID: "2.5.29.15", Critical: true},
+						{Name: "Apple Push Notification Service", OID: "1.2.840.113635.100.6.27.3.2", Critical: true, Unhandled: true},
+					},
+				},
 				{Type: "private_key", KeyType: "RSA", KeySize: "2048"},
 			},
-			mustContain: []string{"Certificate:", "CN=test", "RSA 2048", "AA:BB", "Private Key:"},
+			mustContain: []string{
+				"Certificate:",
+				"CN=test",
+				"RSA 2048",
+				"AA:BB",
+				"Extensions:",
+				"Key Usage (2.5.29.15) [critical]",
+				"Apple Push Notification Service (1.2.840.113635.100.6.27.3.2) [critical, unhandled]",
+				"Private Key:",
+			},
 		},
 		{
 			name: "CSR with SANs",

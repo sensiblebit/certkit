@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
 	"encoding/pem"
 	"math/big"
 	"strings"
@@ -191,6 +192,7 @@ func TestConnectTextStatusSectionConsistency(t *testing.T) {
 func TestFormatConnectVerbose_IncludesChainPEMWithMetadata(t *testing.T) {
 	t.Parallel()
 
+	appleOID := asn1.ObjectIdentifier{1, 2, 840, 113635, 100, 6, 27, 3, 2}
 	cert := &x509.Certificate{
 		Raw:          []byte{0x01, 0x02, 0x03, 0x04},
 		Subject:      pkix.Name{CommonName: "leaf.example.com"},
@@ -198,6 +200,10 @@ func TestFormatConnectVerbose_IncludesChainPEMWithMetadata(t *testing.T) {
 		SerialNumber: big.NewInt(0x2a),
 		NotBefore:    time.Date(2025, time.January, 2, 3, 4, 5, 0, time.UTC),
 		NotAfter:     time.Date(2027, time.March, 4, 5, 6, 7, 0, time.UTC),
+		Extensions: []pkix.Extension{
+			{Id: appleOID, Critical: true, Value: []byte{0x05, 0x00}},
+		},
+		UnhandledCriticalExtensions: []asn1.ObjectIdentifier{appleOID},
 	}
 	result := &certkit.ConnectResult{
 		Host:        "leaf.example.com",
@@ -224,6 +230,9 @@ func TestFormatConnectVerbose_IncludesChainPEMWithMetadata(t *testing.T) {
 	wantPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Raw}))
 	if !strings.Contains(got, wantPEM) {
 		t.Fatalf("verbose output missing PEM certificate:\n%s", got)
+	}
+	if !strings.Contains(got, "Extensions:\n       Apple Push Notification Service (1.2.840.113635.100.6.27.3.2) [critical, unhandled]") {
+		t.Fatalf("verbose output missing extension list:\n%s", got)
 	}
 }
 
