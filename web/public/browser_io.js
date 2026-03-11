@@ -5,7 +5,9 @@ export const MAX_UPLOAD_FILE_BYTES = 10 * MB;
 export const MAX_UPLOAD_TOTAL_BYTES = 50 * MB;
 
 function tooLargeError(actualBytes, maxBytes) {
-  return new Error(`AIA response too large (${actualBytes} bytes, max ${maxBytes})`);
+  return new Error(
+    `AIA response too large (${actualBytes} bytes, max ${maxBytes})`,
+  );
 }
 
 function parseContentLength(headers) {
