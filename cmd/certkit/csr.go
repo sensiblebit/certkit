@@ -26,7 +26,34 @@ var csrCmd = &cobra.Command{
 	Long: `Generate a CSR from a JSON template, existing certificate, or existing CSR.
 
 A new key is generated unless --key is provided. Output is printed to stdout
-by default (PEM format). Use -o to write files to a directory instead.`,
+by default (PEM format). Use -o to write files to a directory instead.
+
+The --template flag accepts a JSON file with the following structure:
+
+  {
+    "subject": {
+      "common_name": "example.com",
+      "organization": ["My Corp"],
+      "organizational_unit": ["Engineering"],
+      "country": ["US"],
+      "province": ["California"],
+      "locality": ["San Francisco"]
+    },
+    "hosts": [
+      "example.com",
+      "*.example.com",
+      "10.0.0.1",
+      "admin@example.com",
+      "spiffe://cluster.local/ns/default/sa/web"
+    ],
+    "other_names": [
+      {"type": "UPN", "value": "user@example.com"}
+    ]
+  }
+
+Hosts are auto-classified as DNS names, IP addresses, emails, or URIs.
+The other_names field is optional and supports UPN, SRV, XMPP,
+SmtpUTF8Mailbox, or a dotted-decimal OID.`,
 	Example: `  certkit csr --template request.json
   certkit csr --from-cert existing.pem --algorithm rsa --bits 4096
   certkit csr --from-csr old.csr --key mykey.pem
