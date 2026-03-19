@@ -33,6 +33,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Use bundle folder name as Kubernetes secret `metadata.name` instead of the CN-derived prefix, so the secret name matches the export directory ([#178])
+- Validate `bundleName` in bundle config YAML against DNS-1123 rules at load time; invalid names now produce a fatal error with the file path and line number ([#178])
 - Deduplicate extension block formatting between `connect --verbose` and the shared internal formatter to prevent drift in extension flag rendering ([`30d67f8`])
 - Avoid loading system roots during the pre-verification AIA bundle walk in `verify`, and include intermediates from all verified connect chains when computing `trust_anchors` ([#172])
 - Preserve real pre-bundle AIA incomplete diagnostics in `verify`, resolve convert/export issuer chains with signature-aware issuer selection, and fail closed when certstore validation is ambiguous across same-SKI renewals ([#172])
@@ -1118,6 +1120,7 @@ Initial release.
 [#169]: https://github.com/sensiblebit/certkit/pull/169
 [#171]: https://github.com/sensiblebit/certkit/pull/171
 [#172]: https://github.com/sensiblebit/certkit/pull/172
+[#178]: https://github.com/sensiblebit/certkit/pull/178
 [#73]: https://github.com/sensiblebit/certkit/pull/73
 [#64]: https://github.com/sensiblebit/certkit/pull/64
 [#63]: https://github.com/sensiblebit/certkit/pull/63

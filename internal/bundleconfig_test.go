@@ -231,6 +231,108 @@ bundles:
 	}
 }
 
+func TestLoadBundleConfigs_InvalidBundleNameDNS1123(t *testing.T) {
+	// WHY: bundleName is used as the Kubernetes secret metadata.name, which must
+	// be a valid DNS-1123 subdomain. Invalid names must be rejected at config load
+	// time with a line-number reference so the user can fix the YAML.
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		yaml    string
+		wantErr string
+	}{
+		{
+			name: "uppercase",
+			yaml: `bundles:
+  - commonNames: ["example.com"]
+    bundleName: "MyBundle"
+`,
+			wantErr: `:3:`,
+		},
+		{
+			name: "underscores",
+			yaml: `bundles:
+  - commonNames: ["example.com"]
+    bundleName: "my_bundle"
+`,
+			wantErr: `:3:`,
+		},
+		{
+			name: "dots",
+			yaml: `bundles:
+  - commonNames: ["example.com"]
+    bundleName: "my.bundle"
+`,
+			wantErr: `:3:`,
+		},
+		{
+			name: "leading hyphen",
+			yaml: `bundles:
+  - commonNames: ["example.com"]
+    bundleName: "-my-bundle"
+`,
+			wantErr: `:3:`,
+		},
+		{
+			name: "valid name accepted",
+			yaml: `bundles:
+  - commonNames: ["example.com"]
+    bundleName: "my-bundle"
+`,
+		},
+		{
+			name: "null name accepted",
+			yaml: `bundles:
+  - commonNames: ["example.com"]
+    bundleName: null
+`,
+		},
+		{
+			name: "empty string accepted",
+			yaml: `bundles:
+  - commonNames: ["example.com"]
+    bundleName: ""
+`,
+		},
+		{
+			name: "old format invalid",
+			yaml: `- commonNames: ["example.com"]
+  bundleName: "BAD_NAME"
+`,
+			wantErr: `:2:`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			dir := t.TempDir()
+			path := filepath.Join(dir, "bundles.yaml")
+			if err := os.WriteFile(path, []byte(tt.yaml), 0600); err != nil {
+				t.Fatalf("write config: %v", err)
+			}
+
+			_, err := LoadBundleConfigs(path)
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Fatalf("unexpected error: %v", err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatal("expected error, got nil")
+			}
+			if !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("error %q does not contain %q", err.Error(), tt.wantErr)
+			}
+			if !strings.Contains(err.Error(), "DNS-1123") {
+				t.Errorf("error %q should mention DNS-1123", err.Error())
+			}
+		})
+	}
+}
+
 func TestLoadBundleConfigs_EmptyBundles(t *testing.T) {
 	// WHY: An empty bundles array with a defaultSubject falls through to old-format parsing, which should fail; this guards against silently accepting a misconfigured file.
 	t.Parallel()

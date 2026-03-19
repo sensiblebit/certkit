@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -134,6 +135,25 @@ var unsafeFileNameReplacer = strings.NewReplacer(
 // for file and ZIP entry paths.
 func SanitizeFileName(name string) string {
 	return unsafeFileNameReplacer.Replace(name)
+}
+
+// dns1123Pattern matches a valid DNS-1123 label: lowercase alphanumeric,
+// hyphens allowed internally, max 63 characters.
+var dns1123Pattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
+
+// errSecretNameInvalid is returned when a folder name cannot be used as a
+// Kubernetes secret metadata.name because it violates DNS-1123 rules.
+var errSecretNameInvalid = errors.New("invalid Kubernetes secret name: must be a lowercase DNS-1123 subdomain (lowercase alphanumeric and hyphens, must start and end with alphanumeric)")
+
+// ValidateK8sSecretName checks that name is a valid DNS-1123 subdomain label
+// suitable for Kubernetes metadata.name. Returns errSecretNameInvalid when
+// the name contains uppercase letters, underscores, dots, or other characters
+// that Kubernetes rejects.
+func ValidateK8sSecretName(name string) error {
+	if name == "" || !dns1123Pattern.MatchString(name) {
+		return fmt.Errorf("%w: %q", errSecretNameInvalid, name)
+	}
+	return nil
 }
 
 // SanitizeBundleFolder returns a safe folder name for bundle output.
