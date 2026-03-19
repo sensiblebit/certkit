@@ -137,9 +137,9 @@ func SanitizeFileName(name string) string {
 	return unsafeFileNameReplacer.Replace(name)
 }
 
-// dns1123Pattern matches a valid DNS-1123 subdomain label: lowercase
-// alphanumeric, hyphens allowed internally, max 253 characters.
-var dns1123Pattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,251}[a-z0-9])?$`)
+// dns1123Pattern matches a valid DNS-1123 label: lowercase alphanumeric,
+// hyphens allowed internally, max 63 characters.
+var dns1123Pattern = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // errSecretNameInvalid is returned when a folder name cannot be used as a
 // Kubernetes secret metadata.name because it violates DNS-1123 rules.
