@@ -1079,6 +1079,21 @@ func TestExportMatchedBundles(t *testing.T) {
 		t.Errorf("folder = %q, want %q", call.folder, "my-bundle")
 	}
 
+	// K8s secret metadata.name must match the folder name
+	for _, f := range call.files {
+		if !strings.HasSuffix(f.Name, ".k8s.yaml") {
+			continue
+		}
+		var secret K8sSecret
+		if err := yaml.Unmarshal(f.Data, &secret); err != nil {
+			t.Fatalf("k8s.yaml: invalid YAML: %v", err)
+		}
+		if secret.Metadata.Name != "my-bundle" {
+			t.Errorf("k8s.yaml metadata.name = %q, want %q", secret.Metadata.Name, "my-bundle")
+		}
+		break
+	}
+
 	// GenerateBundleFiles always produces: .pem, .chain.pem, .fullchain.pem,
 	// .key, .p12, .k8s.yaml, .json, .yaml, .csr, .csr.json (10 files).
 	// With a custom root, .root.pem is also present (11 total).

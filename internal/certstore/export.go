@@ -443,7 +443,7 @@ func ExportMatchedBundles(ctx context.Context, input ExportMatchedBundleInput) e
 			KeyType:     keyRec.KeyType,
 			BitLength:   keyRec.BitLength,
 			Prefix:      prefix,
-			SecretName:  strings.TrimPrefix(folder, "_."),
+			SecretName:  folder,
 			CSRSubject:  input.CSRSubject,
 			P12Password: input.P12Password,
 			EncryptKey:  input.EncryptKey,

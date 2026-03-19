@@ -3,6 +3,7 @@ package internal
 import (
 	"fmt"
 
+	"github.com/sensiblebit/certkit/internal/certstore"
 	"gopkg.in/yaml.v3"
 )
 
@@ -52,6 +53,9 @@ func LoadBundleConfigs(path string) ([]BundleConfig, error) {
 				}
 			}
 		}
+		if err := validateBundleNames(path, data); err != nil {
+			return nil, err
+		}
 		return yamlConfig.Bundles, nil
 	}
 
@@ -60,5 +64,87 @@ func LoadBundleConfigs(path string) ([]BundleConfig, error) {
 	if err := yaml.Unmarshal(data, &configs); err != nil {
 		return nil, fmt.Errorf("parsing bundle config %s: %w", path, err)
 	}
+	if err := validateBundleNamesOldFormat(path, data); err != nil {
+		return nil, err
+	}
 	return configs, nil
+}
+
+// validateBundleNames walks the YAML node tree for the new format (map with
+// "bundles" key) and validates each bundleName against DNS-1123 rules. Errors
+// include the file path and line number of the offending value.
+func validateBundleNames(path string, data []byte) error {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("parsing %s for validation: %w", path, err)
+	}
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
+		return nil
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.MappingNode {
+		return nil
+	}
+	// Find the "bundles" key
+	for i := 0; i+1 < len(root.Content); i += 2 {
+		if root.Content[i].Value != "bundles" {
+			continue
+		}
+		bundlesNode := root.Content[i+1]
+		if bundlesNode.Kind != yaml.SequenceNode {
+			break
+		}
+		for _, entry := range bundlesNode.Content {
+			if err := validateBundleNameNode(path, entry); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// validateBundleNamesOldFormat walks the YAML node tree for the old format
+// (bare array of bundles) and validates each bundleName.
+func validateBundleNamesOldFormat(path string, data []byte) error {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return fmt.Errorf("parsing %s for validation: %w", path, err)
+	}
+	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
+		return nil
+	}
+	root := doc.Content[0]
+	if root.Kind != yaml.SequenceNode {
+		return nil
+	}
+	for _, entry := range root.Content {
+		if err := validateBundleNameNode(path, entry); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// validateBundleNameNode checks a single bundle mapping node for a valid
+// bundleName value.
+func validateBundleNameNode(path string, entry *yaml.Node) error {
+	if entry.Kind != yaml.MappingNode {
+		return nil
+	}
+	for j := 0; j+1 < len(entry.Content); j += 2 {
+		if entry.Content[j].Value != "bundleName" {
+			continue
+		}
+		valNode := entry.Content[j+1]
+		name := valNode.Value
+		// Skip null/empty — these use the CN-derived name instead.
+		if name == "" || valNode.Tag == "!!null" {
+			break
+		}
+		if err := certstore.ValidateK8sSecretName(name); err != nil {
+			return fmt.Errorf("%s:%d: %w", path, valNode.Line, err)
+		}
+		break
+	}
+	return nil
 }
