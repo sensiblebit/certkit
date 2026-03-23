@@ -20,6 +20,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** Default `TrustStore` in `DefaultOptions()` changed from `"system"` to `"mozilla"` — pure-Go Mozilla root verification is used by default instead of macOS `SecTrustEvaluateWithError` syscalls, eliminating multi-minute hangs on large certificate stores
+- Parallelize trust verification in scan summary, dump-certs, and AIA resolution — mozilla checks run concurrently, system checks only run for certs mozilla didn't trust
+- Add `TrustStore` label to `VerifyChainTrustInput` and debug-log every trust verification call with subject, store, and result
 - Normalize all exported private key PEM output (`.key`, K8s `tls.key`, YAML `key`) to PKCS#8 (`PRIVATE KEY`) regardless of input format ([#167])
 - Bundle export warns when Kubernetes TLS secret contains an unencrypted private key alongside encrypted outputs ([#167])
 - Use browser Web Crypto API for PBKDF2 key derivation in WASM builds to avoid blocking the main thread during encrypted key export ([#167])

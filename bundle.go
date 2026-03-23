@@ -337,6 +337,8 @@ type VerifyChainTrustInput struct {
 	Cert          *x509.Certificate
 	Roots         *x509.CertPool
 	Intermediates *x509.CertPool
+	// TrustStore is an optional label for debug logging (e.g. "mozilla", "system").
+	TrustStore string
 }
 
 // CheckTrustAnchorsInput holds parameters for CheckTrustAnchors.
@@ -366,8 +368,15 @@ type CheckTrustAnchorsResult struct {
 // invalid at the leaf's issuance time. This is an uncommon edge case in
 // practice (intermediates outlive the leaves they sign).
 func VerifyChainTrust(input VerifyChainTrustInput) bool {
+	store := input.TrustStore
+	if store == "" {
+		store = "unknown"
+	}
+	slog.Debug("verifying chain trust", "subject", input.Cert.Subject.CommonName, "store", store)
 	chains, err := verifyChainTrustChains(input)
-	return err == nil && len(chains) > 0
+	trusted := err == nil && len(chains) > 0
+	slog.Debug("chain trust result", "subject", input.Cert.Subject.CommonName, "store", store, "trusted", trusted)
+	return trusted
 }
 
 func verifyChainTrustChains(input VerifyChainTrustInput) ([][]*x509.Certificate, error) {
@@ -413,6 +422,7 @@ func CheckTrustAnchors(input CheckTrustAnchorsInput) CheckTrustAnchorsResult {
 		Cert:          input.Cert,
 		Roots:         mozillaPool,
 		Intermediates: input.Intermediates,
+		TrustStore:    "mozilla",
 	}) {
 		result.Anchors = append(result.Anchors, "mozilla")
 	}
@@ -422,6 +432,7 @@ func CheckTrustAnchors(input CheckTrustAnchorsInput) CheckTrustAnchorsResult {
 		Cert:          input.Cert,
 		Roots:         systemPool,
 		Intermediates: input.Intermediates,
+		TrustStore:    "system",
 	}) {
 		result.Anchors = append(result.Anchors, "system")
 	}
@@ -429,6 +440,7 @@ func CheckTrustAnchors(input CheckTrustAnchorsInput) CheckTrustAnchorsResult {
 		Cert:          input.Cert,
 		Roots:         input.FileRoots,
 		Intermediates: input.Intermediates,
+		TrustStore:    "file",
 	}) {
 		result.Anchors = append(result.Anchors, "file")
 	}
@@ -496,7 +508,7 @@ func DefaultOptions() BundleOptions {
 		AIATimeout:       2 * time.Second,
 		AIAMaxDepth:      5,
 		AIAMaxTotalCerts: defaultAIAMaxTotalCerts,
-		TrustStore:       "system",
+		TrustStore:       "mozilla",
 		Verify:           true,
 		MaxIntermediates: defaultBundleMaxIntermediates,
 	}
@@ -705,25 +717,60 @@ func countAIAUnresolvedIssuers(certs []*x509.Certificate, roots *x509.CertPool) 
 		}
 	}
 
-	unresolved := 0
-	for _, cert := range certs {
+	// Identify candidates that need trust verification.
+	type candidate struct {
+		idx  int
+		cert *x509.Certificate
+	}
+	var candidates []candidate
+	skipFlags := make([]bool, len(certs))
+	for i, cert := range certs {
 		if cert == nil {
+			skipFlags[i] = true
 			continue
 		}
 		if len(cert.IssuingCertificateURL) == 0 {
+			skipFlags[i] = true
 			continue
 		}
 		if IsMozillaRoot(cert) {
+			skipFlags[i] = true
 			continue
 		}
 		if bytes.Equal(cert.RawSubject, cert.RawIssuer) {
+			skipFlags[i] = true
 			continue
 		}
-		if roots != nil && VerifyChainTrust(VerifyChainTrustInput{
-			Cert:          cert,
-			Roots:         roots,
-			Intermediates: intermediates,
-		}) {
+		if roots != nil {
+			candidates = append(candidates, candidate{idx: i, cert: cert})
+		}
+	}
+
+	// Verify trust for all candidates concurrently.
+	trusted := make([]bool, len(certs))
+	if len(candidates) > 0 {
+		var wg sync.WaitGroup
+		wg.Add(len(candidates))
+		for _, c := range candidates {
+			go func(idx int, cert *x509.Certificate) {
+				defer wg.Done()
+				trusted[idx] = VerifyChainTrust(VerifyChainTrustInput{
+					Cert:          cert,
+					Roots:         roots,
+					Intermediates: intermediates,
+					TrustStore:    "aia-resolve",
+				})
+			}(c.idx, c.cert)
+		}
+		wg.Wait()
+	}
+
+	unresolved := 0
+	for i, cert := range certs {
+		if skipFlags[i] {
+			continue
+		}
+		if trusted[i] {
 			continue
 		}
 		if hasIssuerInSet(cert, certs) {

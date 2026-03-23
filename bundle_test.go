@@ -159,8 +159,8 @@ func TestDefaultOptions(t *testing.T) {
 	if opts.AIAMaxTotalCerts != defaultAIAMaxTotalCerts {
 		t.Fatalf("AIAMaxTotalCerts = %d, want %d", opts.AIAMaxTotalCerts, defaultAIAMaxTotalCerts)
 	}
-	if opts.TrustStore != "system" {
-		t.Fatalf("TrustStore = %q, want system", opts.TrustStore)
+	if opts.TrustStore != "mozilla" {
+		t.Fatalf("TrustStore = %q, want mozilla", opts.TrustStore)
 	}
 	if !opts.Verify {
 		t.Fatal("Verify = false, want true")
