@@ -327,7 +327,7 @@ func getState(_ js.Value, _ []js.Value) any {
 		expired := now.After(rec.NotAfter)
 		trusted := false
 		if roots != nil {
-			trusted = certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{Cert: rec.Cert, Roots: roots, Intermediates: intermediatePool})
+			trusted = certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{Cert: rec.Cert, Roots: roots, Intermediates: intermediatePool, TrustStore: "mozilla"})
 		}
 
 		serial := ""

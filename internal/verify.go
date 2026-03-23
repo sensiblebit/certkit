@@ -492,6 +492,7 @@ func verifyCertAIAResolved(cert *x509.Certificate, allCerts []*x509.Certificate,
 			Cert:          cert,
 			Roots:         source.roots,
 			Intermediates: intermediates,
+			TrustStore:    source.name,
 		}) {
 			return true
 		}

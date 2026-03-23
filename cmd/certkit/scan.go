@@ -12,8 +12,10 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sensiblebit/certkit"
@@ -279,10 +281,61 @@ func runScan(cmd *cobra.Command, args []string) error {
 			}
 			intermediatePool := store.IntermediatePool()
 
+			// Pre-compute trust status concurrently. Mozilla checks are pure Go
+			// and fast; system checks hit macOS SecTrust which is slow. Run
+			// mozilla first, then only check system for untrusted remainders.
+			type dumpTrust struct {
+				mozilla bool
+				system  bool
+			}
+			now := time.Now()
+			trustStatus := make([]dumpTrust, len(certs))
+			if !scanForceExport && (trustPools.Mozilla != nil || trustPools.System != nil) {
+				var wg sync.WaitGroup
+				if trustPools.Mozilla != nil {
+					for i, c := range certs {
+						if !allowExpired && now.After(c.Cert.NotAfter) {
+							continue
+						}
+						wg.Add(1)
+						go func(idx int, cert *x509.Certificate) {
+							defer wg.Done()
+							trustStatus[idx].mozilla = certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{
+								Cert:          cert,
+								Roots:         trustPools.Mozilla,
+								Intermediates: intermediatePool,
+								TrustStore:    "mozilla",
+							})
+						}(i, c.Cert)
+					}
+					wg.Wait()
+				}
+				if trustPools.System != nil {
+					sem := make(chan struct{}, runtime.NumCPU())
+					for i, c := range certs {
+						if (!allowExpired && now.After(c.Cert.NotAfter)) || trustStatus[i].mozilla {
+							continue
+						}
+						wg.Add(1)
+						sem <- struct{}{}
+						go func(idx int, cert *x509.Certificate) {
+							defer wg.Done()
+							defer func() { <-sem }()
+							trustStatus[idx].system = certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{
+								Cert:          cert,
+								Roots:         trustPools.System,
+								Intermediates: intermediatePool,
+								TrustStore:    "system",
+							})
+						}(i, c.Cert)
+					}
+					wg.Wait()
+				}
+			}
+
 			var data []byte
 			var count, skipped int
-			now := time.Now()
-			for _, c := range certs {
+			for i, c := range certs {
 				cert := c.Cert
 
 				// Skip expired certificates unless --allow-expired is set
@@ -294,17 +347,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 
 				// Validate chain unless --force is set (uses same logic as summary)
 				if !scanForceExport {
-					mozillaTrusted := trustPools.Mozilla != nil && certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{
-						Cert:          cert,
-						Roots:         trustPools.Mozilla,
-						Intermediates: intermediatePool,
-					})
-					systemTrusted := trustPools.System != nil && certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{
-						Cert:          cert,
-						Roots:         trustPools.System,
-						Intermediates: intermediatePool,
-					})
-					if !mozillaTrusted && !systemTrusted && (trustPools.Mozilla != nil || trustPools.System != nil) {
+					if !trustStatus[i].mozilla && !trustStatus[i].system && (trustPools.Mozilla != nil || trustPools.System != nil) {
 						slog.Debug("skipping untrusted certificate", "subject", cert.Subject)
 						skipped++
 						continue

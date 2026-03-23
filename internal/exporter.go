@@ -283,7 +283,7 @@ func exportBundleCerts(ctx context.Context, input exportBundleCertsInput) error 
 		}
 		input.UsedFolders[folder] = input.BundleName
 
-		if err := certstore.ExportMatchedBundles(ctx, certstore.ExportMatchedBundleInput{
+		exportInput := certstore.ExportMatchedBundleInput{
 			Store:         input.Store,
 			SKIs:          []string{certRec.SKI},
 			BundleOpts:    input.Opts,
@@ -292,16 +292,54 @@ func exportBundleCerts(ctx context.Context, input exportBundleCertsInput) error 
 			RetryNoVerify: false,
 			P12Password:   input.P12Password,
 			EncryptKey:    input.EncryptKey,
-		}); err != nil {
-			if input.Opts.Verify && isBundleVerificationError(err) {
-				delete(input.UsedFolders, folder)
-				slog.Debug("skipping untrusted bundle candidate", "cn", certRec.Cert.Subject.CommonName, "error", err)
-				continue
-			}
-			return fmt.Errorf("exporting bundle for %q: %w", certRec.Cert.Subject.CommonName, err)
+		}
+		skipped, err := exportMatchedBundleWithSystemFallback(ctx, certRec.Cert.Subject.CommonName, exportInput, input.Opts, certstore.ExportMatchedBundles)
+		if err != nil {
+			return err
+		}
+		if skipped {
+			delete(input.UsedFolders, folder)
+			continue
 		}
 	}
 	return nil
+}
+
+func exportMatchedBundleWithSystemFallback(
+	ctx context.Context,
+	commonName string,
+	exportInput certstore.ExportMatchedBundleInput,
+	opts certkit.BundleOptions,
+	exportFn func(context.Context, certstore.ExportMatchedBundleInput) error,
+) (bool, error) {
+	err := exportFn(ctx, exportInput)
+	if err == nil {
+		return false, nil
+	}
+
+	// If mozilla verification failed, retry with system trust store so
+	// certificates trusted only by the host OS (e.g. corporate keychain
+	// roots) still export without requiring --force.
+	if opts.Verify && isBundleVerificationError(err) && opts.TrustStore != "system" {
+		slog.Debug("mozilla trust failed, retrying with system trust store", "cn", commonName)
+		systemOpts := opts
+		systemOpts.TrustStore = "system"
+		exportInput.BundleOpts = systemOpts
+		retryErr := exportFn(ctx, exportInput)
+		if retryErr == nil {
+			return false, nil
+		}
+		if !isBundleVerificationError(retryErr) {
+			return false, fmt.Errorf("exporting bundle for %q: %w", commonName, retryErr)
+		}
+	}
+
+	if opts.Verify && isBundleVerificationError(err) {
+		slog.Debug("skipping untrusted bundle candidate", "cn", commonName, "error", err)
+		return true, nil
+	}
+
+	return false, fmt.Errorf("exporting bundle for %q: %w", commonName, err)
 }
 
 func isBundleVerificationError(err error) bool {

@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"runtime"
 	"slices"
 	"sort"
 	"sync"
@@ -398,19 +399,61 @@ func (s *MemStore) ScanSummary(input ScanSummaryInput) ScanSummary {
 		}
 	}
 
+	// Pre-compute trust status for all non-expired certs concurrently.
+	// Mozilla checks are pure Go and fast; system checks hit the macOS
+	// Security framework (SecTrustEvaluateWithError) which is slow.
+	// Run mozilla first, then only check system for certs mozilla didn't trust.
+	type trustStatus struct {
+		mozilla bool
+		system  bool
+	}
 	now := time.Now()
-	for _, rec := range certs {
-		expired := now.After(rec.NotAfter)
-		mozillaTrusted := false
-		systemTrusted := false
-		if !expired {
-			if input.MozillaPool != nil {
-				mozillaTrusted = certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{Cert: rec.Cert, Roots: input.MozillaPool, Intermediates: intermediatePool})
+	trustResults := make([]trustStatus, len(certs))
+	var wg sync.WaitGroup
+	if input.MozillaPool != nil {
+		for i, rec := range certs {
+			if now.After(rec.NotAfter) {
+				continue
 			}
-			if input.SystemPool != nil {
-				systemTrusted = certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{Cert: rec.Cert, Roots: input.SystemPool, Intermediates: intermediatePool})
-			}
+			wg.Add(1)
+			go func(idx int, cert *x509.Certificate) {
+				defer wg.Done()
+				trustResults[idx].mozilla = certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{
+					Cert:          cert,
+					Roots:         input.MozillaPool,
+					Intermediates: intermediatePool,
+					TrustStore:    "mozilla",
+				})
+			}(i, rec.Cert)
 		}
+		wg.Wait()
+	}
+	if input.SystemPool != nil {
+		sem := make(chan struct{}, runtime.NumCPU())
+		for i, rec := range certs {
+			if now.After(rec.NotAfter) || trustResults[i].mozilla {
+				continue
+			}
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(idx int, cert *x509.Certificate) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				trustResults[idx].system = certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{
+					Cert:          cert,
+					Roots:         input.SystemPool,
+					Intermediates: intermediatePool,
+					TrustStore:    "system",
+				})
+			}(i, rec.Cert)
+		}
+		wg.Wait()
+	}
+
+	for i, rec := range certs {
+		expired := now.After(rec.NotAfter)
+		mozillaTrusted := trustResults[i].mozilla
+		systemTrusted := trustResults[i].system
 
 		switch rec.CertType {
 		case "root":
