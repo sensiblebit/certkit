@@ -13,6 +13,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -368,6 +369,9 @@ type CheckTrustAnchorsResult struct {
 // invalid at the leaf's issuance time. This is an uncommon edge case in
 // practice (intermediates outlive the leaves they sign).
 func VerifyChainTrust(input VerifyChainTrustInput) bool {
+	if input.Cert == nil {
+		return false
+	}
 	store := input.TrustStore
 	if store == "" {
 		store = "unknown"
@@ -746,14 +750,18 @@ func countAIAUnresolvedIssuers(certs []*x509.Certificate, roots *x509.CertPool) 
 		}
 	}
 
-	// Verify trust for all candidates concurrently.
+	// Verify trust for all candidates concurrently. Bounded to NumCPU
+	// because system trust checks on macOS block in SecTrustEvaluateWithError.
 	trusted := make([]bool, len(certs))
 	if len(candidates) > 0 {
 		var wg sync.WaitGroup
-		wg.Add(len(candidates))
+		sem := make(chan struct{}, runtime.NumCPU())
 		for _, c := range candidates {
+			wg.Add(1)
+			sem <- struct{}{}
 			go func(idx int, cert *x509.Certificate) {
 				defer wg.Done()
+				defer func() { <-sem }()
 				trusted[idx] = VerifyChainTrust(VerifyChainTrustInput{
 					Cert:          cert,
 					Roots:         roots,

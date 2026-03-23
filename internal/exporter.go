@@ -283,7 +283,7 @@ func exportBundleCerts(ctx context.Context, input exportBundleCertsInput) error 
 		}
 		input.UsedFolders[folder] = input.BundleName
 
-		if err := certstore.ExportMatchedBundles(ctx, certstore.ExportMatchedBundleInput{
+		exportInput := certstore.ExportMatchedBundleInput{
 			Store:         input.Store,
 			SKIs:          []string{certRec.SKI},
 			BundleOpts:    input.Opts,
@@ -292,7 +292,20 @@ func exportBundleCerts(ctx context.Context, input exportBundleCertsInput) error 
 			RetryNoVerify: false,
 			P12Password:   input.P12Password,
 			EncryptKey:    input.EncryptKey,
-		}); err != nil {
+		}
+		if err := certstore.ExportMatchedBundles(ctx, exportInput); err != nil {
+			// If mozilla verification failed, retry with system trust store
+			// so certificates trusted only by the host OS (e.g. corporate
+			// keychain roots) still export without requiring --force.
+			if input.Opts.Verify && isBundleVerificationError(err) && input.Opts.TrustStore != "system" {
+				slog.Debug("mozilla trust failed, retrying with system trust store", "cn", certRec.Cert.Subject.CommonName)
+				systemOpts := input.Opts
+				systemOpts.TrustStore = "system"
+				exportInput.BundleOpts = systemOpts
+				if retryErr := certstore.ExportMatchedBundles(ctx, exportInput); retryErr == nil {
+					continue
+				}
+			}
 			if input.Opts.Verify && isBundleVerificationError(err) {
 				delete(input.UsedFolders, folder)
 				slog.Debug("skipping untrusted bundle candidate", "cn", certRec.Cert.Subject.CommonName, "error", err)

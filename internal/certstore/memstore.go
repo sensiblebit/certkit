@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"runtime"
 	"slices"
 	"sort"
 	"sync"
@@ -428,13 +429,16 @@ func (s *MemStore) ScanSummary(input ScanSummaryInput) ScanSummary {
 		wg.Wait()
 	}
 	if input.SystemPool != nil {
+		sem := make(chan struct{}, runtime.NumCPU())
 		for i, rec := range certs {
 			if now.After(rec.NotAfter) || trustResults[i].mozilla {
 				continue
 			}
 			wg.Add(1)
+			sem <- struct{}{}
 			go func(idx int, cert *x509.Certificate) {
 				defer wg.Done()
+				defer func() { <-sem }()
 				trustResults[idx].system = certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{
 					Cert:          cert,
 					Roots:         input.SystemPool,

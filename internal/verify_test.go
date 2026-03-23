@@ -2055,10 +2055,10 @@ func TestVerifyCert_RevocationBehavior(t *testing.T) {
 			}
 			leaf := newRSALeaf(t, signer, "test.example.com", []string{"test.example.com"}, nil)
 
-			var ocspHits int32
+			var ocspHits atomic.Int32
 			if tc.ocspSigner != nil {
 				ocspServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-					atomic.AddInt32(&ocspHits, 1)
+					ocspHits.Add(1)
 					resp := ocsp.Response{
 						Status:       ocsp.Good,
 						SerialNumber: leaf.cert.SerialNumber,
@@ -2080,10 +2080,10 @@ func TestVerifyCert_RevocationBehavior(t *testing.T) {
 				leaf.cert.OCSPServer = []string{strings.Replace(ocspServer.URL, "127.0.0.1", "localhost", 1)}
 			}
 
-			var crlHits int32
+			var crlHits atomic.Int32
 			if tc.crlSigner != nil {
 				crlServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-					atomic.AddInt32(&crlHits, 1)
+					crlHits.Add(1)
 					now := time.Now()
 					crlDER, err := x509.CreateRevocationList(rand.Reader, &x509.RevocationList{
 						Number:     big.NewInt(1),
@@ -2177,12 +2177,12 @@ func TestVerifyCert_RevocationBehavior(t *testing.T) {
 				t.Errorf("unexpected revoked error, got %v", result.Errors)
 			}
 			if tc.wantOCSPHits != nil {
-				if got := int(atomic.LoadInt32(&ocspHits)); got != *tc.wantOCSPHits {
+				if got := int(ocspHits.Load()); got != *tc.wantOCSPHits {
 					t.Errorf("OCSP endpoint hits = %d, want %d", got, *tc.wantOCSPHits)
 				}
 			}
 			if tc.wantCRLHits != nil {
-				if got := int(atomic.LoadInt32(&crlHits)); got != *tc.wantCRLHits {
+				if got := int(crlHits.Load()); got != *tc.wantCRLHits {
 					t.Errorf("CRL endpoint hits = %d, want %d", got, *tc.wantCRLHits)
 				}
 			}

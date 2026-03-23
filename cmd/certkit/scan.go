@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -310,13 +311,16 @@ func runScan(cmd *cobra.Command, args []string) error {
 					wg.Wait()
 				}
 				if trustPools.System != nil {
+					sem := make(chan struct{}, runtime.NumCPU())
 					for i, c := range certs {
 						if (!allowExpired && now.After(c.Cert.NotAfter)) || trustStatus[i].mozilla {
 							continue
 						}
 						wg.Add(1)
+						sem <- struct{}{}
 						go func(idx int, cert *x509.Certificate) {
 							defer wg.Done()
+							defer func() { <-sem }()
 							trustStatus[idx].system = certkit.VerifyChainTrust(certkit.VerifyChainTrustInput{
 								Cert:          cert,
 								Roots:         trustPools.System,
