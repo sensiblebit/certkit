@@ -5,6 +5,7 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,7 +15,10 @@ import (
 	"github.com/sensiblebit/certkit/internal/certstore"
 )
 
-var errInjectedWriteFailure = errors.New("injected write failure")
+var (
+	errInjectedWriteFailure = errors.New("injected write failure")
+	errUnexpectedTrustStore = errors.New("unexpected trust store")
+)
 
 func TestExportBundles_EndToEnd(t *testing.T) {
 	// WHY: Integration test for the full export pipeline (store -> chain resolution -> file writing); verifies the bundle directory is created and populated.
@@ -399,6 +403,74 @@ func TestExportBundles_UntrustedBundleSkippedWithoutForce(t *testing.T) {
 	}
 	if len(entries) != 0 {
 		t.Fatalf("expected no exported bundles, got %d entries", len(entries))
+	}
+}
+
+func TestExportMatchedBundleWithSystemFallback_RetriesWithSystemTrust(t *testing.T) {
+	// WHY: Bundle export now defaults to Mozilla trust but should retry with the
+	// host system roots before classifying a candidate as untrusted.
+	t.Parallel()
+
+	var trustStores []string
+	exportFn := func(_ context.Context, input certstore.ExportMatchedBundleInput) error {
+		trustStores = append(trustStores, input.BundleOpts.TrustStore)
+		if input.BundleOpts.TrustStore == "mozilla" {
+			return fmt.Errorf("%w: mozilla verify failed", certkit.ErrChainVerificationFailed)
+		}
+		if input.BundleOpts.TrustStore == "system" {
+			return nil
+		}
+		return errUnexpectedTrustStore
+	}
+
+	skipped, err := exportMatchedBundleWithSystemFallback(
+		context.Background(),
+		"fallback.example.com",
+		certstore.ExportMatchedBundleInput{BundleOpts: certkit.BundleOptions{TrustStore: "mozilla", Verify: true}},
+		certkit.BundleOptions{TrustStore: "mozilla", Verify: true},
+		exportFn,
+	)
+	if err != nil {
+		t.Fatalf("exportMatchedBundleWithSystemFallback() error = %v, want nil", err)
+	}
+	if skipped {
+		t.Fatal("exportMatchedBundleWithSystemFallback() skipped = true, want false")
+	}
+	if got, want := strings.Join(trustStores, ","), "mozilla,system"; got != want {
+		t.Fatalf("trust store attempts = %q, want %q", got, want)
+	}
+}
+
+func TestExportMatchedBundleWithSystemFallback_ReturnsRetryFailure(t *testing.T) {
+	// WHY: If the system-trust retry reaches a real export failure, that error
+	// must be returned instead of being silently downgraded to an untrusted skip.
+	t.Parallel()
+
+	exportFn := func(_ context.Context, input certstore.ExportMatchedBundleInput) error {
+		if input.BundleOpts.TrustStore == "mozilla" {
+			return fmt.Errorf("%w: mozilla verify failed", certkit.ErrChainVerificationFailed)
+		}
+		if input.BundleOpts.TrustStore == "system" {
+			return errInjectedWriteFailure
+		}
+		return errUnexpectedTrustStore
+	}
+
+	skipped, err := exportMatchedBundleWithSystemFallback(
+		context.Background(),
+		"fallback.example.com",
+		certstore.ExportMatchedBundleInput{BundleOpts: certkit.BundleOptions{TrustStore: "mozilla", Verify: true}},
+		certkit.BundleOptions{TrustStore: "mozilla", Verify: true},
+		exportFn,
+	)
+	if skipped {
+		t.Fatal("exportMatchedBundleWithSystemFallback() skipped = true, want false")
+	}
+	if err == nil {
+		t.Fatal("exportMatchedBundleWithSystemFallback() error = nil, want non-nil")
+	}
+	if !errors.Is(err, errInjectedWriteFailure) {
+		t.Fatalf("error = %v, want injected retry failure", err)
 	}
 }
 
