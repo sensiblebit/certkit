@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `verify --roots <file>` to include PEM/DER/PKCS#7/PKCS#12/JKS certificates as an additional file-backed trust source ([`0ee41ad`])
 - Add `CheckTrustAnchorsResult` so library callers can inspect `trust_anchors` plus trust-source load warnings from `CheckTrustAnchors` ([#171])
 - Display top-level X.509 certificate extensions with human-readable OID names in `inspect`, `verify --verbose`, and `connect --verbose`, including critical and unhandled-critical markers ([`512d96c`])
+- Add `connect --tls-version` to pin the negotiated protocol version when comparing server TLS behavior across TLS 1.0-1.3 ([#190])
 
 ### Changed
 
@@ -36,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Make `connect` fail when the peer omits part of the trust path and validation only succeeds after local chain completion, instead of accepting the incomplete server-presented chain ([#190])
 - Use bundle folder name as Kubernetes secret `metadata.name` instead of the CN-derived prefix, so the secret name matches the export directory ([#178])
 - Validate `bundleName` in bundle config YAML against DNS-1123 rules at load time; invalid names now produce a fatal error with the file path and line number ([#178])
 - Deduplicate extension block formatting between `connect --verbose` and the shared internal formatter to prevent drift in extension flag rendering ([`30d67f8`])

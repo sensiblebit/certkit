@@ -35,6 +35,7 @@ var (
 	errLegacyCertEntrySizeTruncated = errors.New("certificate entry truncated")
 	errLegacyNoServerHello          = errors.New("no server hello received")
 	errLegacyNoServerCertificates   = errors.New("no certificates received from server")
+	errLegacyVersionMismatch        = errors.New("server negotiated unexpected TLS version during legacy fallback")
 )
 
 // legacyCipherDef describes a cipher suite not implemented by Go's crypto/tls.
@@ -338,6 +339,7 @@ func parseCertificateMessage(data []byte) ([]*x509.Certificate, error) {
 type legacyFallbackInput struct {
 	addr       string
 	serverName string
+	version    uint16
 }
 
 // legacyFallbackResult contains the result of a legacy TLS fallback connection.
@@ -398,6 +400,9 @@ func legacyFallbackConnect(ctx context.Context, input legacyFallbackInput) (*leg
 	}
 	if shResult == nil {
 		return nil, errLegacyNoServerHello
+	}
+	if input.version != 0 && shResult.version != input.version {
+		return nil, fmt.Errorf("%w: expected %s, got %s", errLegacyVersionMismatch, tlsVersionString(input.version), tlsVersionString(shResult.version))
 	}
 	if len(certs) == 0 {
 		return nil, errLegacyNoServerCertificates

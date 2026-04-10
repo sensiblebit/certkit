@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"slices"
 	"strings"
@@ -30,6 +31,8 @@ const maxTextLineBytes = 16 * 1024
 
 var (
 	errConnectHostRequired         = errors.New("connecting to TLS server: host is required")
+	errConnectUnsupportedVersion   = errors.New("connecting to TLS server: unsupported TLS version")
+	errConnectPresentedChain       = errors.New("server did not present a valid trust path")
 	errCipherScanHostRequired      = errors.New("scanning cipher suites: host is required")
 	errConnectNonTLSService        = errors.New("remote service does not appear to speak TLS")
 	errStartTLSUnsupportedProtocol = errors.New("unsupported STARTTLS protocol")
@@ -143,7 +146,125 @@ func DiagnoseConnectChain(input DiagnoseConnectChainInput) []ChainDiagnostic {
 		break
 	}
 
+	if !presentedChainHasIssuerPath(input.PeerChain) && len(input.PeerChain) > 0 {
+		leaf := input.PeerChain[0]
+		diags = append(diags, ChainDiagnostic{
+			Check:  "missing-intermediate",
+			Status: "warn",
+			Detail: fmt.Sprintf("presented chain does not contain an issuer path for leaf %q to a higher CA certificate", FormatDNFromRaw(leaf.RawSubject, leaf.Subject)),
+		})
+	}
+
 	return diags
+}
+
+func diagnoseAIARepairedChain(peerChain, aiaCerts []*x509.Certificate) []ChainDiagnostic {
+	if len(peerChain) == 0 || len(aiaCerts) == 0 {
+		return nil
+	}
+	if isPeerChainMissingIssuer(peerChain) {
+		return []ChainDiagnostic{{
+			Check:  "missing-intermediate",
+			Status: "warn",
+			Detail: "server does not send intermediate certificates; chain was completed via AIA",
+		}}
+	}
+	return []ChainDiagnostic{{
+		Check:  "aia-repaired-chain",
+		Status: "warn",
+		Detail: "server did not present a valid trust path; local validation succeeded after AIA fetch",
+	}}
+}
+
+func isPeerChainMissingIssuer(peerChain []*x509.Certificate) bool {
+	for i, cert := range peerChain {
+		if cert == nil || bytes.Equal(cert.RawIssuer, cert.RawSubject) {
+			continue
+		}
+		issuerPresent := false
+		for j := i + 1; j < len(peerChain); j++ {
+			candidate := peerChain[j]
+			if candidate != nil && bytes.Equal(cert.RawIssuer, candidate.RawSubject) {
+				issuerPresent = true
+				break
+			}
+		}
+		if !issuerPresent {
+			return true
+		}
+	}
+	return false
+}
+
+func presentedChainHasIssuerPath(peerChain []*x509.Certificate) bool {
+	if len(peerChain) == 0 {
+		return false
+	}
+
+	var dfs func(index int, visited map[int]bool) bool
+	dfs = func(index int, visited map[int]bool) bool {
+		cert := peerChain[index]
+		if cert == nil {
+			return false
+		}
+		candidateFound := false
+		for j, issuer := range peerChain {
+			if j == index || issuer == nil || !bytes.Equal(cert.RawIssuer, issuer.RawSubject) {
+				continue
+			}
+			if cert.CheckSignatureFrom(issuer) != nil {
+				continue
+			}
+			candidateFound = true
+			if visited[j] {
+				continue
+			}
+			nextVisited := make(map[int]bool, len(visited)+1)
+			maps.Copy(nextVisited, visited)
+			nextVisited[j] = true
+			if dfs(j, nextVisited) {
+				return true
+			}
+		}
+		return !candidateFound && (len(peerChain) == 1 || index != 0)
+	}
+	return dfs(0, map[int]bool{0: true})
+}
+
+func presentedChainBuildsVerifiedPath(peerChain []*x509.Certificate, verifiedChains [][]*x509.Certificate) bool {
+	if len(peerChain) == 0 || len(verifiedChains) == 0 {
+		return false
+	}
+
+	peerCerts := make(map[string]bool, len(peerChain))
+	for _, cert := range peerChain {
+		if cert != nil {
+			peerCerts[string(cert.Raw)] = true
+		}
+	}
+
+	for _, chain := range verifiedChains {
+		if len(chain) == 0 {
+			continue
+		}
+		requiredCount := len(chain) - 1
+		if len(chain) == 1 {
+			requiredCount = 1
+		}
+
+		complete := true
+		for i := range requiredCount {
+			cert := chain[i]
+			if cert == nil || !peerCerts[string(cert.Raw)] {
+				complete = false
+				break
+			}
+		}
+		if complete {
+			return true
+		}
+	}
+	return false
 }
 
 // SortDiagnostics sorts diagnostics: errors before warnings, then alphabetically
@@ -177,6 +298,19 @@ func DiagnoseVerifyError(verifyErr error) []ChainDiagnostic {
 		}}
 	}
 	return nil
+}
+
+func validateConnectVersion(version uint16) error {
+	switch version {
+	case 0, tls.VersionTLS10, tls.VersionTLS11, tls.VersionTLS12, tls.VersionTLS13:
+		return nil
+	default:
+		return fmt.Errorf("%w: 0x%04x", errConnectUnsupportedVersion, version)
+	}
+}
+
+func allowLegacyFallback(version uint16) bool {
+	return version == 0 || version <= tls.VersionTLS12
 }
 
 // DiagnoseNegotiatedCipher returns diagnostics for the cipher suite and protocol
@@ -245,6 +379,8 @@ type ConnectTLSInput struct {
 	Host string
 	// Port is the TCP port (default: "443").
 	Port string
+	// Version pins the TLS protocol version. Zero means auto-negotiate.
+	Version uint16
 	// ConnectTimeout is used when ctx has no deadline (default: 10s).
 	ConnectTimeout time.Duration
 	// ServerName overrides the SNI hostname (defaults to Host).
@@ -322,6 +458,9 @@ type ConnectResult struct {
 	TLSSCTs [][]byte `json:"-"`
 	// VerifiedChains contains the verified certificate chains.
 	VerifiedChains [][]*x509.Certificate `json:"-"`
+	// TrustPathStatus records whether the server-presented certificates
+	// themselves formed a valid trust path during connection verification.
+	TrustPathStatus ConnectTrustPathStatus `json:"-"`
 	// VerifyError is non-empty if chain verification failed.
 	VerifyError string `json:"verify_error,omitempty"`
 	// Diagnostics contains chain configuration warnings (root-in-chain, duplicate-cert, missing-intermediate).
@@ -349,11 +488,25 @@ type ConnectResult struct {
 	LegacyProbe bool `json:"legacy_probe,omitempty"`
 }
 
+// ConnectTrustPathStatus describes whether the certificates presented by the
+// peer formed a complete trust path to a trusted anchor.
+type ConnectTrustPathStatus string
+
+// ConnectTLS trust-path status values.
+const (
+	ConnectTrustPathStatusUnknown          ConnectTrustPathStatus = ""
+	ConnectTrustPathStatusPresentedValid   ConnectTrustPathStatus = "presented-valid"
+	ConnectTrustPathStatusPresentedInvalid ConnectTrustPathStatus = "presented-invalid"
+)
+
 // ConnectTLS connects to a TLS server and returns connection details including
 // the negotiated protocol, cipher suite, and peer certificate chain.
 func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, error) {
 	if input.Host == "" {
 		return nil, errConnectHostRequired
+	}
+	if err := validateConnectVersion(input.Version); err != nil {
+		return nil, err
 	}
 	port := input.Port
 	if port == "" {
@@ -386,7 +539,11 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 
 	var clientAuth *ClientAuthInfo
 
-	tlsConf := newConnectTLSConfig(serverName, &clientAuth)
+	tlsConf := newConnectTLSConfig(connectTLSConfigInput{
+		serverName: serverName,
+		clientAuth: &clientAuth,
+		version:    input.Version,
+	})
 
 	tlsConn := tls.Client(sniffConn, tlsConf)
 	defer func() { _ = tlsConn.Close() }()
@@ -399,7 +556,7 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 
 	handshakeErr := tlsConn.HandshakeContext(connectCtx)
 	var tlsAlert tls.AlertError
-	if handshakeErr != nil && clientAuth == nil && errors.As(handshakeErr, &tlsAlert) {
+	if handshakeErr != nil && clientAuth == nil && errors.As(handshakeErr, &tlsAlert) && allowLegacyFallback(input.Version) {
 		// Close the failed TLS connection before opening a new one.
 		// The deferred tlsConn.Close() will be a no-op after this.
 		_ = tlsConn.Close()
@@ -414,6 +571,7 @@ func ConnectTLS(ctx context.Context, input ConnectTLSInput) (*ConnectResult, err
 		legacyResult, legacyErr := legacyFallbackConnect(fallbackCtx, legacyFallbackInput{
 			addr:       addr,
 			serverName: serverName,
+			version:    input.Version,
 		})
 		if legacyErr != nil {
 			return nil, fmt.Errorf("tls handshake with %s: %w; legacy fallback: %w", addr, handshakeErr, legacyErr)
@@ -577,20 +735,24 @@ func (result *ConnectResult) populate(ctx context.Context, input ConnectTLSInput
 		result.Diagnostics = append(result.Diagnostics, DiagnoseConnectChain(DiagnoseConnectChainInput{
 			PeerChain: result.PeerChain,
 		})...)
+		if !presentedChainHasIssuerPath(result.PeerChain) {
+			result.TrustPathStatus = ConnectTrustPathStatusPresentedInvalid
+		}
 	}
 
 	// Verify the chain ourselves to capture the error message.
 	if len(result.PeerChain) > 0 {
 		leaf := result.PeerChain[0]
-		opts := x509.VerifyOptions{
+		serverIntermediates := x509.NewCertPool()
+		for _, cert := range result.PeerChain[1:] {
+			serverIntermediates.AddCert(cert)
+		}
+		serverVerifyOpts := x509.VerifyOptions{
 			DNSName:       serverName,
-			Intermediates: x509.NewCertPool(),
+			Intermediates: serverIntermediates,
 			Roots:         input.RootCAs,
 		}
-		for _, cert := range result.PeerChain[1:] {
-			opts.Intermediates.AddCert(cert)
-		}
-		chains, verifyErr := leaf.Verify(opts)
+		chains, verifyErr := leaf.Verify(serverVerifyOpts)
 		if verifyErr != nil && !input.DisableAIA && len(leaf.IssuingCertificateURL) > 0 {
 			// Attempt AIA walking to fetch missing intermediates.
 			aiaTimeout := input.AIATimeout
@@ -607,17 +769,23 @@ func (result *ConnectResult) populate(ctx context.Context, input ConnectTLSInput
 				slog.Debug("AIA fetch warning", "warning", w)
 			}
 			if len(aiaCerts) > 0 {
-				for _, c := range aiaCerts {
-					opts.Intermediates.AddCert(c)
+				aiaIntermediates := x509.NewCertPool()
+				for _, cert := range result.PeerChain[1:] {
+					aiaIntermediates.AddCert(cert)
 				}
-				chains, verifyErr = leaf.Verify(opts)
-				if verifyErr == nil {
+				for _, c := range aiaCerts {
+					aiaIntermediates.AddCert(c)
+				}
+				aiaChains, aiaVerifyErr := leaf.Verify(x509.VerifyOptions{
+					DNSName:       serverName,
+					Intermediates: aiaIntermediates,
+					Roots:         input.RootCAs,
+				})
+				if aiaVerifyErr == nil {
 					result.AIAFetched = true
-					result.Diagnostics = append(result.Diagnostics, ChainDiagnostic{
-						Check:  "missing-intermediate",
-						Status: "warn",
-						Detail: "server does not send intermediate certificates; chain was completed via AIA",
-					})
+					result.VerifiedChains = aiaChains
+					result.TrustPathStatus = ConnectTrustPathStatusPresentedInvalid
+					result.Diagnostics = append(result.Diagnostics, diagnoseAIARepairedChain(result.PeerChain, aiaCerts)...)
 				}
 			}
 		}
@@ -625,7 +793,13 @@ func (result *ConnectResult) populate(ctx context.Context, input ConnectTLSInput
 			result.VerifyError = verifyErr.Error()
 			result.Diagnostics = append(result.Diagnostics, DiagnoseVerifyError(verifyErr)...)
 		} else {
-			result.VerifiedChains = chains
+			if !presentedChainBuildsVerifiedPath(result.PeerChain, chains) {
+				result.VerifyError = errConnectPresentedChain.Error()
+				result.TrustPathStatus = ConnectTrustPathStatusPresentedInvalid
+			} else {
+				result.VerifiedChains = chains
+				result.TrustPathStatus = ConnectTrustPathStatusPresentedValid
+			}
 		}
 	}
 
@@ -723,9 +897,15 @@ func (result *ConnectResult) populate(ctx context.Context, input ConnectTLSInput
 	}
 }
 
-func newConnectTLSConfig(serverName string, clientAuth **ClientAuthInfo) *tls.Config {
-	return &tls.Config{
-		ServerName:         serverName,
+type connectTLSConfigInput struct {
+	serverName string
+	clientAuth **ClientAuthInfo
+	version    uint16
+}
+
+func newConnectTLSConfig(input connectTLSConfigInput) *tls.Config {
+	cfg := &tls.Config{
+		ServerName:         input.serverName,
 		InsecureSkipVerify: true, //nolint:gosec // We do our own verification below.
 		GetClientCertificate: func(cri *tls.CertificateRequestInfo) (*tls.Certificate, error) {
 			info := &ClientAuthInfo{Requested: true}
@@ -745,10 +925,15 @@ func newConnectTLSConfig(serverName string, clientAuth **ClientAuthInfo) *tls.Co
 			for _, scheme := range cri.SignatureSchemes {
 				info.SignatureSchemes = append(info.SignatureSchemes, signatureSchemeString(scheme))
 			}
-			*clientAuth = info
+			*input.clientAuth = info
 			return &tls.Certificate{}, nil
 		},
 	}
+	if input.version != 0 {
+		cfg.MinVersion = input.version
+		cfg.MaxVersion = input.version
+	}
+	return cfg
 }
 
 type connectResultFromTLSStateInput struct {
@@ -1024,7 +1209,11 @@ func connectViaStartTLS(handshakeCtx, verifyCtx context.Context, input connectVi
 
 	bufferedConn := &bufferedPrefixConn{Conn: conn, reader: reader}
 	var clientAuth *ClientAuthInfo
-	tlsConn := tls.Client(bufferedConn, newConnectTLSConfig(input.serverName, &clientAuth))
+	tlsConn := tls.Client(bufferedConn, newConnectTLSConfig(connectTLSConfigInput{
+		serverName: input.serverName,
+		clientAuth: &clientAuth,
+		version:    input.connectInput.Version,
+	}))
 	closeConn = tlsConn
 	handshakeErr := tlsConn.HandshakeContext(handshakeCtx)
 	state := tlsConn.ConnectionState()
@@ -2860,6 +3049,8 @@ func FormatConnectStatusLines(r *ConnectResult) string {
 	}
 
 	switch {
+	case r.VerifyError != "" && r.AIAFetched:
+		fmt.Fprintf(&out, "Verify:       failed (%s; locally completed via AIA)\n", r.VerifyError)
 	case r.VerifyError != "":
 		fmt.Fprintf(&out, "Verify:       failed (%s)\n", r.VerifyError)
 	case r.AIAFetched:
