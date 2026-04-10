@@ -6,6 +6,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/rsa"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
@@ -25,6 +26,7 @@ import (
 var (
 	connectServerName          string
 	connectFormat              string
+	connectTLSVersion          string
 	connectCRL                 bool
 	connectNoOCSP              bool
 	connectCiphers             bool
@@ -34,6 +36,7 @@ var (
 	errConnectEmptyHost        = errors.New("empty host")
 	errConnectEmptyPort        = errors.New("empty port")
 	errConnectInvalidPort      = errors.New("invalid port")
+	errConnectUnsupportedTLS   = errors.New("unsupported TLS version")
 )
 
 var connectCmd = &cobra.Command{
@@ -50,9 +53,13 @@ the server supports with security ratings.
 Network fetches for AIA/OCSP/CRL block private/internal endpoints by default.
 Use --allow-private-network to opt in for internal PKI environments.
 
+Use --tls-version 1.2 or --tls-version 1.3 to compare version-specific
+certificate presentation and validation behavior.
+
 Exits with code 2 if chain verification fails or the certificate is revoked.`,
 	Example: `  certkit connect example.com
   certkit connect example.com:8443
+  certkit connect example.com --tls-version 1.2
   certkit connect example.com --crl
   certkit connect example.com --ciphers
   certkit connect example.com --servername alt.example.com
@@ -64,6 +71,7 @@ Exits with code 2 if chain verification fails or the certificate is revoked.`,
 func init() {
 	connectCmd.Flags().StringVar(&connectServerName, "servername", "", "Override SNI hostname (defaults to host)")
 	connectCmd.Flags().StringVar(&connectFormat, "format", "text", "Output format: text, json")
+	connectCmd.Flags().StringVar(&connectTLSVersion, "tls-version", "", "Pin TLS version: 1.0, 1.1, 1.2, or 1.3 (default: auto)")
 	connectCmd.Flags().BoolVar(&connectCRL, "crl", false, "Check CRL distribution points for revocation")
 	connectCmd.Flags().BoolVar(&connectNoOCSP, "no-ocsp", false, "Disable automatic OCSP revocation check")
 	connectCmd.Flags().BoolVar(&connectCiphers, "ciphers", false, "Enumerate all supported cipher suites with security ratings")
@@ -72,6 +80,7 @@ func init() {
 	connectCmd.Flags().BoolVar(&connectAllowPrivateNetwork, "allow-private-network", false, "Allow AIA/OCSP/CRL fetches to private/internal endpoints")
 
 	registerCompletion(connectCmd, completionInput{"format", fixedCompletion("text", "json")})
+	registerCompletion(connectCmd, completionInput{"tls-version", fixedCompletion("1.0", "1.1", "1.2", "1.3")})
 }
 
 // connectResultJSON is a JSON-serializable version of ConnectResult.
@@ -127,6 +136,10 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("parsing address %q: %w", args[0], err)
 	}
+	version, err := parseConnectTLSVersion(connectTLSVersion)
+	if err != nil {
+		return fmt.Errorf("parsing --tls-version: %w", err)
+	}
 	policy, err := selectedPolicy(connectFIPS1402, connectFIPS1403)
 	if err != nil {
 		return err
@@ -141,6 +154,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	result, err := certkit.ConnectTLS(ctx, certkit.ConnectTLSInput{
 		Host:                 host,
 		Port:                 port,
+		Version:              version,
 		ServerName:           connectServerName,
 		DisableOCSP:          connectNoOCSP,
 		CheckCRL:             connectCRL,
@@ -317,6 +331,23 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
+func parseConnectTLSVersion(raw string) (uint16, error) {
+	switch strings.TrimSpace(strings.ToLower(raw)) {
+	case "", "auto":
+		return 0, nil
+	case "1.0", "tls1.0", "tls1":
+		return tls.VersionTLS10, nil
+	case "1.1", "tls1.1":
+		return tls.VersionTLS11, nil
+	case "1.2", "tls1.2":
+		return tls.VersionTLS12, nil
+	case "1.3", "tls1.3":
+		return tls.VersionTLS13, nil
+	default:
+		return 0, fmt.Errorf("%w: %q (use auto, 1.0, 1.1, 1.2, or 1.3)", errConnectUnsupportedTLS, raw)
+	}
+}
+
 // formatConnectVerbose formats a ConnectResult with extended certificate details.
 func formatConnectVerbose(r *certkit.ConnectResult, now time.Time) string {
 	var out strings.Builder
@@ -417,6 +448,16 @@ func formatConnectChainPEM(chain []*x509.Certificate) string {
 }
 
 func collectConnectTrustStatus(result *certkit.ConnectResult) ([][]string, [][]string) {
+	if result.TrustPathStatus == certkit.ConnectTrustPathStatusPresentedInvalid && len(result.VerifiedChains) == 0 {
+		anchors := make([][]string, len(result.PeerChain))
+		warnings := make([][]string, len(result.PeerChain))
+		for i := range result.PeerChain {
+			anchors[i] = []string{}
+			warnings[i] = []string{}
+		}
+		return anchors, warnings
+	}
+
 	intermediates := connectTrustIntermediates(result)
 
 	anchors := make([][]string, 0, len(result.PeerChain))

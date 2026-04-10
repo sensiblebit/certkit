@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/ecdsa"
 	"crypto/rand"
+	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/asn1"
@@ -134,6 +135,45 @@ func TestRunConnect_InvalidPortInput(t *testing.T) {
 	}
 }
 
+func TestParseConnectTLSVersion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		input           string
+		want            uint16
+		wantErrContains string
+	}{
+		{name: "auto default", input: "", want: 0},
+		{name: "auto explicit", input: "auto", want: 0},
+		{name: "tls12", input: "1.2", want: tls.VersionTLS12},
+		{name: "tls13 alias", input: "tls1.3", want: tls.VersionTLS13},
+		{name: "invalid", input: "1.4", wantErrContains: `unsupported TLS version: "1.4"`},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := parseConnectTLSVersion(tt.input)
+			if tt.wantErrContains != "" {
+				if err == nil {
+					t.Fatalf("parseConnectTLSVersion(%q) expected error", tt.input)
+				}
+				if !strings.Contains(err.Error(), tt.wantErrContains) {
+					t.Fatalf("parseConnectTLSVersion(%q) error = %q, want substring %q", tt.input, err.Error(), tt.wantErrContains)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseConnectTLSVersion(%q) unexpected error: %v", tt.input, err)
+			}
+			if got != tt.want {
+				t.Fatalf("parseConnectTLSVersion(%q) = 0x%04x, want 0x%04x", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestConnectTextStatusSectionConsistency(t *testing.T) {
 	// WHY: shared status lines must stay identical between standard and verbose
 	// connect output to prevent contract drift.
@@ -145,6 +185,7 @@ func TestConnectTextStatusSectionConsistency(t *testing.T) {
 		Protocol:    "TLS 1.3",
 		CipherSuite: "TLS_AES_128_GCM_SHA256",
 		ServerName:  "test.example.com",
+		VerifyError: "x509: certificate signed by unknown authority",
 		ALPN:        "h2",
 		AIAFetched:  true,
 		CT:          &certkit.CTResult{Status: "ok", Total: 3, Valid: 3},
@@ -188,6 +229,25 @@ func TestConnectTextStatusSectionConsistency(t *testing.T) {
 	}
 	if !strings.Contains(verboseHead, shared) {
 		t.Fatalf("verbose output missing shared status block\nshared:\n%s\nverbose:\n%s", shared, verboseOut)
+	}
+}
+
+func TestCollectConnectTrustStatus_PresentedTrustPathInvalid(t *testing.T) {
+	t.Parallel()
+
+	result := &certkit.ConnectResult{
+		PeerChain:         []*x509.Certificate{{}},
+		TrustPathStatus:   certkit.ConnectTrustPathStatusPresentedInvalid,
+		VerifiedChains:    nil,
+		ChainTrustAnchors: nil,
+	}
+
+	anchors, warnings := collectConnectTrustStatus(result)
+	if len(anchors) != 1 || len(anchors[0]) != 0 {
+		t.Fatalf("anchors = %#v, want one empty entry", anchors)
+	}
+	if len(warnings) != 1 || len(warnings[0]) != 0 {
+		t.Fatalf("warnings = %#v, want one empty entry", warnings)
 	}
 }
 

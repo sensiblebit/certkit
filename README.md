@@ -182,6 +182,7 @@ JSON output includes `trust_anchors` and `trust_warnings` for the leaf and displ
 | `--format`                | `text`  | Output format: text, json                                                           |
 | `--no-ocsp`               | `false` | Disable automatic OCSP revocation check                                             |
 | `--servername`            |         | Override SNI hostname (defaults to host)                                            |
+| `--tls-version`           |         | Pin TLS version: 1.0, 1.1, 1.2, or 1.3 (default: auto)                              |
 <!-- /certkit:flags -->
 
 Port defaults to 443 if not specified. OCSP revocation status is checked automatically (best-effort); use `--no-ocsp` to disable. Use `--verbose` for extended details (serial, key info, signature algorithm, key usage, EKU, extensions) plus a PEM-formatted copy of the server-sent certificate chain with `# Subject`, `# Issuer`, and validity headers.

@@ -348,6 +348,75 @@ func TestConnectTLS(t *testing.T) {
 	}
 }
 
+func TestConnectTLS_TLSVersionPin(t *testing.T) {
+	t.Parallel()
+
+	root := generateTestCA(t, "Version Pin Root")
+	leaf := generateTestLeafCert(t, root)
+
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(root.Cert)
+
+	t.Run("pins tls 1.2 when server supports both", func(t *testing.T) {
+		t.Parallel()
+
+		port := startTLSServerWithConfig(t, &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			MaxVersion: tls.VersionTLS13,
+			Certificates: []tls.Certificate{{
+				Certificate: [][]byte{leaf.DER, root.CertDER},
+				PrivateKey:  leaf.Key,
+			}},
+		})
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		result, err := ConnectTLS(ctx, ConnectTLSInput{
+			Host:    "127.0.0.1",
+			Port:    port,
+			Version: tls.VersionTLS12,
+			RootCAs: rootPool,
+		})
+		if err != nil {
+			t.Fatalf("ConnectTLS failed: %v", err)
+		}
+		if result.Protocol != "TLS 1.2" {
+			t.Fatalf("Protocol = %q, want %q", result.Protocol, "TLS 1.2")
+		}
+		if result.VerifyError != "" {
+			t.Fatalf("VerifyError = %q, want empty", result.VerifyError)
+		}
+	})
+
+	t.Run("fails when pinned version is unsupported", func(t *testing.T) {
+		t.Parallel()
+
+		//nolint:gosec // This test intentionally constrains the server to TLS 1.2 to verify version pin failures.
+		port := startTLSServerWithConfig(t, &tls.Config{
+			MinVersion: tls.VersionTLS12,
+			MaxVersion: tls.VersionTLS12,
+			Certificates: []tls.Certificate{{
+				Certificate: [][]byte{leaf.DER, root.CertDER},
+				PrivateKey:  leaf.Key,
+			}},
+		})
+
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		_, err := ConnectTLS(ctx, ConnectTLSInput{
+			Host:    "127.0.0.1",
+			Port:    port,
+			Version: tls.VersionTLS13,
+			RootCAs: rootPool,
+		})
+		if err == nil {
+			t.Fatal("expected handshake failure when TLS 1.3 is unavailable")
+		}
+	})
+}
+
 func TestDetectStartTLSServerName(t *testing.T) {
 	t.Parallel()
 
@@ -2354,12 +2423,14 @@ func TestFormatConnectResult(t *testing.T) {
 			notWantStrings: []string{"[WARN] hostname-mismatch:"},
 		},
 		{
-			name:       "AIA-aware verify line",
-			aiaFetched: true,
+			name:        "AIA-aware verify line",
+			verifyError: "x509: certificate signed by unknown authority",
+			aiaFetched:  true,
 			diagnostics: []ChainDiagnostic{
 				{Check: "missing-intermediate", Status: "warn", Detail: "server does not send intermediate certificates; chain was completed via AIA"},
 			},
-			wantStrings: []string{"Verify:       ok (intermediates fetched via AIA)", "[WARN] missing-intermediate:"},
+			wantStrings:    []string{"Verify:       failed (x509: certificate signed by unknown authority; locally completed via AIA)", "[WARN] missing-intermediate:"},
+			notWantStrings: []string{"Verify:       ok"},
 		},
 		{
 			name:           "no diagnostics section when empty",
@@ -2546,8 +2617,9 @@ func TestFormatConnectResult(t *testing.T) {
 }
 
 func TestDiagnoseConnectChain(t *testing.T) {
-	// WHY: DiagnoseConnectChain should flag root-in-chain, duplicate certs, and
-	// misordered chains without false positives for clean chains.
+	// WHY: DiagnoseConnectChain should flag root-in-chain, duplicate certs,
+	// missing intermediates, and misordered chains without false positives for
+	// clean chains.
 	t.Parallel()
 
 	root, intermediates, leaf := buildChain(t, 3)
@@ -2591,14 +2663,20 @@ func TestDiagnoseConnectChain(t *testing.T) {
 		{
 			name:               "missing intermediate does not trigger misordered-chain",
 			peerChain:          []*x509.Certificate{leaf, root},
-			wantChecks:         []string{"root-in-chain"},
-			wantDetailContains: [][]string{{"Chain Root CA", "position 1"}},
+			wantChecks:         []string{"root-in-chain", "missing-intermediate"},
+			wantDetailContains: [][]string{{"Chain Root CA", "position 1"}, {"chain-leaf.example.com", "issuer path"}},
 		},
 		{
 			name:               "duplicate-cert detected",
 			peerChain:          []*x509.Certificate{leaf, intermediates[0], intermediates[0]},
 			wantChecks:         []string{"duplicate-cert"},
 			wantDetailContains: [][]string{{"CN=Intermediate CA 1", "positions 1 and 2"}},
+		},
+		{
+			name:               "duplicate leaf also flags missing intermediate",
+			peerChain:          []*x509.Certificate{leaf, leaf},
+			wantChecks:         []string{"duplicate-cert", "missing-intermediate"},
+			wantDetailContains: [][]string{{"chain-leaf.example.com", "positions 0 and 1"}, {"chain-leaf.example.com", "issuer path"}},
 		},
 		{
 			name:       "leaf-only chain",
@@ -2608,11 +2686,12 @@ func TestDiagnoseConnectChain(t *testing.T) {
 		{
 			name:       "root-in-chain and duplicate-cert",
 			peerChain:  []*x509.Certificate{leaf, root, root},
-			wantChecks: []string{"root-in-chain", "duplicate-cert", "root-in-chain"},
+			wantChecks: []string{"root-in-chain", "duplicate-cert", "root-in-chain", "missing-intermediate"},
 			wantDetailContains: [][]string{
 				{"CN=Chain Root CA", "position 1"},
 				{"CN=Chain Root CA", "positions 1 and 2"},
 				{"CN=Chain Root CA", "position 2"},
+				{"chain-leaf.example.com", "issuer path"},
 			},
 		},
 	}
@@ -2663,6 +2742,46 @@ func TestDiagnoseConnectChain(t *testing.T) {
 				if !matched {
 					t.Fatalf("no diagnostic matched check %q with detail %v in %+v", wantCheck, wantSubstrs, diags)
 				}
+			}
+		})
+	}
+}
+
+func TestPresentedChainBuildsVerifiedPath(t *testing.T) {
+	t.Parallel()
+
+	root, intermediates, leaf := buildChain(t, 3)
+	verifiedChain := [][]*x509.Certificate{{leaf, intermediates[0], root}}
+
+	tests := []struct {
+		name      string
+		peerChain []*x509.Certificate
+		want      bool
+	}{
+		{
+			name:      "accepts presented intermediate with root omitted",
+			peerChain: []*x509.Certificate{leaf, intermediates[0]},
+			want:      true,
+		},
+		{
+			name:      "rejects missing intermediate",
+			peerChain: []*x509.Certificate{leaf},
+			want:      false,
+		},
+		{
+			name:      "rejects wrong presented issuer",
+			peerChain: []*x509.Certificate{leaf, root},
+			want:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := presentedChainBuildsVerifiedPath(tt.peerChain, verifiedChain)
+			if got != tt.want {
+				t.Fatalf("presentedChainBuildsVerifiedPath() = %v, want %v", got, tt.want)
 			}
 		})
 	}
@@ -3129,11 +3248,14 @@ func TestConnectTLS_AIAFetch(t *testing.T) {
 		t.Errorf("leaf CN = %q, want %q", result.PeerChain[0].Subject.CommonName, "localhost")
 	}
 
-	if result.VerifyError != "" {
-		t.Errorf("expected verify to succeed, got error %q", result.VerifyError)
+	if result.VerifyError == "" {
+		t.Error("expected presented-chain verification failure when server omits intermediate")
 	}
 	if !result.AIAFetched {
 		t.Error("expected AIAFetched=true")
+	}
+	if len(result.VerifiedChains) == 0 {
+		t.Fatal("expected AIA-completed VerifiedChains")
 	}
 	missingIntermediate := false
 	for _, diag := range result.Diagnostics {
@@ -3275,6 +3397,55 @@ func TestConnectTLS_RootInChainDiagnostic(t *testing.T) {
 	}
 }
 
+func TestConnectTLS_DuplicateLeafMissingIntermediateFails(t *testing.T) {
+	// WHY: Platform trust helpers must not mask a peer chain that duplicates the
+	// leaf and omits the required intermediate.
+	t.Parallel()
+
+	root := generateTestCA(t, "Dup Leaf Missing Intermediate Root")
+	intermediate := generateIntermediateCA(t, root, "Dup Leaf Missing Intermediate CA")
+	leaf := generateTestLeafCert(t, intermediate)
+
+	port := startTLSServer(t, [][]byte{leaf.DER, leaf.DER}, leaf.Key)
+
+	rootPool := x509.NewCertPool()
+	rootPool.AddCert(root.Cert)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	result, err := ConnectTLS(ctx, ConnectTLSInput{
+		Host:    "127.0.0.1",
+		Port:    port,
+		RootCAs: rootPool,
+	})
+	if err != nil {
+		t.Fatalf("ConnectTLS failed: %v", err)
+	}
+	if result.VerifyError == "" {
+		t.Fatal("expected verification failure for duplicate leaf with missing intermediate")
+	}
+	if len(result.VerifiedChains) != 0 {
+		t.Fatalf("expected no VerifiedChains from incomplete presented path, got %d", len(result.VerifiedChains))
+	}
+
+	var missingIntermediate, duplicateLeaf bool
+	for _, diag := range result.Diagnostics {
+		switch diag.Check {
+		case "missing-intermediate":
+			missingIntermediate = true
+		case "duplicate-cert":
+			duplicateLeaf = true
+		}
+	}
+	if !missingIntermediate {
+		t.Fatal("expected missing-intermediate diagnostic")
+	}
+	if !duplicateLeaf {
+		t.Fatal("expected duplicate-cert diagnostic")
+	}
+}
+
 func TestConnectTLS_AIAFetch_FallbackURL(t *testing.T) {
 	// WHY: ConnectTLS should continue AIA walking when earlier URLs fail.
 	t.Parallel()
@@ -3330,8 +3501,11 @@ func TestConnectTLS_AIAFetch_FallbackURL(t *testing.T) {
 	if !result.AIAFetched {
 		t.Fatal("expected AIAFetched=true")
 	}
-	if result.VerifyError != "" {
-		t.Fatalf("expected AIA chain verification success, got %q", result.VerifyError)
+	if result.VerifyError == "" {
+		t.Fatal("expected presented-chain verification failure when server omits intermediate")
+	}
+	if len(result.VerifiedChains) == 0 {
+		t.Fatal("expected AIA-completed VerifiedChains")
 	}
 }
 
@@ -4406,12 +4580,16 @@ func TestConnectTLS_CRL_AIAFetchedIssuer(t *testing.T) {
 		t.Fatalf("ConnectTLS failed: %v", err)
 	}
 
-	// Chain should verify via AIA-fetched intermediate.
-	if result.VerifyError != "" {
-		t.Fatalf("expected chain to verify via AIA, got error: %s", result.VerifyError)
+	// Presented-chain verification should still fail, but AIA should provide a
+	// usable issuer for CRL validation.
+	if result.VerifyError == "" {
+		t.Fatal("expected presented-chain verification failure when server omits intermediate")
 	}
 	if !result.AIAFetched {
 		t.Error("expected AIAFetched=true")
+	}
+	if len(result.VerifiedChains) == 0 {
+		t.Fatal("expected AIA-completed VerifiedChains")
 	}
 
 	// CRL check should use the AIA-fetched intermediate as issuer.
