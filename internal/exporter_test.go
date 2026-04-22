@@ -407,15 +407,15 @@ func TestExportBundles_UntrustedBundleSkippedWithoutForce(t *testing.T) {
 }
 
 func TestExportMatchedBundleWithSystemFallback_RetriesWithSystemTrust(t *testing.T) {
-	// WHY: Bundle export now defaults to Mozilla trust but should retry with the
-	// host system roots before classifying a candidate as untrusted.
+	// WHY: When explicitly enabled, bundle export should retry unknown-authority
+	// failures with the host system roots before classifying a candidate as untrusted.
 	t.Parallel()
 
 	var trustStores []string
 	exportFn := func(_ context.Context, input certstore.ExportMatchedBundleInput) error {
 		trustStores = append(trustStores, input.BundleOpts.TrustStore)
 		if input.BundleOpts.TrustStore == "mozilla" {
-			return fmt.Errorf("%w: mozilla verify failed", certkit.ErrChainVerificationFailed)
+			return fmt.Errorf("%w: %w", certkit.ErrChainVerificationFailed, x509.UnknownAuthorityError{})
 		}
 		if input.BundleOpts.TrustStore == "system" {
 			return nil
@@ -428,6 +428,7 @@ func TestExportMatchedBundleWithSystemFallback_RetriesWithSystemTrust(t *testing
 		"fallback.example.com",
 		certstore.ExportMatchedBundleInput{BundleOpts: certkit.BundleOptions{TrustStore: "mozilla", Verify: true}},
 		certkit.BundleOptions{TrustStore: "mozilla", Verify: true},
+		true,
 		exportFn,
 	)
 	if err != nil {
@@ -448,7 +449,7 @@ func TestExportMatchedBundleWithSystemFallback_ReturnsRetryFailure(t *testing.T)
 
 	exportFn := func(_ context.Context, input certstore.ExportMatchedBundleInput) error {
 		if input.BundleOpts.TrustStore == "mozilla" {
-			return fmt.Errorf("%w: mozilla verify failed", certkit.ErrChainVerificationFailed)
+			return fmt.Errorf("%w: %w", certkit.ErrChainVerificationFailed, x509.UnknownAuthorityError{})
 		}
 		if input.BundleOpts.TrustStore == "system" {
 			return errInjectedWriteFailure
@@ -461,6 +462,7 @@ func TestExportMatchedBundleWithSystemFallback_ReturnsRetryFailure(t *testing.T)
 		"fallback.example.com",
 		certstore.ExportMatchedBundleInput{BundleOpts: certkit.BundleOptions{TrustStore: "mozilla", Verify: true}},
 		certkit.BundleOptions{TrustStore: "mozilla", Verify: true},
+		true,
 		exportFn,
 	)
 	if skipped {
@@ -471,6 +473,66 @@ func TestExportMatchedBundleWithSystemFallback_ReturnsRetryFailure(t *testing.T)
 	}
 	if !errors.Is(err, errInjectedWriteFailure) {
 		t.Fatalf("error = %v, want injected retry failure", err)
+	}
+}
+
+func TestExportMatchedBundleWithSystemFallback_DoesNotRetryExpiredCertificate(t *testing.T) {
+	t.Parallel()
+
+	var trustStores []string
+	exportFn := func(_ context.Context, input certstore.ExportMatchedBundleInput) error {
+		trustStores = append(trustStores, input.BundleOpts.TrustStore)
+		return fmt.Errorf(
+			"%w: %w",
+			certkit.ErrChainVerificationFailed,
+			x509.CertificateInvalidError{Reason: x509.Expired},
+		)
+	}
+
+	skipped, err := exportMatchedBundleWithSystemFallback(
+		context.Background(),
+		"expired.example.com",
+		certstore.ExportMatchedBundleInput{BundleOpts: certkit.BundleOptions{TrustStore: "mozilla", Verify: true}},
+		certkit.BundleOptions{TrustStore: "mozilla", Verify: true},
+		true,
+		exportFn,
+	)
+	if err != nil {
+		t.Fatalf("exportMatchedBundleWithSystemFallback() error = %v, want nil", err)
+	}
+	if !skipped {
+		t.Fatal("exportMatchedBundleWithSystemFallback() skipped = false, want true")
+	}
+	if got, want := strings.Join(trustStores, ","), "mozilla"; got != want {
+		t.Fatalf("trust store attempts = %q, want %q", got, want)
+	}
+}
+
+func TestExportMatchedBundleWithSystemFallback_DisabledSkipsUnknownAuthority(t *testing.T) {
+	t.Parallel()
+
+	var trustStores []string
+	exportFn := func(_ context.Context, input certstore.ExportMatchedBundleInput) error {
+		trustStores = append(trustStores, input.BundleOpts.TrustStore)
+		return fmt.Errorf("%w: %w", certkit.ErrChainVerificationFailed, x509.UnknownAuthorityError{})
+	}
+
+	skipped, err := exportMatchedBundleWithSystemFallback(
+		context.Background(),
+		"fallback.example.com",
+		certstore.ExportMatchedBundleInput{BundleOpts: certkit.BundleOptions{TrustStore: "mozilla", Verify: true}},
+		certkit.BundleOptions{TrustStore: "mozilla", Verify: true},
+		false,
+		exportFn,
+	)
+	if err != nil {
+		t.Fatalf("exportMatchedBundleWithSystemFallback() error = %v, want nil", err)
+	}
+	if !skipped {
+		t.Fatal("exportMatchedBundleWithSystemFallback() skipped = false, want true")
+	}
+	if got, want := strings.Join(trustStores, ","), "mozilla"; got != want {
+		t.Fatalf("trust store attempts = %q, want %q", got, want)
 	}
 }
 
@@ -639,7 +701,7 @@ func TestAssignBundleNames(t *testing.T) {
 			CommonNames: []string{"app.example.com"},
 			BundleName:  "app-bundle",
 		},
-		// No config for *.wild.example.com — should get sanitized CN
+		// No config for *.wild.example.com — should not export a bundle
 	}
 
 	AssignBundleNames(store, configs)
@@ -654,7 +716,7 @@ func TestAssignBundleNames(t *testing.T) {
 	if !nameSet["app-bundle"] {
 		t.Error("expected 'app-bundle' in BundleNames")
 	}
-	if !nameSet["_.wild.example.com"] {
-		t.Errorf("expected '_.wild.example.com' in BundleNames, got %v", bundleNames)
+	if nameSet["_.wild.example.com"] {
+		t.Errorf("did not expect unmatched wildcard CN bundle in BundleNames, got %v", bundleNames)
 	}
 }

@@ -34,6 +34,7 @@ type readonlyGlobals struct {
 	// scan flags
 	scanBundlePath          string
 	scanConfigPath          string
+	scanTrustStore          string
 	scanForceExport         bool
 	scanDuplicates          bool
 	scanDumpKeys            string
@@ -47,6 +48,7 @@ type readonlyGlobals struct {
 	// connect flags
 	connectServerName          string
 	connectFormat              string
+	connectTrustStore          string
 	connectCRL                 bool
 	connectNoOCSP              bool
 	connectCiphers             bool
@@ -62,6 +64,7 @@ type readonlyGlobals struct {
 	// verify flags
 	verifyKeyPath             string
 	verifyRootsPath           string
+	verifyTrustStore          string
 	verifyExpiry              string
 	verifyFormat              string
 	verifyDiagnose            bool
@@ -71,6 +74,7 @@ type readonlyGlobals struct {
 
 	// inspect flags
 	inspectFormat              string
+	inspectTrustStore          string
 	inspectAllowPrivateNetwork bool
 
 	// tree flags
@@ -90,6 +94,7 @@ func snapshotReadonlyGlobals() readonlyGlobals {
 
 		scanBundlePath:          scanBundlePath,
 		scanConfigPath:          scanConfigPath,
+		scanTrustStore:          scanTrustStore,
 		scanForceExport:         scanForceExport,
 		scanDuplicates:          scanDuplicates,
 		scanDumpKeys:            scanDumpKeys,
@@ -102,6 +107,7 @@ func snapshotReadonlyGlobals() readonlyGlobals {
 
 		connectServerName:          connectServerName,
 		connectFormat:              connectFormat,
+		connectTrustStore:          connectTrustStore,
 		connectCRL:                 connectCRL,
 		connectNoOCSP:              connectNoOCSP,
 		connectCiphers:             connectCiphers,
@@ -115,6 +121,7 @@ func snapshotReadonlyGlobals() readonlyGlobals {
 
 		verifyKeyPath:             verifyKeyPath,
 		verifyRootsPath:           verifyRootsPath,
+		verifyTrustStore:          verifyTrustStore,
 		verifyExpiry:              verifyExpiry,
 		verifyFormat:              verifyFormat,
 		verifyDiagnose:            verifyDiagnose,
@@ -123,6 +130,7 @@ func snapshotReadonlyGlobals() readonlyGlobals {
 		verifyAllowPrivateNetwork: verifyAllowPrivateNetwork,
 
 		inspectFormat:              inspectFormat,
+		inspectTrustStore:          inspectTrustStore,
 		inspectAllowPrivateNetwork: inspectAllowPrivateNetwork,
 
 		treeIncludeFlags:     treeIncludeFlags,
@@ -139,6 +147,7 @@ func restoreReadonlyGlobals(g readonlyGlobals) {
 
 	scanBundlePath = g.scanBundlePath
 	scanConfigPath = g.scanConfigPath
+	scanTrustStore = g.scanTrustStore
 	scanForceExport = g.scanForceExport
 	scanDuplicates = g.scanDuplicates
 	scanDumpKeys = g.scanDumpKeys
@@ -151,6 +160,7 @@ func restoreReadonlyGlobals(g readonlyGlobals) {
 
 	connectServerName = g.connectServerName
 	connectFormat = g.connectFormat
+	connectTrustStore = g.connectTrustStore
 	connectCRL = g.connectCRL
 	connectNoOCSP = g.connectNoOCSP
 	connectCiphers = g.connectCiphers
@@ -164,6 +174,7 @@ func restoreReadonlyGlobals(g readonlyGlobals) {
 
 	verifyKeyPath = g.verifyKeyPath
 	verifyRootsPath = g.verifyRootsPath
+	verifyTrustStore = g.verifyTrustStore
 	verifyExpiry = g.verifyExpiry
 	verifyFormat = g.verifyFormat
 	verifyDiagnose = g.verifyDiagnose
@@ -172,6 +183,7 @@ func restoreReadonlyGlobals(g readonlyGlobals) {
 	verifyAllowPrivateNetwork = g.verifyAllowPrivateNetwork
 
 	inspectFormat = g.inspectFormat
+	inspectTrustStore = g.inspectTrustStore
 	inspectAllowPrivateNetwork = g.inspectAllowPrivateNetwork
 
 	treeIncludeFlags = g.treeIncludeFlags
@@ -324,6 +336,79 @@ func TestRunScan_CommandSurface(t *testing.T) {
 	}
 	if int(roots) != 0 || int(intermediates) != 0 || int(leaves) != 1 {
 		t.Fatalf("scan json expected roots=0 intermediates=0 leaves=1, got roots=%v intermediates=%v leaves=%v", roots, intermediates, leaves)
+	}
+}
+
+func TestRunScan_JSONSummaryUsesMozillaTrustOnly(t *testing.T) {
+	snap := snapshotReadonlyGlobals()
+	defer restoreReadonlyGlobals(snap)
+
+	origSummaryLoader := scanSummaryTrustPoolLoader
+	t.Cleanup(func() {
+		scanSummaryTrustPoolLoader = origSummaryLoader
+	})
+
+	dir := t.TempDir()
+	caKey, caCert := generateKeyAndCert(t, "System Root", true)
+	_, leaf := signCert(t, "scan.example.com", false, caKey, caCert)
+	writeCertPEM(t, dir, "leaf.pem", leaf)
+
+	mozillaPool := x509.NewCertPool()
+	systemPool := x509.NewCertPool()
+	systemPool.AddCert(caCert)
+	scanSummaryTrustPoolLoader = func(trustStore string) (scanTrustPools, error) {
+		switch trustStore {
+		case "system":
+			return scanTrustPools{System: systemPool}, nil
+		default:
+			return scanTrustPools{Mozilla: mozillaPool}, nil
+		}
+	}
+
+	passwordList = nil
+	passwordFile = ""
+	verbose = false
+	jsonOutput = true
+	scanBundlePath = ""
+	scanTrustStore = "mozilla"
+	scanConfigPath = filepath.Join(dir, "missing-config.yaml")
+	scanForceExport = false
+	scanDuplicates = false
+	scanDumpKeys = ""
+	scanDumpCerts = ""
+	scanMaxFileSize = 10 * 1024 * 1024
+	scanFormat = "json"
+	scanAllowPrivateNetwork = false
+	scanSaveDB = ""
+	scanLoadDB = ""
+
+	stdout, stderr, err := captureOutput(t, func() error { return runScan(newCommandWithContext(), []string{dir}) })
+	if err != nil {
+		t.Fatalf("runScan json failed: %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("scan json wrote unexpected stderr:\n%s", stderr)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal([]byte(stdout), &payload); err != nil {
+		t.Fatalf("scan json unmarshal: %v\noutput:\n%s", err, stdout)
+	}
+
+	systemTrustedLeaves, ok := payload["system_trusted_leaves"].(float64)
+	if !ok {
+		t.Fatalf("scan json missing system_trusted_leaves: %v", payload)
+	}
+	if systemTrustedLeaves != 0 {
+		t.Fatalf("system_trusted_leaves = %v, want 0", systemTrustedLeaves)
+	}
+
+	untrustedLeaves, ok := payload["untrusted_leaves"].(float64)
+	if !ok {
+		t.Fatalf("scan json missing untrusted_leaves: %v", payload)
+	}
+	if untrustedLeaves != 1 {
+		t.Fatalf("untrusted_leaves = %v, want 1", untrustedLeaves)
 	}
 }
 

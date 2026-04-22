@@ -413,7 +413,7 @@ func ResolveInspectAIA(ctx context.Context, input ResolveInspectAIAInput) ([]Ins
 // AnnotateInspectTrust sets the Expired, Trusted, and TrustAnchors fields on
 // certificate results. Intermediate certificates found in the results are used
 // to build chains.
-func AnnotateInspectTrust(results []InspectResult) error {
+func AnnotateInspectTrust(results []InspectResult, trustStore string) error {
 	// Build intermediate pool from all certs in the results
 	intermediatePool := x509.NewCertPool()
 	for i := range results {
@@ -434,6 +434,7 @@ func AnnotateInspectTrust(results []InspectResult) error {
 		trustResult := certkit.CheckTrustAnchors(certkit.CheckTrustAnchorsInput{
 			Cert:          cert,
 			Intermediates: intermediatePool,
+			TrustStore:    trustStore,
 		})
 		results[i].TrustAnchors = trustResult.Anchors
 		results[i].TrustWarnings = trustResult.Warnings

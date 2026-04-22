@@ -173,7 +173,12 @@ func VerifyCert(ctx context.Context, input *VerifyInput) (*VerifyResult, error) 
 			result.Errors = append(result.Errors, "chain validation: "+bundleErr.Error())
 		}
 		if bundle != nil {
-			result.Chain = buildChainDisplay(bundle, input.Verbose, fileRootsPool)
+			result.Chain = buildChainDisplay(buildChainDisplayInput{
+				Bundle:     bundle,
+				Verbose:    input.Verbose,
+				FileRoots:  fileRootsPool,
+				TrustStore: input.TrustStore,
+			})
 		}
 	}
 
@@ -351,16 +356,23 @@ func verifyTrustSources(fileRootsPool *x509.CertPool, trustStore string) ([]veri
 	case "":
 		sources := []verifyTrustSource{
 			loadVerifyTrustSource("mozilla", certkit.MozillaRootPool),
-			loadVerifyTrustSource("system", certkit.SystemCertPoolCached),
 		}
 		if fileRootsPool != nil {
 			sources = append(sources, verifyTrustSource{name: "file", roots: fileRootsPool})
 		}
 		return sources, nil
 	case "mozilla":
-		return []verifyTrustSource{loadVerifyTrustSource("mozilla", certkit.MozillaRootPool)}, nil
+		sources := []verifyTrustSource{loadVerifyTrustSource("mozilla", certkit.MozillaRootPool)}
+		if fileRootsPool != nil {
+			sources = append(sources, verifyTrustSource{name: "file", roots: fileRootsPool})
+		}
+		return sources, nil
 	case "system":
-		return []verifyTrustSource{loadVerifyTrustSource("system", certkit.SystemCertPoolCached)}, nil
+		sources := []verifyTrustSource{loadVerifyTrustSource("system", certkit.SystemCertPoolCached)}
+		if fileRootsPool != nil {
+			sources = append(sources, verifyTrustSource{name: "file", roots: fileRootsPool})
+		}
+		return sources, nil
 	case "custom", "file":
 		return []verifyTrustSource{{name: "file", roots: fileRootsPool}}, nil
 	default:
@@ -557,14 +569,22 @@ func checkVerifyOCSP(ctx context.Context, input certkit.CheckOCSPInput) *certkit
 	return ocspResult
 }
 
+type buildChainDisplayInput struct {
+	Bundle     *certkit.BundleResult
+	Verbose    bool
+	FileRoots  *x509.CertPool
+	TrustStore string
+}
+
 // buildChainDisplay creates the display chain from a BundleResult.
-func buildChainDisplay(bundle *certkit.BundleResult, verbose bool, fileRoots *x509.CertPool) []ChainCert {
-	intermediatePool := newCertPool(bundle.Intermediates)
+func buildChainDisplay(input buildChainDisplayInput) []ChainCert {
+	intermediatePool := newCertPool(input.Bundle.Intermediates)
 	buildEntry := func(c *x509.Certificate, isRoot bool) ChainCert {
 		trustResult := certkit.CheckTrustAnchors(certkit.CheckTrustAnchorsInput{
 			Cert:          c,
 			Intermediates: intermediatePool,
-			FileRoots:     fileRoots,
+			FileRoots:     input.FileRoots,
+			TrustStore:    input.TrustStore,
 		})
 		cc := ChainCert{
 			Subject:       certkit.FormatDNFromRaw(c.RawSubject, c.Subject),
@@ -574,7 +594,7 @@ func buildChainDisplay(bundle *certkit.BundleResult, verbose bool, fileRoots *x5
 			TrustAnchors:  trustResult.Anchors,
 			TrustWarnings: trustResult.Warnings,
 		}
-		if verbose {
+		if input.Verbose {
 			cc.Issuer = certkit.FormatDNFromRaw(c.RawIssuer, c.Issuer)
 			cc.Serial = certkit.FormatSerialNumber(c.SerialNumber)
 			cc.NotBefore = c.NotBefore.UTC().Format(time.RFC3339)
@@ -593,11 +613,11 @@ func buildChainDisplay(bundle *certkit.BundleResult, verbose bool, fileRoots *x5
 	}
 
 	var chain []ChainCert
-	chain = append(chain, buildEntry(bundle.Leaf, false))
-	for _, c := range bundle.Intermediates {
+	chain = append(chain, buildEntry(input.Bundle.Leaf, false))
+	for _, c := range input.Bundle.Intermediates {
 		chain = append(chain, buildEntry(c, false))
 	}
-	for _, c := range bundle.Roots {
+	for _, c := range input.Bundle.Roots {
 		chain = append(chain, buildEntry(c, true))
 	}
 	return chain

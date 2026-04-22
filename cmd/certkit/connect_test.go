@@ -242,7 +242,7 @@ func TestCollectConnectTrustStatus_PresentedTrustPathInvalid(t *testing.T) {
 		ChainTrustAnchors: nil,
 	}
 
-	anchors, warnings := collectConnectTrustStatus(result)
+	anchors, warnings := collectConnectTrustStatus(result, "mozilla")
 	if len(anchors) != 1 || len(anchors[0]) != 0 {
 		t.Fatalf("anchors = %#v, want one empty entry", anchors)
 	}

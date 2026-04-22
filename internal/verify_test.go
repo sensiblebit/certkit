@@ -179,8 +179,11 @@ func TestVerifyCert_NoTrustAnchors(t *testing.T) {
 	if result.ChainValid == nil || *result.ChainValid {
 		t.Fatalf("expected ChainValid false, got %v", result.ChainValid)
 	}
-	if !strings.Contains(result.ChainErr, "mozilla:") || !strings.Contains(result.ChainErr, "system:") {
-		t.Errorf("expected ChainErr to mention mozilla and system attempts, got %q", result.ChainErr)
+	if !strings.Contains(result.ChainErr, "mozilla:") {
+		t.Errorf("expected ChainErr to mention mozilla attempt, got %q", result.ChainErr)
+	}
+	if strings.Contains(result.ChainErr, "system:") {
+		t.Errorf("did not expect ChainErr to mention system attempt, got %q", result.ChainErr)
 	}
 	if strings.Contains(result.ChainErr, "file:") {
 		t.Errorf("expected ChainErr not to mention file trust source when no file roots were requested, got %q", result.ChainErr)

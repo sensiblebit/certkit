@@ -750,6 +750,9 @@ func TestGenerateCSR_RoundTrip(t *testing.T) {
 	}
 
 	// Verify subject fields are copied from cert
+	if csr.Subject.CommonName != "csr.example.com" {
+		t.Errorf("CSR common name = %q, want %q", csr.Subject.CommonName, "csr.example.com")
+	}
 	if len(csr.Subject.Organization) != 1 || csr.Subject.Organization[0] != "TestOrg" {
 		t.Errorf("CSR organization = %v, want [TestOrg]", csr.Subject.Organization)
 	}
@@ -769,6 +772,13 @@ func TestGenerateCSR_RoundTrip(t *testing.T) {
 	var jsonResult map[string]any
 	if err := json.Unmarshal(csrJSON, &jsonResult); err != nil {
 		t.Fatalf("CSR JSON is not valid: %v", err)
+	}
+	subjectRaw, ok := jsonResult["subject"].(map[string]any)
+	if !ok {
+		t.Fatal("CSR JSON subject is not an object")
+	}
+	if commonName, ok := subjectRaw["common_name"].(string); !ok || commonName != "csr.example.com" {
+		t.Errorf("CSR JSON subject.common_name = %v, want %q", subjectRaw["common_name"], "csr.example.com")
 	}
 
 	// dns_names content must match the certificate SANs
@@ -887,8 +897,9 @@ func TestGenerateCSR_SANExclusion(t *testing.T) {
 }
 
 func TestGenerateCSR_SubjectOverride(t *testing.T) {
-	// WHY: Verifies that CSRSubjectOverride replaces (not merges with) the
-	// certificate's own subject fields, and that OU defaults to "None" when empty.
+	// WHY: Verifies that CSRSubjectOverride replaces the configurable subject
+	// fields while preserving the certificate CN, and that OU defaults to
+	// "None" when empty.
 	t.Parallel()
 
 	ca := newRSACA(t)
@@ -915,6 +926,9 @@ func TestGenerateCSR_SubjectOverride(t *testing.T) {
 	}
 	if len(csr.Subject.Organization) != 1 || csr.Subject.Organization[0] != "New Org" {
 		t.Errorf("organization = %v, want [New Org]", csr.Subject.Organization)
+	}
+	if csr.Subject.CommonName != "sub.example.com" {
+		t.Errorf("common_name = %q, want %q", csr.Subject.CommonName, "sub.example.com")
 	}
 	// OU should default to "None" since override didn't set it
 	if len(csr.Subject.OrganizationalUnit) != 1 || csr.Subject.OrganizationalUnit[0] != "None" {

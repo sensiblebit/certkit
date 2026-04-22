@@ -26,6 +26,7 @@ import (
 var (
 	connectServerName          string
 	connectFormat              string
+	connectTrustStore          string
 	connectTLSVersion          string
 	connectCRL                 bool
 	connectNoOCSP              bool
@@ -53,6 +54,9 @@ the server supports with security ratings.
 Network fetches for AIA/OCSP/CRL block private/internal endpoints by default.
 Use --allow-private-network to opt in for internal PKI environments.
 
+Chain verification uses Mozilla roots by default; use --trust-store system to
+use the host trust store.
+
 Use --tls-version 1.2 or --tls-version 1.3 to compare version-specific
 certificate presentation and validation behavior.
 
@@ -71,6 +75,7 @@ Exits with code 2 if chain verification fails or the certificate is revoked.`,
 func init() {
 	connectCmd.Flags().StringVar(&connectServerName, "servername", "", "Override SNI hostname (defaults to host)")
 	connectCmd.Flags().StringVar(&connectFormat, "format", "text", "Output format: text, json")
+	connectCmd.Flags().StringVar(&connectTrustStore, "trust-store", "mozilla", "Trust store: system, mozilla")
 	connectCmd.Flags().StringVar(&connectTLSVersion, "tls-version", "", "Pin TLS version: 1.0, 1.1, 1.2, or 1.3 (default: auto)")
 	connectCmd.Flags().BoolVar(&connectCRL, "crl", false, "Check CRL distribution points for revocation")
 	connectCmd.Flags().BoolVar(&connectNoOCSP, "no-ocsp", false, "Disable automatic OCSP revocation check")
@@ -80,6 +85,7 @@ func init() {
 	connectCmd.Flags().BoolVar(&connectAllowPrivateNetwork, "allow-private-network", false, "Allow AIA/OCSP/CRL fetches to private/internal endpoints")
 
 	registerCompletion(connectCmd, completionInput{"format", fixedCompletion("text", "json")})
+	registerCompletion(connectCmd, completionInput{"trust-store", fixedCompletion("system", "mozilla")})
 	registerCompletion(connectCmd, completionInput{"tls-version", fixedCompletion("1.0", "1.1", "1.2", "1.3")})
 }
 
@@ -144,6 +150,10 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return err
 	}
+	rootCAs, err := loadSelectedTrustPool(connectTrustStore)
+	if err != nil {
+		return fmt.Errorf("loading trust store: %w", err)
+	}
 
 	spin := newSpinner("Connecting…")
 	spin.Start(cmd.Context())
@@ -156,6 +166,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 		Port:                 port,
 		Version:              version,
 		ServerName:           connectServerName,
+		RootCAs:              rootCAs,
 		DisableOCSP:          connectNoOCSP,
 		CheckCRL:             connectCRL,
 		AllowPrivateNetworks: connectAllowPrivateNetwork,
@@ -248,7 +259,7 @@ func runConnect(cmd *cobra.Command, args []string) error {
 	}
 
 	certkit.SortDiagnostics(result.Diagnostics)
-	result.ChainTrustAnchors, result.ChainTrustWarnings = collectConnectTrustStatus(result)
+	result.ChainTrustAnchors, result.ChainTrustWarnings = collectConnectTrustStatus(result, connectTrustStore)
 
 	format := connectFormat
 	if jsonOutput {
@@ -447,7 +458,7 @@ func formatConnectChainPEM(chain []*x509.Certificate) string {
 	return out.String()
 }
 
-func collectConnectTrustStatus(result *certkit.ConnectResult) ([][]string, [][]string) {
+func collectConnectTrustStatus(result *certkit.ConnectResult, trustStore string) ([][]string, [][]string) {
 	if result.TrustPathStatus == certkit.ConnectTrustPathStatusPresentedInvalid && len(result.VerifiedChains) == 0 {
 		anchors := make([][]string, len(result.PeerChain))
 		warnings := make([][]string, len(result.PeerChain))
@@ -466,6 +477,7 @@ func collectConnectTrustStatus(result *certkit.ConnectResult) ([][]string, [][]s
 		trustResult := certkit.CheckTrustAnchors(certkit.CheckTrustAnchorsInput{
 			Cert:          cert,
 			Intermediates: intermediates,
+			TrustStore:    trustStore,
 		})
 		anchors = append(anchors, trustResult.Anchors)
 		warnings = append(warnings, trustResult.Warnings)

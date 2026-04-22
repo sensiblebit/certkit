@@ -18,6 +18,7 @@ import (
 var (
 	verifyKeyPath             string
 	verifyRootsPath           string
+	verifyTrustStore          string
 	verifyExpiry              string
 	verifyFormat              string
 	verifyDiagnose            bool
@@ -34,11 +35,12 @@ var verifyCmd = &cobra.Command{
 	Long: `Verify a certificate's chain of trust, check if a key matches, or check
 if it expires within a given duration.
 
-Accepts PEM, DER, PKCS#12, JKS, or PKCS#7 input. The chain is always verified
-against both the embedded Mozilla roots and the host system trust store. Use
---roots to add a file-backed trust source. When the input contains an embedded
-private key (PKCS#12, JKS), the key match is checked automatically. Use --key
-to check against an external key file.
+Accepts PEM, DER, PKCS#12, JKS, or PKCS#7 input. The chain is verified against
+Mozilla roots by default; use --trust-store system to use the host trust store.
+Use --roots to add a file-backed trust source alongside the selected trust
+store. When the input contains an embedded private key (PKCS#12, JKS), the key
+match is checked automatically. Use --key to check against an external key
+file.
 
 Use --ocsp to check OCSP revocation status, and --crl to check CRL distribution
 points. Both require network access and a valid chain (the issuer certificate
@@ -61,6 +63,7 @@ Exits with code 2 if verification finds any errors (including revocation).`,
 func init() {
 	verifyCmd.Flags().StringVar(&verifyKeyPath, "key", "", "Private key file to check against the certificate")
 	verifyCmd.Flags().StringVar(&verifyRootsPath, "roots", "", "Additional root certificates file (PEM, DER, PKCS#7, PKCS#12, or JKS)")
+	verifyCmd.Flags().StringVar(&verifyTrustStore, "trust-store", "mozilla", "Trust store: system, mozilla")
 	verifyCmd.Flags().StringVarP(&verifyExpiry, "expiry", "e", "", "Check if cert expires within duration (e.g., 30d, 720h)")
 	verifyCmd.Flags().StringVar(&verifyFormat, "format", "text", "Output format: text, json")
 	verifyCmd.Flags().BoolVar(&verifyDiagnose, "diagnose", false, "Show diagnostics when chain verification fails")
@@ -69,6 +72,7 @@ func init() {
 	verifyCmd.Flags().BoolVar(&verifyAllowPrivateNetwork, "allow-private-network", false, "Allow AIA/OCSP/CRL fetches to private/internal endpoints")
 
 	registerCompletion(verifyCmd, completionInput{"format", fixedCompletion("text", "json")})
+	registerCompletion(verifyCmd, completionInput{"trust-store", fixedCompletion("system", "mozilla")})
 }
 
 // parseDuration extends time.ParseDuration to support a "d" suffix for days.
@@ -153,6 +157,7 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		CheckKeyMatch:        key != nil,
 		CheckChain:           true, // Always verify chain
 		ExpiryDuration:       expiryDuration,
+		TrustStore:           verifyTrustStore,
 		Verbose:              verbose,
 		CheckOCSP:            verifyOCSP,
 		CheckCRL:             verifyCRL,

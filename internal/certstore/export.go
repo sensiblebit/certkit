@@ -336,6 +336,7 @@ func GenerateYAML(bundle *certkit.BundleResult, keyPEM []byte, keyType string, b
 // override or the existing certificate's subject fields.
 func buildCSRSubject(cert *x509.Certificate, override *CSRSubjectOverride) pkix.Name {
 	subj := pkix.Name{
+		CommonName:    cert.Subject.CommonName,
 		StreetAddress: cert.Subject.StreetAddress,
 		PostalCode:    cert.Subject.PostalCode,
 		SerialNumber:  cert.Subject.SerialNumber,
@@ -527,6 +528,7 @@ func GenerateCSR(leaf *x509.Certificate, keyPEM []byte, subject *CSRSubjectOverr
 
 	csrDetails := map[string]any{
 		"subject": map[string]any{
+			"common_name":         parsedCSR.Subject.CommonName,
 			"country":             parsedCSR.Subject.Country,
 			"province":            parsedCSR.Subject.Province,
 			"locality":            parsedCSR.Subject.Locality,

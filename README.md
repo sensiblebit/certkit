@@ -142,10 +142,11 @@ Common passwords (`""`, `"password"`, `"changeit"`, `"keypassword"`) are always 
 ### Inspect Flags
 
 <!-- certkit:flags:inspect -->
-| Flag                      | Default | Description                                     |
-| ------------------------- | ------- | ----------------------------------------------- |
-| `--allow-private-network` | `false` | Allow AIA fetches to private/internal endpoints |
-| `--format`                | `text`  | Output format: text, json                       |
+| Flag                      | Default   | Description                                     |
+| ------------------------- | --------- | ----------------------------------------------- |
+| `--allow-private-network` | `false`   | Allow AIA fetches to private/internal endpoints |
+| `--format`                | `text`    | Output format: text, json                       |
+| `--trust-store`           | `mozilla` | Trust store: system, mozilla                    |
 <!-- /certkit:flags -->
 
 JSON certificate records include `trust_anchors` and `trust_warnings`.
@@ -153,36 +154,38 @@ JSON certificate records include `trust_anchors` and `trust_warnings`.
 ### Verify Flags
 
 <!-- certkit:flags:verify -->
-| Flag                      | Default | Description                                                           |
-| ------------------------- | ------- | --------------------------------------------------------------------- |
-| `--allow-private-network` | `false` | Allow AIA/OCSP/CRL fetches to private/internal endpoints              |
-| `--crl`                   | `false` | Check CRL distribution points for revocation                          |
-| `--diagnose`              | `false` | Show diagnostics when chain verification fails                        |
-| `--expiry`, `-e`          |         | Check if cert expires within duration (e.g., 30d, 720h)               |
-| `--format`                | `text`  | Output format: text, json                                             |
-| `--key`                   |         | Private key file to check against the certificate                     |
-| `--ocsp`                  | `false` | Check OCSP revocation status                                          |
-| `--roots`                 |         | Additional root certificates file (PEM, DER, PKCS#7, PKCS#12, or JKS) |
+| Flag                      | Default   | Description                                                           |
+| ------------------------- | --------- | --------------------------------------------------------------------- |
+| `--allow-private-network` | `false`   | Allow AIA/OCSP/CRL fetches to private/internal endpoints              |
+| `--crl`                   | `false`   | Check CRL distribution points for revocation                          |
+| `--diagnose`              | `false`   | Show diagnostics when chain verification fails                        |
+| `--expiry`, `-e`          |           | Check if cert expires within duration (e.g., 30d, 720h)               |
+| `--format`                | `text`    | Output format: text, json                                             |
+| `--key`                   |           | Private key file to check against the certificate                     |
+| `--ocsp`                  | `false`   | Check OCSP revocation status                                          |
+| `--roots`                 |           | Additional root certificates file (PEM, DER, PKCS#7, PKCS#12, or JKS) |
+| `--trust-store`           | `mozilla` | Trust store: system, mozilla                                          |
 <!-- /certkit:flags -->
 
-Chain verification is always performed against both the embedded Mozilla roots and the host system trust store. Use `--roots` to add a file-backed trust source for private PKI, including pinned or legacy trust anchors loaded from PEM, DER, PKCS#7, PKCS#12, or JKS. When the input contains an embedded private key (PKCS#12, JKS), key match is checked automatically. Use `--ocsp` and/or `--crl` to check revocation status (requires network access and a valid chain).
+Chain verification uses the embedded Mozilla roots by default; use `--trust-store system` to switch to the host trust store. Use `--roots` to add a file-backed trust source for private PKI, including pinned or legacy trust anchors loaded from PEM, DER, PKCS#7, PKCS#12, or JKS. When the input contains an embedded private key (PKCS#12, JKS), key match is checked automatically. Use `--ocsp` and/or `--crl` to check revocation status (requires network access and a valid chain).
 
 JSON output includes `trust_anchors` and `trust_warnings` for the leaf and displayed chain entries.
 
 ### Connect Flags
 
 <!-- certkit:flags:connect -->
-| Flag                      | Default | Description                                                                         |
-| ------------------------- | ------- | ----------------------------------------------------------------------------------- |
-| `--allow-private-network` | `false` | Allow AIA/OCSP/CRL fetches to private/internal endpoints                            |
-| `--ciphers`               | `false` | Enumerate all supported cipher suites with security ratings                         |
-| `--crl`                   | `false` | Check CRL distribution points for revocation                                        |
-| `--fips-140-2`            | `false` | Apply conservative FIPS 140-2 heuristic checks to negotiated/offered TLS algorithms |
-| `--fips-140-3`            | `false` | Apply conservative FIPS 140-3 heuristic checks to negotiated/offered TLS algorithms |
-| `--format`                | `text`  | Output format: text, json                                                           |
-| `--no-ocsp`               | `false` | Disable automatic OCSP revocation check                                             |
-| `--servername`            |         | Override SNI hostname (defaults to host)                                            |
-| `--tls-version`           |         | Pin TLS version: 1.0, 1.1, 1.2, or 1.3 (default: auto)                              |
+| Flag                      | Default   | Description                                                                         |
+| ------------------------- | --------- | ----------------------------------------------------------------------------------- |
+| `--allow-private-network` | `false`   | Allow AIA/OCSP/CRL fetches to private/internal endpoints                            |
+| `--ciphers`               | `false`   | Enumerate all supported cipher suites with security ratings                         |
+| `--crl`                   | `false`   | Check CRL distribution points for revocation                                        |
+| `--fips-140-2`            | `false`   | Apply conservative FIPS 140-2 heuristic checks to negotiated/offered TLS algorithms |
+| `--fips-140-3`            | `false`   | Apply conservative FIPS 140-3 heuristic checks to negotiated/offered TLS algorithms |
+| `--format`                | `text`    | Output format: text, json                                                           |
+| `--no-ocsp`               | `false`   | Disable automatic OCSP revocation check                                             |
+| `--servername`            |           | Override SNI hostname (defaults to host)                                            |
+| `--tls-version`           |           | Pin TLS version: 1.0, 1.1, 1.2, or 1.3 (default: auto)                              |
+| `--trust-store`           | `mozilla` | Trust store: system, mozilla                                                        |
 <!-- /certkit:flags -->
 
 Port defaults to 443 if not specified. OCSP revocation status is checked automatically (best-effort); use `--no-ocsp` to disable. Use `--verbose` for extended details (serial, key info, signature algorithm, key usage, EKU, extensions) plus a PEM-formatted copy of the server-sent certificate chain with `# Subject`, `# Issuer`, and validity headers.
@@ -267,6 +270,7 @@ Input format is auto-detected.
 | `--load-db`               |                  | Load an existing database into memory before scanning    |
 | `--max-file-size`         | `10485760`       | Skip files larger than this size in bytes (0 to disable) |
 | `--save-db`               |                  | Save the in-memory database to disk after scanning       |
+| `--trust-store`           | `mozilla`        | Trust store: system, mozilla                             |
 <!-- /certkit:flags -->
 
 ### Keygen Flags

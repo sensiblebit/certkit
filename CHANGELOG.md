@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Breaking:** Default `TrustStore` in `DefaultOptions()` changed from `"system"` to `"mozilla"` — pure-Go Mozilla root verification is used by default instead of macOS `SecTrustEvaluateWithError` syscalls, eliminating multi-minute hangs on large certificate stores
+- Default `scan`, `verify`, `inspect`, and `connect` trust-store selection to Mozilla, and require an explicit `--trust-store system` to consult host trust roots
 - Parallelize trust verification in scan summary, dump-certs, and AIA resolution — mozilla checks run concurrently, system checks only run for certs mozilla didn't trust
 - Add `TrustStore` label to `VerifyChainTrustInput` and debug-log every trust verification call with subject, store, and result
 - Normalize all exported private key PEM output (`.key`, K8s `tls.key`, YAML `key`) to PKCS#8 (`PRIVATE KEY`) regardless of input format ([#167])
@@ -37,6 +38,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Make `scan` summaries rely on Mozilla trust only, and stop `scan --bundle-path` from silently retrying system trust unless system fallback is explicitly enabled
+- Stop assigning fallback bundle names to certificates that do not match any configured bundle entry, so stray export directories like `bundles/spf-console.zimperium.com/` are no longer generated
+- Preserve the certificate common name in generated bundle CSRs so exported requests include a subject CN alongside SANs
+- Include `subject.common_name` in generated CSR JSON output so `.csr.json` matches the exported CSR subject
+- Stop bundle export from retrying the system trust fallback for non-trust-store verification failures such as expired certificates
 - Make `connect` fail when the peer omits part of the trust path and validation only succeeds after local chain completion, instead of accepting the incomplete server-presented chain ([#190])
 - Use bundle folder name as Kubernetes secret `metadata.name` instead of the CN-derived prefix, so the secret name matches the export directory ([#178])
 - Validate `bundleName` in bundle config YAML against DNS-1123 rules at load time; invalid names now produce a fatal error with the file path and line number ([#178])

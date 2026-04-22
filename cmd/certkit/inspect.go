@@ -11,6 +11,7 @@ import (
 )
 
 var inspectFormat string
+var inspectTrustStore string
 var inspectAllowPrivateNetwork bool
 
 var inspectCmd = &cobra.Command{
@@ -26,9 +27,11 @@ var inspectCmd = &cobra.Command{
 
 func init() {
 	inspectCmd.Flags().StringVar(&inspectFormat, "format", "text", "Output format: text, json")
+	inspectCmd.Flags().StringVar(&inspectTrustStore, "trust-store", "mozilla", "Trust store: system, mozilla")
 	inspectCmd.Flags().BoolVar(&inspectAllowPrivateNetwork, "allow-private-network", false, "Allow AIA fetches to private/internal endpoints")
 
 	registerCompletion(inspectCmd, completionInput{"format", fixedCompletion("text", "json")})
+	registerCompletion(inspectCmd, completionInput{"trust-store", fixedCompletion("system", "mozilla")})
 }
 
 func runInspect(cmd *cobra.Command, args []string) error {
@@ -54,7 +57,7 @@ func runInspect(cmd *cobra.Command, args []string) error {
 		slog.Warn("AIA resolution", "warning", w)
 	}
 
-	if err := internal.AnnotateInspectTrust(results); err != nil {
+	if err := internal.AnnotateInspectTrust(results, inspectTrustStore); err != nil {
 		return fmt.Errorf("annotating trust: %w", err)
 	}
 

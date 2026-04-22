@@ -118,7 +118,7 @@ func inspectFiles(_ js.Value, args []js.Value) any {
 			}
 
 			// Annotate trust for certificates.
-			if err := internal.AnnotateInspectTrust(allResults); err != nil {
+			if err := internal.AnnotateInspectTrust(allResults, "mozilla"); err != nil {
 				slog.Debug("trust annotation failed", "error", err)
 			}
 

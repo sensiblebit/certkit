@@ -174,9 +174,13 @@ type ExportBundlesInput struct {
 	Configs     []BundleConfig
 	OutDir      string
 	Store       *certstore.MemStore
+	TrustStore  string
 	ForceBundle bool
 	Duplicates  bool
 	P12Password string
+	// AllowSystemFallback retries unknown-authority bundle verification with the
+	// host system roots after a Mozilla trust failure.
+	AllowSystemFallback bool
 	// EncryptKey when true encrypts .key PEM output using PKCS#8 v2.
 	EncryptKey bool
 }
@@ -189,20 +193,24 @@ func ExportBundles(ctx context.Context, input ExportBundlesInput) error {
 
 	for _, bundleName := range bundleNames {
 		opts := certkit.DefaultOptions()
+		if input.TrustStore != "" {
+			opts.TrustStore = input.TrustStore
+		}
 		if input.ForceBundle {
 			opts.Verify = false
 		}
 
 		if err := exportBundleCerts(ctx, exportBundleCertsInput{
-			Store:       input.Store,
-			Opts:        opts,
-			Configs:     input.Configs,
-			OutDir:      input.OutDir,
-			BundleName:  bundleName,
-			Duplicates:  input.Duplicates,
-			P12Password: input.P12Password,
-			EncryptKey:  input.EncryptKey,
-			UsedFolders: usedFolders,
+			Store:               input.Store,
+			Opts:                opts,
+			Configs:             input.Configs,
+			OutDir:              input.OutDir,
+			BundleName:          bundleName,
+			Duplicates:          input.Duplicates,
+			P12Password:         input.P12Password,
+			AllowSystemFallback: input.AllowSystemFallback,
+			EncryptKey:          input.EncryptKey,
+			UsedFolders:         usedFolders,
 		}); err != nil {
 			return fmt.Errorf("exporting bundle %q: %w", bundleName, err)
 		}
@@ -211,13 +219,14 @@ func ExportBundles(ctx context.Context, input ExportBundlesInput) error {
 }
 
 type exportBundleCertsInput struct {
-	Store       *certstore.MemStore
-	Opts        certkit.BundleOptions
-	Configs     []BundleConfig
-	OutDir      string
-	BundleName  string
-	Duplicates  bool
-	P12Password string
+	Store               *certstore.MemStore
+	Opts                certkit.BundleOptions
+	Configs             []BundleConfig
+	OutDir              string
+	BundleName          string
+	Duplicates          bool
+	P12Password         string
+	AllowSystemFallback bool
 	// EncryptKey when true encrypts .key PEM output using PKCS#8 v2.
 	EncryptKey  bool
 	UsedFolders map[string]string
@@ -293,7 +302,14 @@ func exportBundleCerts(ctx context.Context, input exportBundleCertsInput) error 
 			P12Password:   input.P12Password,
 			EncryptKey:    input.EncryptKey,
 		}
-		skipped, err := exportMatchedBundleWithSystemFallback(ctx, certRec.Cert.Subject.CommonName, exportInput, input.Opts, certstore.ExportMatchedBundles)
+		skipped, err := exportMatchedBundleWithSystemFallback(
+			ctx,
+			certRec.Cert.Subject.CommonName,
+			exportInput,
+			input.Opts,
+			input.AllowSystemFallback,
+			certstore.ExportMatchedBundles,
+		)
 		if err != nil {
 			return err
 		}
@@ -310,6 +326,7 @@ func exportMatchedBundleWithSystemFallback(
 	commonName string,
 	exportInput certstore.ExportMatchedBundleInput,
 	opts certkit.BundleOptions,
+	allowSystemFallback bool,
 	exportFn func(context.Context, certstore.ExportMatchedBundleInput) error,
 ) (bool, error) {
 	err := exportFn(ctx, exportInput)
@@ -317,10 +334,10 @@ func exportMatchedBundleWithSystemFallback(
 		return false, nil
 	}
 
-	// If mozilla verification failed, retry with system trust store so
+	// If mozilla verification failed due to an unknown authority, retry with system trust store so
 	// certificates trusted only by the host OS (e.g. corporate keychain
 	// roots) still export without requiring --force.
-	if opts.Verify && isBundleVerificationError(err) && opts.TrustStore != "system" {
+	if allowSystemFallback && opts.Verify && shouldRetrySystemFallback(err) && opts.TrustStore != "system" {
 		slog.Debug("mozilla trust failed, retrying with system trust store", "cn", commonName)
 		systemOpts := opts
 		systemOpts.TrustStore = "system"
@@ -340,6 +357,11 @@ func exportMatchedBundleWithSystemFallback(
 	}
 
 	return false, fmt.Errorf("exporting bundle for %q: %w", commonName, err)
+}
+
+func shouldRetrySystemFallback(err error) bool {
+	var unknownAuthorityErr x509.UnknownAuthorityError
+	return errors.As(err, &unknownAuthorityErr)
 }
 
 func isBundleVerificationError(err error) bool {
@@ -408,5 +430,5 @@ func determineBundleName(cn string, configs []BundleConfig) string {
 			}
 		}
 	}
-	return strings.ReplaceAll(cn, "*", "_")
+	return ""
 }
