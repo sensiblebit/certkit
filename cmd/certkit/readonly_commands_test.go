@@ -455,6 +455,37 @@ func TestRunInspect_CommandSurface(t *testing.T) {
 	}
 }
 
+func TestRunInspect_InvalidTrustStoreFailsFast(t *testing.T) {
+	snap := snapshotReadonlyGlobals()
+	defer restoreReadonlyGlobals(snap)
+
+	dir := t.TempDir()
+	_, cert := generateKeyAndCert(t, "inspect-invalid.example.com", false)
+	certPath := writeCertPEM(t, dir, "inspect.pem", cert)
+
+	passwordList = nil
+	passwordFile = ""
+	allowExpired = true
+	jsonOutput = false
+	inspectFormat = "text"
+	inspectTrustStore = "garbage"
+	inspectAllowPrivateNetwork = false
+
+	stdout, stderr, err := captureOutput(t, func() error { return runInspect(newCommandWithContext(), []string{certPath}) })
+	if err == nil {
+		t.Fatal("runInspect expected trust-store error")
+	}
+	if !strings.Contains(err.Error(), "loading trust store: unsupported trust store") {
+		t.Fatalf("runInspect error = %v, want trust-store load failure", err)
+	}
+	if stdout != "" {
+		t.Fatalf("inspect invalid trust store wrote unexpected stdout:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("inspect invalid trust store wrote unexpected stderr:\n%s", stderr)
+	}
+}
+
 func TestRunVerify_CommandSurfaceValidation(t *testing.T) {
 	snap := snapshotReadonlyGlobals()
 	defer restoreReadonlyGlobals(snap)
@@ -509,6 +540,43 @@ func TestRunVerify_CommandSurfaceValidation(t *testing.T) {
 	errorsField, ok := payload["errors"].([]any)
 	if !ok || len(errorsField) == 0 {
 		t.Fatalf("verify json missing errors: %v", payload)
+	}
+}
+
+func TestRunVerify_InvalidTrustStoreFailsFast(t *testing.T) {
+	snap := snapshotReadonlyGlobals()
+	defer restoreReadonlyGlobals(snap)
+
+	dir := t.TempDir()
+	_, cert := generateKeyAndCert(t, "verify-invalid.example.com", false)
+	certPath := writeCertPEM(t, dir, "verify.pem", cert)
+
+	passwordList = nil
+	passwordFile = ""
+	allowExpired = true
+	jsonOutput = false
+	verifyFormat = "text"
+	verifyKeyPath = ""
+	verifyRootsPath = ""
+	verifyTrustStore = "garbage"
+	verifyExpiry = ""
+	verifyDiagnose = false
+	verifyOCSP = false
+	verifyCRL = false
+	verifyAllowPrivateNetwork = false
+
+	stdout, stderr, err := captureOutput(t, func() error { return runVerify(newCommandWithContext(), []string{certPath}) })
+	if err == nil {
+		t.Fatal("runVerify expected trust-store error")
+	}
+	if !strings.Contains(err.Error(), "loading trust store: unsupported trust store") {
+		t.Fatalf("runVerify error = %v, want trust-store load failure", err)
+	}
+	if stdout != "" {
+		t.Fatalf("verify invalid trust store wrote unexpected stdout:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("verify invalid trust store wrote unexpected stderr:\n%s", stderr)
 	}
 }
 
