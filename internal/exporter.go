@@ -294,7 +294,7 @@ func exportBundleCerts(ctx context.Context, input exportBundleCertsInput) error 
 
 		exportInput := certstore.ExportMatchedBundleInput{
 			Store:         input.Store,
-			SKIs:          []string{certRec.SKI},
+			Certs:         []*certstore.CertRecord{certRec},
 			BundleOpts:    input.Opts,
 			Writer:        &folderOverrideWriter{outDir: input.OutDir, folder: folder},
 			CSRSubject:    csrSubject,
