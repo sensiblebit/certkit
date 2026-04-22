@@ -182,6 +182,20 @@ func (s *MemStore) SetBundleName(ski, name string) {
 	}
 }
 
+// UpdateBundleName sets the bundle name for a specific certificate record.
+func (s *MemStore) UpdateBundleName(rec *CertRecord, name string) {
+	if rec == nil || rec.Cert == nil {
+		return
+	}
+
+	id := certID(rec.Cert)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if current := s.certsByID[id]; current != nil {
+		current.BundleName = name
+	}
+}
+
 // GetCert returns the certificate record with the latest NotAfter for the
 // given SKI, or nil if not found. This preserves backward compatibility with
 // callers that expect a single cert per SKI.

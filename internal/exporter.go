@@ -414,7 +414,7 @@ func (w *folderOverrideWriter) WriteBundleFiles(_ string, files []certstore.Bund
 // is complete to avoid per-cert overhead during scanning.
 func AssignBundleNames(store *certstore.MemStore, configs []BundleConfig) {
 	for _, rec := range store.AllCertsFlat() {
-		rec.BundleName = determineBundleName(rec.Cert.Subject.CommonName, configs)
+		store.UpdateBundleName(rec, determineBundleName(rec.Cert.Subject.CommonName, configs))
 	}
 }
 

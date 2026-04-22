@@ -278,11 +278,16 @@ func runScan(cmd *cobra.Command, args []string) error {
 	if scanDumpCerts != "" {
 		certs := store.AllCertsFlat()
 		if len(certs) > 0 {
-			trustPools, err := scanValidationTrustPoolLoader(scanTrustStore)
-			if err != nil {
-				return err
+			trustPools := scanTrustPools{}
+			var intermediatePool *x509.CertPool
+			if !scanForceExport {
+				var err error
+				trustPools, err = scanValidationTrustPoolLoader(scanTrustStore)
+				if err != nil {
+					return err
+				}
+				intermediatePool = store.IntermediatePool()
 			}
-			intermediatePool := store.IntermediatePool()
 
 			// Pre-compute trust status concurrently against the selected trust
 			// source so export-time filtering does not re-verify each cert.

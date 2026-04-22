@@ -23,6 +23,8 @@ import (
 // globals so each command under test sees a stable flag snapshot.
 var readonlyGlobalsMu sync.Mutex
 
+var errValidationTrustLoaderCalled = errors.New("validation trust loader should not be called")
+
 type readonlyGlobals struct {
 	// root flags
 	jsonOutput   bool
@@ -409,6 +411,67 @@ func TestRunScan_JSONSummaryUsesMozillaTrustOnly(t *testing.T) {
 	}
 	if untrustedLeaves != 1 {
 		t.Fatalf("untrusted_leaves = %v, want 1", untrustedLeaves)
+	}
+}
+
+func TestRunScan_DumpCertsForceSkipsTrustLoading(t *testing.T) {
+	snap := snapshotReadonlyGlobals()
+	defer restoreReadonlyGlobals(snap)
+
+	origValidationLoader := scanValidationTrustPoolLoader
+	origSummaryLoader := scanSummaryTrustPoolLoader
+	t.Cleanup(func() {
+		scanValidationTrustPoolLoader = origValidationLoader
+		scanSummaryTrustPoolLoader = origSummaryLoader
+	})
+
+	dir := t.TempDir()
+	_, cert := generateKeyAndCert(t, "scan-force.example.com", false)
+	writeCertPEM(t, dir, "leaf.pem", cert)
+	dumpPath := filepath.Join(dir, "dump.pem")
+
+	scanValidationTrustPoolLoader = func(string) (scanTrustPools, error) {
+		return scanTrustPools{}, errValidationTrustLoaderCalled
+	}
+	scanSummaryTrustPoolLoader = func(string) (scanTrustPools, error) {
+		return scanTrustPools{}, nil
+	}
+
+	passwordList = nil
+	passwordFile = ""
+	verbose = false
+	jsonOutput = false
+	scanBundlePath = ""
+	scanTrustStore = "system"
+	scanConfigPath = filepath.Join(dir, "missing-config.yaml")
+	scanForceExport = true
+	scanDuplicates = false
+	scanDumpKeys = ""
+	scanDumpCerts = dumpPath
+	scanMaxFileSize = 10 * 1024 * 1024
+	scanFormat = "text"
+	scanAllowPrivateNetwork = false
+	scanSaveDB = ""
+	scanLoadDB = ""
+
+	stdout, stderr, err := captureOutput(t, func() error { return runScan(newCommandWithContext(), []string{dir}) })
+	if err != nil {
+		t.Fatalf("runScan force dump-certs failed: %v", err)
+	}
+	if !strings.Contains(stdout, "Found 1 certificate(s)") {
+		t.Fatalf("scan text output missing summary:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("scan text wrote unexpected stderr:\n%s", stderr)
+	}
+
+	//nolint:gosec // Test reads from a tempdir path controlled entirely by the test.
+	data, err := os.ReadFile(dumpPath)
+	if err != nil {
+		t.Fatalf("reading dumped certs: %v", err)
+	}
+	if !strings.Contains(string(data), "BEGIN CERTIFICATE") {
+		t.Fatalf("dumped cert file missing PEM data:\n%s", string(data))
 	}
 }
 

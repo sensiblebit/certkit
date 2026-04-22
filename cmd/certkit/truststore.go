@@ -15,7 +15,7 @@ func loadSelectedTrustPool(trustStore string) (*x509.CertPool, error) {
 	case "", "mozilla":
 		pool, err := certkit.MozillaRootPool()
 		if err != nil {
-			return nil, fmt.Errorf("loading Mozilla root pool: %w", err)
+			return nil, fmt.Errorf("loading mozilla root pool: %w", err)
 		}
 		return pool, nil
 	case "system":
