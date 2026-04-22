@@ -302,14 +302,13 @@ func exportBundleCerts(ctx context.Context, input exportBundleCertsInput) error 
 			P12Password:   input.P12Password,
 			EncryptKey:    input.EncryptKey,
 		}
-		skipped, err := exportMatchedBundleWithSystemFallback(
-			ctx,
-			certRec.Cert.Subject.CommonName,
-			exportInput,
-			input.Opts,
-			input.AllowSystemFallback,
-			certstore.ExportMatchedBundles,
-		)
+		skipped, err := exportMatchedBundleWithSystemFallback(ctx, exportMatchedBundleWithSystemFallbackInput{
+			CommonName:          certRec.Cert.Subject.CommonName,
+			ExportInput:         exportInput,
+			Opts:                input.Opts,
+			AllowSystemFallback: input.AllowSystemFallback,
+			Export:              certstore.ExportMatchedBundles,
+		})
 		if err != nil {
 			return err
 		}
@@ -321,15 +320,19 @@ func exportBundleCerts(ctx context.Context, input exportBundleCertsInput) error 
 	return nil
 }
 
+type exportMatchedBundleWithSystemFallbackInput struct {
+	CommonName          string
+	ExportInput         certstore.ExportMatchedBundleInput
+	Opts                certkit.BundleOptions
+	AllowSystemFallback bool
+	Export              func(context.Context, certstore.ExportMatchedBundleInput) error
+}
+
 func exportMatchedBundleWithSystemFallback(
 	ctx context.Context,
-	commonName string,
-	exportInput certstore.ExportMatchedBundleInput,
-	opts certkit.BundleOptions,
-	allowSystemFallback bool,
-	exportFn func(context.Context, certstore.ExportMatchedBundleInput) error,
+	input exportMatchedBundleWithSystemFallbackInput,
 ) (bool, error) {
-	err := exportFn(ctx, exportInput)
+	err := input.Export(ctx, input.ExportInput)
 	if err == nil {
 		return false, nil
 	}
@@ -337,26 +340,26 @@ func exportMatchedBundleWithSystemFallback(
 	// If mozilla verification failed due to an unknown authority, retry with system trust store so
 	// certificates trusted only by the host OS (e.g. corporate keychain
 	// roots) still export without requiring --force.
-	if allowSystemFallback && opts.Verify && shouldRetrySystemFallback(err) && opts.TrustStore != "system" {
-		slog.Debug("mozilla trust failed, retrying with system trust store", "cn", commonName)
-		systemOpts := opts
+	if input.AllowSystemFallback && input.Opts.Verify && shouldRetrySystemFallback(err) && input.Opts.TrustStore != "system" {
+		slog.Debug("mozilla trust failed, retrying with system trust store", "cn", input.CommonName)
+		systemOpts := input.Opts
 		systemOpts.TrustStore = "system"
-		exportInput.BundleOpts = systemOpts
-		retryErr := exportFn(ctx, exportInput)
+		input.ExportInput.BundleOpts = systemOpts
+		retryErr := input.Export(ctx, input.ExportInput)
 		if retryErr == nil {
 			return false, nil
 		}
 		if !isBundleVerificationError(retryErr) {
-			return false, fmt.Errorf("exporting bundle for %q: %w", commonName, retryErr)
+			return false, fmt.Errorf("exporting bundle for %q: %w", input.CommonName, retryErr)
 		}
 	}
 
-	if opts.Verify && isBundleVerificationError(err) {
-		slog.Debug("skipping untrusted bundle candidate", "cn", commonName, "error", err)
+	if input.Opts.Verify && isBundleVerificationError(err) {
+		slog.Debug("skipping untrusted bundle candidate", "cn", input.CommonName, "error", err)
 		return true, nil
 	}
 
-	return false, fmt.Errorf("exporting bundle for %q: %w", commonName, err)
+	return false, fmt.Errorf("exporting bundle for %q: %w", input.CommonName, err)
 }
 
 func shouldRetrySystemFallback(err error) bool {
@@ -411,8 +414,7 @@ func (w *folderOverrideWriter) WriteBundleFiles(_ string, files []certstore.Bund
 // is complete to avoid per-cert overhead during scanning.
 func AssignBundleNames(store *certstore.MemStore, configs []BundleConfig) {
 	for _, rec := range store.AllCertsFlat() {
-		name := determineBundleName(rec.Cert.Subject.CommonName, configs)
-		store.SetBundleName(rec.SKI, name)
+		rec.BundleName = determineBundleName(rec.Cert.Subject.CommonName, configs)
 	}
 }
 
