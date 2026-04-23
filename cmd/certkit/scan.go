@@ -29,6 +29,7 @@ var (
 	scanSaveDB              string
 	scanConfigPath          string
 	scanBundlePath          string
+	scanTrustStore          string
 	scanForceExport         bool
 	scanDuplicates          bool
 	scanDumpKeys            string
@@ -41,6 +42,7 @@ var (
 	errScanAIARedirects     = errors.New("AIA redirect limit exceeded")
 	errScanAIAHTTPStatus    = errors.New("AIA server returned non-200 status")
 	errScanAIAResponseLarge = errors.New("AIA response exceeds size limit")
+	scanExportBundles       = internal.ExportBundles
 )
 
 var scanCmd = &cobra.Command{
@@ -58,6 +60,7 @@ var scanCmd = &cobra.Command{
 func init() {
 	scanCmd.Flags().StringVar(&scanBundlePath, "bundle-path", "", "Export bundles to this directory")
 	scanCmd.Flags().StringVarP(&scanConfigPath, "config", "c", "./bundles.yaml", "Path to bundle config YAML")
+	scanCmd.Flags().StringVar(&scanTrustStore, "trust-store", "mozilla", "Trust store: system, mozilla")
 	scanCmd.Flags().BoolVarP(&scanForceExport, "force", "f", false, "Allow export of untrusted certificate bundles")
 	scanCmd.Flags().BoolVar(&scanDuplicates, "duplicates", false, "Export all certificates per bundle, not just the newest")
 	scanCmd.Flags().StringVar(&scanDumpKeys, "dump-keys", "", "Dump all discovered keys to a single PEM file")
@@ -70,6 +73,7 @@ func init() {
 	scanCmd.Flags().StringVar(&scanLoadDB, "load-db", "", "Load an existing database into memory before scanning")
 
 	registerCompletion(scanCmd, completionInput{"format", fixedCompletion("text", "json")})
+	registerCompletion(scanCmd, completionInput{"trust-store", fixedCompletion("system", "mozilla")})
 	registerCompletion(scanCmd, completionInput{"bundle-path", directoryCompletion})
 }
 
@@ -275,15 +279,19 @@ func runScan(cmd *cobra.Command, args []string) error {
 	if scanDumpCerts != "" {
 		certs := store.AllCertsFlat()
 		if len(certs) > 0 {
-			trustPools, err := loadScanTrustPools()
-			if err != nil {
-				return err
+			trustPools := scanTrustPools{}
+			var intermediatePool *x509.CertPool
+			if !scanForceExport {
+				var err error
+				trustPools, err = scanValidationTrustPoolLoader(scanTrustStore)
+				if err != nil {
+					return err
+				}
+				intermediatePool = store.IntermediatePool()
 			}
-			intermediatePool := store.IntermediatePool()
 
-			// Pre-compute trust status concurrently. Mozilla checks are pure Go
-			// and fast; system checks hit macOS SecTrust which is slow. Run
-			// mozilla first, then only check system for untrusted remainders.
+			// Pre-compute trust status concurrently against the selected trust
+			// source so export-time filtering does not re-verify each cert.
 			type dumpTrust struct {
 				mozilla bool
 				system  bool
@@ -393,14 +401,16 @@ func runScan(cmd *cobra.Command, args []string) error {
 		if err := os.MkdirAll(scanBundlePath, 0o755); err != nil {
 			return fmt.Errorf("creating output directory %s: %w", scanBundlePath, err)
 		}
-		if err := internal.ExportBundles(cmd.Context(), internal.ExportBundlesInput{
-			Configs:     bundleConfigs,
-			OutDir:      scanBundlePath,
-			Store:       store,
-			ForceBundle: scanForceExport,
-			Duplicates:  scanDuplicates,
-			P12Password: p12Password,
-			EncryptKey:  len(passwordSets.Export) > 0,
+		if err := scanExportBundles(cmd.Context(), internal.ExportBundlesInput{
+			Configs:             bundleConfigs,
+			OutDir:              scanBundlePath,
+			Store:               store,
+			TrustStore:          scanTrustStore,
+			ForceBundle:         scanForceExport,
+			Duplicates:          scanDuplicates,
+			P12Password:         p12Password,
+			AllowSystemFallback: true,
+			EncryptKey:          len(passwordSets.Export) > 0,
 		}); err != nil {
 			return fmt.Errorf("exporting bundles: %w", err)
 		}
@@ -410,7 +420,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 		store.DumpDebug()
 		switch format {
 		case "json":
-			trustPools, err := loadScanTrustPools()
+			trustPools, err := scanSummaryTrustPoolLoader(scanTrustStore)
 			if err != nil {
 				return err
 			}
@@ -428,7 +438,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 			}
 			fmt.Println(string(data))
 		case "text":
-			trustPools, err := loadScanTrustPools()
+			trustPools, err := scanSummaryTrustPoolLoader(scanTrustStore)
 			if err != nil {
 				return err
 			}
@@ -463,7 +473,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 			}
 		}
 		// Print summary with trust and expiry annotations
-		trustPools, err := loadScanTrustPools()
+		trustPools, err := scanSummaryTrustPoolLoader(scanTrustStore)
 		if err != nil {
 			return err
 		}
@@ -528,19 +538,23 @@ type scanTrustPools struct {
 	System  *x509.CertPool
 }
 
-func loadScanTrustPools() (scanTrustPools, error) {
-	mozillaPool, err := certkit.MozillaRootPool()
+var (
+	scanValidationTrustPoolLoader = loadScanTrustPools
+	scanSummaryTrustPoolLoader    = loadScanTrustPools
+)
+
+func loadScanTrustPools(trustStore string) (scanTrustPools, error) {
+	pool, err := loadSelectedTrustPool(trustStore)
 	if err != nil {
-		return scanTrustPools{}, fmt.Errorf("loading Mozilla root pool: %w", err)
+		return scanTrustPools{}, fmt.Errorf("loading scan trust pool: %w", err)
 	}
-	systemPool, err := certkit.SystemCertPoolCached()
-	if err != nil {
-		slog.Debug("system cert pool unavailable for scan trust summary", "error", err)
+
+	switch trustStore {
+	case "system":
+		return scanTrustPools{System: pool}, nil
+	default:
+		return scanTrustPools{Mozilla: pool}, nil
 	}
-	return scanTrustPools{
-		Mozilla: mozillaPool,
-		System:  systemPool,
-	}, nil
 }
 
 // scanCertEntry holds per-certificate details for verbose scan output.

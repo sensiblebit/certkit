@@ -347,6 +347,7 @@ type CheckTrustAnchorsInput struct {
 	Cert          *x509.Certificate
 	Intermediates *x509.CertPool
 	FileRoots     *x509.CertPool
+	TrustStore    string
 }
 
 // CheckTrustAnchorsResult reports which trust sources validated a certificate
@@ -410,35 +411,55 @@ func verifyChainTrustChains(input VerifyChainTrustInput) ([][]*x509.Certificate,
 }
 
 // CheckTrustAnchors reports which trust sources validate the certificate.
-// Results are returned in stable order: mozilla, system, file.
+// Results are returned in stable order: selected trust store, then file.
 func CheckTrustAnchors(input CheckTrustAnchorsInput) CheckTrustAnchorsResult {
 	if input.Cert == nil {
 		return CheckTrustAnchorsResult{Anchors: []string{}, Warnings: []string{}}
 	}
 
 	result := CheckTrustAnchorsResult{
-		Anchors:  make([]string, 0, 3),
+		Anchors:  make([]string, 0, 2),
 		Warnings: make([]string, 0, 2),
 	}
-	if mozillaPool, err := MozillaRootPool(); err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("mozilla trust source unavailable: %v", err))
-	} else if VerifyChainTrust(VerifyChainTrustInput{
-		Cert:          input.Cert,
-		Roots:         mozillaPool,
-		Intermediates: input.Intermediates,
-		TrustStore:    "mozilla",
-	}) {
-		result.Anchors = append(result.Anchors, "mozilla")
+	checkRoots := func(name string, roots *x509.CertPool) {
+		if VerifyChainTrust(VerifyChainTrustInput{
+			Cert:          input.Cert,
+			Roots:         roots,
+			Intermediates: input.Intermediates,
+			TrustStore:    name,
+		}) {
+			result.Anchors = append(result.Anchors, name)
+		}
 	}
-	if systemPool, err := SystemCertPoolCached(); err != nil {
-		result.Warnings = append(result.Warnings, fmt.Sprintf("system trust source unavailable: %v", err))
-	} else if VerifyChainTrust(VerifyChainTrustInput{
-		Cert:          input.Cert,
-		Roots:         systemPool,
-		Intermediates: input.Intermediates,
-		TrustStore:    "system",
-	}) {
-		result.Anchors = append(result.Anchors, "system")
+
+	trustStore := input.TrustStore
+	if trustStore == "" {
+		trustStore = "mozilla"
+	}
+	switch trustStore {
+	case "mozilla":
+		mozillaPool, err := MozillaRootPool()
+		if err != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("mozilla trust source unavailable: %v", err))
+			break
+		}
+		checkRoots("mozilla", mozillaPool)
+	case "system":
+		systemPool, err := SystemCertPoolCached()
+		if err != nil {
+			result.Warnings = append(result.Warnings, fmt.Sprintf("system trust source unavailable: %v", err))
+			break
+		}
+		checkRoots("system", systemPool)
+	case "custom":
+		result.Warnings = append(result.Warnings, "custom trust store cannot be evaluated without an explicit roots pool")
+	case "file":
+		if input.FileRoots == nil {
+			result.Warnings = append(result.Warnings, "file trust store cannot be evaluated without file roots")
+		}
+	default:
+		result.Warnings = append(result.Warnings, fmt.Sprintf("unsupported trust store %q", trustStore))
+		return result
 	}
 	if input.FileRoots != nil && VerifyChainTrust(VerifyChainTrustInput{
 		Cert:          input.Cert,

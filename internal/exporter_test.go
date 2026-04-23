@@ -2,14 +2,19 @@ package internal
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math/big"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sensiblebit/certkit"
 	"github.com/sensiblebit/certkit/internal/certstore"
@@ -407,15 +412,15 @@ func TestExportBundles_UntrustedBundleSkippedWithoutForce(t *testing.T) {
 }
 
 func TestExportMatchedBundleWithSystemFallback_RetriesWithSystemTrust(t *testing.T) {
-	// WHY: Bundle export now defaults to Mozilla trust but should retry with the
-	// host system roots before classifying a candidate as untrusted.
+	// WHY: When explicitly enabled, bundle export should retry unknown-authority
+	// failures with the host system roots before classifying a candidate as untrusted.
 	t.Parallel()
 
 	var trustStores []string
 	exportFn := func(_ context.Context, input certstore.ExportMatchedBundleInput) error {
 		trustStores = append(trustStores, input.BundleOpts.TrustStore)
 		if input.BundleOpts.TrustStore == "mozilla" {
-			return fmt.Errorf("%w: mozilla verify failed", certkit.ErrChainVerificationFailed)
+			return fmt.Errorf("%w: %w", certkit.ErrChainVerificationFailed, x509.UnknownAuthorityError{})
 		}
 		if input.BundleOpts.TrustStore == "system" {
 			return nil
@@ -423,13 +428,13 @@ func TestExportMatchedBundleWithSystemFallback_RetriesWithSystemTrust(t *testing
 		return errUnexpectedTrustStore
 	}
 
-	skipped, err := exportMatchedBundleWithSystemFallback(
-		context.Background(),
-		"fallback.example.com",
-		certstore.ExportMatchedBundleInput{BundleOpts: certkit.BundleOptions{TrustStore: "mozilla", Verify: true}},
-		certkit.BundleOptions{TrustStore: "mozilla", Verify: true},
-		exportFn,
-	)
+	skipped, err := exportMatchedBundleWithSystemFallback(context.Background(), exportMatchedBundleWithSystemFallbackInput{
+		CommonName:          "fallback.example.com",
+		ExportInput:         certstore.ExportMatchedBundleInput{BundleOpts: certkit.BundleOptions{TrustStore: "mozilla", Verify: true}},
+		Opts:                certkit.BundleOptions{TrustStore: "mozilla", Verify: true},
+		AllowSystemFallback: true,
+		Export:              exportFn,
+	})
 	if err != nil {
 		t.Fatalf("exportMatchedBundleWithSystemFallback() error = %v, want nil", err)
 	}
@@ -448,7 +453,7 @@ func TestExportMatchedBundleWithSystemFallback_ReturnsRetryFailure(t *testing.T)
 
 	exportFn := func(_ context.Context, input certstore.ExportMatchedBundleInput) error {
 		if input.BundleOpts.TrustStore == "mozilla" {
-			return fmt.Errorf("%w: mozilla verify failed", certkit.ErrChainVerificationFailed)
+			return fmt.Errorf("%w: %w", certkit.ErrChainVerificationFailed, x509.UnknownAuthorityError{})
 		}
 		if input.BundleOpts.TrustStore == "system" {
 			return errInjectedWriteFailure
@@ -456,13 +461,13 @@ func TestExportMatchedBundleWithSystemFallback_ReturnsRetryFailure(t *testing.T)
 		return errUnexpectedTrustStore
 	}
 
-	skipped, err := exportMatchedBundleWithSystemFallback(
-		context.Background(),
-		"fallback.example.com",
-		certstore.ExportMatchedBundleInput{BundleOpts: certkit.BundleOptions{TrustStore: "mozilla", Verify: true}},
-		certkit.BundleOptions{TrustStore: "mozilla", Verify: true},
-		exportFn,
-	)
+	skipped, err := exportMatchedBundleWithSystemFallback(context.Background(), exportMatchedBundleWithSystemFallbackInput{
+		CommonName:          "fallback.example.com",
+		ExportInput:         certstore.ExportMatchedBundleInput{BundleOpts: certkit.BundleOptions{TrustStore: "mozilla", Verify: true}},
+		Opts:                certkit.BundleOptions{TrustStore: "mozilla", Verify: true},
+		AllowSystemFallback: true,
+		Export:              exportFn,
+	})
 	if skipped {
 		t.Fatal("exportMatchedBundleWithSystemFallback() skipped = true, want false")
 	}
@@ -471,6 +476,64 @@ func TestExportMatchedBundleWithSystemFallback_ReturnsRetryFailure(t *testing.T)
 	}
 	if !errors.Is(err, errInjectedWriteFailure) {
 		t.Fatalf("error = %v, want injected retry failure", err)
+	}
+}
+
+func TestExportMatchedBundleWithSystemFallback_DoesNotRetryExpiredCertificate(t *testing.T) {
+	t.Parallel()
+
+	var trustStores []string
+	exportFn := func(_ context.Context, input certstore.ExportMatchedBundleInput) error {
+		trustStores = append(trustStores, input.BundleOpts.TrustStore)
+		return fmt.Errorf(
+			"%w: %w",
+			certkit.ErrChainVerificationFailed,
+			x509.CertificateInvalidError{Reason: x509.Expired},
+		)
+	}
+
+	skipped, err := exportMatchedBundleWithSystemFallback(context.Background(), exportMatchedBundleWithSystemFallbackInput{
+		CommonName:          "expired.example.com",
+		ExportInput:         certstore.ExportMatchedBundleInput{BundleOpts: certkit.BundleOptions{TrustStore: "mozilla", Verify: true}},
+		Opts:                certkit.BundleOptions{TrustStore: "mozilla", Verify: true},
+		AllowSystemFallback: true,
+		Export:              exportFn,
+	})
+	if err != nil {
+		t.Fatalf("exportMatchedBundleWithSystemFallback() error = %v, want nil", err)
+	}
+	if !skipped {
+		t.Fatal("exportMatchedBundleWithSystemFallback() skipped = false, want true")
+	}
+	if got, want := strings.Join(trustStores, ","), "mozilla"; got != want {
+		t.Fatalf("trust store attempts = %q, want %q", got, want)
+	}
+}
+
+func TestExportMatchedBundleWithSystemFallback_DisabledSkipsUnknownAuthority(t *testing.T) {
+	t.Parallel()
+
+	var trustStores []string
+	exportFn := func(_ context.Context, input certstore.ExportMatchedBundleInput) error {
+		trustStores = append(trustStores, input.BundleOpts.TrustStore)
+		return fmt.Errorf("%w: %w", certkit.ErrChainVerificationFailed, x509.UnknownAuthorityError{})
+	}
+
+	skipped, err := exportMatchedBundleWithSystemFallback(context.Background(), exportMatchedBundleWithSystemFallbackInput{
+		CommonName:          "fallback.example.com",
+		ExportInput:         certstore.ExportMatchedBundleInput{BundleOpts: certkit.BundleOptions{TrustStore: "mozilla", Verify: true}},
+		Opts:                certkit.BundleOptions{TrustStore: "mozilla", Verify: true},
+		AllowSystemFallback: false,
+		Export:              exportFn,
+	})
+	if err != nil {
+		t.Fatalf("exportMatchedBundleWithSystemFallback() error = %v, want nil", err)
+	}
+	if !skipped {
+		t.Fatal("exportMatchedBundleWithSystemFallback() skipped = false, want true")
+	}
+	if got, want := strings.Join(trustStores, ","), "mozilla"; got != want {
+		t.Fatalf("trust store attempts = %q, want %q", got, want)
 	}
 }
 
@@ -639,7 +702,7 @@ func TestAssignBundleNames(t *testing.T) {
 			CommonNames: []string{"app.example.com"},
 			BundleName:  "app-bundle",
 		},
-		// No config for *.wild.example.com — should get sanitized CN
+		// No config for *.wild.example.com — should not export a bundle
 	}
 
 	AssignBundleNames(store, configs)
@@ -654,7 +717,84 @@ func TestAssignBundleNames(t *testing.T) {
 	if !nameSet["app-bundle"] {
 		t.Error("expected 'app-bundle' in BundleNames")
 	}
-	if !nameSet["_.wild.example.com"] {
-		t.Errorf("expected '_.wild.example.com' in BundleNames, got %v", bundleNames)
+	if nameSet["_.wild.example.com"] {
+		t.Errorf("did not expect unmatched wildcard CN bundle in BundleNames, got %v", bundleNames)
+	}
+}
+
+func TestAssignBundleNames_IgnoresUnmatchedRenewalWithSameSKI(t *testing.T) {
+	t.Parallel()
+
+	ca := newRSACA(t)
+	matchedLeaf := newRSALeaf(t, ca, "app.example.com", []string{"app.example.com"}, nil)
+	matchedKey, ok := matchedLeaf.key.(*rsa.PrivateKey)
+	if !ok {
+		t.Fatal("matched leaf key is not RSA")
+	}
+
+	renewalTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(2),
+		Subject: pkix.Name{
+			CommonName:   "unmatched.example.com",
+			Organization: []string{"TestOrg"},
+			Country:      []string{"US"},
+			Province:     []string{"California"},
+			Locality:     []string{"San Francisco"},
+		},
+		DNSNames:       []string{"unmatched.example.com"},
+		NotBefore:      time.Now().Add(-1 * time.Hour),
+		NotAfter:       time.Now().Add(2 * 365 * 24 * time.Hour),
+		KeyUsage:       x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:    []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		AuthorityKeyId: ca.cert.SubjectKeyId,
+	}
+	renewalDER, err := x509.CreateCertificate(rand.Reader, renewalTemplate, ca.cert, &matchedKey.PublicKey, ca.key)
+	if err != nil {
+		t.Fatalf("create renewal cert: %v", err)
+	}
+	renewalCert, err := x509.ParseCertificate(renewalDER)
+	if err != nil {
+		t.Fatalf("parse renewal cert: %v", err)
+	}
+
+	store := certstore.NewMemStore()
+	if err := store.HandleCertificate(matchedLeaf.cert, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HandleCertificate(renewalCert, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HandleCertificate(ca.cert, "test"); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.HandleKey(matchedLeaf.key, matchedLeaf.keyPEM, "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	configs := []BundleConfig{
+		{
+			CommonNames: []string{"app.example.com"},
+			BundleName:  "app-bundle",
+		},
+	}
+
+	AssignBundleNames(store, configs)
+
+	bundleNames := store.BundleNames()
+	if len(bundleNames) != 1 || bundleNames[0] != "app-bundle" {
+		t.Fatalf("BundleNames() = %v, want [app-bundle]", bundleNames)
+	}
+
+	for _, rec := range store.AllCertsFlat() {
+		switch rec.Cert.Subject.CommonName {
+		case "app.example.com":
+			if rec.BundleName != "app-bundle" {
+				t.Fatalf("bundle name for %q = %q, want app-bundle", rec.Cert.Subject.CommonName, rec.BundleName)
+			}
+		case "unmatched.example.com":
+			if rec.BundleName != "" {
+				t.Fatalf("bundle name for %q = %q, want empty", rec.Cert.Subject.CommonName, rec.BundleName)
+			}
+		}
 	}
 }

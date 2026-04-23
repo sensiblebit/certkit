@@ -336,6 +336,7 @@ func GenerateYAML(bundle *certkit.BundleResult, keyPEM []byte, keyType string, b
 // override or the existing certificate's subject fields.
 func buildCSRSubject(cert *x509.Certificate, override *CSRSubjectOverride) pkix.Name {
 	subj := pkix.Name{
+		CommonName:    cert.Subject.CommonName,
 		StreetAddress: cert.Subject.StreetAddress,
 		PostalCode:    cert.Subject.PostalCode,
 		SerialNumber:  cert.Subject.SerialNumber,
@@ -372,6 +373,7 @@ type BundleWriter interface {
 type ExportMatchedBundleInput struct {
 	Store         *MemStore
 	SKIs          []string // matched-pair SKIs to export
+	Certs         []*CertRecord
 	BundleOpts    certkit.BundleOptions
 	Writer        BundleWriter
 	CSRSubject    *CSRSubjectOverride // optional; nil uses cert's own subject
@@ -388,8 +390,9 @@ func ExportMatchedBundles(ctx context.Context, input ExportMatchedBundleInput) e
 	opts := input.BundleOpts
 	opts.ExtraIntermediates = slices.Concat(opts.ExtraIntermediates, intermediates)
 
-	for _, ski := range input.SKIs {
-		certRec := input.Store.GetCert(ski)
+	for _, selection := range exportCertSelections(input) {
+		ski := selection.ski
+		certRec := selection.cert
 		keyRec := input.Store.GetKey(ski)
 		if certRec == nil || keyRec == nil {
 			slog.Debug("skipping export entry without cert or key", "ski", ski)
@@ -464,6 +467,31 @@ func ExportMatchedBundles(ctx context.Context, input ExportMatchedBundleInput) e
 	return nil
 }
 
+type exportCertSelection struct {
+	ski  string
+	cert *CertRecord
+}
+
+func exportCertSelections(input ExportMatchedBundleInput) []exportCertSelection {
+	if len(input.Certs) > 0 {
+		selections := make([]exportCertSelection, 0, len(input.Certs))
+		for _, certRec := range input.Certs {
+			ski := ""
+			if certRec != nil {
+				ski = certRec.SKI
+			}
+			selections = append(selections, exportCertSelection{ski: ski, cert: certRec})
+		}
+		return selections
+	}
+
+	selections := make([]exportCertSelection, 0, len(input.SKIs))
+	for _, ski := range input.SKIs {
+		selections = append(selections, exportCertSelection{ski: ski, cert: input.Store.GetCert(ski)})
+	}
+	return selections
+}
+
 // GenerateCSR creates a CSR using the certificate's details and private key.
 // The subject parameter optionally overrides the certificate's subject fields.
 func GenerateCSR(leaf *x509.Certificate, keyPEM []byte, subject *CSRSubjectOverride) (csrPEM []byte, csrJSON []byte, err error) {
@@ -527,6 +555,7 @@ func GenerateCSR(leaf *x509.Certificate, keyPEM []byte, subject *CSRSubjectOverr
 
 	csrDetails := map[string]any{
 		"subject": map[string]any{
+			"common_name":         parsedCSR.Subject.CommonName,
 			"country":             parsedCSR.Subject.Country,
 			"province":            parsedCSR.Subject.Province,
 			"locality":            parsedCSR.Subject.Locality,

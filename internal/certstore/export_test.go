@@ -1,12 +1,16 @@
 package certstore
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"math/big"
 	"net"
 	"strings"
 	"testing"
@@ -750,6 +754,9 @@ func TestGenerateCSR_RoundTrip(t *testing.T) {
 	}
 
 	// Verify subject fields are copied from cert
+	if csr.Subject.CommonName != "csr.example.com" {
+		t.Errorf("CSR common name = %q, want %q", csr.Subject.CommonName, "csr.example.com")
+	}
 	if len(csr.Subject.Organization) != 1 || csr.Subject.Organization[0] != "TestOrg" {
 		t.Errorf("CSR organization = %v, want [TestOrg]", csr.Subject.Organization)
 	}
@@ -769,6 +776,13 @@ func TestGenerateCSR_RoundTrip(t *testing.T) {
 	var jsonResult map[string]any
 	if err := json.Unmarshal(csrJSON, &jsonResult); err != nil {
 		t.Fatalf("CSR JSON is not valid: %v", err)
+	}
+	subjectRaw, ok := jsonResult["subject"].(map[string]any)
+	if !ok {
+		t.Fatal("CSR JSON subject is not an object")
+	}
+	if commonName, ok := subjectRaw["common_name"].(string); !ok || commonName != "csr.example.com" {
+		t.Errorf("CSR JSON subject.common_name = %v, want %q", subjectRaw["common_name"], "csr.example.com")
 	}
 
 	// dns_names content must match the certificate SANs
@@ -887,8 +901,9 @@ func TestGenerateCSR_SANExclusion(t *testing.T) {
 }
 
 func TestGenerateCSR_SubjectOverride(t *testing.T) {
-	// WHY: Verifies that CSRSubjectOverride replaces (not merges with) the
-	// certificate's own subject fields, and that OU defaults to "None" when empty.
+	// WHY: Verifies that CSRSubjectOverride replaces the configurable subject
+	// fields while preserving the certificate CN, and that OU defaults to
+	// "None" when empty.
 	t.Parallel()
 
 	ca := newRSACA(t)
@@ -915,6 +930,9 @@ func TestGenerateCSR_SubjectOverride(t *testing.T) {
 	}
 	if len(csr.Subject.Organization) != 1 || csr.Subject.Organization[0] != "New Org" {
 		t.Errorf("organization = %v, want [New Org]", csr.Subject.Organization)
+	}
+	if csr.Subject.CommonName != "sub.example.com" {
+		t.Errorf("common_name = %q, want %q", csr.Subject.CommonName, "sub.example.com")
 	}
 	// OU should default to "None" since override didn't set it
 	if len(csr.Subject.OrganizationalUnit) != 1 || csr.Subject.OrganizationalUnit[0] != "None" {
@@ -1473,6 +1491,98 @@ func TestExportMatchedBundles_WriterErrorFailsFast(t *testing.T) {
 	}
 	if len(written) != 0 {
 		t.Fatalf("expected 0 successful writes before fail-fast return, got %d", len(written))
+	}
+}
+
+func TestExportMatchedBundles_UsesExactCertRecordWhenProvided(t *testing.T) {
+	t.Parallel()
+
+	ca := newRSACA(t)
+	matchedLeaf := newRSALeaf(t, ca, "*.dns-stg.zimperium.com", []string{"*.dns-stg.zimperium.com", "dns-stg.zimperium.com"})
+	matchedKey, ok := matchedLeaf.key.(*rsa.PrivateKey)
+	if !ok {
+		t.Fatal("matched leaf key is not RSA")
+	}
+
+	newerTemplate := &x509.Certificate{
+		SerialNumber: big.NewInt(200),
+		Subject: pkix.Name{
+			CommonName:   "*.zimperium.com",
+			Organization: []string{"TestOrg"},
+			Country:      []string{"US"},
+		},
+		DNSNames:       []string{"*.zimperium.com", "zimperium.com"},
+		NotBefore:      time.Now().Add(-1 * time.Hour),
+		NotAfter:       time.Now().Add(2 * 365 * 24 * time.Hour),
+		KeyUsage:       x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+		ExtKeyUsage:    []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		AuthorityKeyId: ca.cert.SubjectKeyId,
+	}
+	newerDER, err := x509.CreateCertificate(rand.Reader, newerTemplate, ca.cert, &matchedKey.PublicKey, ca.key)
+	if err != nil {
+		t.Fatalf("create newer cert: %v", err)
+	}
+	newerCert, err := x509.ParseCertificate(newerDER)
+	if err != nil {
+		t.Fatalf("parse newer cert: %v", err)
+	}
+
+	store := NewMemStore()
+	for _, cert := range []*x509.Certificate{matchedLeaf.cert, newerCert, ca.cert} {
+		if err := store.HandleCertificate(cert, "test"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := store.HandleKey(matchedLeaf.key, matchedLeaf.keyPEM, "test"); err != nil {
+		t.Fatal(err)
+	}
+
+	var matchedRec *CertRecord
+	for _, rec := range store.AllCertsFlat() {
+		switch rec.Cert.Subject.CommonName {
+		case "*.dns-stg.zimperium.com":
+			rec.BundleName = "dnsstg-zimperium-tls"
+			matchedRec = rec
+		case "*.zimperium.com":
+			rec.BundleName = ""
+		}
+	}
+	if matchedRec == nil {
+		t.Fatal("expected matched cert record")
+	}
+
+	var written []mockWriteCall
+	writer := &mockBundleWriter{calls: &written}
+	err = ExportMatchedBundles(t.Context(), ExportMatchedBundleInput{
+		Store:  store,
+		Certs:  []*CertRecord{matchedRec},
+		Writer: writer,
+		BundleOpts: certkit.BundleOptions{
+			CustomRoots: []*x509.Certificate{ca.cert},
+			TrustStore:  "custom",
+			Verify:      true,
+		},
+		P12Password: "testpass",
+	})
+	if err != nil {
+		t.Fatalf("ExportMatchedBundles: %v", err)
+	}
+	if len(written) != 1 {
+		t.Fatalf("expected 1 write call, got %d", len(written))
+	}
+	if written[0].folder != "dnsstg-zimperium-tls" {
+		t.Fatalf("folder = %q, want %q", written[0].folder, "dnsstg-zimperium-tls")
+	}
+
+	nameSet := make(map[string]bool, len(written[0].files))
+	for _, file := range written[0].files {
+		nameSet[file.Name] = true
+	}
+	if !nameSet["_.dns-stg.zimperium.com.pem"] {
+		t.Fatalf("expected exact bundle file prefix in %v", written[0].files)
+	}
+	if nameSet["_.zimperium.com.pem"] {
+		t.Fatalf("did not expect newer same-SKI cert prefix in %v", written[0].files)
 	}
 }
 

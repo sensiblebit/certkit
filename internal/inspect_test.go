@@ -611,7 +611,7 @@ func TestAnnotateInspectTrust(t *testing.T) {
 			results := make([]InspectResult, len(tt.results))
 			copy(results, tt.results)
 
-			if err := AnnotateInspectTrust(results); err != nil {
+			if err := AnnotateInspectTrust(results, "mozilla"); err != nil {
 				t.Fatalf("AnnotateInspectTrust: %v", err)
 			}
 

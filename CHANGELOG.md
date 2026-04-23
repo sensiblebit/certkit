@@ -22,21 +22,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Breaking:** Default `TrustStore` in `DefaultOptions()` changed from `"system"` to `"mozilla"` — pure-Go Mozilla root verification is used by default instead of macOS `SecTrustEvaluateWithError` syscalls, eliminating multi-minute hangs on large certificate stores
-- Parallelize trust verification in scan summary, dump-certs, and AIA resolution — mozilla checks run concurrently, system checks only run for certs mozilla didn't trust
+- Default `scan`, `verify`, `inspect`, and `connect` trust-store selection to Mozilla, and require an explicit `--trust-store system` when command trust reporting should come from host trust roots
+- Parallelize trust verification in scan summary, dump-certs, and AIA resolution for the selected trust store
 - Add `TrustStore` label to `VerifyChainTrustInput` and debug-log every trust verification call with subject, store, and result
 - Normalize all exported private key PEM output (`.key`, K8s `tls.key`, YAML `key`) to PKCS#8 (`PRIVATE KEY`) regardless of input format ([#167])
 - Bundle export warns when Kubernetes TLS secret contains an unencrypted private key alongside encrypted outputs ([#167])
 - Use browser Web Crypto API for PBKDF2 key derivation in WASM builds to avoid blocking the main thread during encrypted key export ([#167])
-- `verify` now checks both Mozilla and system trust stores by default and treats a certificate as trusted when any available anchor source succeeds ([`0ee41ad`])
+- `verify` now uses the selected built-in trust store plus any `--roots` file-backed anchors, and treats a certificate as trusted when any requested anchor source succeeds
 - `scan` now counts `untrusted_*` certificates as trusted by neither Mozilla nor system, and exposes per-store trust counts in JSON output ([`0ee41ad`])
 - Surface trust-source load warnings in `inspect`, `verify`, and `connect`, fail fast on invalid `verify` trust-store configuration, and stop reporting a synthetic `file` source when no file-backed roots were requested ([#171])
 
-### Removed
-
-- **Breaking:** Remove `verify --trust-store`; use the default Mozilla+system verification or `--roots` to add a file-backed trust source ([`0ee41ad`])
-
 ### Fixed
 
+- Make `scan` summaries rely on the selected trust store while still retrying bundle exports against host trust roots after Mozilla unknown-authority failures
+- Stop assigning fallback bundle names to certificates that do not match any configured bundle entry, so stray export directories like `bundles/spf-console.zimperium.com/` are no longer generated
+- Preserve the certificate common name in generated bundle CSRs so exported requests include a subject CN alongside SANs
+- Include `subject.common_name` in generated CSR JSON output so `.csr.json` matches the exported CSR subject
+- Stop bundle export from retrying the system trust fallback for non-trust-store verification failures such as expired certificates
 - Make `connect` fail when the peer omits part of the trust path and validation only succeeds after local chain completion, instead of accepting the incomplete server-presented chain ([#190])
 - Use bundle folder name as Kubernetes secret `metadata.name` instead of the CN-derived prefix, so the secret name matches the export directory ([#178])
 - Validate `bundleName` in bundle config YAML against DNS-1123 rules at load time; invalid names now produce a fatal error with the file path and line number ([#178])
