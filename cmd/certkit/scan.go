@@ -42,6 +42,7 @@ var (
 	errScanAIARedirects     = errors.New("AIA redirect limit exceeded")
 	errScanAIAHTTPStatus    = errors.New("AIA server returned non-200 status")
 	errScanAIAResponseLarge = errors.New("AIA response exceeds size limit")
+	scanExportBundles       = internal.ExportBundles
 )
 
 var scanCmd = &cobra.Command{
@@ -400,15 +401,16 @@ func runScan(cmd *cobra.Command, args []string) error {
 		if err := os.MkdirAll(scanBundlePath, 0o755); err != nil {
 			return fmt.Errorf("creating output directory %s: %w", scanBundlePath, err)
 		}
-		if err := internal.ExportBundles(cmd.Context(), internal.ExportBundlesInput{
-			Configs:     bundleConfigs,
-			OutDir:      scanBundlePath,
-			Store:       store,
-			TrustStore:  scanTrustStore,
-			ForceBundle: scanForceExport,
-			Duplicates:  scanDuplicates,
-			P12Password: p12Password,
-			EncryptKey:  len(passwordSets.Export) > 0,
+		if err := scanExportBundles(cmd.Context(), internal.ExportBundlesInput{
+			Configs:             bundleConfigs,
+			OutDir:              scanBundlePath,
+			Store:               store,
+			TrustStore:          scanTrustStore,
+			ForceBundle:         scanForceExport,
+			Duplicates:          scanDuplicates,
+			P12Password:         p12Password,
+			AllowSystemFallback: true,
+			EncryptKey:          len(passwordSets.Export) > 0,
 		}); err != nil {
 			return fmt.Errorf("exporting bundles: %w", err)
 		}
@@ -550,10 +552,8 @@ func loadScanTrustPools(trustStore string) (scanTrustPools, error) {
 	switch trustStore {
 	case "system":
 		return scanTrustPools{System: pool}, nil
-	case "", "mozilla":
-		return scanTrustPools{Mozilla: pool}, nil
 	default:
-		return scanTrustPools{}, fmt.Errorf("%w: %q", errUnsupportedTrustStore, trustStore)
+		return scanTrustPools{Mozilla: pool}, nil
 	}
 }
 

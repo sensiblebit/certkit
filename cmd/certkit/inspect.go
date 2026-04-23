@@ -35,7 +35,7 @@ func init() {
 }
 
 func runInspect(cmd *cobra.Command, args []string) error {
-	if _, err := loadSelectedTrustPool(inspectTrustStore); err != nil {
+	if err := validateSelectedTrustStore(inspectTrustStore); err != nil {
 		return fmt.Errorf("loading trust store: %w", err)
 	}
 

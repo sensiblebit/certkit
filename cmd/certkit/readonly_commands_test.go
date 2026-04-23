@@ -16,6 +16,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/sensiblebit/certkit/internal"
 	"github.com/spf13/cobra"
 )
 
@@ -472,6 +473,65 @@ func TestRunScan_DumpCertsForceSkipsTrustLoading(t *testing.T) {
 	}
 	if !strings.Contains(string(data), "BEGIN CERTIFICATE") {
 		t.Fatalf("dumped cert file missing PEM data:\n%s", string(data))
+	}
+}
+
+func TestRunScan_ExportEnablesSystemFallback(t *testing.T) {
+	snap := snapshotReadonlyGlobals()
+	defer restoreReadonlyGlobals(snap)
+
+	origSummaryLoader := scanSummaryTrustPoolLoader
+	origExportBundles := scanExportBundles
+	t.Cleanup(func() {
+		scanSummaryTrustPoolLoader = origSummaryLoader
+		scanExportBundles = origExportBundles
+	})
+
+	dir := t.TempDir()
+	_, cert := generateKeyAndCert(t, "scan-export.example.com", false)
+	writeCertPEM(t, dir, "leaf.pem", cert)
+
+	configPath := filepath.Join(dir, "bundles.yaml")
+	configData := []byte("bundles:\n  - bundleName: scan-export\n    commonNames:\n      - scan-export.example.com\n")
+	if err := os.WriteFile(configPath, configData, 0o600); err != nil {
+		t.Fatalf("write bundle config: %v", err)
+	}
+
+	var gotFallback bool
+	scanSummaryTrustPoolLoader = func(string) (scanTrustPools, error) {
+		return scanTrustPools{}, nil
+	}
+	scanExportBundles = func(_ context.Context, input internal.ExportBundlesInput) error {
+		gotFallback = input.AllowSystemFallback
+		return nil
+	}
+
+	passwordList = nil
+	passwordFile = ""
+	verbose = false
+	jsonOutput = false
+	scanBundlePath = filepath.Join(dir, "out")
+	scanConfigPath = configPath
+	scanTrustStore = "mozilla"
+	scanForceExport = false
+	scanDuplicates = false
+	scanDumpKeys = ""
+	scanDumpCerts = ""
+	scanMaxFileSize = 10 * 1024 * 1024
+	scanFormat = "text"
+	scanAllowPrivateNetwork = false
+	scanSaveDB = ""
+	scanLoadDB = ""
+
+	_, stderr, err := captureOutput(t, func() error { return runScan(newCommandWithContext(), []string{dir}) })
+	if err != nil {
+		t.Fatalf("runScan export failed: %v", err)
+	}
+	if !gotFallback {
+		t.Fatal("scan export did not enable system fallback")
+	}
+	if !strings.Contains(stderr, "Exported bundles to") {
+		t.Fatalf("scan export stderr missing export status:\n%s", stderr)
 	}
 }
 

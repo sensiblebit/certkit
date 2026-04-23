@@ -451,7 +451,12 @@ func CheckTrustAnchors(input CheckTrustAnchorsInput) CheckTrustAnchorsResult {
 			break
 		}
 		checkRoots("system", systemPool)
-	case "custom", "file":
+	case "custom":
+		result.Warnings = append(result.Warnings, "custom trust store cannot be evaluated without an explicit roots pool")
+	case "file":
+		if input.FileRoots == nil {
+			result.Warnings = append(result.Warnings, "file trust store cannot be evaluated without file roots")
+		}
 	default:
 		result.Warnings = append(result.Warnings, fmt.Sprintf("unsupported trust store %q", trustStore))
 		return result

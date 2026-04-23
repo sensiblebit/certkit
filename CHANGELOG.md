@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Breaking:** Default `TrustStore` in `DefaultOptions()` changed from `"system"` to `"mozilla"` — pure-Go Mozilla root verification is used by default instead of macOS `SecTrustEvaluateWithError` syscalls, eliminating multi-minute hangs on large certificate stores
-- Default `scan`, `verify`, `inspect`, and `connect` trust-store selection to Mozilla, and require an explicit `--trust-store system` to consult host trust roots
+- Default `scan`, `verify`, `inspect`, and `connect` trust-store selection to Mozilla, and require an explicit `--trust-store system` when command trust reporting should come from host trust roots
 - Parallelize trust verification in scan summary, dump-certs, and AIA resolution for the selected trust store
 - Add `TrustStore` label to `VerifyChainTrustInput` and debug-log every trust verification call with subject, store, and result
 - Normalize all exported private key PEM output (`.key`, K8s `tls.key`, YAML `key`) to PKCS#8 (`PRIVATE KEY`) regardless of input format ([#167])
@@ -34,7 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Make `scan` summaries rely on the selected trust store, and require `--trust-store system` when `scan --bundle-path` should validate/export against host trust roots
+- Make `scan` summaries rely on the selected trust store while still retrying bundle exports against host trust roots after Mozilla unknown-authority failures
 - Stop assigning fallback bundle names to certificates that do not match any configured bundle entry, so stray export directories like `bundles/spf-console.zimperium.com/` are no longer generated
 - Preserve the certificate common name in generated bundle CSRs so exported requests include a subject CN alongside SANs
 - Include `subject.common_name` in generated CSR JSON output so `.csr.json` matches the exported CSR subject

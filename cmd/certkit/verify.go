@@ -101,7 +101,7 @@ func runVerify(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	if _, err := loadSelectedTrustPool(verifyTrustStore); err != nil {
+	if err := validateSelectedTrustStore(verifyTrustStore); err != nil {
 		return fmt.Errorf("loading trust store: %w", err)
 	}
 

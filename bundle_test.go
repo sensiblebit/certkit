@@ -194,6 +194,50 @@ func TestCheckTrustAnchors_FileRoots(t *testing.T) {
 	}
 }
 
+func TestCheckTrustAnchors_CustomTrustStoreWarnsWithoutRootsPool(t *testing.T) {
+	t.Parallel()
+
+	_, intermediates, leaf := buildChain(t, 3)
+	intermediatePool := x509.NewCertPool()
+	for _, intermediate := range intermediates {
+		intermediatePool.AddCert(intermediate)
+	}
+
+	result := CheckTrustAnchors(CheckTrustAnchorsInput{
+		Cert:          leaf,
+		Intermediates: intermediatePool,
+		TrustStore:    "custom",
+	})
+	if len(result.Anchors) != 0 {
+		t.Fatalf("CheckTrustAnchors() anchors = %v, want none", result.Anchors)
+	}
+	if got, want := strings.Join(result.Warnings, "; "), "custom trust store cannot be evaluated without an explicit roots pool"; got != want {
+		t.Fatalf("CheckTrustAnchors() warnings = %q, want %q", got, want)
+	}
+}
+
+func TestCheckTrustAnchors_FileTrustStoreWarnsWithoutFileRoots(t *testing.T) {
+	t.Parallel()
+
+	_, intermediates, leaf := buildChain(t, 3)
+	intermediatePool := x509.NewCertPool()
+	for _, intermediate := range intermediates {
+		intermediatePool.AddCert(intermediate)
+	}
+
+	result := CheckTrustAnchors(CheckTrustAnchorsInput{
+		Cert:          leaf,
+		Intermediates: intermediatePool,
+		TrustStore:    "file",
+	})
+	if len(result.Anchors) != 0 {
+		t.Fatalf("CheckTrustAnchors() anchors = %v, want none", result.Anchors)
+	}
+	if got, want := strings.Join(result.Warnings, "; "), "file trust store cannot be evaluated without file roots"; got != want {
+		t.Fatalf("CheckTrustAnchors() warnings = %q, want %q", got, want)
+	}
+}
+
 func TestFormatTrustAnchors(t *testing.T) {
 	t.Parallel()
 

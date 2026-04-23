@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/x509"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,6 +11,8 @@ import (
 
 	"github.com/sensiblebit/certkit"
 )
+
+var errInjectedSystemTrustLoadFailure = errors.New("injected system trust load failure")
 
 func TestParseDuration(t *testing.T) {
 	t.Parallel()
@@ -192,6 +195,60 @@ func TestRunVerify_AllowsLeafTrustAnchorInRootsFile(t *testing.T) {
 
 	if err := runVerify(newCommandWithContext(), []string{certPath}); err != nil {
 		t.Fatalf("runVerify: %v", err)
+	}
+}
+
+func TestRunVerify_FileRootsStillWorkWhenTrustStorePreloadWouldFail(t *testing.T) {
+	// Serial: runVerify mutates package-level Cobra flag globals guarded by
+	// snapshotReadonlyGlobals/restoreReadonlyGlobals.
+	snap := snapshotReadonlyGlobals()
+	defer restoreReadonlyGlobals(snap)
+
+	origSystemLoader := loadSystemCertPool
+	t.Cleanup(func() {
+		loadSystemCertPool = origSystemLoader
+	})
+	loadSystemCertPool = func() (*x509.CertPool, error) {
+		return nil, errInjectedSystemTrustLoadFailure
+	}
+
+	dir := t.TempDir()
+	rootKey, rootCert := generateKeyAndCert(t, "Verify Root", true)
+	_, leafCert := signCert(t, "verify-file-roots.example.com", false, rootKey, rootCert)
+
+	certPath := filepath.Join(dir, "leaf.pem")
+	if err := os.WriteFile(certPath, []byte(certkit.CertToPEM(leafCert)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	rootsPath := filepath.Join(dir, "roots.pem")
+	if err := os.WriteFile(rootsPath, []byte(certkit.CertToPEM(rootCert)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	passwordList = nil
+	passwordFile = ""
+	allowExpired = true
+	jsonOutput = false
+	verifyFormat = "text"
+	verifyKeyPath = ""
+	verifyRootsPath = rootsPath
+	verifyTrustStore = "system"
+	verifyExpiry = ""
+	verifyDiagnose = false
+	verifyOCSP = false
+	verifyCRL = false
+	verifyAllowPrivateNetwork = false
+
+	stdout, stderr, err := captureOutput(t, func() error { return runVerify(newCommandWithContext(), []string{certPath}) })
+	if err != nil {
+		t.Fatalf("runVerify with file roots failed: %v\nstdout:\n%s\nstderr:\n%s", err, stdout, stderr)
+	}
+	if !strings.Contains(stdout, "Verification OK") {
+		t.Fatalf("verify output missing success summary:\n%s", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("verify wrote unexpected stderr:\n%s", stderr)
 	}
 }
 
