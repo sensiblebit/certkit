@@ -6,7 +6,7 @@ require (
 	github.com/breml/rootcerts v0.3.5
 	github.com/google/certificate-transparency-go v1.3.3
 	github.com/jmoiron/sqlx v1.4.0
-	github.com/mattn/go-isatty v0.0.21
+	github.com/mattn/go-isatty v0.0.22
 	github.com/pavlo-v-chernykh/keystore-go/v4 v4.5.0
 	github.com/smallstep/pkcs7 v0.2.1
 	github.com/spf13/cobra v1.10.2
