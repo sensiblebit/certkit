@@ -8,7 +8,7 @@
     "test:watch": "vitest"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260317.1",
+    "@cloudflare/workers-types": "^4.20260426.1",
     "jsdom": "^29.0.0",
     "vitest": "^4.1.0"
   }
