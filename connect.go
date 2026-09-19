@@ -2047,6 +2047,13 @@ func signatureSchemeString(scheme tls.SignatureScheme) string {
 		return "Ed25519"
 	case tls.SignatureScheme(0x0808):
 		return "Ed448"
+	// ML-DSA
+	case tls.MLDSA44:
+		return "ML-DSA-44"
+	case tls.MLDSA65:
+		return "ML-DSA-65"
+	case tls.MLDSA87:
+		return "ML-DSA-87"
 	default:
 		if legacyName, ok := legacySignatureSchemeName(scheme); ok {
 			return legacyName

@@ -9,7 +9,7 @@
 ## 0 — Project Overview
 
 Go module: `github.com/sensiblebit/certkit`
-Go version: 1.25+
+Go version: 1.27+
 Pure Go build — no CGO required (uses `modernc.org/sqlite` for optional `--save-db`/`--load-db` persistence).
 
 Certificate management tool: ingest certs/keys in many formats, catalog in memory, export organized bundles. Also a reusable Go library.

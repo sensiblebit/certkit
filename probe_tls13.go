@@ -281,9 +281,10 @@ func generateKeyShare(groupID tls.CurveID) ([]byte, error) {
 		}
 		return append(ec.PublicKey().Bytes(), dk.EncapsulationKey().Bytes()...), nil
 
-	default:
-		return nil, fmt.Errorf("%w: 0x%04x", errTLS13UnsupportedGroup, uint16(groupID))
+	case tls.MLKEM1024:
+		// Standalone ML-KEM is not part of keyExchangeGroups.
 	}
+	return nil, fmt.Errorf("%w: 0x%04x", errTLS13UnsupportedGroup, uint16(groupID))
 }
 
 // readServerHello reads a TLS record from the connection and parses the

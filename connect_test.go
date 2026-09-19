@@ -638,6 +638,11 @@ func TestConnectTLS_ClientAuth(t *testing.T) {
 			if !hasWellKnownNamedScheme {
 				t.Errorf("expected a well-known named signature scheme mapping, got %v", result.ClientAuth.SignatureSchemes)
 			}
+			for _, scheme := range []string{"ML-DSA-44", "ML-DSA-65", "ML-DSA-87"} {
+				if !slices.Contains(result.ClientAuth.SignatureSchemes, scheme) {
+					t.Errorf("SignatureSchemes = %v, want %s", result.ClientAuth.SignatureSchemes, scheme)
+				}
+			}
 
 			// Chain should still be present and verifiable properties intact.
 			if len(result.PeerChain) == 0 {
@@ -1559,7 +1564,6 @@ func TestConnectViaStartTLS_ClientAuthRequired(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = listener.Close() })
 
-	//nolint:gosec // This test server intentionally pins TLS 1.2+ defaults while requiring client auth to exercise STARTTLS mTLS behavior.
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		Certificates: []tls.Certificate{{
@@ -1617,7 +1621,6 @@ func startPlaintextUpgradeServer(t *testing.T, protocol startTLSProtocol, certCh
 	}
 	t.Cleanup(func() { _ = listener.Close() })
 
-	//nolint:gosec // Test plaintext-upgrade fixtures use the Go default test-server policy unless a test overrides it explicitly.
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		Certificates: []tls.Certificate{{
@@ -1652,7 +1655,6 @@ func startSMTPStartTLSServer(t *testing.T, banner string, certChain [][]byte, ke
 	}
 	t.Cleanup(func() { _ = listener.Close() })
 
-	//nolint:gosec // Test plaintext-upgrade fixtures use the Go default test-server policy unless a test overrides it explicitly.
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		Certificates: []tls.Certificate{{
@@ -1727,7 +1729,6 @@ func startGenericUpgradeServer(t *testing.T, input genericUpgradeServerInput) st
 	}
 	t.Cleanup(func() { _ = listener.Close() })
 
-	//nolint:gosec // Test plaintext-upgrade fixtures use the Go default test-server policy unless a test overrides it explicitly.
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		Certificates: []tls.Certificate{{
@@ -1818,7 +1819,6 @@ func startSMTPServerWithEHLOResponse(t *testing.T, input smtpEHLOResponseServerI
 
 	var tlsConfig *tls.Config
 	if len(input.certChain) > 0 && input.key != nil {
-		//nolint:gosec // Test plaintext-upgrade fixtures use the Go default test-server policy unless a test overrides it explicitly.
 		tlsConfig = &tls.Config{
 			MinVersion: tls.VersionTLS12,
 			Certificates: []tls.Certificate{{
@@ -1868,7 +1868,6 @@ func startSMTPStartTLSServerWithFirstConnectionBehavior(t *testing.T, behavior s
 	}
 	t.Cleanup(func() { _ = listener.Close() })
 
-	//nolint:gosec // Test plaintext-upgrade fixtures use the Go default test-server policy unless a test overrides it explicitly.
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		Certificates: []tls.Certificate{{
@@ -1908,7 +1907,6 @@ func startIMAPStartTLSServerWithUntaggedResponse(t *testing.T, certChain [][]byt
 	}
 	t.Cleanup(func() { _ = listener.Close() })
 
-	//nolint:gosec // Test plaintext-upgrade fixtures use the Go default test-server policy unless a test overrides it explicitly.
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		Certificates: []tls.Certificate{{

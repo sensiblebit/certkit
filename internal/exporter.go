@@ -372,23 +372,19 @@ func isBundleVerificationError(err error) bool {
 		return true
 	}
 
-	var unknownAuthorityErr x509.UnknownAuthorityError
-	if errors.As(err, &unknownAuthorityErr) {
+	if _, ok := errors.AsType[x509.UnknownAuthorityError](err); ok {
 		return true
 	}
 
-	var certInvalidErr x509.CertificateInvalidError
-	if errors.As(err, &certInvalidErr) {
+	if _, ok := errors.AsType[x509.CertificateInvalidError](err); ok {
 		return true
 	}
 
-	var hostnameErr x509.HostnameError
-	if errors.As(err, &hostnameErr) {
+	if _, ok := errors.AsType[x509.HostnameError](err); ok {
 		return true
 	}
 
-	var insecureAlgorithmErr x509.InsecureAlgorithmError
-	if errors.As(err, &insecureAlgorithmErr) {
+	if _, ok := errors.AsType[x509.InsecureAlgorithmError](err); ok {
 		return true
 	}
 

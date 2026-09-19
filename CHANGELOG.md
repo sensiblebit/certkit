@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking:** Require Go 1.27+ and update Go, web, and development dependencies to current stable releases ([#200])
 - **Breaking:** Default `TrustStore` in `DefaultOptions()` changed from `"system"` to `"mozilla"` — pure-Go Mozilla root verification is used by default instead of macOS `SecTrustEvaluateWithError` syscalls, eliminating multi-minute hangs on large certificate stores
 - Default `scan`, `verify`, `inspect`, and `connect` trust-store selection to Mozilla, and require an explicit `--trust-store system` when command trust reporting should come from host trust roots
 - Parallelize trust verification in scan summary, dump-certs, and AIA resolution for the selected trust store
@@ -34,6 +35,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Remove Homebrew's deprecated `postflight` warning from stable and nightly casks while preserving macOS quarantine handling ([#200])
+- Display ML-DSA signature scheme names when Go 1.27 TLS peers request client certificates ([#200])
 - Make `scan` summaries rely on the selected trust store while still retrying bundle exports against host trust roots after Mozilla unknown-authority failures
 - Stop assigning fallback bundle names to certificates that do not match any configured bundle entry, so stray export directories like `bundles/spf-console.zimperium.com/` are no longer generated
 - Preserve the certificate common name in generated bundle CSRs so exported requests include a subject CN alongside SANs
@@ -990,6 +993,7 @@ Initial release.
 - Homebrew distribution via GoReleaser
 
 [Unreleased]: https://github.com/sensiblebit/certkit/compare/v0.8.3...HEAD
+[#200]: https://github.com/sensiblebit/certkit/pull/200
 [0.8.3]: https://github.com/sensiblebit/certkit/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/sensiblebit/certkit/compare/v0.8.1...v0.8.2
 [0.8.1]: https://github.com/sensiblebit/certkit/compare/v0.8.0...v0.8.1

@@ -1207,8 +1207,7 @@ func TestRunCRL_CommandSurfaceOutput(t *testing.T) {
 		if err == nil {
 			t.Fatal("runCRL expected validation error for revoked certificate")
 		}
-		var validationErr *ValidationError
-		if !errors.As(err, &validationErr) {
+		if _, ok := errors.AsType[*ValidationError](err); !ok {
 			t.Fatalf("runCRL error type = %T, want *ValidationError", err)
 		}
 		if !strings.Contains(stdout, "REVOKED") {
@@ -1374,8 +1373,7 @@ func TestRunOCSP_CommandSurfaceOutput(t *testing.T) {
 		if err == nil {
 			t.Fatal("runOCSP expected validation error for revoked certificate")
 		}
-		var validationErr *ValidationError
-		if !errors.As(err, &validationErr) {
+		if _, ok := errors.AsType[*ValidationError](err); !ok {
 			t.Fatalf("runOCSP error type = %T, want *ValidationError", err)
 		}
 		if !strings.Contains(stdout, "Status:       revoked") {

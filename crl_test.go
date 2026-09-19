@@ -234,7 +234,7 @@ func TestFetchCRL(t *testing.T) {
 			name: "too many redirects",
 			handler: func(w http.ResponseWriter, r *http.Request) {
 				// Redirect back to self — after 3 hops the client stops.
-				http.Redirect(w, r, r.URL.String(), http.StatusFound)
+				http.Redirect(w, r, "/", http.StatusFound)
 			},
 			allowPrivate: true,
 			wantErr:      "stopped after 3 redirects",

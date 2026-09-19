@@ -116,8 +116,7 @@ func TestRunVerify_InvalidExpiryValue(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	var ve *ValidationError
-	if errors.As(err, &ve) {
+	if _, ok := errors.AsType[*ValidationError](err); ok {
 		t.Fatalf("expected parse error before validation, got ValidationError: %v", err)
 	}
 }
@@ -158,8 +157,7 @@ func TestRunVerify_ExplicitKeyOverridesEmbeddedKey(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected mismatched explicit key to fail")
 	}
-	var ve *ValidationError
-	if !errors.As(err, &ve) {
+	if _, ok := errors.AsType[*ValidationError](err); !ok {
 		t.Fatalf("expected ValidationError, got %T (%v)", err, err)
 	}
 }
