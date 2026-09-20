@@ -194,17 +194,20 @@ func TestBundlePlan_RejectsCaseInsensitiveDirectoryCollisions(t *testing.T) {
 func TestBundlePlan_PreservesUnselectedDirectoryAliases(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
-		name       string
-		selected   string
-		unselected string
-		existing   string
-		manifest   string
+		name         string
+		selected     string
+		unselected   string
+		existing     string
+		manifest     string
+		manifestFile string
 	}{
-		{"existing case variant", "mixed.example.com", "", "MIXED.example.com", ""},
-		{"existing Unicode case variant", "SigmaΣ", "", "Sigmaς", ""},
-		{"unselected sanitized alias", "api/example.com", "api_example.com", "api_example.com", ""},
-		{"unselected whitespace alias", " mixed.example.com ", "mixed.example.com", "mixed.example.com", ""},
-		{"manifest retains removed alias", "api/example.com", "", "api_example.com", "api_example.com"},
+		{"existing case variant", "mixed.example.com", "", "MIXED.example.com", "", ""},
+		{"existing Unicode case variant", "SigmaΣ", "", "Sigmaς", "", ""},
+		{"unselected sanitized alias", "api/example.com", "api_example.com", "api_example.com", "", ""},
+		{"unselected whitespace alias", " mixed.example.com ", "mixed.example.com", "mixed.example.com", "", ""},
+		{"manifest retains removed alias", "api/example.com", "", "api_example.com", "api_example.com", "manifest.json"},
+		{"uppercase manifest retains removed alias", "api/example.com", "", "api_example.com", "api_example.com", "MANIFEST.JSON"},
+		{"mixed case manifest retains removed alias", "api/example.com", "", "api_example.com", "api_example.com", "Manifest.Json"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -234,7 +237,7 @@ func TestBundlePlan_PreservesUnselectedDirectoryAliases(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if err := os.WriteFile(filepath.Join(dir, "manifest.json"), data, 0600); err != nil {
+				if err := os.WriteFile(filepath.Join(dir, test.manifestFile), data, 0600); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -312,5 +315,31 @@ func TestBundlePlan_RejectsUnselectedAliasesBeforeFirstExport(t *testing.T) {
 				t.Fatalf("blocked plan created an output directory: %v", err)
 			}
 		})
+	}
+}
+
+func TestBundlePlan_RejectsConflictingManifestIdentities(t *testing.T) {
+	t.Parallel()
+	fixture := newBundlePlanFixture(t)
+	fixture.input.Formats = []string{"pem"}
+	plan, err := PlanBundleExports(context.Background(), fixture.input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Write(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	dir := plan.Entries[0].OutputDirectory
+	uppercase := filepath.Join(dir, "MANIFEST.JSON")
+	if _, err := os.Stat(uppercase); err == nil {
+		t.Skip("filesystem cannot store both manifest filename case variants")
+	} else if !errors.Is(err, os.ErrNotExist) {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(uppercase, []byte(`{"bundle_name":"another-bundle"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := PlanBundleExports(context.Background(), fixture.input); !errors.Is(err, errBundleInspection) {
+		t.Fatalf("conflicting manifest identities were accepted despite force: %v", err)
 	}
 }

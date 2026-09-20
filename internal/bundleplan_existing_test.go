@@ -177,11 +177,14 @@ func TestBundlePlan_ManagedCAReplacement(t *testing.T) {
 		name         string
 		intermediate bool
 		formats      []string
+		manifest     string
 	}{
-		{"root with public artifacts", false, []string{"pem", "fullchain", "json"}},
-		{"root with key only", false, []string{"key"}},
-		{"intermediate with full chain", true, []string{"pem", "fullchain", "json"}},
-		{"intermediate with key only", true, []string{"key"}},
+		{"root with public artifacts", false, []string{"pem", "fullchain", "json"}, ""},
+		{"root with key only", false, []string{"key"}, ""},
+		{"intermediate with full chain", true, []string{"pem", "fullchain", "json"}, ""},
+		{"intermediate with key only", true, []string{"key"}, ""},
+		{"root with uppercase manifest", false, []string{"key"}, "MANIFEST.JSON"},
+		{"intermediate with mixed case manifest", true, []string{"pem", "fullchain", "json"}, "Manifest.Json"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -213,6 +216,12 @@ func TestBundlePlan_ManagedCAReplacement(t *testing.T) {
 			}
 			if err := plan.Write(context.Background()); err != nil {
 				t.Fatal(err)
+			}
+			if test.manifest != "" {
+				dir := plan.Entries[0].OutputDirectory
+				if err := os.Rename(filepath.Join(dir, "manifest.json"), filepath.Join(dir, test.manifest)); err != nil {
+					t.Fatal(err)
+				}
 			}
 			refresh, err := PlanBundleExports(context.Background(), fixture.input)
 			if err != nil {
