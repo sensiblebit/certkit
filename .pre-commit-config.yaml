@@ -27,6 +27,6 @@ repos:
       - id: go-test
         entry: go test -race ./...
       - id: vitest
-        entry: bash -c 'cd web && npm test'
+        entry: bash -c 'cd web && npm ci --include=dev && npm test'
         language: system
         additional_dependencies: []

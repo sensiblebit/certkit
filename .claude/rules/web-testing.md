@@ -7,6 +7,14 @@ paths:
 
 Tests use [vitest](https://vitest.dev/) with jsdom for DOM-dependent tests.
 
+Requires Node.js `^24.15.0 || >=26.0.0` and npm. From the repository root, install the locked development dependencies before running tests directly:
+
+```sh
+npm --prefix web ci --include=dev
+```
+
+The pre-commit Vitest hook runs this installation automatically before testing.
+
 ```sh
 cd web && npm test           # Run all JS/TS tests (vitest run)
 cd web && npm run test:watch # Watch mode
