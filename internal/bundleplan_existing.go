@@ -20,11 +20,12 @@ import (
 var errBundleInspection = errors.New("cannot safely inspect existing bundle")
 
 type bundleDirectoryState struct {
-	exists    bool
-	digest    string
-	leaf      *BundleLeaf
-	ambiguity string
-	files     []string
+	exists     bool
+	bundleName string
+	digest     string
+	leaf       *BundleLeaf
+	ambiguity  string
+	files      []string
 }
 
 // inspectBundleDirectory reads the existing public certificate and fingerprints
@@ -79,8 +80,11 @@ func inspectBundleDirectory(path string) (bundleDirectoryState, error) {
 			var manifest BundleExportEntry
 			if err := json.Unmarshal(data, &manifest); err != nil {
 				state.ambiguity = "existing export manifest is invalid"
-			} else if manifest.Leaf != nil {
-				pemData = manifest.Leaf.PEM
+			} else {
+				state.bundleName = manifest.BundleName
+				if manifest.Leaf != nil {
+					pemData = manifest.Leaf.PEM
+				}
 			}
 		case strings.HasSuffix(name, ".json") && !strings.HasSuffix(name, ".csr.json"):
 			var metadata struct {

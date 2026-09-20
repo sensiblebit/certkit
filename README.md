@@ -404,7 +404,7 @@ Managed root and intermediate CA bundles use the manifest's selected certificate
 
 Managed exports reserve `manifest.json` for the export manifest and `.certkit-refresh.lock` for the output-directory lock, including case variants. A certificate whose generated JSON filename collides with `manifest.json` must omit the `json` format. A bundle whose directory name collides with the lock must use a different configured `bundleName`. These collisions fail during planning without writing files, even with `--force`.
 
-Bundle directory names must also remain distinct after sanitization and case-insensitive comparison. For example, CN-derived names `MIXED.example.com` and `mixed.example.com` cannot be exported together; configure distinct bundle names to preserve both outputs on case-insensitive filesystems.
+Bundle directory names must also remain distinct after sanitization and case-insensitive comparison. For example, CN-derived names `MIXED.example.com` and `mixed.example.com` cannot be exported together. Scoped refresh also rejects aliases of existing directories, including those claimed by an unselected configuration rule, and refuses to replace a directory whose manifest identifies a different bundle. These protections apply even with `--force`; directory names and contents are rechecked before writing. Use the exact existing bundle name or configure distinct names to preserve both outputs.
 
 Default artifacts are `pem,key,chain,fullchain,intermediates,root,json,p12`. Select any subset with `--formats`; public-only formats work without a private key. YAML, Kubernetes secrets, and CSR files require explicit selection:
 

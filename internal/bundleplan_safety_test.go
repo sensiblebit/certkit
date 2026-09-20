@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -187,5 +188,95 @@ func TestBundlePlan_RejectsCaseInsensitiveDirectoryCollisions(t *testing.T) {
 				t.Fatal("directory collision wrote output")
 			}
 		})
+	}
+}
+
+func TestBundlePlan_PreservesUnselectedDirectoryAliases(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name       string
+		selected   string
+		unselected string
+		existing   string
+		manifest   string
+	}{
+		{"existing case variant", "mixed.example.com", "", "MIXED.example.com", ""},
+		{"existing Unicode case variant", "SigmaΣ", "", "Sigmaς", ""},
+		{"unselected sanitized alias", "api/example.com", "api_example.com", "api_example.com", ""},
+		{"unselected whitespace alias", " mixed.example.com ", "mixed.example.com", "mixed.example.com", ""},
+		{"manifest retains removed alias", "api/example.com", "", "api_example.com", "api_example.com"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			fixture := newBundlePlanFixture(t)
+			leaf := newECDSALeaf(t, fixture.ca, test.selected, nil)
+			if err := fixture.input.Store.HandleCertificate(leaf.cert, "delivery.pem"); err != nil {
+				t.Fatal(err)
+			}
+			fixture.input.Configs = []BundleConfig{{CommonNames: []string{test.selected}}}
+			if test.unselected != "" {
+				fixture.input.Configs = append(fixture.input.Configs, BundleConfig{CommonNames: []string{test.unselected}})
+			}
+			AssignBundleNames(fixture.input.Store, fixture.input.Configs)
+			fixture.input.BundleNames = []string{test.selected}
+			fixture.input.Formats = []string{"pem"}
+			dir := filepath.Join(fixture.input.OutDir, test.existing)
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dir, "installed.pem")
+			original := []byte(certkit.CertToPEM(leaf.cert))
+			if err := os.WriteFile(path, original, 0600); err != nil {
+				t.Fatal(err)
+			}
+			if test.manifest != "" {
+				data, err := json.Marshal(BundleExportEntry{BundleName: test.manifest})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, "manifest.json"), data, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := PlanBundleExports(context.Background(), fixture.input); !errors.Is(err, errExportBundleFolderCollision) {
+				t.Fatalf("unselected alias was accepted despite force: %v", err)
+			}
+			if string(mustReadTestFile(t, path)) != string(original) {
+				t.Fatal("unselected bundle was changed")
+			}
+		})
+	}
+}
+
+func TestBundlePlan_RechecksDirectoryNamesBeforeWrite(t *testing.T) {
+	t.Parallel()
+	fixture := newBundlePlanFixture(t)
+	plan, err := PlanBundleExports(context.Background(), fixture.input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Write(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	plan, err = PlanBundleExports(context.Background(), fixture.input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	originalDir := filepath.Join(fixture.input.OutDir, "service-tls")
+	renamedDir := filepath.Join(fixture.input.OutDir, "SERVICE-TLS")
+	if err := os.Rename(originalDir, renamedDir); err != nil {
+		t.Fatal(err)
+	}
+	manifestPath := filepath.Join(renamedDir, "manifest.json")
+	original := mustReadTestFile(t, manifestPath)
+	if err := plan.Write(context.Background()); !errors.Is(err, errExportBundleFolderCollision) {
+		t.Fatalf("renamed unselected directory was accepted: %v", err)
+	}
+	if string(mustReadTestFile(t, manifestPath)) != string(original) {
+		t.Fatal("renamed bundle was changed")
+	}
+	children, err := os.ReadDir(fixture.input.OutDir)
+	if err != nil || len(children) != 1 || children[0].Name() != "SERVICE-TLS" {
+		t.Fatalf("blocked write changed directory names: %v, %v", children, err)
 	}
 }

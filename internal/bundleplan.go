@@ -107,10 +107,11 @@ type BundlePlanInput struct {
 // BundleExportPlan contains a reviewable manifest and private, in-memory output.
 // Use Write to apply the plan after inspecting its entries.
 type BundleExportPlan struct {
-	Entries []BundleExportEntry `json:"exports"`
-	outDir  string
-	writes  []plannedBundleWrite
-	blocked []string
+	Entries           []BundleExportEntry `json:"exports"`
+	outDir            string
+	writes            []plannedBundleWrite
+	blocked           []string
+	unselectedFolders map[string]string
 }
 
 type plannedBundleWrite struct {
@@ -174,7 +175,16 @@ func PlanBundleExports(ctx context.Context, input BundlePlanInput) (*BundleExpor
 			return nil, fmt.Errorf("%w: required bundle %q is outside the selected scope", errBundlePlanInput, name)
 		}
 	}
-	plan := &BundleExportPlan{outDir: input.OutDir, Entries: []BundleExportEntry{}}
+	plan := &BundleExportPlan{outDir: input.OutDir, Entries: []BundleExportEntry{}, unselectedFolders: map[string]string{}}
+	for name := range rules {
+		if !slices.Contains(names, name) {
+			folder, err := certstore.SanitizeBundleFolder(name)
+			if err != nil {
+				return nil, fmt.Errorf("sanitizing unselected bundle %q: %w", name, err)
+			}
+			plan.unselectedFolders[name] = folder
+		}
+	}
 	folders := map[string]string{}
 	for _, name := range names {
 		if err := ctx.Err(); err != nil {
@@ -255,7 +265,40 @@ func PlanBundleExports(ctx context.Context, input BundlePlanInput) (*BundleExpor
 			plan.blocked = append(plan.blocked, name+": "+primary.Reason)
 		}
 	}
+	if err := plan.checkDirectoryScope(); err != nil {
+		return nil, err
+	}
 	return plan, nil
+}
+
+// checkDirectoryScope uses directory entry names rather than path lookup, which
+// can silently resolve an unselected case variant on case-insensitive systems.
+func (p *BundleExportPlan) checkDirectoryScope() error {
+	if len(p.writes) == 0 {
+		return nil
+	}
+	children, err := os.ReadDir(p.outDir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("checking bundle output directory names: %w", err)
+	}
+	for _, write := range p.writes {
+		for _, child := range children {
+			if strings.EqualFold(child.Name(), write.folder) {
+				if child.Name() != write.folder {
+					return fmt.Errorf("%w: selected directory %q aliases existing directory %q; use the exact existing name or configure a distinct bundle name", errExportBundleFolderCollision, write.folder, child.Name())
+				}
+				for _, folder := range p.unselectedFolders {
+					if strings.EqualFold(folder, write.folder) {
+						return fmt.Errorf("%w: selected directory %q also belongs to an unselected configuration rule; configure distinct bundle names", errExportBundleFolderCollision, write.folder)
+					}
+				}
+			}
+		}
+	}
+	return nil
 }
 
 func bundlePlanRules(input BundlePlanInput) (map[string]*BundleRule, error) {
@@ -356,6 +399,9 @@ func planBundleCandidate(ctx context.Context, input planBundleCandidateInput) (B
 	if err != nil {
 		return entry, write, err
 	}
+	if existing.bundleName != "" && existing.bundleName != rec.BundleName {
+		return entry, write, fmt.Errorf("%w: existing directory %q belongs to bundle %q instead of %q; configure a distinct bundle name", errExportBundleFolderCollision, input.Folder, existing.bundleName, rec.BundleName)
+	}
 	write.existing = existing
 	entry.ExistingLeaf = existing.leaf
 	if existing.exists {
@@ -448,6 +494,9 @@ func (p *BundleExportPlan) Write(ctx context.Context) error {
 			slog.Warn("removing bundle refresh lock", "path", lockPath, "error", err)
 		}
 	}()
+	if err := p.checkDirectoryScope(); err != nil {
+		return err
+	}
 	for _, write := range p.writes {
 		current, err := inspectBundleDirectory(p.Entries[write.entry].OutputDirectory)
 		if err != nil {
