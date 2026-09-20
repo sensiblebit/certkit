@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Skip optional expired or keyless bundle candidates before replacement checks, exclude existing dump outputs from scans, and stop managed writes if the default-password warning cannot be displayed ([#225])
 - Ignore CSR JSON when identifying existing bundle certificates, so complete legacy bundles can refresh without a false replacement conflict; report the filename for malformed certificate artifacts ([#225])
 - Keep the managed P12 default-password warning visible regardless of `--log-level` ([#225])
 - Protect managed bundle refreshes against expiration downgrades, equal-expiry certificate conflicts, ambiguous existing leaves, and files changed after planning ([#225])

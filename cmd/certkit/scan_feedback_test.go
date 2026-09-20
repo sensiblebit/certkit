@@ -1,0 +1,114 @@
+package main
+
+import (
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/sensiblebit/certkit"
+	"github.com/sensiblebit/certkit/internal"
+	"github.com/sensiblebit/certkit/internal/certstore"
+)
+
+func TestRunScan_ExcludesExistingDumpOutputs(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		keys bool
+	}{
+		{"key dump", true},
+		{"certificate dump", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, input := setupScanRefreshTest(t)
+			scanBundlePath = ""
+			key, leaf := generateKeyAndCert(t, "current.example.com", false)
+			delivery, err := certkit.EncodePKCS12Legacy(key, leaf, nil, internal.DefaultExportPassword)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(input, "delivery.p12"), delivery, 0600); err != nil {
+				t.Fatal(err)
+			}
+			oldKey, oldLeaf := generateKeyAndCert(t, "stale.example.com", false)
+			path := filepath.Join(input, "dump.pem")
+			stale := certkit.CertToPEM(oldLeaf)
+			if test.keys {
+				scanDumpKeys = path
+				stale, err = certkit.MarshalPrivateKeyToPEM(oldKey)
+				if err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				scanDumpCerts = path
+			}
+			if err := os.WriteFile(path, []byte(stale), 0600); err != nil {
+				t.Fatal(err)
+			}
+			stdout, _, err := captureOutput(t, func() error { return runScan(newCommandWithContext(), []string{input}) })
+			if err != nil {
+				t.Fatal(err)
+			}
+			var summary certstore.ScanSummary
+			if err := json.Unmarshal([]byte(stdout), &summary); err != nil {
+				t.Fatal(err)
+			}
+			if summary.Leaves != 1 || summary.Keys != 1 {
+				t.Fatalf("stale output was scanned: %+v", summary)
+			}
+			//nolint:gosec // This output path belongs to the test's temporary directory.
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if test.keys {
+				keys, err := certkit.ParsePEMPrivateKeys(data, nil)
+				if err != nil || len(keys) != 1 {
+					t.Fatalf("dump must contain only the current key: %v", err)
+				}
+				if matches, err := certkit.KeyMatchesCert(keys[0], leaf); err != nil || !matches {
+					t.Fatalf("dump contains the wrong key: %v", err)
+				}
+			} else {
+				certs, err := certkit.ParsePEMCertificates(data)
+				if err != nil || len(certs) != 1 || !certs[0].Equal(leaf) {
+					t.Fatalf("dump must contain only the current certificate: %v", err)
+				}
+			}
+		})
+	}
+}
+
+func TestRunScan_PasswordWarningFailurePreventsWrite(t *testing.T) {
+	dir, input := setupScanRefreshTest(t)
+	key, leaf := generateKeyAndCert(t, "service.example.com", false)
+	delivery, err := certkit.EncodePKCS12Legacy(key, leaf, nil, internal.DefaultExportPassword)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(input, "delivery.p12"), delivery, 0600); err != nil {
+		t.Fatal(err)
+	}
+	closed, err := os.CreateTemp(dir, "closed-stderr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := closed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	scanRefresh.Write = true
+	_, _, err = captureOutput(t, func() error {
+		stderr := os.Stderr
+		os.Stderr = closed
+		defer func() { os.Stderr = stderr }()
+		return runScan(newCommandWithContext(), []string{input})
+	})
+	if !errors.Is(err, os.ErrClosed) || !strings.Contains(err.Error(), "writing default-password warning") {
+		t.Fatalf("warning write error was not preserved: %v", err)
+	}
+	if _, err := os.Stat(scanBundlePath); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("failed warning still applied the bundle plan")
+	}
+}

@@ -131,7 +131,9 @@ func runScanBundleExport(ctx context.Context, input runScanBundleExportInput) er
 	if input.OutputPassword == "" && slices.ContainsFunc(plan.Entries, func(entry internal.BundleExportEntry) bool {
 		return slices.Contains(entry.Formats, "p12")
 	}) {
-		fmt.Fprintln(os.Stderr, "Using default password 'changeit'. Use --output-password-file for scan exports.")
+		if _, err := fmt.Fprintln(os.Stderr, "Using default password 'changeit'. Use --output-password-file for scan exports."); err != nil {
+			return fmt.Errorf("writing default-password warning: %w", err)
+		}
 	}
 	trustPools, err := scanSummaryTrustPoolLoader(scanTrustStore)
 	if err != nil {

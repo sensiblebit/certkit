@@ -175,7 +175,7 @@ func PlanBundleExports(ctx context.Context, input BundlePlanInput) (*BundleExpor
 		}
 		if slices.Contains(formats, "k8s") {
 			if err := certstore.ValidateK8sSecretName(name); err != nil {
-				return nil, fmt.Errorf("validating Kubernetes secret name for bundle %q: %w", name, err)
+				return nil, fmt.Errorf("validating kubernetes secret name for bundle %q: %w", name, err)
 			}
 		}
 		certs := input.Store.CertsByBundleName(name)
@@ -292,6 +292,15 @@ func planBundleCandidate(ctx context.Context, input planBundleCandidateInput) (B
 		entry.KeySource = key.Source
 	}
 	write := plannedBundleWrite{folder: input.Folder}
+	if key == nil && certstore.BundleFormatsNeedKey(opts.Formats) {
+		entry.Status, entry.Action, entry.Reason = "skipped", "skip", "no matching private key was found"
+		return entry, write, nil
+	}
+	if time.Now().After(rec.Cert.NotAfter) && !opts.AllowExpired {
+		entry.Status, entry.Action = "skipped", "skip"
+		entry.Reason = "certificate has expired; use --allow-expired to permit expired leaves"
+		return entry, write, nil
+	}
 	existing, err := inspectBundleDirectory(entry.OutputDirectory)
 	if err != nil {
 		return entry, write, err
@@ -321,15 +330,6 @@ func planBundleCandidate(ctx context.Context, input planBundleCandidateInput) (B
 			}
 			entry.Forced = true
 		}
-	}
-	if key == nil && certstore.BundleFormatsNeedKey(opts.Formats) {
-		entry.Status, entry.Action, entry.Reason = "skipped", "skip", "no matching private key was found"
-		return entry, write, nil
-	}
-	if time.Now().After(rec.Cert.NotAfter) && !opts.AllowExpired {
-		entry.Status, entry.Action = "skipped", "skip"
-		entry.Reason = "certificate has expired; use --allow-expired to permit expired leaves"
-		return entry, write, nil
 	}
 	bundleOpts := certkit.DefaultOptions()
 	bundleOpts.AllowExpired = opts.AllowExpired

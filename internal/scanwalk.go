@@ -13,7 +13,7 @@ import (
 var (
 	errScanRootPathRequired = errors.New("root path is required")
 	errScanFileHandlerNil   = errors.New("file handler is required")
-	errScanInputExcluded    = errors.New("scan input cannot also be a bundle output or password file")
+	errScanInputExcluded    = errors.New("scan input cannot also be a declared output or password file")
 )
 
 // WalkScanFilesInput configures WalkScanFiles.

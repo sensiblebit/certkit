@@ -184,7 +184,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 		err := internal.WalkScanFiles(internal.WalkScanFilesInput{
 			RootPath:     inputPath,
 			MaxFileSize:  scanMaxFileSize,
-			ExcludePaths: []string{scanBundlePath, passwordFile, scanRefresh.InputPasswordFile, scanRefresh.OutputPasswordFile},
+			ExcludePaths: []string{scanBundlePath, scanDumpKeys, scanDumpCerts, passwordFile, scanRefresh.InputPasswordFile, scanRefresh.OutputPasswordFile},
 			OnFile: func(path string) error {
 				scannedFiles++
 				if archiveFormat := internal.ArchiveFormat(path); archiveFormat != "" {
