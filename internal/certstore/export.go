@@ -56,7 +56,7 @@ type BundleExportInput struct {
 	Prefix     string              // sanitized file name prefix
 	SecretName string              // Kubernetes secret metadata.name
 	CSRSubject *CSRSubjectOverride // optional; nil uses cert's own subject
-	// P12Password controls the .p12 output file password and must be explicit.
+	// P12Password controls the .p12 output file password and must be nonempty.
 	P12Password string
 	// EncryptKey when true encrypts the .key PEM output using PKCS#8 v2.
 	EncryptKey bool
@@ -132,7 +132,7 @@ func GenerateBundleFiles(input BundleExportInput) ([]BundleFile, error) {
 			return nil, fmt.Errorf("matching bundle key: %w", err)
 		}
 		if !matches {
-			return nil, errBundleKeyMismatch
+			return nil, fmt.Errorf("matching bundle key: %w", errBundleKeyMismatch)
 		}
 		pkcs8PEM, err := certkit.MarshalPrivateKeyToPEM(privKey)
 		if err != nil {

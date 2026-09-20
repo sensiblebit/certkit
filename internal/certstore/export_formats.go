@@ -15,9 +15,9 @@ func BundleFormats() []string {
 }
 
 // DefaultBundleFormats returns the managed CLI defaults: public certificates,
-// metadata, and one private-key file. Additional key copies require opt-in.
+// metadata, a private-key file, and the legacy PKCS#12 archive.
 func DefaultBundleFormats() []string {
-	return []string{"pem", "key", "chain", "fullchain", "intermediates", "root", "json"}
+	return []string{"pem", "key", "chain", "fullchain", "intermediates", "root", "json", "p12"}
 }
 
 // NormalizeBundleFormats validates and deduplicates artifact names. Nil means

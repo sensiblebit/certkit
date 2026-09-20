@@ -44,13 +44,32 @@ func WalkScanFiles(input WalkScanFilesInput) error {
 			return fmt.Errorf("resolving excluded scan path: %w", err)
 		}
 		excluded[absolute] = true
+		canonical, err := scanRootBoundary(path)
+		if err != nil {
+			return fmt.Errorf("resolving excluded scan target: %w", err)
+		}
+		excluded[canonical] = true
 	}
-	isExcluded := func(path string) bool {
+	isExcluded := func(path string) (bool, error) {
 		absolute, err := filepath.Abs(path)
-		return err == nil && excluded[absolute]
+		if err != nil {
+			return false, fmt.Errorf("resolving scan path: %w", err)
+		}
+		canonical, err := scanRootBoundary(path)
+		if err != nil {
+			return false, fmt.Errorf("resolving scan target: %w", err)
+		}
+		for excludedPath := range excluded {
+			if pathWithinBoundary(absolute, excludedPath) || pathWithinBoundary(canonical, excludedPath) {
+				return true, nil
+			}
+		}
+		return false, nil
 	}
-	if isExcluded(input.RootPath) {
-		return errScanInputExcluded
+	if skip, err := isExcluded(input.RootPath); err != nil {
+		return err
+	} else if skip {
+		return fmt.Errorf("checking scan root %s: %w", input.RootPath, errScanInputExcluded)
 	}
 	info, err := os.Stat(input.RootPath)
 	if err != nil {
@@ -83,7 +102,11 @@ func WalkScanFiles(input WalkScanFilesInput) error {
 			}
 			return nil
 		}
-		if isExcluded(path) {
+		skip, err := isExcluded(path)
+		if err != nil {
+			return err
+		}
+		if skip {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}

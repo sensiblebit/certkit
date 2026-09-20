@@ -231,7 +231,7 @@ func TestBundlePlan_ManifestProtectsKeyOnlyExport(t *testing.T) {
 	if second.Entries[0].ExistingLeaf == nil || second.Entries[0].ExistingLeaf.Fingerprint != second.Entries[0].Leaf.Fingerprint {
 		t.Fatal("manifest did not preserve leaf identity for key-only output")
 	}
-	if second.Entries[0].Forced {
+	if second.Entries[0].Reason != "same leaf certificate; refresh selected artifacts" {
 		t.Fatal("same leaf should not require a replacement override")
 	}
 }
@@ -315,8 +315,10 @@ func TestBundlePlan_SelectionIndependentOfInputOrder(t *testing.T) {
 	first := resignBundleLeaf(t, resignBundleLeafInput{Fixture: fixture, Serial: 1, NotBefore: now.Add(-4 * time.Hour), NotAfter: now.Add(24 * time.Hour)})
 	second := resignBundleLeaf(t, resignBundleLeafInput{Fixture: fixture, Serial: 2, NotBefore: now.Add(-2 * time.Hour), NotAfter: first.NotAfter})
 	third := resignBundleLeaf(t, resignBundleLeafInput{Fixture: fixture, Serial: 3, NotBefore: second.NotBefore, NotAfter: first.NotAfter})
+	fourth := resignBundleLeaf(t, resignBundleLeafInput{Fixture: fixture, Serial: 4, NotBefore: second.NotBefore, NotAfter: now.Add(12 * time.Hour)})
 	want := min(certkit.CertFingerprint(second), certkit.CertFingerprint(third))
-	for _, certs := range [][]*x509.Certificate{{first, second, third}, {third, first, second}, {second, third, first}} {
+	fixture.input.FailOnSkip = true
+	for _, certs := range [][]*x509.Certificate{{first, second, third, fourth}, {fourth, third, first, second}, {second, third, fourth, first}} {
 		store := certstore.NewMemStore()
 		for _, cert := range certs {
 			if err := store.HandleCertificate(cert, "delivery.pem"); err != nil {
@@ -335,8 +337,42 @@ func TestBundlePlan_SelectionIndependentOfInputOrder(t *testing.T) {
 		if plan.Entries[0].Leaf.Fingerprint != want {
 			t.Fatalf("selected %s, want %s", plan.Entries[0].Leaf.Fingerprint, want)
 		}
-		if plan.Entries[0].CandidateCount != 3 || !strings.Contains(plan.Entries[0].SelectionReason, "not_before") {
+		if plan.Entries[0].CandidateCount != 4 || !strings.Contains(plan.Entries[0].SelectionReason, "not_before") {
 			t.Fatal("selection was not explained")
+		}
+		decisions := plan.Entries[0].SkippedCandidates
+		if len(decisions) != 3 {
+			t.Fatalf("unselected candidates = %d, want 3", len(decisions))
+		}
+		if decisions[0].Leaf.Fingerprint == want || decisions[0].Reason != "higher SHA-256 fingerprint than the selected candidate" {
+			t.Fatalf("incorrect fingerprint decision: %+v", decisions[0])
+		}
+		if decisions[1].Leaf.Fingerprint != certkit.CertFingerprint(first) || decisions[1].Reason != "earlier issuance time than the selected candidate" {
+			t.Fatalf("incorrect issuance decision: %+v", decisions[1])
+		}
+		if decisions[2].Leaf.Fingerprint != certkit.CertFingerprint(fourth) || decisions[2].Reason != "earlier expiration than the selected candidate" {
+			t.Fatalf("incorrect expiration decision: %+v", decisions[2])
+		}
+		for _, decision := range decisions {
+			if decision.Leaf.Source != "delivery.pem" || decision.KeySource != "delivery.key" {
+				t.Fatalf("missing unselected candidate provenance: %+v", decision)
+			}
+		}
+		if err := plan.Validate(); err != nil {
+			t.Fatalf("unselected alternatives must not fail --fail-on-skip: %v", err)
+		}
+	}
+	fixture.input.Duplicates = true
+	plan, err := PlanBundleExports(context.Background(), fixture.input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(plan.Entries) != 4 {
+		t.Fatalf("--duplicates planned %d candidates, want 4", len(plan.Entries))
+	}
+	for _, entry := range plan.Entries {
+		if entry.Status != "planned" || len(entry.SkippedCandidates) != 0 {
+			t.Fatalf("duplicate incorrectly reported as skipped: %+v", entry)
 		}
 	}
 }
@@ -352,7 +388,6 @@ func TestBundlePlan_InvalidConfiguration(t *testing.T) {
 		{"duplicate rule", func(in *BundlePlanInput) { in.Configs = append(in.Configs, in.Configs[0]) }},
 		{"unknown scope", func(in *BundlePlanInput) { in.BundleNames = []string{"unknown"} }},
 		{"unknown artifact", func(in *BundlePlanInput) { in.Formats = []string{"unknown"} }},
-		{"P12 without password", func(in *BundlePlanInput) { in.Formats = []string{"p12"} }},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -363,6 +398,53 @@ func TestBundlePlan_InvalidConfiguration(t *testing.T) {
 			}
 			if _, err := os.Stat(fixture.input.OutDir); !errors.Is(err, os.ErrNotExist) {
 				t.Fatal("invalid plan created output")
+			}
+		})
+	}
+}
+
+func TestBundlePlan_ExpiryRequiresSeparateOptIn(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name         string
+		force        bool
+		allowExpired bool
+		wantStatus   string
+		wantReason   string
+	}{
+		{"expired leaf is skipped", false, false, "skipped", "--allow-expired"},
+		{"force still requires expiry opt in", true, false, "skipped", "--allow-expired"},
+		{"expiry opt in still requires trust", false, true, "skipped", "verification failed"},
+		{"both overrides permit export", true, true, "planned", "new bundle"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			fixture := newBundlePlanFixture(t)
+			now := time.Now()
+			expired := resignBundleLeaf(t, resignBundleLeafInput{Fixture: fixture, Serial: 10,
+				NotBefore: now.Add(-30 * time.Minute), NotAfter: now.Add(-time.Minute)})
+			store := certstore.NewMemStore()
+			if err := store.HandleCertificate(expired, "expired.pem"); err != nil {
+				t.Fatal(err)
+			}
+			AssignBundleNames(store, fixture.input.Configs)
+			fixture.input.Store = store
+			fixture.input.Formats = []string{"pem", "json"}
+			fixture.input.ForceBundle, fixture.input.AllowExpired = test.force, test.allowExpired
+			fixture.input.RequireBundles = []string{"service-tls"}
+			plan, err := PlanBundleExports(context.Background(), fixture.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			entry := plan.Entries[0]
+			if entry.Status != test.wantStatus || !strings.Contains(entry.Reason, test.wantReason) {
+				t.Fatalf("unexpected expiry decision: %+v", entry)
+			}
+			if errors.Is(plan.Validate(), ErrBundlePlanBlocked) != (test.wantStatus == "skipped") {
+				t.Fatalf("unexpected plan validation: %v", plan.Validate())
+			}
+			if test.wantStatus == "planned" && (!entry.Forced || entry.Chain.Status != "verification_disabled") {
+				t.Fatalf("missing force provenance: %+v", entry)
 			}
 		})
 	}

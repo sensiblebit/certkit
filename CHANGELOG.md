@@ -24,7 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - **Breaking:** `scan --bundle-path` now previews by default and requires `--write` to save bundles; dry runs never write outputs, and unsafe replacement plans fail before modifying bundles ([#225])
-- **Breaking:** Scan input passwords no longer encrypt outputs; use `--output-password-file` explicitly. Default managed artifacts contain one key copy and omit P12, Kubernetes YAML, YAML, and CSR files unless selected ([#225])
+- **Breaking:** Scan input passwords no longer encrypt outputs; use `--output-password-file` explicitly. Managed P12 output retains the default `changeit` password; Kubernetes YAML, YAML, and CSR files now require explicit format selection ([#225])
 
 - **Breaking:** Require Go 1.27+ and update Go, web, and development dependencies to current stable releases ([#200])
 - **Breaking:** Default `TrustStore` in `DefaultOptions()` changed from `"system"` to `"mozilla"` — pure-Go Mozilla root verification is used by default instead of macOS `SecTrustEvaluateWithError` syscalls, eliminating multi-minute hangs on large certificate stores
@@ -43,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Protect managed bundle refreshes against expiration downgrades, equal-expiry certificate conflicts, ambiguous existing leaves, and files changed after planning ([#225])
 - Make certificate selection deterministic using expiry, issuance time, and SHA-256 fingerprint; expose skipped candidates and fail on invalid export configuration ([#225])
 - Honor explicitly selected scan roots named `vendor`, and exclude declared output directories and password files from directory ingestion ([#225])
+- Preserve default P12 exports, exclude symlink aliases of managed output and password files, report unselected certificate candidates, and honor `--allow-expired` independently of `--force` during managed refreshes ([#225])
 
 - Remove Homebrew's deprecated `postflight` warning from stable and nightly casks while preserving macOS quarantine handling ([#200])
 - Display ML-DSA signature scheme names when Go 1.27 TLS peers request client certificates ([#200])

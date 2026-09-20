@@ -37,9 +37,9 @@ func init() {
 	flags.StringSliceVar(&scanRefresh.Names, "bundle-name", nil, "Export only these configured bundle names (repeatable)")
 	flags.StringSliceVar(&scanRefresh.Only, "only", nil, "Alias for --bundle-name (repeatable)")
 	flags.StringSliceVar(&scanRefresh.Required, "require-bundle", nil, "Fail unless each named bundle can be produced (repeatable)")
-	flags.StringSliceVar(&scanRefresh.Formats, "formats", nil, "Bundle artifacts: pem,key,chain,fullchain,intermediates,root,json,yaml,p12,k8s,csr,csr-json (default pem,key,chain,fullchain,intermediates,root,json)")
+	flags.StringSliceVar(&scanRefresh.Formats, "formats", nil, "Bundle artifacts: pem,key,chain,fullchain,intermediates,root,json,yaml,p12,k8s,csr,csr-json (default pem,key,chain,fullchain,intermediates,root,json,p12)")
 	flags.StringVar(&scanRefresh.InputPasswordFile, "input-password-file", "", "Input decryption passwords, one per line; never used for output encryption")
-	flags.StringVar(&scanRefresh.OutputPasswordFile, "output-password-file", "", "One explicit output password for encrypted key/YAML and selected P12 artifacts")
+	flags.StringVar(&scanRefresh.OutputPasswordFile, "output-password-file", "", "Output password for encrypted key/YAML and P12 artifacts (P12 defaults to changeit; key/YAML remain unencrypted)")
 	flags.BoolVar(&scanRefresh.Write, "write", false, "Apply the bundle export plan (default is a read-only preview)")
 	flags.BoolVar(&scanRefresh.DryRun, "dry-run", false, "Show the export plan without writing any files")
 	flags.BoolVar(&scanRefresh.FailOnSkip, "fail-on-skip", false, "Fail the entire export if any requested bundle is skipped")
@@ -123,6 +123,7 @@ func runScanBundleExport(ctx context.Context, input runScanBundleExportInput) er
 		ConfigPath: scanConfigPath, BundleNames: slices.Concat(scanRefresh.Names, scanRefresh.Only),
 		RequireBundles: scanRefresh.Required, FailOnSkip: scanRefresh.FailOnSkip,
 		Formats: scanRefresh.Formats, AllowPrivateNetworks: scanAllowPrivateNetwork, AIATimeout: scanAIATimeout,
+		AllowExpired: allowExpired,
 	})
 	if err != nil {
 		return fmt.Errorf("planning bundle exports: %w", err)
@@ -172,6 +173,11 @@ func printBundleExportPlan(plan *internal.BundleExportPlan) error {
 		if entry.Rule != nil {
 			fmt.Fprintf(&out, "  Rule: %s #%d (%s)\n", entry.Rule.ConfigPath, entry.Rule.Index, strings.Join(entry.Rule.CommonNames, ", "))
 		}
+		for _, skipped := range entry.SkippedCandidates {
+			fmt.Fprintf(&out, "  Unselected candidate: serial=%s SHA-256=%s\n    Validity: %s to %s\n    Source: %s\n    Key source: %s\n    Reason: %s\n",
+				skipped.Leaf.Serial, skipped.Leaf.Fingerprint, skipped.Leaf.NotBefore.Format(time.RFC3339),
+				skipped.Leaf.NotAfter.Format(time.RFC3339), skipped.Leaf.Source, skipped.KeySource, skipped.Reason)
+		}
 		for _, value := range []struct {
 			label string
 			leaf  *internal.BundleLeaf
@@ -183,6 +189,9 @@ func printBundleExportPlan(plan *internal.BundleExportPlan) error {
 		}
 		if entry.Leaf != nil {
 			fmt.Fprintf(&out, "  Selection: %s (%d candidates)\n  Key source: %s\n  Chain: %s (%s)\n", entry.SelectionReason, entry.CandidateCount, entry.KeySource, entry.Chain.Status, entry.Chain.TrustStore)
+		}
+		for _, warning := range entry.Chain.Warnings {
+			fmt.Fprintf(&out, "  Chain warning: %s\n", warning)
 		}
 		fmt.Fprintf(&out, "  Files: %s\n", strings.Join(entry.Files, ", "))
 		if len(entry.RemovedFiles) > 0 {

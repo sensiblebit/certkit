@@ -505,11 +505,13 @@ func TestRunScan_ExportEnablesSystemFallback(t *testing.T) {
 	}
 
 	var gotFallback bool
+	var gotAllowExpired bool
 	scanSummaryTrustPoolLoader = func(string) (scanTrustPools, error) {
 		return scanTrustPools{}, nil
 	}
 	scanPlanBundles = func(_ context.Context, input internal.BundlePlanInput) (*internal.BundleExportPlan, error) {
 		gotFallback = input.AllowSystemFallback
+		gotAllowExpired = input.AllowExpired
 		return &internal.BundleExportPlan{}, nil
 	}
 
@@ -521,6 +523,7 @@ func TestRunScan_ExportEnablesSystemFallback(t *testing.T) {
 	scanConfigPath = configPath
 	scanTrustStore = "mozilla"
 	scanForceExport = false
+	allowExpired = true
 	scanDuplicates = false
 	scanDumpKeys = ""
 	scanDumpCerts = ""
@@ -536,6 +539,9 @@ func TestRunScan_ExportEnablesSystemFallback(t *testing.T) {
 	}
 	if !gotFallback {
 		t.Fatal("scan export did not enable system fallback")
+	}
+	if !gotAllowExpired {
+		t.Fatal("scan export did not pass --allow-expired to planning")
 	}
 	if !strings.Contains(stdout, "Bundle export plan") {
 		t.Fatalf("scan stdout missing export plan:\n%s", stdout)

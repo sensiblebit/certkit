@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/sensiblebit/certkit"
+	"github.com/sensiblebit/certkit/internal"
 )
 
 func setupScanRefreshTest(t *testing.T) (string, string) {
@@ -46,12 +47,14 @@ func TestRunScan_ManagedBundleWorkflow(t *testing.T) {
 		legacyPassword bool
 		outputPassword bool
 		archive        bool
+		omitP12        bool
 	}{
-		{"preview by default", false, false, false, false, false},
-		{"explicit dry run", false, true, false, false, false},
-		{"vendor password is input only", true, false, false, false, false},
-		{"legacy password is input only", true, false, true, false, false},
-		{"separate output encryption", true, false, false, true, true},
+		{"preview by default", false, false, false, false, false, false},
+		{"explicit dry run", false, true, false, false, false, false},
+		{"vendor password is input only", true, false, false, false, false, false},
+		{"legacy password is input only", true, false, true, false, false, false},
+		{"separate output encryption", true, false, false, true, true, false},
+		{"explicit formats omit P12", true, false, false, false, false, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			dir, input := setupScanRefreshTest(t)
@@ -90,6 +93,9 @@ func TestRunScan_ManagedBundleWorkflow(t *testing.T) {
 			}
 			scanRefresh.Write, scanRefresh.DryRun = test.write, test.dryRun
 			scanRefresh.Names = []string{"service-tls"}
+			if test.omitP12 {
+				scanRefresh.Formats = []string{"key", "json"}
+			}
 			if test.outputPassword {
 				scanRefresh.OutputPasswordFile = filepath.Join(dir, "output-password")
 				if err := os.WriteFile(scanRefresh.OutputPasswordFile, []byte(" deployment-secret \n"), 0600); err != nil {
@@ -121,6 +127,10 @@ func TestRunScan_ManagedBundleWorkflow(t *testing.T) {
 			if strings.Contains(stdout+stderr, vendorPassword) || strings.Contains(stdout+stderr, "deployment-secret") {
 				t.Fatal("password leaked into output")
 			}
+			wantDefaultWarning := !test.outputPassword && !test.omitP12
+			if strings.Contains(stderr, "Using default password 'changeit'") != wantDefaultWarning {
+				t.Fatalf("incorrect default-password warning: %s", stderr)
+			}
 			if !test.write {
 				if _, err := os.Stat(scanBundlePath); !errors.Is(err, os.ErrNotExist) {
 					t.Fatalf("preview created output: %v", err)
@@ -140,20 +150,36 @@ func TestRunScan_ManagedBundleWorkflow(t *testing.T) {
 				if _, err := certkit.ParsePEMPrivateKeyWithPasswords(keyData, []string{" deployment-secret "}); err != nil {
 					t.Fatalf("output key uses wrong password: %v", err)
 				}
-				p12Data, err := os.ReadFile(filepath.Join(entry.OutputDirectory, "service.example.com.p12"))
-				if err != nil {
-					t.Fatal(err)
-				}
-				if _, _, _, err := certkit.DecodePKCS12(p12Data, " deployment-secret "); err != nil {
-					t.Fatalf("P12 uses wrong password: %v", err)
-				}
 			} else {
 				if _, err := certkit.ParsePEMPrivateKey(keyData); err != nil {
 					t.Fatalf("input password encrypted output key: %v", err)
 				}
-				if _, err := os.Stat(filepath.Join(entry.OutputDirectory, "service.example.com.p12")); !errors.Is(err, os.ErrNotExist) {
-					t.Fatal("implicit P12 output was generated")
+			}
+			p12Path := filepath.Join(entry.OutputDirectory, "service.example.com.p12")
+			if test.omitP12 {
+				if _, err := os.Stat(p12Path); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("unselected P12 output was generated")
 				}
+				return
+			}
+			//nolint:gosec // The export path is created by this test inside t.TempDir.
+			p12Data, err := os.ReadFile(p12Path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			wantPassword := internal.DefaultExportPassword
+			if test.outputPassword {
+				wantPassword = " deployment-secret "
+			}
+			outputKey, outputLeaf, _, err := certkit.DecodePKCS12(p12Data, wantPassword)
+			if err != nil {
+				t.Fatalf("P12 uses wrong password: %v", err)
+			}
+			if !outputLeaf.Equal(leaf) {
+				t.Fatal("P12 contains wrong certificate")
+			}
+			if matches, err := certkit.KeyMatchesCert(outputKey, leaf); err != nil || !matches {
+				t.Fatalf("P12 contains wrong key: %v", err)
 			}
 		})
 	}

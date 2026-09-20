@@ -165,6 +165,59 @@ func TestWalkScanFiles_PropagatesOnFileError(t *testing.T) {
 	}
 }
 
+func TestWalkScanFiles_ExcludesSymlinkTargets(t *testing.T) {
+	t.Parallel()
+	for _, aliasedExclusion := range []bool{false, true} {
+		name := "direct exclusion"
+		if aliasedExclusion {
+			name = "aliased exclusion"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			output := filepath.Join(root, "bundles")
+			if err := os.Mkdir(output, 0700); err != nil {
+				t.Fatal(err)
+			}
+			secret := filepath.Join(root, "password")
+			artifact := filepath.Join(output, "old.key")
+			input := filepath.Join(root, "delivery.pem")
+			for _, path := range []string{secret, artifact, input} {
+				if err := os.WriteFile(path, []byte("fixture"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			secretAlias := filepath.Join(root, "password-alias")
+			outputAlias := filepath.Join(root, "bundles-alias")
+			artifactAlias := filepath.Join(root, "old-key-alias")
+			createSymlinkOrSkip(t, secret, secretAlias)
+			createSymlinkOrSkip(t, output, outputAlias)
+			createSymlinkOrSkip(t, artifact, artifactAlias)
+			exclusions := []string{output, secret, filepath.Join(root, "future-output")}
+			if aliasedExclusion {
+				exclusions = []string{outputAlias, secretAlias}
+			}
+			var visited []string
+			inputOpts := WalkScanFilesInput{RootPath: root, ExcludePaths: exclusions, OnFile: func(path string) error {
+				visited = append(visited, path)
+				return nil
+			}}
+			if err := WalkScanFiles(inputOpts); err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(visited, []string{input}) {
+				t.Fatalf("visited %v, want only vendor delivery", visited)
+			}
+			for _, path := range []string{secret, secretAlias, artifact, artifactAlias, output, outputAlias} {
+				inputOpts.RootPath = path
+				if err := WalkScanFiles(inputOpts); !errors.Is(err, errScanInputExcluded) {
+					t.Fatalf("explicit excluded input %s: %v", path, err)
+				}
+			}
+		})
+	}
+}
+
 func TestWalkScanFiles_ExcludesOutputsAndSecrets(t *testing.T) {
 	t.Parallel()
 	root := filepath.Join(t.TempDir(), "vendor")

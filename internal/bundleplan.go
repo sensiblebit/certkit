@@ -56,24 +56,32 @@ type BundleChain struct {
 	Warnings      []string `json:"warnings,omitempty"`
 }
 
+// BundleCandidateDecision records why an alternative certificate was not selected.
+type BundleCandidateDecision struct {
+	Leaf      *BundleLeaf `json:"leaf"`
+	KeySource string      `json:"key_source,omitempty"`
+	Reason    string      `json:"reason"`
+}
+
 // BundleExportEntry records the decision for one requested bundle directory.
 type BundleExportEntry struct {
-	BundleName      string      `json:"bundle_name"`
-	OutputDirectory string      `json:"output_directory"`
-	Rule            *BundleRule `json:"rule,omitempty"`
-	Leaf            *BundleLeaf `json:"leaf,omitempty"`
-	ExistingLeaf    *BundleLeaf `json:"existing_leaf,omitempty"`
-	KeySource       string      `json:"key_source,omitempty"`
-	SelectionReason string      `json:"selection_reason,omitempty"`
-	CandidateCount  int         `json:"candidate_count"`
-	Chain           BundleChain `json:"chain"`
-	Formats         []string    `json:"formats"`
-	Files           []string    `json:"files"`
-	RemovedFiles    []string    `json:"removed_files,omitempty"`
-	Action          string      `json:"action"`
-	Status          string      `json:"status"`
-	Reason          string      `json:"reason"`
-	Forced          bool        `json:"forced,omitempty"`
+	BundleName        string                    `json:"bundle_name"`
+	OutputDirectory   string                    `json:"output_directory"`
+	Rule              *BundleRule               `json:"rule,omitempty"`
+	Leaf              *BundleLeaf               `json:"leaf,omitempty"`
+	ExistingLeaf      *BundleLeaf               `json:"existing_leaf,omitempty"`
+	KeySource         string                    `json:"key_source,omitempty"`
+	SelectionReason   string                    `json:"selection_reason,omitempty"`
+	CandidateCount    int                       `json:"candidate_count"`
+	SkippedCandidates []BundleCandidateDecision `json:"skipped_candidates,omitempty"`
+	Chain             BundleChain               `json:"chain"`
+	Formats           []string                  `json:"formats"`
+	Files             []string                  `json:"files"`
+	RemovedFiles      []string                  `json:"removed_files,omitempty"`
+	Action            string                    `json:"action"`
+	Status            string                    `json:"status"`
+	Reason            string                    `json:"reason"`
+	Forced            bool                      `json:"forced,omitempty"`
 }
 
 // BundlePlanInput configures a managed bundle refresh. It never writes files.
@@ -86,6 +94,7 @@ type BundlePlanInput struct {
 	Formats              []string
 	AllowPrivateNetworks bool
 	AIATimeout           time.Duration
+	AllowExpired         bool
 }
 
 // BundleExportPlan contains a reviewable manifest and private, in-memory output.
@@ -133,7 +142,8 @@ func PlanBundleExports(ctx context.Context, input BundlePlanInput) (*BundleExpor
 		return nil, fmt.Errorf("selecting bundle artifacts: %w", err)
 	}
 	if slices.Contains(formats, "p12") && input.P12Password == "" {
-		return nil, fmt.Errorf("%w: p12 output requires an explicit --output-password-file", errBundlePlanInput)
+		input.P12Password = DefaultExportPassword
+		slog.Warn("Using default password 'changeit'. Use --output-password-file for scan exports.")
 	}
 	input.Formats = formats
 	rules, err := bundlePlanRules(input)
@@ -196,6 +206,21 @@ func PlanBundleExports(ctx context.Context, input BundlePlanInput) (*BundleExpor
 			})
 			if err != nil {
 				return nil, fmt.Errorf("planning bundle %q: %w", name, err)
+			}
+			if i == 0 && !input.Duplicates {
+				for _, skipped := range certs[1:] {
+					decision := BundleCandidateDecision{Leaf: describeBundleLeaf(skipped.Cert, skipped.Source),
+						Reason: "higher SHA-256 fingerprint than the selected candidate"}
+					if skipped.NotAfter.Before(rec.NotAfter) {
+						decision.Reason = "earlier expiration than the selected candidate"
+					} else if skipped.Cert.NotBefore.Before(rec.Cert.NotBefore) {
+						decision.Reason = "earlier issuance time than the selected candidate"
+					}
+					if key := input.Store.GetKey(skipped.SKI); key != nil {
+						decision.KeySource = key.Source
+					}
+					entry.SkippedCandidates = append(entry.SkippedCandidates, decision)
+				}
 			}
 			write.entry = len(plan.Entries)
 			plan.Entries = append(plan.Entries, entry)
@@ -290,7 +315,13 @@ func planBundleCandidate(ctx context.Context, input planBundleCandidateInput) (B
 		entry.Status, entry.Action, entry.Reason = "skipped", "skip", "no matching private key was found"
 		return entry, write, nil
 	}
+	if time.Now().After(rec.Cert.NotAfter) && !opts.AllowExpired {
+		entry.Status, entry.Action = "skipped", "skip"
+		entry.Reason = "certificate has expired; use --allow-expired to permit expired leaves"
+		return entry, write, nil
+	}
 	bundleOpts := certkit.DefaultOptions()
+	bundleOpts.AllowExpired = opts.AllowExpired
 	bundleOpts.ExtraIntermediates = opts.Store.Intermediates()
 	bundleOpts.AllowPrivateNetworks = opts.AllowPrivateNetworks
 	if opts.AIATimeout > 0 {
@@ -318,6 +349,7 @@ func planBundleCandidate(ctx context.Context, input planBundleCandidateInput) (B
 	entry.Chain.Status = "verified"
 	if !bundleOpts.Verify {
 		entry.Chain.Status = "verification_disabled"
+		entry.Forced = true
 	}
 	entry.Chain.Warnings = bundle.Warnings
 	for _, cert := range bundle.Intermediates {

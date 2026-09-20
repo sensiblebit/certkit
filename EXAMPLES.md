@@ -505,9 +505,9 @@ certkit scan ./tmp --config ./bundles.yaml --bundle-path ./bundles \
   --bundle-name myapp-tls --input-password-file ./tmp/vendor-password --write
 ```
 
-Repeat `--bundle-name` to select more bundles. An explicitly selected bundle must be produced; missing certificates, keys, or trust make the command fail. Use `--require-bundle myapp-tls` to require a bundle while retaining the default all-configured-bundles scope, or `--fail-on-skip` to require every planned bundle. Config errors and protected replacement conflicts fail before any bundles are written.
+Repeat `--bundle-name` to select more bundles. An explicitly selected bundle must be produced; missing certificates, required keys, or trust make the command fail. Public-only formats do not require a private key. Use `--require-bundle myapp-tls` to require a bundle while retaining the default all-configured-bundles scope, or `--fail-on-skip` to require every planned bundle. Config errors and protected replacement conflicts fail before any bundles are written.
 
-The default output is PEM variants, one `.key` file, public JSON metadata, and `manifest.json`. Request only the artifacts you need:
+The default output is PEM variants, a `.key` file, a `.p12` archive, public JSON metadata, and `manifest.json`. Request only the artifacts you need:
 
 ```sh
 certkit scan ./tmp -c bundles.yaml --bundle-path ./bundles \
@@ -525,9 +525,9 @@ certkit scan ./tmp -c bundles.yaml --bundle-path ./bundles \
   --input-password-file vendor-password --output-password-file deployment-password --write
 ```
 
-P12 requires an explicit output password and is otherwise omitted. A selected `.yaml` artifact also contains a private key, encrypted only when `--output-password-file` is supplied. Kubernetes TLS secrets (`--formats k8s`) always contain unencrypted keys.
+Without `--output-password-file`, P12 uses the intentional `changeit` default with a warning on stderr. Select formats without `p12` to omit the archive. A selected `.yaml` artifact also contains a private key, encrypted only when `--output-password-file` is supplied. Kubernetes TLS secrets (`--formats k8s`) always contain unencrypted keys.
 
-Expiration downgrades and equal-expiry conflicts are blocked by default. `--force` explicitly allows those replacements **and untrusted certificates**. The manifest records the override and whether trust verification was disabled. Selection uses latest expiry, latest issuance time, and then a stable fingerprint tie-breaker.
+Expiration downgrades and equal-expiry conflicts are blocked by default. `--force` explicitly allows those replacements **and untrusted certificates**. Expired leaves additionally require `--allow-expired`; with verification enabled, their chains are checked at the leaf's `NotBefore` time, reported in chain warnings. The manifest records force overrides and whether trust verification was disabled. Selection uses latest expiry, latest issuance time, and then a stable fingerprint tie-breaker. Unselected candidates and their reasons appear in the plan and manifest; they do not count as failed bundles for `--fail-on-skip`.
 
 ---
 
