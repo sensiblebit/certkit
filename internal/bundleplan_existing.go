@@ -82,7 +82,7 @@ func inspectBundleDirectory(path string) (bundleDirectoryState, error) {
 			} else if manifest.Leaf != nil {
 				pemData = manifest.Leaf.PEM
 			}
-		case strings.HasSuffix(name, ".json"):
+		case strings.HasSuffix(name, ".json") && !strings.HasSuffix(name, ".csr.json"):
 			var metadata struct {
 				PEM string `json:"pem"`
 			}
@@ -104,7 +104,7 @@ func inspectBundleDirectory(path string) (bundleDirectoryState, error) {
 		if pemData != "" {
 			certs, err := certkit.ParsePEMCertificates([]byte(pemData))
 			if err != nil {
-				state.ambiguity = "existing certificate artifact cannot be parsed"
+				state.ambiguity = fmt.Sprintf("existing certificate artifact %q cannot be parsed", name)
 			}
 			for _, cert := range certs {
 				// A manifest identifies the selected certificate, which may itself

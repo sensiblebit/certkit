@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -103,7 +104,11 @@ func TestRunScan_ManagedBundleWorkflow(t *testing.T) {
 				}
 				scanRefresh.Formats = []string{"key", "p12", "json"}
 			}
-			stdout, stderr, err := captureOutput(t, func() error { return runScan(newCommandWithContext(), []string{input}) })
+			stdout, stderr, err := captureOutput(t, func() error {
+				// Password warnings must remain visible even with --log-level error.
+				slog.SetDefault(slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError})))
+				return runScan(newCommandWithContext(), []string{input})
+			})
 			if err != nil {
 				t.Fatalf("runScan: %v\nstderr: %s", err, stderr)
 			}

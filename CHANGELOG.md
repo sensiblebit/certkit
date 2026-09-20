@@ -40,6 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Ignore CSR JSON when identifying existing bundle certificates, so complete legacy bundles can refresh without a false replacement conflict; report the filename for malformed certificate artifacts ([#225])
+- Keep the managed P12 default-password warning visible regardless of `--log-level` ([#225])
 - Protect managed bundle refreshes against expiration downgrades, equal-expiry certificate conflicts, ambiguous existing leaves, and files changed after planning ([#225])
 - Make certificate selection deterministic using expiry, issuance time, and SHA-256 fingerprint; expose skipped candidates and fail on invalid export configuration ([#225])
 - Honor explicitly selected scan roots named `vendor`, and exclude declared output directories and password files from directory ingestion ([#225])

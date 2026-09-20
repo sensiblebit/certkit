@@ -3,6 +3,8 @@ package internal
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +12,74 @@ import (
 	"github.com/sensiblebit/certkit"
 	"github.com/sensiblebit/certkit/internal/certstore"
 )
+
+func TestBundlePlan_CSRMetadataDoesNotBlockRefresh(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name       string
+		legacy     bool
+		corruptPEM bool
+	}{
+		{"legacy complete bundle", true, false},
+		{"managed complete bundle", false, false},
+		{"corrupt certificate metadata remains protected", true, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			fixture := newBundlePlanFixture(t)
+			fixture.input.Formats = certstore.BundleFormats()
+			plan, err := PlanBundleExports(context.Background(), fixture.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := plan.Write(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			dir := plan.Entries[0].OutputDirectory
+			if test.legacy {
+				if err := os.Remove(filepath.Join(dir, "manifest.json")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if test.corruptPEM {
+				if err := os.WriteFile(filepath.Join(dir, "service.example.com.json"), []byte(`{"pem":"invalid certificate"}`), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			fixture.input.ForceBundle = false
+			refresh, err := PlanBundleExports(context.Background(), fixture.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			entry := refresh.Entries[0]
+			if entry.ExistingLeaf == nil || entry.ExistingLeaf.Fingerprint != certkit.CertFingerprint(fixture.leaf.cert) {
+				t.Fatal("existing certificate identity was lost")
+			}
+			if test.corruptPEM {
+				if !errors.Is(refresh.Validate(), ErrBundlePlanBlocked) || !strings.Contains(entry.Reason, `"service.example.com.json" cannot be parsed`) {
+					t.Fatalf("corrupt certificate metadata did not identify its artifact: %+v", entry)
+				}
+				return
+			}
+			// The generated CA is untrusted, but valid CSR metadata must not
+			// prevent the planner from reaching the separate trust check.
+			if entry.Status != "skipped" || !strings.Contains(entry.Reason, "certificate verification failed") {
+				t.Fatalf("CSR metadata incorrectly blocked replacement: %+v", entry)
+			}
+			fixture.input.ForceBundle = true
+			refresh, err = PlanBundleExports(context.Background(), fixture.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if refresh.Entries[0].Reason != "same leaf certificate; refresh selected artifacts" {
+				t.Fatal("valid CSR metadata still requires a replacement override")
+			}
+			if err := refresh.Write(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
 
 func TestBundlePlan_ManagedCAReplacement(t *testing.T) {
 	t.Parallel()

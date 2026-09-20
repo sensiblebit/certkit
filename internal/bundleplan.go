@@ -143,7 +143,6 @@ func PlanBundleExports(ctx context.Context, input BundlePlanInput) (*BundleExpor
 	}
 	if slices.Contains(formats, "p12") && input.P12Password == "" {
 		input.P12Password = DefaultExportPassword
-		slog.Warn("Using default password 'changeit'. Use --output-password-file for scan exports.")
 	}
 	input.Formats = formats
 	rules, err := bundlePlanRules(input)
