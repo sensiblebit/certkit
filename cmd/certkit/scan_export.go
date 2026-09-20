@@ -137,7 +137,7 @@ func runScanBundleExport(ctx context.Context, input runScanBundleExportInput) er
 	}
 	trustPools, err := scanSummaryTrustPoolLoader(scanTrustStore)
 	if err != nil {
-		return err
+		return fmt.Errorf("loading scan trust pools: %w", err)
 	}
 	planErr := plan.Validate()
 	if scanRefresh.Write && planErr == nil {

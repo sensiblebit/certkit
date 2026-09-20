@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Identify the operation when loading trust pools fails during managed bundle export, preserving the underlying error ([#225])
 - Reject bundle-directory names that differ only by case, preventing one requested bundle from silently overwriting another on case-insensitive filesystems ([#225])
 - Reserve managed manifest and refresh-lock names during planning, and skip optional untrusted candidates before replacement conflicts can block other exports ([#225])
 - Skip optional expired or keyless bundle candidates before replacement checks, exclude existing dump outputs from scans, and stop managed writes if the default-password warning cannot be displayed ([#225])
