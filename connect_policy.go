@@ -218,7 +218,8 @@ func certificateSignatureAllowedByPolicy(cert *x509.Certificate, policy Security
 		x509.SHA256WithRSAPSS, x509.SHA384WithRSAPSS, x509.SHA512WithRSAPSS:
 		return true
 	case x509.UnknownSignatureAlgorithm, x509.MD2WithRSA, x509.MD5WithRSA,
-		x509.SHA1WithRSA, x509.DSAWithSHA1, x509.DSAWithSHA256, x509.ECDSAWithSHA1, x509.PureEd25519:
+		x509.SHA1WithRSA, x509.DSAWithSHA1, x509.DSAWithSHA256, x509.ECDSAWithSHA1, x509.PureEd25519,
+		x509.MLDSA44, x509.MLDSA65, x509.MLDSA87:
 		return false
 	default:
 		return false

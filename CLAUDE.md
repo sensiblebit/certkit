@@ -9,7 +9,7 @@
 ## 0 — Project Overview
 
 Go module: `github.com/sensiblebit/certkit`
-Go version: 1.25+
+Go version: 1.27+
 Pure Go build — no CGO required (uses `modernc.org/sqlite` for optional `--save-db`/`--load-db` persistence).
 
 Certificate management tool: ingest certs/keys in many formats, catalog in memory, export organized bundles. Also a reusable Go library.
@@ -332,7 +332,7 @@ Every PR runs 11 parallel checks (`.github/workflows/ci.yml`):
 
 ### Pre-commit
 
-Install [pre-commit](https://pre-commit.com/) and set up the hooks:
+Install [pre-commit](https://pre-commit.com/) and set up the hooks. Web checks require Node.js `^24.15.0 || >=26.0.0` and npm. The Vitest hook installs the lockfile's dependencies, including development dependencies, before running tests, so it also works on a fresh checkout:
 
 ```sh
 brew install pre-commit

@@ -71,7 +71,7 @@ func TestFetchAIAURL(t *testing.T) {
 			newRawURL: func(t *testing.T) string {
 				t.Helper()
 				redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					http.Redirect(w, r, r.URL.String(), http.StatusFound)
+					http.Redirect(w, r, "/", http.StatusFound)
 				}))
 				t.Cleanup(redirector.Close)
 				return redirector.URL

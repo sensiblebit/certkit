@@ -49,7 +49,7 @@ sudo dpkg -i certkit_*.deb
 
 ### From source
 
-Requires Go 1.26+.
+Requires Go 1.27+.
 
 ```sh
 go build -o certkit ./cmd/certkit/

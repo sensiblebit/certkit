@@ -1,15 +1,16 @@
 {
   "private": true,
+  "type": "module",
   "engines": {
-    "node": ">=24"
+    "node": "^24.15.0 || >=26.0.0"
   },
   "scripts": {
     "test": "vitest run",
     "test:watch": "vitest"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260317.1",
-    "jsdom": "^29.0.0",
-    "vitest": "^4.1.0"
+    "@cloudflare/workers-types": "^5.20260919.1",
+    "jsdom": "^30.1.0",
+    "vitest": "^5.0.1"
   }
 }

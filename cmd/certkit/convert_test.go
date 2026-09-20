@@ -141,8 +141,7 @@ func TestFindAllKeyLeafPairs(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected error, got nil")
 		}
-		var ve *ValidationError
-		if !errors.As(err, &ve) {
+		if _, ok := errors.AsType[*ValidationError](err); !ok {
 			t.Errorf("expected *ValidationError, got %T: %v", err, err)
 		}
 	})
@@ -311,8 +310,7 @@ func TestRunConvert_PKCS12MultiMatchIsGeneralError(t *testing.T) {
 	if !errors.Is(err, errPKCS12MultiKey) {
 		t.Fatalf("expected PKCS#12 multi-key error, got: %v", err)
 	}
-	var validationErr *ValidationError
-	if errors.As(err, &validationErr) {
+	if _, ok := errors.AsType[*ValidationError](err); ok {
 		t.Fatalf("expected general error, got ValidationError: %v", err)
 	}
 }

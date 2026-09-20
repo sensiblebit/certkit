@@ -309,12 +309,10 @@ func formatBundleOutput(input formatBundleOutputInput) ([]byte, error) {
 }
 
 func isChainValidationError(err error) bool {
-	var unknownAuthority x509.UnknownAuthorityError
-	if errors.As(err, &unknownAuthority) {
+	if _, ok := errors.AsType[x509.UnknownAuthorityError](err); ok {
 		return true
 	}
-	var invalid x509.CertificateInvalidError
-	if errors.As(err, &invalid) {
+	if _, ok := errors.AsType[x509.CertificateInvalidError](err); ok {
 		return true
 	}
 	var hostname x509.HostnameError

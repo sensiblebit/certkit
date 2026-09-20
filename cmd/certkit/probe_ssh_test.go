@@ -232,11 +232,9 @@ func startProbeSSHServer(t *testing.T) string {
 	cfg := &ssh.ServerConfig{
 		NoClientAuth:  true,
 		ServerVersion: "SSH-2.0-certkit-cmd-test",
-		Config: ssh.Config{
-			KeyExchanges: []string{"curve25519-sha256", "diffie-hellman-group14-sha256"},
-			Ciphers:      []string{ssh.CipherAES128GCM, ssh.CipherChaCha20Poly1305},
-			MACs:         []string{ssh.HMACSHA256, ssh.HMACSHA512},
-		},
+		KeyExchanges:  []string{"curve25519-sha256", "diffie-hellman-group14-sha256"},
+		Ciphers:       []string{ssh.CipherAES128GCM, ssh.CipherChaCha20Poly1305},
+		MACs:          []string{ssh.HMACSHA256, ssh.HMACSHA512},
 	}
 	cfg.AddHostKey(edSigner)
 	cfg.AddHostKey(rsaSigner)

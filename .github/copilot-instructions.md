@@ -1,6 +1,6 @@
 # Copilot Review Instructions
 
-This is a Go project (`github.com/sensiblebit/certkit`) targeting Go 1.25+. Review
+This is a Go project (`github.com/sensiblebit/certkit`) targeting Go 1.27+. Review
 all changes against the rules in `CLAUDE.md` at the repository root. Flag violations
 by rule ID (e.g., ERR-1, CS-2).
 

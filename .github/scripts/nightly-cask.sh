@@ -103,9 +103,10 @@ cask "certkit@nightly" do
   binary "certkit"
 
   on_macos do
-    postflight do
-      system_command "/usr/bin/xattr",
-                     args: ["-dr", "com.apple.quarantine", "#{staged_path}"]
+    postflight_steps do
+      run "/usr/bin/xattr",
+          args: ["-dr", "com.apple.quarantine", "{{staged_path}}"],
+          must_succeed: false
     end
 
     on_intel do
