@@ -107,7 +107,9 @@ func inspectBundleDirectory(path string) (bundleDirectoryState, error) {
 				state.ambiguity = "existing certificate artifact cannot be parsed"
 			}
 			for _, cert := range certs {
-				if !cert.IsCA {
+				// A manifest identifies the selected certificate, which may itself
+				// be a CA. Other artifacts can contain unrelated chain CAs.
+				if !cert.IsCA || name == "manifest.json" {
 					leaf := describeBundleLeaf(cert, filepath.Join(path, name))
 					if _, exists := leaves[leaf.Fingerprint]; !exists {
 						leaves[leaf.Fingerprint] = leaf

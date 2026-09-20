@@ -44,6 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Make certificate selection deterministic using expiry, issuance time, and SHA-256 fingerprint; expose skipped candidates and fail on invalid export configuration ([#225])
 - Honor explicitly selected scan roots named `vendor`, and exclude declared output directories and password files from directory ingestion ([#225])
 - Preserve default P12 exports, exclude symlink aliases of managed output and password files, report unselected certificate candidates, and honor `--allow-expired` independently of `--force` during managed refreshes ([#225])
+- Preserve managed CA identity during refresh, keep duplicate Kubernetes Secret names valid, and allow required bundles to succeed when only historical duplicates are skipped ([#225])
 
 - Remove Homebrew's deprecated `postflight` warning from stable and nightly casks while preserving macOS quarantine handling ([#200])
 - Display ML-DSA signature scheme names when Go 1.27 TLS peers request client certificates ([#200])

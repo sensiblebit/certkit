@@ -396,7 +396,11 @@ Bundles without an explicit `subject` block inherit from `defaultSubject`. Certi
 
 Selection is deterministic: latest `NotAfter`, then latest `NotBefore`, then lowest SHA-256 fingerprint. The plan reports the winning certificate and selection order. The newest candidate is not silently replaced by an older candidate if it lacks a key or fails trust verification. `--duplicates` additionally exports older candidates to directories suffixed with a UTC timestamp, serial, and fingerprint prefix.
 
+With `--duplicates`, required or explicitly selected names still require the primary `<bundleName>` directory. Skipped historical candidates do not fail that requirement when the primary bundle can be produced; `--fail-on-skip` makes those skips fatal too. Kubernetes Secrets in every duplicate directory retain the configured bundle name as `metadata.name`, validated before export.
+
 Existing bundles are protected against shorter validity, equal expiration with a different certificate, and an unidentifiable existing leaf. `--force` explicitly overrides these replacement checks and also disables trust verification. Skipped candidates and their reasons are always shown. Blocked replacements or unmet requirements return exit code 2 and prevent all planned writes. Each directory is staged before replacement; an I/O failure can leave earlier bundles applied, and the result manifest shows their status. A lock rejects overlapping certkit refreshes against the same output directory. If a process is killed and leaves `.certkit-refresh.lock`, remove that empty directory only after confirming no refresh is still running.
+
+Managed root and intermediate CA bundles use the manifest's selected certificate for replacement comparisons, so chain CAs are not mistaken for the selected certificate.
 
 Default artifacts are `pem,key,chain,fullchain,intermediates,root,json,p12`. Select any subset with `--formats`; public-only formats work without a private key. YAML, Kubernetes secrets, and CSR files require explicit selection:
 

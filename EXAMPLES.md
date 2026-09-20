@@ -507,6 +507,8 @@ certkit scan ./tmp --config ./bundles.yaml --bundle-path ./bundles \
 
 Repeat `--bundle-name` to select more bundles. An explicitly selected bundle must be produced; missing certificates, required keys, or trust make the command fail. Public-only formats do not require a private key. Use `--require-bundle myapp-tls` to require a bundle while retaining the default all-configured-bundles scope, or `--fail-on-skip` to require every planned bundle. Config errors and protected replacement conflicts fail before any bundles are written.
 
+With `--duplicates`, skipped older candidates do not fail a required or scoped export if the primary bundle is produced. Use `--fail-on-skip` to require every duplicate too. Kubernetes Secret names stay equal to the configured bundle name, even inside dated duplicate directories.
+
 The default output is PEM variants, a `.key` file, a `.p12` archive, public JSON metadata, and `manifest.json`. Request only the artifacts you need:
 
 ```sh

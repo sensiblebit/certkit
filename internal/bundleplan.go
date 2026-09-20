@@ -174,6 +174,11 @@ func PlanBundleExports(ctx context.Context, input BundlePlanInput) (*BundleExpor
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("planning bundle export: %w", err)
 		}
+		if slices.Contains(formats, "k8s") {
+			if err := certstore.ValidateK8sSecretName(name); err != nil {
+				return nil, fmt.Errorf("validating Kubernetes secret name for bundle %q: %w", name, err)
+			}
+		}
 		certs := input.Store.CertsByBundleName(name)
 		if len(certs) == 0 {
 			entry := BundleExportEntry{BundleName: name, OutputDirectory: filepath.Join(input.OutDir, name),
@@ -185,6 +190,7 @@ func PlanBundleExports(ctx context.Context, input BundlePlanInput) (*BundleExpor
 			}
 			continue
 		}
+		primaryEntryIndex := len(plan.Entries)
 		for i, rec := range certs {
 			if i > 0 && !input.Duplicates {
 				break
@@ -224,12 +230,18 @@ func PlanBundleExports(ctx context.Context, input BundlePlanInput) (*BundleExpor
 			}
 			write.entry = len(plan.Entries)
 			plan.Entries = append(plan.Entries, entry)
-			if entry.Status == "blocked" || (entry.Status == "skipped" && (input.FailOnSkip || slices.Contains(input.RequireBundles, name) || slices.Contains(input.BundleNames, name))) {
+			if entry.Status == "blocked" || (entry.Status == "skipped" && input.FailOnSkip) {
 				plan.blocked = append(plan.blocked, name+": "+entry.Reason)
 			}
 			if entry.Status == "planned" {
 				plan.writes = append(plan.writes, write)
 			}
+		}
+		// Required names refer to the primary managed directory. Historical
+		// duplicates may be skipped unless the caller explicitly fails on skips.
+		primary := plan.Entries[primaryEntryIndex]
+		if !input.FailOnSkip && primary.Status == "skipped" && (slices.Contains(input.RequireBundles, name) || slices.Contains(input.BundleNames, name)) {
+			plan.blocked = append(plan.blocked, name+": "+primary.Reason)
 		}
 	}
 	return plan, nil
@@ -359,7 +371,7 @@ func planBundleCandidate(ctx context.Context, input planBundleCandidateInput) (B
 		entry.Chain.Roots = append(entry.Chain.Roots, certkit.CertFingerprint(cert))
 	}
 	fileInput := certstore.BundleExportInput{Bundle: bundle,
-		Prefix: certstore.SanitizeFileName(certstore.FormatCN(rec.Cert)), SecretName: input.Folder,
+		Prefix: certstore.SanitizeFileName(certstore.FormatCN(rec.Cert)), SecretName: rec.BundleName,
 		P12Password: opts.P12Password, EncryptKey: opts.EncryptKey, Formats: opts.Formats}
 	if key != nil {
 		fileInput.KeyPEM, fileInput.KeyType, fileInput.BitLength = key.PEM, key.KeyType, key.BitLength

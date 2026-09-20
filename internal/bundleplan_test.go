@@ -388,6 +388,10 @@ func TestBundlePlan_InvalidConfiguration(t *testing.T) {
 		{"duplicate rule", func(in *BundlePlanInput) { in.Configs = append(in.Configs, in.Configs[0]) }},
 		{"unknown scope", func(in *BundlePlanInput) { in.BundleNames = []string{"unknown"} }},
 		{"unknown artifact", func(in *BundlePlanInput) { in.Formats = []string{"unknown"} }},
+		{"invalid Kubernetes name", func(in *BundlePlanInput) {
+			in.Configs[0].BundleName = "invalid_name"
+			in.Formats = []string{"k8s"}
+		}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
