@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add scoped managed bundle refresh plans with repeatable `scan --bundle-name` / `--only`, replacement comparisons, per-bundle manifests, `--require-bundle`, `--fail-on-skip`, and selectable `--formats`
+
 - Add `tree` subcommand to display the full CLI command, subcommand, and flag surface in a tree layout ([#169])
 - Encrypt PEM private key output (`.key`) using PKCS#8 v2 (AES-256-CBC) when an explicit export password is supplied ([#167])
 - Support decryption of PKCS#8 v2 encrypted private keys (`ENCRYPTED PRIVATE KEY` PEM blocks) with all PBES2 cipher (AES-128/192/256-CBC, 3DES-CBC) and PRF (HMAC-SHA-1/256/384/512) combinations ([#167])
@@ -20,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `connect --tls-version` to pin the negotiated protocol version when comparing server TLS behavior across TLS 1.0-1.3 ([#190])
 
 ### Changed
+
+- **Breaking:** `scan --bundle-path` now previews by default and requires `--write` to save bundles; dry runs never write outputs, and unsafe replacement plans fail before modifying bundles
+- **Breaking:** Scan input passwords no longer encrypt outputs; use `--output-password-file` explicitly. Default managed artifacts contain one key copy and omit P12, Kubernetes YAML, YAML, and CSR files unless selected
 
 - **Breaking:** Require Go 1.27+ and update Go, web, and development dependencies to current stable releases ([#200])
 - **Breaking:** Default `TrustStore` in `DefaultOptions()` changed from `"system"` to `"mozilla"` — pure-Go Mozilla root verification is used by default instead of macOS `SecTrustEvaluateWithError` syscalls, eliminating multi-minute hangs on large certificate stores
@@ -34,6 +39,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Surface trust-source load warnings in `inspect`, `verify`, and `connect`, fail fast on invalid `verify` trust-store configuration, and stop reporting a synthetic `file` source when no file-backed roots were requested ([#171])
 
 ### Fixed
+
+- Protect managed bundle refreshes against expiration downgrades, equal-expiry certificate conflicts, ambiguous existing leaves, and files changed after planning
+- Make certificate selection deterministic using expiry, issuance time, and SHA-256 fingerprint; expose skipped candidates and fail on invalid export configuration
+- Honor explicitly selected scan roots named `vendor`, and exclude declared output directories and password files from directory ingestion
 
 - Remove Homebrew's deprecated `postflight` warning from stable and nightly casks while preserving macOS quarantine handling ([#200])
 - Display ML-DSA signature scheme names when Go 1.27 TLS peers request client certificates ([#200])

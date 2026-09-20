@@ -164,3 +164,29 @@ func TestWalkScanFiles_PropagatesOnFileError(t *testing.T) {
 		t.Fatalf("error = %v, want wrapped %v", err, wantErr)
 	}
 }
+
+func TestWalkScanFiles_ExcludesOutputsAndSecrets(t *testing.T) {
+	t.Parallel()
+	root := filepath.Join(t.TempDir(), "vendor")
+	output := filepath.Join(root, "managed")
+	if err := os.MkdirAll(output, 0700); err != nil {
+		t.Fatal(err)
+	}
+	input := filepath.Join(root, "delivery.pem")
+	secret := filepath.Join(root, "password")
+	for _, path := range []string{input, secret, filepath.Join(output, "old.pem")} {
+		if err := os.WriteFile(path, []byte("fixture"), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var visited []string
+	if err := WalkScanFiles(WalkScanFilesInput{RootPath: root, ExcludePaths: []string{output, secret}, OnFile: func(path string) error {
+		visited = append(visited, path)
+		return nil
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(visited, []string{input}) {
+		t.Fatalf("visited %v, want only explicit vendor delivery", visited)
+	}
+}

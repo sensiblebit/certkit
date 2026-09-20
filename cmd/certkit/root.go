@@ -15,9 +15,16 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:           "certkit",
-	Short:         "Certificate management tool",
-	Long:          "Inspect, bundle, verify, and manage TLS/SSL certificates and keys.",
+	Use:   "certkit",
+	Short: "Certificate management tool",
+	Long: `Inspect, bundle, verify, and manage TLS/SSL certificates and keys.
+
+Managed bundle refresh: scan vendor deliveries, review the plan, then apply it:
+  certkit scan ./tmp --config bundles.yaml --bundle-path ./bundles --bundle-name example-tls
+  certkit scan ./tmp --config bundles.yaml --bundle-path ./bundles --bundle-name example-tls --write
+
+Use scan --formats to choose artifacts and --input-password-file to decrypt inputs.
+Use bundle to assemble a single certificate chain on stdout or with -o.`,
 	SilenceUsage:  true,
 	SilenceErrors: true,
 	PersistentPreRunE: func(_ *cobra.Command, _ []string) error {

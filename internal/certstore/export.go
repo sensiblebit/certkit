@@ -26,6 +26,7 @@ var (
 	errBundleNil          = errors.New("bundle is nil")
 	errBundleLeafCertNil  = errors.New("bundle leaf certificate is nil")
 	errLeafCertificateNil = errors.New("leaf certificate is nil")
+	errBundleKeyMismatch  = errors.New("bundle private key does not match the leaf certificate")
 )
 
 // BundleFile represents a single output file in a bundle export.
@@ -59,6 +60,8 @@ type BundleExportInput struct {
 	P12Password string
 	// EncryptKey when true encrypts the .key PEM output using PKCS#8 v2.
 	EncryptKey bool
+	// Formats selects output artifacts. Nil preserves the complete legacy set.
+	Formats []string
 }
 
 // K8sSecret represents a Kubernetes TLS secret.
@@ -85,117 +88,124 @@ func GenerateBundleFiles(input BundleExportInput) ([]BundleFile, error) {
 	if err := validateBundle(bundle); err != nil {
 		return nil, err
 	}
+	formats, err := NormalizeBundleFormats(input.Formats)
+	if err != nil {
+		return nil, err
+	}
+	wants := func(format string) bool { return slices.Contains(formats, format) }
 	prefix := input.Prefix
-
 	leafPEM := []byte(certkit.CertToPEM(bundle.Leaf))
-
-	var intermediatePEM []byte
+	var intermediatePEM, rootPEM []byte
 	for _, c := range bundle.Intermediates {
 		intermediatePEM = append(intermediatePEM, []byte(certkit.CertToPEM(c))...)
 	}
-
-	var rootPEM []byte
-	root := bundleRoot(bundle)
-	if root != nil {
+	if root := bundleRoot(bundle); root != nil {
 		rootPEM = []byte(certkit.CertToPEM(root))
 	}
-
 	chainPEM := slices.Concat(leafPEM, intermediatePEM)
 	fullchainPEM := slices.Concat(chainPEM, rootPEM)
-
-	files := []BundleFile{
-		{Name: prefix + ".pem", Data: leafPEM},
-		{Name: prefix + ".chain.pem", Data: chainPEM},
-		{Name: prefix + ".fullchain.pem", Data: fullchainPEM},
-	}
-	if len(intermediatePEM) > 0 {
-		files = append(files, BundleFile{Name: prefix + ".intermediates.pem", Data: intermediatePEM})
-	}
-	if len(rootPEM) > 0 {
-		files = append(files, BundleFile{Name: prefix + ".root.pem", Data: rootPEM})
-	}
-
-	// Parse private key once for P12, CSR, and optional encryption.
-	privKey, err := certkit.ParsePEMPrivateKey(input.KeyPEM)
-	if err != nil {
-		return nil, fmt.Errorf("parsing private key: %w", err)
-	}
-
-	// Normalize key output to PKCS#8 PEM regardless of input format.
-	pkcs8PEM, err := certkit.MarshalPrivateKeyToPEM(privKey)
-	if err != nil {
-		return nil, fmt.Errorf("marshaling private key to PKCS#8: %w", err)
-	}
-	pkcs8Bytes := []byte(pkcs8PEM)
-
-	// Private key — encrypt when explicitly requested.
-	keyOutput := pkcs8Bytes
-	if input.EncryptKey {
-		encrypted, encErr := certkit.MarshalEncryptedPrivateKeyToPEM(privKey, input.P12Password)
-		if encErr != nil {
-			return nil, fmt.Errorf("encrypting private key PEM: %w", encErr)
+	var files []BundleFile
+	for _, artifact := range []struct {
+		format string
+		suffix string
+		data   []byte
+	}{
+		{"pem", ".pem", leafPEM},
+		{"chain", ".chain.pem", chainPEM},
+		{"fullchain", ".fullchain.pem", fullchainPEM},
+		{"intermediates", ".intermediates.pem", intermediatePEM},
+		{"root", ".root.pem", rootPEM},
+	} {
+		if wants(artifact.format) && len(artifact.data) > 0 {
+			files = append(files, BundleFile{Name: prefix + artifact.suffix, Data: artifact.data})
 		}
-		keyOutput = []byte(encrypted)
-	}
-	files = append(files, BundleFile{Name: prefix + ".key", Data: keyOutput, Sensitive: true})
-
-	// PKCS#12
-	p12Password := input.P12Password
-	if p12Password == "" {
-		return nil, errP12PasswordRequired
-	}
-	p12Data, err := certkit.EncodePKCS12Legacy(privKey, bundle.Leaf, bundle.Intermediates, p12Password)
-	if err != nil {
-		return nil, fmt.Errorf("creating P12: %w", err)
-	}
-	files = append(files, BundleFile{Name: prefix + ".p12", Data: p12Data, Sensitive: true})
-
-	// Kubernetes TLS secret
-	k8sSecret := K8sSecret{
-		APIVersion: "v1",
-		Kind:       "Secret",
-		Type:       "kubernetes.io/tls",
-		Metadata: K8sMetadata{
-			Name: input.SecretName,
-		},
-		Data: map[string]string{
-			"tls.crt": base64.StdEncoding.EncodeToString(chainPEM),
-			"tls.key": base64.StdEncoding.EncodeToString(pkcs8Bytes),
-		},
-	}
-	k8sYAML, err := yaml.Marshal(k8sSecret)
-	if err != nil {
-		return nil, fmt.Errorf("marshaling kubernetes secret YAML: %w", err)
-	}
-	files = append(files, BundleFile{Name: prefix + ".k8s.yaml", Data: k8sYAML, Sensitive: true})
-	if input.EncryptKey {
-		slog.Warn("kubernetes TLS secret contains unencrypted private key",
-			"file", prefix+".k8s.yaml",
-			"reason", "kubernetes.io/tls requires unencrypted tls.key")
 	}
 
-	// JSON
-	jsonData, err := GenerateJSON(bundle)
-	if err != nil {
-		return nil, fmt.Errorf("generating JSON: %w", err)
+	var pkcs8Bytes, keyOutput []byte
+	if BundleFormatsNeedKey(formats) {
+		privKey, err := certkit.ParsePEMPrivateKey(input.KeyPEM)
+		if err != nil {
+			return nil, fmt.Errorf("parsing private key: %w", err)
+		}
+		matches, err := certkit.KeyMatchesCert(privKey, bundle.Leaf)
+		if err != nil {
+			return nil, fmt.Errorf("matching bundle key: %w", err)
+		}
+		if !matches {
+			return nil, errBundleKeyMismatch
+		}
+		pkcs8PEM, err := certkit.MarshalPrivateKeyToPEM(privKey)
+		if err != nil {
+			return nil, fmt.Errorf("marshaling private key to PKCS#8: %w", err)
+		}
+		pkcs8Bytes = []byte(pkcs8PEM)
+		keyOutput = pkcs8Bytes
+		if input.EncryptKey && (wants("key") || wants("yaml")) {
+			encrypted, err := certkit.MarshalEncryptedPrivateKeyToPEM(privKey, input.P12Password)
+			if err != nil {
+				return nil, fmt.Errorf("encrypting private key PEM: %w", err)
+			}
+			keyOutput = []byte(encrypted)
+		}
+		if wants("key") {
+			files = append(files, BundleFile{Name: prefix + ".key", Data: keyOutput, Sensitive: true})
+		}
+		if wants("p12") {
+			if input.P12Password == "" {
+				return nil, errP12PasswordRequired
+			}
+			p12Data, err := certkit.EncodePKCS12Legacy(privKey, bundle.Leaf, bundle.Intermediates, input.P12Password)
+			if err != nil {
+				return nil, fmt.Errorf("creating P12: %w", err)
+			}
+			files = append(files, BundleFile{Name: prefix + ".p12", Data: p12Data, Sensitive: true})
+		}
 	}
-	files = append(files, BundleFile{Name: prefix + ".json", Data: jsonData})
-
-	// YAML — use encrypted key when requested so the YAML doesn't leak plaintext.
-	yamlData, err := GenerateYAML(bundle, keyOutput, input.KeyType, input.BitLength)
-	if err != nil {
-		return nil, fmt.Errorf("generating YAML: %w", err)
+	if wants("k8s") {
+		secret := K8sSecret{
+			APIVersion: "v1", Kind: "Secret", Type: "kubernetes.io/tls",
+			Metadata: K8sMetadata{Name: input.SecretName},
+			Data: map[string]string{
+				"tls.crt": base64.StdEncoding.EncodeToString(chainPEM),
+				"tls.key": base64.StdEncoding.EncodeToString(pkcs8Bytes),
+			},
+		}
+		data, err := yaml.Marshal(secret)
+		if err != nil {
+			return nil, fmt.Errorf("marshaling kubernetes secret YAML: %w", err)
+		}
+		files = append(files, BundleFile{Name: prefix + ".k8s.yaml", Data: data, Sensitive: true})
+		if input.EncryptKey {
+			slog.Warn("kubernetes TLS secret contains unencrypted private key", "file", prefix+".k8s.yaml",
+				"reason", "kubernetes.io/tls requires unencrypted tls.key")
+		}
 	}
-	files = append(files, BundleFile{Name: prefix + ".yaml", Data: yamlData, Sensitive: true})
-
-	// CSR
-	csrPEM, csrJSON, err := GenerateCSR(bundle.Leaf, pkcs8Bytes, input.CSRSubject)
-	if err != nil {
-		return nil, fmt.Errorf("generating CSR: %w", err)
+	if wants("json") {
+		data, err := GenerateJSON(bundle)
+		if err != nil {
+			return nil, fmt.Errorf("generating JSON: %w", err)
+		}
+		files = append(files, BundleFile{Name: prefix + ".json", Data: data})
 	}
-	files = append(files, BundleFile{Name: prefix + ".csr", Data: csrPEM})
-	files = append(files, BundleFile{Name: prefix + ".csr.json", Data: csrJSON})
-
+	if wants("yaml") {
+		data, err := GenerateYAML(bundle, keyOutput, input.KeyType, input.BitLength)
+		if err != nil {
+			return nil, fmt.Errorf("generating YAML: %w", err)
+		}
+		files = append(files, BundleFile{Name: prefix + ".yaml", Data: data, Sensitive: true})
+	}
+	if wants("csr") || wants("csr-json") {
+		csrPEM, csrJSON, err := GenerateCSR(bundle.Leaf, pkcs8Bytes, input.CSRSubject)
+		if err != nil {
+			return nil, fmt.Errorf("generating CSR: %w", err)
+		}
+		if wants("csr") {
+			files = append(files, BundleFile{Name: prefix + ".csr", Data: csrPEM})
+		}
+		if wants("csr-json") {
+			files = append(files, BundleFile{Name: prefix + ".csr.json", Data: csrJSON})
+		}
+	}
 	return files, nil
 }
 
@@ -383,8 +393,8 @@ type ExportMatchedBundleInput struct {
 }
 
 // ExportMatchedBundles builds certificate chains and writes bundle files for
-// each matched key-cert pair. This is the shared orchestration used by both CLI
-// and WASM exports.
+// each matched key-cert pair. WASM and legacy internal exports use this
+// orchestration; managed CLI exports use a separate preflight plan.
 func ExportMatchedBundles(ctx context.Context, input ExportMatchedBundleInput) error {
 	intermediates := input.Store.Intermediates()
 	opts := input.BundleOpts

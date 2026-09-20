@@ -13,13 +13,16 @@ import (
 var (
 	errScanRootPathRequired = errors.New("root path is required")
 	errScanFileHandlerNil   = errors.New("file handler is required")
+	errScanInputExcluded    = errors.New("scan input cannot also be a bundle output or password file")
 )
 
 // WalkScanFilesInput configures WalkScanFiles.
 type WalkScanFilesInput struct {
 	RootPath    string
 	MaxFileSize int64
-	OnFile      func(path string) error
+	// ExcludePaths omits declared output directories and secret input files.
+	ExcludePaths []string
+	OnFile       func(path string) error
 }
 
 // WalkScanFiles iterates scan-eligible files under RootPath.
@@ -31,6 +34,24 @@ func WalkScanFiles(input WalkScanFilesInput) error {
 		return errScanFileHandlerNil
 	}
 
+	excluded := make(map[string]bool)
+	for _, path := range input.ExcludePaths {
+		if path == "" {
+			continue
+		}
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return fmt.Errorf("resolving excluded scan path: %w", err)
+		}
+		excluded[absolute] = true
+	}
+	isExcluded := func(path string) bool {
+		absolute, err := filepath.Abs(path)
+		return err == nil && excluded[absolute]
+	}
+	if isExcluded(input.RootPath) {
+		return errScanInputExcluded
+	}
 	info, err := os.Stat(input.RootPath)
 	if err != nil {
 		return fmt.Errorf("stat %s: %w", input.RootPath, err)
@@ -62,8 +83,14 @@ func WalkScanFiles(input WalkScanFilesInput) error {
 			}
 			return nil
 		}
+		if isExcluded(path) {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		if d.IsDir() {
-			if IsSkippableDir(d.Name()) {
+			if path != input.RootPath && IsSkippableDir(d.Name()) {
 				slog.Debug("skipping directory", "path", path)
 				return filepath.SkipDir
 			}
