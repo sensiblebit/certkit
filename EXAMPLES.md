@@ -451,6 +451,8 @@ Resume from a previous scan:
 certkit scan /path/to/new-certs/ --load-db inventory.db --save-db inventory.db
 ```
 
+Declared `--save-db` and `--load-db` paths are excluded from file ingestion, including their symlink aliases. `--load-db` imports the saved inventory once through the database loader; `--save-db` alone does not import an existing snapshot.
+
 ### Dump all certs or keys to a single file
 
 Dump every discovered certificate into a single PEM file:

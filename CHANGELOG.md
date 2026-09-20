@@ -40,6 +40,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Reserve unselected configuration aliases before the first scoped export, including when the output directory does not yet exist ([#225])
+- Exclude declared database snapshots and their symlink aliases from scan file ingestion while preserving explicit `--load-db` imports ([#225])
 - Preserve unselected existing bundles when a scoped refresh uses a case or sanitized name alias, and recheck directory names before applying the plan ([#225])
 - Identify the operation when loading trust pools fails during managed bundle export, preserving the underlying error ([#225])
 - Reject bundle-directory names that differ only by case, preventing one requested bundle from silently overwriting another on case-insensitive filesystems ([#225])

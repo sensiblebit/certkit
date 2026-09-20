@@ -277,6 +277,13 @@ func (p *BundleExportPlan) checkDirectoryScope() error {
 	if len(p.writes) == 0 {
 		return nil
 	}
+	for _, write := range p.writes {
+		for _, folder := range p.unselectedFolders {
+			if strings.EqualFold(folder, write.folder) {
+				return fmt.Errorf("%w: selected directory %q also belongs to an unselected configuration rule; configure distinct bundle names", errExportBundleFolderCollision, write.folder)
+			}
+		}
+	}
 	children, err := os.ReadDir(p.outDir)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
@@ -289,11 +296,6 @@ func (p *BundleExportPlan) checkDirectoryScope() error {
 			if strings.EqualFold(child.Name(), write.folder) {
 				if child.Name() != write.folder {
 					return fmt.Errorf("%w: selected directory %q aliases existing directory %q; use the exact existing name or configure a distinct bundle name", errExportBundleFolderCollision, write.folder, child.Name())
-				}
-				for _, folder := range p.unselectedFolders {
-					if strings.EqualFold(folder, write.folder) {
-						return fmt.Errorf("%w: selected directory %q also belongs to an unselected configuration rule; configure distinct bundle names", errExportBundleFolderCollision, write.folder)
-					}
 				}
 			}
 		}

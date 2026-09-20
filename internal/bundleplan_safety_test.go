@@ -280,3 +280,37 @@ func TestBundlePlan_RechecksDirectoryNamesBeforeWrite(t *testing.T) {
 		t.Fatalf("blocked write changed directory names: %v, %v", children, err)
 	}
 }
+
+func TestBundlePlan_RejectsUnselectedAliasesBeforeFirstExport(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name  string
+		mkdir bool
+	}{
+		{"missing output directory", false},
+		{"empty output directory", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			fixture := newBundlePlanFixture(t)
+			fixture.input.Configs = append(fixture.input.Configs, BundleConfig{CommonNames: []string{" service-tls "}})
+			fixture.input.BundleNames = []string{"service-tls"}
+			fixture.input.Formats = []string{"pem"}
+			if test.mkdir {
+				if err := os.MkdirAll(fixture.input.OutDir, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := PlanBundleExports(context.Background(), fixture.input); !errors.Is(err, errExportBundleFolderCollision) {
+				t.Fatalf("first export claimed an unselected alias: %v", err)
+			}
+			children, err := os.ReadDir(fixture.input.OutDir)
+			if test.mkdir && (err != nil || len(children) != 0) {
+				t.Fatalf("blocked plan changed the empty output directory: %v, %v", children, err)
+			}
+			if !test.mkdir && !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("blocked plan created an output directory: %v", err)
+			}
+		})
+	}
+}

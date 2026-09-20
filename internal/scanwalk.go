@@ -13,14 +13,14 @@ import (
 var (
 	errScanRootPathRequired = errors.New("root path is required")
 	errScanFileHandlerNil   = errors.New("file handler is required")
-	errScanInputExcluded    = errors.New("scan input cannot also be a declared output or password file")
+	errScanInputExcluded    = errors.New("scan input cannot also be a declared output, database, or password file")
 )
 
 // WalkScanFilesInput configures WalkScanFiles.
 type WalkScanFilesInput struct {
 	RootPath    string
 	MaxFileSize int64
-	// ExcludePaths omits declared output directories and secret input files.
+	// ExcludePaths omits declared outputs, databases, and secret input files.
 	ExcludePaths []string
 	OnFile       func(path string) error
 }

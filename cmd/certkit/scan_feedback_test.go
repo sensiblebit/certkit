@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -76,6 +77,66 @@ func TestRunScan_ExcludesExistingDumpOutputs(t *testing.T) {
 				if err != nil || len(certs) != 1 || !certs[0].Equal(leaf) {
 					t.Fatalf("dump must contain only the current certificate: %v", err)
 				}
+			}
+		})
+	}
+}
+
+func TestRunScan_ExcludesDeclaredDatabasesFromFileIngestion(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		load bool
+		save bool
+	}{
+		{"save snapshot", false, true},
+		{"load snapshot", true, false},
+		{"load and save snapshot", true, true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			_, input := setupScanRefreshTest(t)
+			scanBundlePath, scanFormat, jsonOutput = "", "text", false
+			key, leaf := generateKeyAndCert(t, "current.example.com", false)
+			delivery, err := certkit.EncodePKCS12Legacy(key, leaf, nil, internal.DefaultExportPassword)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(input, "delivery.p12"), delivery, 0600); err != nil {
+				t.Fatal(err)
+			}
+			oldKey, oldLeaf := generateKeyAndCert(t, "stale.example.com", false)
+			oldPEM, err := certkit.MarshalPrivateKeyToPEM(oldKey)
+			if err != nil {
+				t.Fatal(err)
+			}
+			store := certstore.NewMemStore()
+			if err := store.HandleCertificate(oldLeaf, "old.pem"); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.HandleKey(oldKey, []byte(oldPEM), "old.key"); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(input, "snapshot.db")
+			if err := certstore.SaveToSQLite(store, path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(path, filepath.Join(input, "snapshot-alias")); err != nil {
+				t.Fatal(err)
+			}
+			wantCount := 1
+			if test.load {
+				scanLoadDB = path
+				wantCount++ // --load-db deliberately imports the stored inventory.
+			}
+			if test.save {
+				scanSaveDB = path
+			}
+			stdout, _, err := captureOutput(t, func() error { return runScan(newCommandWithContext(), []string{input}) })
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := fmt.Sprintf("Found %d certificate(s) and %d key(s) in 1 file(s)\n", wantCount, wantCount)
+			if !strings.HasPrefix(stdout, want) {
+				t.Fatalf("database or its alias was ingested as a file: %s", stdout)
 			}
 		})
 	}
