@@ -343,3 +343,26 @@ func TestBundlePlan_RejectsConflictingManifestIdentities(t *testing.T) {
 		t.Fatalf("conflicting manifest identities were accepted despite force: %v", err)
 	}
 }
+
+func TestBundlePlan_RejectsWindowsReservedDirectories(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"service.", "service..", "service. ", "CON", "nul.example.com", "Aux", "COM1", "lpt9.txt", "COM¹", "CONIN$", "conout$"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			fixture := newBundlePlanFixture(t)
+			leaf := newECDSALeaf(t, fixture.ca, name, nil)
+			if err := fixture.input.Store.HandleCertificate(leaf.cert, "delivery.pem"); err != nil {
+				t.Fatal(err)
+			}
+			fixture.input.Configs = append(fixture.input.Configs, BundleConfig{CommonNames: []string{name}})
+			AssignBundleNames(fixture.input.Store, fixture.input.Configs)
+			fixture.input.Formats = []string{"pem"}
+			if _, err := PlanBundleExports(context.Background(), fixture.input); !errors.Is(err, errBundlePlanInput) {
+				t.Fatalf("windows-reserved directory was accepted: %v", err)
+			}
+			if _, err := os.Stat(fixture.input.OutDir); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("invalid directory name wrote output")
+			}
+		})
+	}
+}

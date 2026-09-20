@@ -406,6 +406,8 @@ Managed exports reserve `manifest.json` for the export manifest and `.certkit-re
 
 Bundle directory names must also remain distinct after sanitization and case-insensitive comparison. For example, CN-derived names `MIXED.example.com` and `mixed.example.com` cannot be exported together. Scoped refresh rejects names claimed by an unselected configuration rule, even before those directories exist. It also rejects aliases of existing directories and refuses to replace a directory whose manifest identifies a different bundle. These protections apply even with `--force`; directory names and contents are rechecked before writing. Use the exact existing bundle name or configure distinct names to preserve both outputs.
 
+Managed directory names must be portable: names ending in a period and Windows device names such as `CON`, `NUL`, or `COM1` are rejected on every platform. Set an explicit, distinct `bundleName` when a certificate's CN would produce one of these names.
+
 Default artifacts are `pem,key,chain,fullchain,intermediates,root,json,p12`. Select any subset with `--formats`; public-only formats work without a private key. YAML, Kubernetes secrets, and CSR files require explicit selection:
 
 | Format | File | Contents |

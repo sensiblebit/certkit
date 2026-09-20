@@ -222,6 +222,9 @@ func PlanBundleExports(ctx context.Context, input BundlePlanInput) (*BundleExpor
 			if strings.EqualFold(folder, bundleRefreshLockName) {
 				return nil, fmt.Errorf("%w: bundle directory %q is reserved for the refresh lock; configure a different bundle name", errBundlePlanInput, folder)
 			}
+			if isWindowsReservedBundleFolder(folder) {
+				return nil, fmt.Errorf("%w: bundle directory %q uses a windows-reserved name or trailing period; configure a different bundle name", errBundlePlanInput, folder)
+			}
 			for previousFolder, previousName := range folders {
 				if strings.EqualFold(previousFolder, folder) {
 					return nil, fmt.Errorf("%w: %q and %q map to the same directory on a case-insensitive filesystem", errExportBundleFolderCollision, previousName, name)
@@ -269,6 +272,25 @@ func PlanBundleExports(ctx context.Context, input BundlePlanInput) (*BundleExpor
 		return nil, err
 	}
 	return plan, nil
+}
+
+// isWindowsReservedBundleFolder keeps managed directory names portable even
+// when a plan is prepared on a different operating system.
+func isWindowsReservedBundleFolder(folder string) bool {
+	if strings.HasSuffix(folder, ".") || strings.HasSuffix(folder, " ") {
+		return true
+	}
+	base, _, _ := strings.Cut(folder, ".")
+	base = strings.ToUpper(strings.TrimRight(base, " "))
+	if slices.Contains([]string{"CON", "PRN", "AUX", "NUL", "CONIN$", "CONOUT$"}, base) {
+		return true
+	}
+	chars := []rune(base)
+	if len(chars) == 4 && (strings.HasPrefix(base, "COM") || strings.HasPrefix(base, "LPT")) {
+		digit := chars[3]
+		return digit >= '1' && digit <= '9' || digit == '¹' || digit == '²' || digit == '³'
+	}
+	return false
 }
 
 // checkDirectoryScope uses directory entry names rather than path lookup, which
