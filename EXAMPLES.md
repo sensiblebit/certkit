@@ -519,6 +519,8 @@ certkit scan ./tmp -c bundles.yaml --bundle-path ./bundles \
 
 `--json` prints the export manifest, including created/replaced/skipped status and reasons. Every saved bundle also contains `manifest.json`. Existing directories are replaced as a unit; unselected artifacts from a previous export are removed and listed in the plan.
 
+`manifest.json` and the output-directory lock `.certkit-refresh.lock` are reserved, including case variants. If the CN is `manifest`, omit `json` from `--formats`. If a CN-derived bundle directory collides with the lock name, set a different `bundleName` in the configuration. Collisions fail during the preview.
+
 Scan input passwords never become output passwords. To deliberately create an encrypted key and P12, supply a separate output password file:
 
 ```sh
@@ -529,7 +531,7 @@ certkit scan ./tmp -c bundles.yaml --bundle-path ./bundles \
 
 Without `--output-password-file`, P12 uses the intentional `changeit` default with a warning on stderr. Select formats without `p12` to omit the archive. A selected `.yaml` artifact also contains a private key, encrypted only when `--output-password-file` is supplied. Kubernetes TLS secrets (`--formats k8s`) always contain unencrypted keys.
 
-Expiration downgrades and equal-expiry conflicts are blocked by default. `--force` explicitly allows those replacements **and untrusted certificates**. Expired leaves additionally require `--allow-expired`; with verification enabled, their chains are checked at the leaf's `NotBefore` time, reported in chain warnings. The manifest records force overrides and whether trust verification was disabled. Selection uses latest expiry, latest issuance time, and then a stable fingerprint tie-breaker. Unselected candidates and their reasons appear in the plan and manifest; they do not count as failed bundles for `--fail-on-skip`.
+Expiration downgrades and equal-expiry conflicts are blocked for candidates that pass the key, expiry, and trust checks. Optional candidates that fail those checks are skipped before replacement conflicts are considered. `--force` explicitly allows protected replacements **and untrusted certificates**. Expired leaves additionally require `--allow-expired`; with verification enabled, their chains are checked at the leaf's `NotBefore` time, reported in chain warnings. The manifest records force overrides and whether trust verification was disabled. Selection uses latest expiry, latest issuance time, and then a stable fingerprint tie-breaker. Unselected candidates and their reasons appear in the plan and manifest; they do not count as failed bundles for `--fail-on-skip`.
 
 ---
 

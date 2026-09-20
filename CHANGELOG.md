@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Reserve managed manifest and refresh-lock names during planning, and skip optional untrusted candidates before replacement conflicts can block other exports ([#225])
 - Skip optional expired or keyless bundle candidates before replacement checks, exclude existing dump outputs from scans, and stop managed writes if the default-password warning cannot be displayed ([#225])
 - Ignore CSR JSON when identifying existing bundle certificates, so complete legacy bundles can refresh without a false replacement conflict; report the filename for malformed certificate artifacts ([#225])
 - Keep the managed P12 default-password warning visible regardless of `--log-level` ([#225])

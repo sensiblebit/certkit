@@ -75,7 +75,7 @@ func inspectBundleDirectory(path string) (bundleDirectoryState, error) {
 		switch {
 		case strings.HasSuffix(name, ".pem"):
 			pemData = string(data)
-		case name == "manifest.json":
+		case name == bundleManifestName:
 			var manifest BundleExportEntry
 			if err := json.Unmarshal(data, &manifest); err != nil {
 				state.ambiguity = "existing export manifest is invalid"
@@ -109,7 +109,7 @@ func inspectBundleDirectory(path string) (bundleDirectoryState, error) {
 			for _, cert := range certs {
 				// A manifest identifies the selected certificate, which may itself
 				// be a CA. Other artifacts can contain unrelated chain CAs.
-				if !cert.IsCA || name == "manifest.json" {
+				if !cert.IsCA || name == bundleManifestName {
 					leaf := describeBundleLeaf(cert, filepath.Join(path, name))
 					if _, exists := leaves[leaf.Fingerprint]; !exists {
 						leaves[leaf.Fingerprint] = leaf

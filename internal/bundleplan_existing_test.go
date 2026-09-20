@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"crypto/x509"
 	"errors"
 	"os"
 	"path/filepath"
@@ -54,6 +55,8 @@ func TestBundlePlan_SkipsUnusableReplacementCandidates(t *testing.T) {
 			}
 			AssignBundleNames(store, fixture.input.Configs)
 			fixture.input.Store, fixture.input.ForceBundle = store, false
+			fixture.input.TrustStore = "custom"
+			fixture.input.CustomRoots = []*x509.Certificate{fixture.ca.cert}
 			fixture.input.AllowExpired = test.allowExpired
 			if test.publicOnly {
 				fixture.input.Formats = []string{"pem"}
@@ -120,6 +123,9 @@ func TestBundlePlan_CSRMetadataDoesNotBlockRefresh(t *testing.T) {
 			t.Parallel()
 			fixture := newBundlePlanFixture(t)
 			fixture.input.Formats = certstore.BundleFormats()
+			fixture.input.ForceBundle = false
+			fixture.input.TrustStore = "custom"
+			fixture.input.CustomRoots = []*x509.Certificate{fixture.ca.cert}
 			plan, err := PlanBundleExports(context.Background(), fixture.input)
 			if err != nil {
 				t.Fatal(err)
@@ -138,7 +144,6 @@ func TestBundlePlan_CSRMetadataDoesNotBlockRefresh(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			fixture.input.ForceBundle = false
 			refresh, err := PlanBundleExports(context.Background(), fixture.input)
 			if err != nil {
 				t.Fatal(err)
@@ -153,15 +158,8 @@ func TestBundlePlan_CSRMetadataDoesNotBlockRefresh(t *testing.T) {
 				}
 				return
 			}
-			// The generated CA is untrusted, but valid CSR metadata must not
-			// prevent the planner from reaching the separate trust check.
-			if entry.Status != "skipped" || !strings.Contains(entry.Reason, "certificate verification failed") {
+			if entry.Status != "planned" || entry.Chain.Status != "verified" {
 				t.Fatalf("CSR metadata incorrectly blocked replacement: %+v", entry)
-			}
-			fixture.input.ForceBundle = true
-			refresh, err = PlanBundleExports(context.Background(), fixture.input)
-			if err != nil {
-				t.Fatal(err)
 			}
 			if refresh.Entries[0].Reason != "same leaf certificate; refresh selected artifacts" {
 				t.Fatal("valid CSR metadata still requires a replacement override")
@@ -245,6 +243,12 @@ func TestBundlePlan_ManagedCAReplacement(t *testing.T) {
 			}
 			AssignBundleNames(store, fixture.input.Configs)
 			fixture.input.Store, fixture.input.ForceBundle = store, false
+			fixture.input.TrustStore = "custom"
+			fixture.input.CustomRoots = []*x509.Certificate{fixture.ca.cert}
+			if !test.intermediate {
+				// For root bundles, trust the candidate root itself.
+				fixture.input.CustomRoots = []*x509.Certificate{older}
+			}
 			downgrade, err := PlanBundleExports(context.Background(), fixture.input)
 			if err != nil {
 				t.Fatal(err)

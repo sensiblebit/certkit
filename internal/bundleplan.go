@@ -24,6 +24,11 @@ var ErrBundlePlanBlocked = errors.New("bundle export plan is blocked")
 
 var errBundlePlanInput = errors.New("invalid bundle export request")
 
+const (
+	bundleManifestName    = "manifest.json"
+	bundleRefreshLockName = ".certkit-refresh.lock"
+)
+
 // BundleLeaf describes a selected or existing certificate without private material.
 type BundleLeaf struct {
 	CommonName     string    `json:"common_name"`
@@ -95,6 +100,8 @@ type BundlePlanInput struct {
 	AllowPrivateNetworks bool
 	AIATimeout           time.Duration
 	AllowExpired         bool
+	// CustomRoots supplies trust anchors when TrustStore is "custom".
+	CustomRoots []*x509.Certificate
 }
 
 // BundleExportPlan contains a reviewable manifest and private, in-memory output.
@@ -202,6 +209,9 @@ func PlanBundleExports(ctx context.Context, input BundlePlanInput) (*BundleExpor
 			if err != nil {
 				return nil, fmt.Errorf("sanitizing bundle %q: %w", name, err)
 			}
+			if strings.EqualFold(folder, bundleRefreshLockName) {
+				return nil, fmt.Errorf("%w: bundle directory %q is reserved for the refresh lock; configure a different bundle name", errBundlePlanInput, folder)
+			}
 			if previous, ok := folders[folder]; ok {
 				return nil, fmt.Errorf("%w: %q and %q map to %q", errExportBundleFolderCollision, previous, name, folder)
 			}
@@ -301,38 +311,9 @@ func planBundleCandidate(ctx context.Context, input planBundleCandidateInput) (B
 		entry.Reason = "certificate has expired; use --allow-expired to permit expired leaves"
 		return entry, write, nil
 	}
-	existing, err := inspectBundleDirectory(entry.OutputDirectory)
-	if err != nil {
-		return entry, write, err
-	}
-	write.existing = existing
-	entry.ExistingLeaf = existing.leaf
-	if existing.exists {
-		entry.Action = "replace"
-		entry.Reason = "candidate expires later than the existing leaf"
-		conflict := existing.ambiguity
-		if existing.leaf != nil {
-			switch {
-			case entry.Leaf.Fingerprint == existing.leaf.Fingerprint:
-				entry.Reason = "same leaf certificate; refresh selected artifacts"
-			case entry.Leaf.NotAfter.Before(existing.leaf.NotAfter):
-				conflict = "candidate would downgrade the existing expiration"
-			case entry.Leaf.NotAfter.Equal(existing.leaf.NotAfter):
-				conflict = "same expiration with a different certificate fingerprint"
-			}
-		}
-		if conflict != "" {
-			entry.Reason = conflict
-			if !opts.ForceBundle {
-				entry.Status = "blocked"
-				entry.Reason += "; use --force to explicitly allow replacement"
-				return entry, write, nil
-			}
-			entry.Forced = true
-		}
-	}
 	bundleOpts := certkit.DefaultOptions()
 	bundleOpts.AllowExpired = opts.AllowExpired
+	bundleOpts.CustomRoots = opts.CustomRoots
 	bundleOpts.ExtraIntermediates = opts.Store.Intermediates()
 	bundleOpts.AllowPrivateNetworks = opts.AllowPrivateNetworks
 	if opts.AIATimeout > 0 {
@@ -369,6 +350,36 @@ func planBundleCandidate(ctx context.Context, input planBundleCandidateInput) (B
 	for _, cert := range bundle.Roots {
 		entry.Chain.Roots = append(entry.Chain.Roots, certkit.CertFingerprint(cert))
 	}
+	existing, err := inspectBundleDirectory(entry.OutputDirectory)
+	if err != nil {
+		return entry, write, err
+	}
+	write.existing = existing
+	entry.ExistingLeaf = existing.leaf
+	if existing.exists {
+		entry.Action = "replace"
+		entry.Reason = "candidate expires later than the existing leaf"
+		conflict := existing.ambiguity
+		if existing.leaf != nil {
+			switch {
+			case entry.Leaf.Fingerprint == existing.leaf.Fingerprint:
+				entry.Reason = "same leaf certificate; refresh selected artifacts"
+			case entry.Leaf.NotAfter.Before(existing.leaf.NotAfter):
+				conflict = "candidate would downgrade the existing expiration"
+			case entry.Leaf.NotAfter.Equal(existing.leaf.NotAfter):
+				conflict = "same expiration with a different certificate fingerprint"
+			}
+		}
+		if conflict != "" {
+			entry.Reason = conflict
+			if !opts.ForceBundle {
+				entry.Status = "blocked"
+				entry.Reason += "; use --force to explicitly allow replacement"
+				return entry, write, nil
+			}
+			entry.Forced = true
+		}
+	}
 	fileInput := certstore.BundleExportInput{Bundle: bundle,
 		Prefix: certstore.SanitizeFileName(certstore.FormatCN(rec.Cert)), SecretName: rec.BundleName,
 		P12Password: opts.P12Password, EncryptKey: opts.EncryptKey, Formats: opts.Formats}
@@ -384,9 +395,12 @@ func planBundleCandidate(ctx context.Context, input planBundleCandidateInput) (B
 		return entry, write, fmt.Errorf("generating selected artifacts: %w", err)
 	}
 	for _, file := range files {
+		if strings.EqualFold(file.Name, bundleManifestName) {
+			return entry, write, fmt.Errorf("%w: generated artifact %q conflicts with the reserved export manifest; omit the json format", errBundlePlanInput, file.Name)
+		}
 		entry.Files = append(entry.Files, file.Name)
 	}
-	entry.Files = append(entry.Files, "manifest.json")
+	entry.Files = append(entry.Files, bundleManifestName)
 	for _, name := range existing.files {
 		if !slices.Contains(entry.Files, name) {
 			entry.RemovedFiles = append(entry.RemovedFiles, name)
@@ -423,7 +437,7 @@ func (p *BundleExportPlan) Write(ctx context.Context) error {
 	if err := os.MkdirAll(p.outDir, 0o755); err != nil {
 		return fmt.Errorf("creating bundle output directory: %w", err)
 	}
-	lockPath := filepath.Join(p.outDir, ".certkit-refresh.lock")
+	lockPath := filepath.Join(p.outDir, bundleRefreshLockName)
 	if err := os.Mkdir(lockPath, 0o700); err != nil {
 		return fmt.Errorf("acquiring bundle refresh lock (another refresh may be running): %w", err)
 	}
@@ -455,7 +469,7 @@ func (p *BundleExportPlan) Write(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("encoding export manifest: %w", err)
 		}
-		files := append(slices.Clone(write.files), certstore.BundleFile{Name: "manifest.json", Data: append(data, '\n')})
+		files := append(slices.Clone(write.files), certstore.BundleFile{Name: bundleManifestName, Data: append(data, '\n')})
 		if err := writer.WriteBundleFiles(write.folder, files); err != nil {
 			return fmt.Errorf("writing bundle %q: %w", entry.BundleName, err)
 		}

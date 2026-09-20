@@ -179,6 +179,8 @@ func TestBundlePlan_ReplacementProtection(t *testing.T) {
 				t.Fatal(err)
 			}
 			fixture.input.ForceBundle = test.force
+			fixture.input.TrustStore = "custom"
+			fixture.input.CustomRoots = []*x509.Certificate{fixture.ca.cert}
 			plan, err := PlanBundleExports(context.Background(), fixture.input)
 			if err != nil {
 				t.Fatal(err)
