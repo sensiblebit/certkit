@@ -375,7 +375,12 @@ func planBundleCandidate(ctx context.Context, input planBundleCandidateInput) (B
 		entry.Status, entry.Action, entry.Reason = "skipped", "skip", "no matching private key was found"
 		return entry, write, nil
 	}
-	if time.Now().After(rec.Cert.NotAfter) && !opts.AllowExpired {
+	now := time.Now()
+	if now.Before(rec.Cert.NotBefore) {
+		entry.Status, entry.Action, entry.Reason = "skipped", "skip", "certificate is not yet valid"
+		return entry, write, nil
+	}
+	if now.After(rec.Cert.NotAfter) && !opts.AllowExpired {
 		entry.Status, entry.Action = "skipped", "skip"
 		entry.Reason = "certificate has expired; use --allow-expired to permit expired leaves"
 		return entry, write, nil

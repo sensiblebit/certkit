@@ -108,6 +108,70 @@ func TestBundlePlan_SkipsUnusableReplacementCandidates(t *testing.T) {
 	}
 }
 
+func TestBundlePlan_FutureCertificatesCannotReplaceExistingBundles(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name         string
+		force        bool
+		allowExpired bool
+		requirement  string
+	}{
+		{"verified", false, false, ""},
+		{"forced", true, false, ""},
+		{"forced with expired allowed", true, true, ""},
+		{"required forced export", true, false, "required"},
+		{"selected forced export", true, false, "selected"},
+		{"fail on forced skip", true, false, "fail-on-skip"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			fixture := newBundlePlanFixture(t)
+			future := resignBundleLeaf(t, resignBundleLeafInput{Fixture: fixture, Serial: 42,
+				NotBefore: time.Now().Add(time.Hour), NotAfter: fixture.leaf.cert.NotAfter.Add(24 * time.Hour)})
+			if err := fixture.input.Store.HandleCertificate(future, "future.pem"); err != nil {
+				t.Fatal(err)
+			}
+			AssignBundleNames(fixture.input.Store, fixture.input.Configs)
+			fixture.input.ForceBundle, fixture.input.AllowExpired = test.force, test.allowExpired
+			switch test.requirement {
+			case "required":
+				fixture.input.RequireBundles = []string{"service-tls"}
+			case "selected":
+				fixture.input.BundleNames = []string{"service-tls"}
+			case "fail-on-skip":
+				fixture.input.FailOnSkip = true
+			}
+			dir := filepath.Join(fixture.input.OutDir, "service-tls")
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dir, "installed.pem")
+			original := certkit.CertToPEM(fixture.leaf.cert)
+			if err := os.WriteFile(path, []byte(original), 0600); err != nil {
+				t.Fatal(err)
+			}
+			plan, err := PlanBundleExports(context.Background(), fixture.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			entry := plan.Entries[0]
+			if entry.Status != "skipped" || entry.Reason != "certificate is not yet valid" || entry.Leaf.Fingerprint != certkit.CertFingerprint(future) {
+				t.Fatalf("future candidate was exported or silently replaced with an older candidate: %+v", entry)
+			}
+			err = plan.Write(context.Background())
+			if test.requirement != "" && !errors.Is(err, ErrBundlePlanBlocked) {
+				t.Fatalf("required future bundle did not block writing: %v", err)
+			}
+			if test.requirement == "" && err != nil {
+				t.Fatalf("optional future bundle was not skipped: %v", err)
+			}
+			if string(mustReadTestFile(t, path)) != original {
+				t.Fatal("future certificate replaced the existing bundle")
+			}
+		})
+	}
+}
+
 func TestBundlePlan_CSRMetadataDoesNotBlockRefresh(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
