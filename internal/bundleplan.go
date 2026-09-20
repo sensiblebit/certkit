@@ -212,8 +212,10 @@ func PlanBundleExports(ctx context.Context, input BundlePlanInput) (*BundleExpor
 			if strings.EqualFold(folder, bundleRefreshLockName) {
 				return nil, fmt.Errorf("%w: bundle directory %q is reserved for the refresh lock; configure a different bundle name", errBundlePlanInput, folder)
 			}
-			if previous, ok := folders[folder]; ok {
-				return nil, fmt.Errorf("%w: %q and %q map to %q", errExportBundleFolderCollision, previous, name, folder)
+			for previousFolder, previousName := range folders {
+				if strings.EqualFold(previousFolder, folder) {
+					return nil, fmt.Errorf("%w: %q and %q map to the same directory on a case-insensitive filesystem", errExportBundleFolderCollision, previousName, name)
+				}
 			}
 			folders[folder] = name
 			entry, write, err := planBundleCandidate(ctx, planBundleCandidateInput{

@@ -156,3 +156,36 @@ func TestBundlePlan_ReservedOutputNames(t *testing.T) {
 		})
 	}
 }
+
+func TestBundlePlan_RejectsCaseInsensitiveDirectoryCollisions(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name  string
+		names []string
+	}{
+		{"ASCII case", []string{"MIXED.example.com", "mixed.example.com"}},
+		{"Unicode case", []string{"SigmaΣ", "Sigmaς"}},
+		{"sanitized aliases", []string{"api/example.com", "api_example.com"}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			fixture := newBundlePlanFixture(t)
+			fixture.input.Configs = nil
+			fixture.input.Formats = []string{"pem"}
+			for _, name := range test.names {
+				leaf := newECDSALeaf(t, fixture.ca, name, nil)
+				if err := fixture.input.Store.HandleCertificate(leaf.cert, name+".pem"); err != nil {
+					t.Fatal(err)
+				}
+				fixture.input.Configs = append(fixture.input.Configs, BundleConfig{CommonNames: []string{name}})
+			}
+			AssignBundleNames(fixture.input.Store, fixture.input.Configs)
+			if _, err := PlanBundleExports(context.Background(), fixture.input); !errors.Is(err, errExportBundleFolderCollision) {
+				t.Fatalf("colliding bundle directories were accepted: %v", err)
+			}
+			if _, err := os.Stat(fixture.input.OutDir); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("directory collision wrote output")
+			}
+		})
+	}
+}
