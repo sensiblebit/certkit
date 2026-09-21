@@ -79,10 +79,12 @@ type K8sMetadata struct {
 	Annotations map[string]string `yaml:"annotations,omitempty"`
 }
 
-// GenerateBundleFiles creates all output files for a certificate bundle.
-// The returned files include PEM variants, private key, PKCS#12, Kubernetes
-// TLS secret, JSON, YAML, CSR, and CSR JSON. Conditional files (intermediates,
-// root) are only included when the corresponding certificates exist.
+// GenerateBundleFiles creates the certificate bundle artifacts selected by
+// input.Formats. Nil Formats preserves the full legacy set: PEM variants,
+// private key, PKCS#12, Kubernetes TLS secret, JSON, YAML, CSR, and CSR JSON.
+// A non-nil Formats slice limits output to the requested formats; an empty or
+// invalid selection returns an error. Selected intermediates and root files
+// are included only when the corresponding certificates exist.
 func GenerateBundleFiles(input BundleExportInput) ([]BundleFile, error) {
 	bundle := input.Bundle
 	if err := validateBundle(bundle); err != nil {
