@@ -123,6 +123,8 @@ type plannedBundleWrite struct {
 	existing  bundleDirectoryState
 	notBefore time.Time
 	notAfter  time.Time
+	leaf      *x509.Certificate
+	verify    *x509.VerifyOptions
 }
 
 // Validate reports all decisions that prevent this plan from being applied.
@@ -437,6 +439,17 @@ func planBundleCandidate(ctx context.Context, input planBundleCandidateInput) (B
 	if !bundleOpts.Verify {
 		entry.Chain.Status = "verification_disabled"
 		entry.Forced = true
+	} else {
+		// Preserve the exact trusted chain that produced the planned artifacts.
+		// Reverification must not silently substitute a different chain at write time.
+		write.leaf = bundle.Leaf
+		write.verify = &x509.VerifyOptions{Roots: x509.NewCertPool(), Intermediates: x509.NewCertPool()}
+		for _, certificate := range bundle.Roots {
+			write.verify.Roots.AddCert(certificate)
+		}
+		for _, certificate := range bundle.Intermediates {
+			write.verify.Intermediates.AddCert(certificate)
+		}
 	}
 	entry.Chain.Warnings = bundle.Warnings
 	for _, cert := range bundle.Intermediates {
@@ -523,9 +536,13 @@ func describeBundleLeaf(cert *x509.Certificate, source string) *BundleLeaf {
 	return leaf
 }
 
-// Write applies a validated plan, rechecking every existing directory before
-// modifying any bundle. Each directory is replaced using staging and rollback.
+// Write applies a validated plan, rechecking existing directories and candidate
+// validity and trust before modifying bundles. Each directory is replaced using
+// staging and rollback; committed status is retained if backup cleanup fails.
 func (p *BundleExportPlan) Write(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("writing bundle plan: %w", err)
+	}
 	if err := p.Validate(); err != nil {
 		return err
 	}
@@ -560,7 +577,7 @@ func (p *BundleExportPlan) Write(ctx context.Context) error {
 		return err
 	}
 	for _, write := range p.writes {
-		if err := p.checkCandidateValidity(write); err != nil {
+		if err := p.checkCandidateAtWrite(write); err != nil {
 			return err
 		}
 		current, err := inspectBundleDirectory(p.Entries[write.entry].OutputDirectory)
@@ -576,7 +593,7 @@ func (p *BundleExportPlan) Write(ctx context.Context) error {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("writing bundle plan: %w", err)
 		}
-		if err := p.checkCandidateValidity(write); err != nil {
+		if err := p.checkCandidateAtWrite(write); err != nil {
 			return err
 		}
 		entry := p.Entries[write.entry]
@@ -590,6 +607,9 @@ func (p *BundleExportPlan) Write(ctx context.Context) error {
 		}
 		files := append(slices.Clone(write.files), certstore.BundleFile{Name: bundleManifestName, Data: append(data, '\n')})
 		if err := writer.WriteBundleFiles(write.folder, files); err != nil {
+			if errors.Is(err, errExportBundleCommittedCleanup) {
+				p.Entries[write.entry] = entry
+			}
 			return fmt.Errorf("writing bundle %q: %w", entry.BundleName, err)
 		}
 		p.Entries[write.entry] = entry
@@ -597,19 +617,40 @@ func (p *BundleExportPlan) Write(ctx context.Context) error {
 	return nil
 }
 
-func (p *BundleExportPlan) checkCandidateValidity(write plannedBundleWrite) error {
+func (p *BundleExportPlan) checkCandidateAtWrite(write plannedBundleWrite) error {
 	now := p.now()
 	reason := ""
+	entry := &p.Entries[write.entry]
+	var verificationErr error
 	if now.Before(write.notBefore) {
 		reason = "certificate is not yet valid at write time"
 	} else if !p.allowExpired && now.After(write.notAfter) {
 		reason = "certificate expired after planning; rerun with --allow-expired to permit expired leaves"
 	}
+	if reason == "" && write.verify != nil {
+		opts := *write.verify
+		opts.CurrentTime = now
+		if p.allowExpired && now.After(write.notAfter) {
+			opts.CurrentTime = write.notBefore
+		}
+		if _, err := write.leaf.Verify(opts); err != nil {
+			verificationErr = err
+			reason = "planned chain verification failed at write time: " + err.Error()
+			entry.Chain.Status = "untrusted"
+		} else if now.After(write.notAfter) {
+			warning := "expired leaf: chain verified at " + opts.CurrentTime.UTC().Format(time.RFC3339)
+			if !slices.Contains(entry.Chain.Warnings, warning) {
+				entry.Chain.Warnings = append(entry.Chain.Warnings, warning)
+			}
+		}
+	}
 	if reason == "" {
 		return nil
 	}
-	entry := &p.Entries[write.entry]
 	entry.Status, entry.Reason = "blocked", reason
 	p.blocked = append(p.blocked, entry.BundleName+": "+reason)
+	if verificationErr != nil {
+		return fmt.Errorf("%w: %w", p.Validate(), verificationErr)
+	}
 	return p.Validate()
 }

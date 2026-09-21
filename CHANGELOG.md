@@ -40,6 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Reject an already-canceled managed write before creating output directories or lock markers ([#225])
+- Reverify the planned trusted chain before managed writes, blocking expired intermediates or roots and retaining explicit force and expired-leaf policies ([#225])
+- Preserve replaced bundle status when backup cleanup fails after installation, report the retained backup path, and stop subsequent writes ([#225])
 - Reserve every selected bundle directory before candidate lookup and reject Unicode-equivalent aliases, including when a rule has no matching certificate yet ([#225])
 - Reject Windows device names in generated bundle artifacts even when the configured directory name is safe ([#225])
 - Recheck candidate validity before managed writes, preventing certificates that expire after planning from replacing bundles without explicit `--allow-expired` ([#225])

@@ -16,11 +16,12 @@ import (
 )
 
 var (
-	errExportBundleFolderEmpty     = errors.New("bundle folder name is empty")
-	errExportBundleFolderRelative  = errors.New("bundle folder name must be relative")
-	errExportBundleFolderEscapes   = errors.New("bundle folder name escapes output dir")
-	errExportBundleFolderCollision = errors.New("sanitized bundle folder collision")
-	errExportBundlePathNotDir      = errors.New("existing bundle path is not a directory")
+	errExportBundleFolderEmpty      = errors.New("bundle folder name is empty")
+	errExportBundleFolderRelative   = errors.New("bundle folder name must be relative")
+	errExportBundleFolderEscapes    = errors.New("bundle folder name escapes output dir")
+	errExportBundleFolderCollision  = errors.New("sanitized bundle folder collision")
+	errExportBundlePathNotDir       = errors.New("existing bundle path is not a directory")
+	errExportBundleCommittedCleanup = errors.New("bundle committed but backup cleanup failed")
 
 	exporterMkdirAll  = os.MkdirAll
 	exporterMkdir     = os.Mkdir
@@ -87,6 +88,7 @@ func (w *filesystemWriter) WriteBundleFiles(folder string, files []certstore.Bun
 	}
 
 	if err := replaceDirectoryAtomically(tempDir, folderPath); err != nil {
+		committed = errors.Is(err, errExportBundleCommittedCleanup)
 		return fmt.Errorf("committing bundle directory %s: %w", folderPath, err)
 	}
 	committed = true
@@ -127,7 +129,7 @@ func replaceDirectoryAtomically(tempDir, folderPath string) error {
 
 	if hadExisting {
 		if err := exporterRemoveAll(backupDir); err != nil {
-			return fmt.Errorf("removing replaced bundle backup: %w", err)
+			return fmt.Errorf("%w: removing %s: %w", errExportBundleCommittedCleanup, backupDir, err)
 		}
 	}
 	return nil
