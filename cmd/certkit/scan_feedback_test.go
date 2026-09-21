@@ -215,3 +215,30 @@ func TestRunScan_PasswordWarningFailurePreventsWrite(t *testing.T) {
 		t.Fatal("failed warning still applied the bundle plan")
 	}
 }
+
+func TestRunScan_ExportOutputFailurePreservesContext(t *testing.T) {
+	dir, input := setupScanRefreshTest(t)
+	jsonOutput, scanFormat = false, "text"
+	scanRefresh.Formats = []string{"pem"}
+	closed, err := os.CreateTemp(dir, "closed-stdout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := closed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	_, _, err = captureOutput(t, func() error {
+		stdout := os.Stdout
+		os.Stdout = closed
+		defer func() { os.Stdout = stdout }()
+		return runScan(newCommandWithContext(), []string{input})
+	})
+	if !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("output error cause was lost: %v", err)
+	}
+	for _, context := range []string{"exporting managed scan bundles", "printing bundle export plan", "writing bundle export plan"} {
+		if !strings.Contains(err.Error(), context) {
+			t.Fatalf("missing error context %q: %v", context, err)
+		}
+	}
+}

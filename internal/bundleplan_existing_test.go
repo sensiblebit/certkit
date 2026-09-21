@@ -17,14 +17,20 @@ import (
 func TestBundlePlan_PreservesMalformedArtifactDiagnostics(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
-		name           string
-		filename       string
-		contents       string
-		multipleLeaves bool
+		name      string
+		filename  string
+		contents  string
+		leafCount int
 	}{
-		{"malformed only certificate", "broken.pem", "not a PEM certificate", false},
-		{"malformed alongside multiple leaves", "broken.pem", "not a PEM certificate", true},
-		{"malformed manifest", "MANIFEST.JSON", "{", false},
+		{"malformed only certificate", "broken.pem", "not a PEM certificate", 0},
+		{"malformed alongside multiple leaves", "broken.pem", "not a PEM certificate", 2},
+		{"malformed manifest", "MANIFEST.JSON", "{", 0},
+		{"malformed JSON without leaf", "broken.json", "{", 0},
+		{"malformed JSON alongside valid leaf", "broken.json", "{", 1},
+		{"invalid JSON certificate field", "broken.json", `{"pem": 123}`, 1},
+		{"malformed YAML without leaf", "broken.yaml", "crt: [", 0},
+		{"malformed YAML alongside valid leaf", "broken.yaml", "crt: [", 1},
+		{"invalid YAML certificate field", "broken.yaml", "crt: [invalid]", 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -40,9 +46,12 @@ func TestBundlePlan_PreservesMalformedArtifactDiagnostics(t *testing.T) {
 			if err := os.WriteFile(path, []byte(test.contents), 0600); err != nil {
 				t.Fatal(err)
 			}
-			if test.multipleLeaves {
-				other := newECDSALeaf(t, fixture.ca, "other.example.com", nil)
-				leaves := certkit.CertToPEM(fixture.leaf.cert) + certkit.CertToPEM(other.cert)
+			if test.leafCount > 0 {
+				leaves := certkit.CertToPEM(fixture.leaf.cert)
+				if test.leafCount > 1 {
+					other := newECDSALeaf(t, fixture.ca, "other.example.com", nil)
+					leaves += certkit.CertToPEM(other.cert)
+				}
 				if err := os.WriteFile(filepath.Join(directory, "leaves.pem"), []byte(leaves), 0600); err != nil {
 					t.Fatal(err)
 				}

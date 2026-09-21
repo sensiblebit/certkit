@@ -40,6 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Include AIA-fetched certificates in configured bundle exports by assigning names after chain resolution ([#225])
+- Block replacement when existing JSON/YAML certificate metadata is malformed, even alongside a valid leaf, and retain filename-specific diagnostics ([#225])
+- Add managed-export and artifact-inspection context to propagated errors while preserving their underlying causes ([#225])
 - Reject colliding derived bundle names within one configuration rule while preserving deliberate grouping under an explicit `bundleName` ([#225])
 - Pin managed plans to absolute resolved output directories and validate directory identity before writing, preventing working-directory changes or retargeted aliases from redirecting exports ([#225])
 - Include the planned bundle name in errors that occur before staged artifacts reach the commit callback ([#225])

@@ -67,7 +67,7 @@ func inspectBundleDirectory(path string) (bundleDirectoryState, error) {
 		}
 		data, mode, err := readExistingBundleArtifact(root, name)
 		if err != nil {
-			return err
+			return fmt.Errorf("inspecting artifact %q: %w", name, err)
 		}
 		if _, err := fmt.Fprintf(hash, "%q:%d:%x\n", name, mode, sha256.Sum256(data)); err != nil {
 			return fmt.Errorf("fingerprinting existing bundle: %w", err)
@@ -98,7 +98,7 @@ func inspectBundleDirectory(path string) (bundleDirectoryState, error) {
 			if err := json.Unmarshal(data, &metadata); err == nil {
 				pemData = metadata.PEM
 			} else {
-				slog.Debug("existing JSON artifact has no usable certificate", "file", name, "error", err)
+				state.ambiguity = fmt.Sprintf("existing JSON certificate artifact %q is invalid", name)
 			}
 		case strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".k8s.yaml"):
 			var metadata struct {
@@ -107,7 +107,7 @@ func inspectBundleDirectory(path string) (bundleDirectoryState, error) {
 			if err := yaml.Unmarshal(data, &metadata); err == nil {
 				pemData = metadata.CRT
 			} else {
-				slog.Debug("existing YAML artifact has no usable certificate", "file", name, "error", err)
+				state.ambiguity = fmt.Sprintf("existing YAML certificate artifact %q is invalid", name)
 			}
 		}
 		if pemData != "" {

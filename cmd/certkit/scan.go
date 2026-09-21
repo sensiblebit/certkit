@@ -246,11 +246,6 @@ func runScan(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Assign bundle names post-ingestion
-	if scanExport {
-		internal.AssignBundleNames(store, bundleConfigs)
-	}
-
 	// Resolve missing intermediates via AIA before trust checking
 	if certstore.HasUnresolvedIssuers(store) {
 		slog.Debug("resolving certificate chains")
@@ -262,6 +257,11 @@ func runScan(cmd *cobra.Command, args []string) error {
 		for _, w := range aiaResult.Warnings {
 			slog.Debug("AIA resolution", "warning", w)
 		}
+	}
+
+	// Assign names after all ingestion, including certificates fetched through AIA.
+	if scanExport {
+		internal.AssignBundleNames(store, bundleConfigs)
 	}
 
 	if scanDumpKeys != "" {
@@ -402,7 +402,7 @@ func runScan(cmd *cobra.Command, args []string) error {
 		if err := runScanBundleExport(cmd.Context(), runScanBundleExportInput{
 			Store: store, Configs: bundleConfigs, OutputPassword: outputPassword, Format: format,
 		}); err != nil {
-			return err
+			return fmt.Errorf("exporting managed scan bundles: %w", err)
 		}
 	} else {
 		if progressEnabled {

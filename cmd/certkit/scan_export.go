@@ -168,7 +168,7 @@ func runScanBundleExport(ctx context.Context, input runScanBundleExportInput) er
 		}
 	} else {
 		if err := printBundleExportPlan(plan); err != nil {
-			return err
+			return fmt.Errorf("printing bundle export plan: %w", err)
 		}
 	}
 	if planErr != nil {
