@@ -142,6 +142,48 @@ func TestRunScan_ExcludesDeclaredDatabasesFromFileIngestion(t *testing.T) {
 	}
 }
 
+func TestRunScan_ProtectsControlFilesFromBundleReplacement(t *testing.T) {
+	for _, test := range []struct {
+		flag string
+		set  func(string)
+	}{
+		{"--config", func(path string) { scanConfigPath = path }},
+		{"--password-file", func(path string) { passwordFile = path }},
+		{"--input-password-file", func(path string) { scanRefresh.InputPasswordFile = path }},
+		{"--output-password-file", func(path string) { scanRefresh.OutputPasswordFile = path }},
+		{"--load-db", func(path string) { scanLoadDB = path }},
+		{"--save-db", func(path string) { scanSaveDB = path }},
+	} {
+		t.Run(test.flag, func(t *testing.T) {
+			_, input := setupScanRefreshTest(t)
+			scanRefresh.Write = true
+			dir := filepath.Join(scanBundlePath, "service-tls")
+			if err := os.MkdirAll(dir, 0700); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(dir, "control-file")
+			const original = "must survive replacement"
+			if err := os.WriteFile(path, []byte(original), 0600); err != nil {
+				t.Fatal(err)
+			}
+			test.set(path)
+			_, _, err := captureOutput(t, func() error { return runScan(newCommandWithContext(), []string{input}) })
+			if !errors.Is(err, errScanRefreshOptions) || !strings.Contains(err.Error(), test.flag) {
+				t.Fatalf("managed control file did not fail flag preflight: %v", err)
+			}
+			//nolint:gosec // This path belongs to the test's temporary directory.
+			data, err := os.ReadFile(path)
+			if err != nil || string(data) != original {
+				t.Fatalf("declared control file changed: %v", err)
+			}
+			files, err := os.ReadDir(dir)
+			if err != nil || len(files) != 1 {
+				t.Fatalf("invalid request wrote bundle artifacts: %v", err)
+			}
+		})
+	}
+}
+
 func TestRunScan_PasswordWarningFailurePreventsWrite(t *testing.T) {
 	dir, input := setupScanRefreshTest(t)
 	key, leaf := generateKeyAndCert(t, "service.example.com", false)

@@ -112,13 +112,17 @@ type BundleExportPlan struct {
 	writes            []plannedBundleWrite
 	blocked           []string
 	unselectedFolders map[string]string
+	allowExpired      bool
+	now               func() time.Time
 }
 
 type plannedBundleWrite struct {
-	entry    int
-	folder   string
-	files    []certstore.BundleFile
-	existing bundleDirectoryState
+	entry     int
+	folder    string
+	files     []certstore.BundleFile
+	existing  bundleDirectoryState
+	notBefore time.Time
+	notAfter  time.Time
 }
 
 // Validate reports all decisions that prevent this plan from being applied.
@@ -175,7 +179,8 @@ func PlanBundleExports(ctx context.Context, input BundlePlanInput) (*BundleExpor
 			return nil, fmt.Errorf("%w: required bundle %q is outside the selected scope", errBundlePlanInput, name)
 		}
 	}
-	plan := &BundleExportPlan{outDir: input.OutDir, Entries: []BundleExportEntry{}, unselectedFolders: map[string]string{}}
+	plan := &BundleExportPlan{outDir: input.OutDir, Entries: []BundleExportEntry{},
+		unselectedFolders: map[string]string{}, allowExpired: input.AllowExpired, now: time.Now}
 	for name := range rules {
 		if !slices.Contains(names, name) {
 			folder, err := certstore.SanitizeBundleFolder(name)
@@ -186,6 +191,14 @@ func PlanBundleExports(ctx context.Context, input BundlePlanInput) (*BundleExpor
 		}
 	}
 	folders := map[string]string{}
+	primaryFolders := map[string]string{}
+	for _, name := range names {
+		folder, err := reserveBundleFolder(folders, name)
+		if err != nil {
+			return nil, err
+		}
+		primaryFolders[name] = folder
+	}
 	for _, name := range names {
 		if err := ctx.Err(); err != nil {
 			return nil, fmt.Errorf("planning bundle export: %w", err)
@@ -197,7 +210,7 @@ func PlanBundleExports(ctx context.Context, input BundlePlanInput) (*BundleExpor
 		}
 		certs := input.Store.CertsByBundleName(name)
 		if len(certs) == 0 {
-			entry := BundleExportEntry{BundleName: name, OutputDirectory: filepath.Join(input.OutDir, name),
+			entry := BundleExportEntry{BundleName: name, OutputDirectory: filepath.Join(input.OutDir, primaryFolders[name]),
 				Rule: rules[name], Formats: formats, Files: []string{}, Action: "skip", Status: "skipped",
 				Reason: "no matching certificate was found", Chain: BundleChain{Status: "not_checked"}}
 			plan.Entries = append(plan.Entries, entry)
@@ -211,26 +224,14 @@ func PlanBundleExports(ctx context.Context, input BundlePlanInput) (*BundleExpor
 			if i > 0 && !input.Duplicates {
 				break
 			}
-			folderName := name
+			folder := primaryFolders[name]
 			if i > 0 {
-				folderName = fmt.Sprintf("%s_%s_%s_%s", name, rec.NotAfter.UTC().Format("20060102T150405Z"), rec.Cert.SerialNumber, certkit.CertFingerprint(rec.Cert)[:12])
-			}
-			folder, err := certstore.SanitizeBundleFolder(folderName)
-			if err != nil {
-				return nil, fmt.Errorf("sanitizing bundle %q: %w", name, err)
-			}
-			if strings.EqualFold(folder, bundleRefreshLockName) {
-				return nil, fmt.Errorf("%w: bundle directory %q is reserved for the refresh lock; configure a different bundle name", errBundlePlanInput, folder)
-			}
-			if isWindowsReservedBundleFolder(folder) {
-				return nil, fmt.Errorf("%w: bundle directory %q uses a windows-reserved name or trailing period; configure a different bundle name", errBundlePlanInput, folder)
-			}
-			for previousFolder, previousName := range folders {
-				if strings.EqualFold(previousFolder, folder) {
-					return nil, fmt.Errorf("%w: %q and %q map to the same directory on a case-insensitive filesystem", errExportBundleFolderCollision, previousName, name)
+				folderName := fmt.Sprintf("%s_%s_%s_%s", name, rec.NotAfter.UTC().Format("20060102T150405Z"), rec.Cert.SerialNumber, certkit.CertFingerprint(rec.Cert)[:12])
+				folder, err = reserveBundleFolder(folders, folderName)
+				if err != nil {
+					return nil, err
 				}
 			}
-			folders[folder] = name
 			entry, write, err := planBundleCandidate(ctx, planBundleCandidateInput{
 				Input: input, Record: rec, Folder: folder, Rule: rules[name], CandidateCount: len(certs),
 			})
@@ -274,9 +275,29 @@ func PlanBundleExports(ctx context.Context, input BundlePlanInput) (*BundleExpor
 	return plan, nil
 }
 
-// isWindowsReservedBundleFolder keeps managed directory names portable even
+func reserveBundleFolder(folders map[string]string, name string) (string, error) {
+	folder, err := certstore.SanitizeBundleFolder(name)
+	if err != nil {
+		return "", fmt.Errorf("sanitizing bundle %q: %w", name, err)
+	}
+	if equalBundlePathNames(folder, bundleRefreshLockName) {
+		return "", fmt.Errorf("%w: bundle directory %q is reserved for the refresh lock; configure a different bundle name", errBundlePlanInput, folder)
+	}
+	if isWindowsReservedBundleName(folder) {
+		return "", fmt.Errorf("%w: bundle directory %q uses a windows-reserved name or trailing period; configure a different bundle name", errBundlePlanInput, folder)
+	}
+	for previousFolder, previousName := range folders {
+		if equalBundlePathNames(previousFolder, folder) {
+			return "", fmt.Errorf("%w: %q and %q map to the same directory after case and unicode normalization", errExportBundleFolderCollision, previousName, name)
+		}
+	}
+	folders[folder] = name
+	return folder, nil
+}
+
+// isWindowsReservedBundleName keeps managed directory and artifact names portable even
 // when a plan is prepared on a different operating system.
-func isWindowsReservedBundleFolder(folder string) bool {
+func isWindowsReservedBundleName(folder string) bool {
 	if strings.HasSuffix(folder, ".") || strings.HasSuffix(folder, " ") {
 		return true
 	}
@@ -301,7 +322,7 @@ func (p *BundleExportPlan) checkDirectoryScope() error {
 	}
 	for _, write := range p.writes {
 		for _, folder := range p.unselectedFolders {
-			if strings.EqualFold(folder, write.folder) {
+			if equalBundlePathNames(folder, write.folder) {
 				return fmt.Errorf("%w: selected directory %q also belongs to an unselected configuration rule; configure distinct bundle names", errExportBundleFolderCollision, write.folder)
 			}
 		}
@@ -315,7 +336,7 @@ func (p *BundleExportPlan) checkDirectoryScope() error {
 	}
 	for _, write := range p.writes {
 		for _, child := range children {
-			if strings.EqualFold(child.Name(), write.folder) {
+			if equalBundlePathNames(child.Name(), write.folder) {
 				if child.Name() != write.folder {
 					return fmt.Errorf("%w: selected directory %q aliases existing directory %q; use the exact existing name or configure a distinct bundle name", errExportBundleFolderCollision, write.folder, child.Name())
 				}
@@ -370,7 +391,7 @@ func planBundleCandidate(ctx context.Context, input planBundleCandidateInput) (B
 	if key != nil {
 		entry.KeySource = key.Source
 	}
-	write := plannedBundleWrite{folder: input.Folder}
+	write := plannedBundleWrite{folder: input.Folder, notBefore: rec.Cert.NotBefore, notAfter: rec.Cert.NotAfter}
 	if key == nil && certstore.BundleFormatsNeedKey(opts.Formats) {
 		entry.Status, entry.Action, entry.Reason = "skipped", "skip", "no matching private key was found"
 		return entry, write, nil
@@ -472,6 +493,9 @@ func planBundleCandidate(ctx context.Context, input planBundleCandidateInput) (B
 		return entry, write, fmt.Errorf("generating selected artifacts: %w", err)
 	}
 	for _, file := range files {
+		if isWindowsReservedBundleName(file.Name) {
+			return entry, write, fmt.Errorf("%w: generated artifact %q uses a windows-reserved name", errBundlePlanInput, file.Name)
+		}
 		if strings.EqualFold(file.Name, bundleManifestName) {
 			return entry, write, fmt.Errorf("%w: generated artifact %q conflicts with the reserved export manifest; omit the json format", errBundlePlanInput, file.Name)
 		}
@@ -536,6 +560,9 @@ func (p *BundleExportPlan) Write(ctx context.Context) error {
 		return err
 	}
 	for _, write := range p.writes {
+		if err := p.checkCandidateValidity(write); err != nil {
+			return err
+		}
 		current, err := inspectBundleDirectory(p.Entries[write.entry].OutputDirectory)
 		if err != nil {
 			return fmt.Errorf("rechecking bundle before write: %w", err)
@@ -548,6 +575,9 @@ func (p *BundleExportPlan) Write(ctx context.Context) error {
 	for _, write := range p.writes {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("writing bundle plan: %w", err)
+		}
+		if err := p.checkCandidateValidity(write); err != nil {
+			return err
 		}
 		entry := p.Entries[write.entry]
 		entry.Status = "created"
@@ -565,4 +595,21 @@ func (p *BundleExportPlan) Write(ctx context.Context) error {
 		p.Entries[write.entry] = entry
 	}
 	return nil
+}
+
+func (p *BundleExportPlan) checkCandidateValidity(write plannedBundleWrite) error {
+	now := p.now()
+	reason := ""
+	if now.Before(write.notBefore) {
+		reason = "certificate is not yet valid at write time"
+	} else if !p.allowExpired && now.After(write.notAfter) {
+		reason = "certificate expired after planning; rerun with --allow-expired to permit expired leaves"
+	}
+	if reason == "" {
+		return nil
+	}
+	entry := &p.Entries[write.entry]
+	entry.Status, entry.Reason = "blocked", reason
+	p.blocked = append(p.blocked, entry.BundleName+": "+reason)
+	return p.Validate()
 }

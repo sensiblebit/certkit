@@ -120,6 +120,9 @@ func TestBundlePlan_ReservedOutputNames(t *testing.T) {
 		{"lock case variant", ".CERTKIT-REFRESH.LOCK", "", nil, true},
 		{"lock after sanitization", " .certkit-refresh.lock ", "", nil, true},
 		{"lock with explicit bundle name", ".certkit-refresh.lock", "service-tls", nil, false},
+		{"device artifact with safe bundle name", "CON", "service-tls", []string{"pem"}, true},
+		{"device artifact with extension", "COM1.example.com", "service-tls", []string{"key"}, true},
+		{"trailing period only in artifact prefix", "service.", "service-tls", []string{"pem"}, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -161,22 +164,28 @@ func TestBundlePlan_ReservedOutputNames(t *testing.T) {
 func TestBundlePlan_RejectsCaseInsensitiveDirectoryCollisions(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {
-		name  string
-		names []string
+		name    string
+		names   []string
+		missing int
 	}{
-		{"ASCII case", []string{"MIXED.example.com", "mixed.example.com"}},
-		{"Unicode case", []string{"SigmaΣ", "Sigmaς"}},
-		{"sanitized aliases", []string{"api/example.com", "api_example.com"}},
+		{"ASCII case", []string{"MIXED.example.com", "mixed.example.com"}, -1},
+		{"Unicode case", []string{"SigmaΣ", "Sigmaς"}, -1},
+		{"Unicode normalization", []string{"caf\u00e9", "cafe\u0301"}, -1},
+		{"sanitized aliases", []string{"api/example.com", "api_example.com"}, -1},
+		{"first selected alias has no certificate", []string{"api/example.com", "api_example.com"}, 0},
+		{"last selected alias has no certificate", []string{"api/example.com", "api_example.com"}, 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
 			fixture := newBundlePlanFixture(t)
 			fixture.input.Configs = nil
 			fixture.input.Formats = []string{"pem"}
-			for _, name := range test.names {
-				leaf := newECDSALeaf(t, fixture.ca, name, nil)
-				if err := fixture.input.Store.HandleCertificate(leaf.cert, name+".pem"); err != nil {
-					t.Fatal(err)
+			for i, name := range test.names {
+				if i != test.missing {
+					leaf := newECDSALeaf(t, fixture.ca, name, nil)
+					if err := fixture.input.Store.HandleCertificate(leaf.cert, name+".pem"); err != nil {
+						t.Fatal(err)
+					}
 				}
 				fixture.input.Configs = append(fixture.input.Configs, BundleConfig{CommonNames: []string{name}})
 			}
@@ -203,6 +212,8 @@ func TestBundlePlan_PreservesUnselectedDirectoryAliases(t *testing.T) {
 	}{
 		{"existing case variant", "mixed.example.com", "", "MIXED.example.com", "", ""},
 		{"existing Unicode case variant", "SigmaΣ", "", "Sigmaς", "", ""},
+		{"existing Unicode normalization variant", "caf\u00e9", "", "cafe\u0301", "", ""},
+		{"unselected Unicode normalization alias", "caf\u00e9", "cafe\u0301", "cafe\u0301", "", ""},
 		{"unselected sanitized alias", "api/example.com", "api_example.com", "api_example.com", "", ""},
 		{"unselected whitespace alias", " mixed.example.com ", "mixed.example.com", "mixed.example.com", "", ""},
 		{"manifest retains removed alias", "api/example.com", "", "api_example.com", "api_example.com", "manifest.json"},

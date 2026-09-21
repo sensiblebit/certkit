@@ -40,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Reserve every selected bundle directory before candidate lookup and reject Unicode-equivalent aliases, including when a rule has no matching certificate yet ([#225])
+- Reject Windows device names in generated bundle artifacts even when the configured directory name is safe ([#225])
+- Recheck candidate validity before managed writes, preventing certificates that expire after planning from replacing bundles without explicit `--allow-expired` ([#225])
+- Reject config, password, and database paths inside managed output before scanning, protecting declared files from replacement and keeping database snapshots outside bundle artifacts ([#225])
 - Respect existing refresh-lock markers regardless of filename case, preventing managed writes from bypassing a reserved marker ([#225])
 - Skip not-yet-valid managed bundle candidates even with `--force`, preserving existing bundles and failing required exports ([#225])
 - Reject managed directory names with trailing periods or Windows device names on every platform, preventing normalized directory aliases from overwriting another bundle ([#225])

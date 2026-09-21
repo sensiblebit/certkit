@@ -509,6 +509,8 @@ certkit scan ./tmp --config ./bundles.yaml --bundle-path ./bundles \
 
 Repeat `--bundle-name` to select more bundles. An explicitly selected bundle must be produced; missing certificates, required keys, or trust make the command fail. Public-only formats do not require a private key. Use `--require-bundle myapp-tls` to require a bundle while retaining the default all-configured-bundles scope, or `--fail-on-skip` to require every planned bundle. Config errors and protected replacement conflicts fail before any bundles are written.
 
+Keep `bundles.yaml`, password files, and any `--load-db` / `--save-db` paths outside `./bundles`. Managed refresh rejects control files inside its output tree, including symlink aliases and database paths that do not yet exist.
+
 With `--duplicates`, skipped older candidates do not fail a required or scoped export if the primary bundle is produced. Use `--fail-on-skip` to require every duplicate too. Kubernetes Secret names stay equal to the configured bundle name, even inside dated duplicate directories.
 
 The default output is PEM variants, a `.key` file, a `.p12` archive, public JSON metadata, and `manifest.json`. Request only the artifacts you need:
@@ -523,6 +525,8 @@ certkit scan ./tmp -c bundles.yaml --bundle-path ./bundles \
 
 `manifest.json` and the output-directory lock `.certkit-refresh.lock` are reserved, including case variants. If the CN is `manifest`, omit `json` from `--formats`. If a CN-derived bundle directory collides with the lock name, set a different `bundleName` in the configuration. Collisions fail during the preview.
 
+Configured directories must remain distinct after sanitization, Unicode normalization, and case-insensitive comparison, including rules that have no matching certificate yet. Windows device names are rejected in both directory names and generated artifact filenames, even on other platforms; a safe `bundleName` cannot make a CN-derived `CON.pem` filename portable.
+
 Scan input passwords never become output passwords. To deliberately create an encrypted key and P12, supply a separate output password file:
 
 ```sh
@@ -534,6 +538,8 @@ certkit scan ./tmp -c bundles.yaml --bundle-path ./bundles \
 Without `--output-password-file`, P12 uses the intentional `changeit` default with a warning on stderr. Select formats without `p12` to omit the archive. A selected `.yaml` artifact also contains a private key, encrypted only when `--output-password-file` is supplied. Kubernetes TLS secrets (`--formats k8s`) always contain unencrypted keys.
 
 Expiration downgrades and equal-expiry conflicts are blocked for candidates that pass the key, validity, and trust checks. Optional candidates that fail those checks are skipped before replacement conflicts are considered. `--force` explicitly allows protected replacements **and untrusted certificates**. Future-dated leaves are always skipped, even with `--force`. Expired leaves additionally require `--allow-expired`; with verification enabled, their chains are checked at the leaf's `NotBefore` time, reported in chain warnings. The manifest records force overrides and whether trust verification was disabled. Selection uses latest expiry, latest issuance time, and then a stable fingerprint tie-breaker. Unselected candidates and their reasons appear in the plan and manifest; they do not count as failed bundles for `--fail-on-skip`.
+
+Validity is checked again before writing. If a candidate expires after planning, the write fails unless `--allow-expired` was supplied. All candidates are rechecked before the first replacement, and each is checked again immediately before its own replacement; if a later write fails, the result manifest records any earlier bundles already applied.
 
 ---
 

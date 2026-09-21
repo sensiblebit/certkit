@@ -72,6 +72,18 @@ func validateScanRefreshFlags() error {
 	if !scanRefresh.Write && scanSaveDB != "" {
 		return fmt.Errorf("%w: a bundle preview cannot write --save-db; use --write or scan separately", errScanRefreshOptions)
 	}
+	for _, file := range []struct {
+		flag string
+		path string
+	}{
+		{"--config", scanConfigPath}, {"--password-file", passwordFile},
+		{"--input-password-file", scanRefresh.InputPasswordFile}, {"--output-password-file", scanRefresh.OutputPasswordFile},
+		{"--load-db", scanLoadDB}, {"--save-db", scanSaveDB},
+	} {
+		if err := internal.ValidateBundleInputPath(scanBundlePath, file.path); err != nil {
+			return fmt.Errorf("%w: %s: %w", errScanRefreshOptions, file.flag, err)
+		}
+	}
 	return nil
 }
 
