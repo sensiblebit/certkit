@@ -538,19 +538,28 @@ func TestBundlePlan_RejectsSymlinkedBundle(t *testing.T) {
 
 func TestBundlePlan_RejectsConcurrentWriter(t *testing.T) {
 	t.Parallel()
-	fixture := newBundlePlanFixture(t)
-	plan, err := PlanBundleExports(context.Background(), fixture.input)
-	if err != nil {
-		t.Fatal(err)
-	}
-	lock := filepath.Join(fixture.input.OutDir, ".certkit-refresh.lock")
-	if err := os.MkdirAll(lock, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := plan.Write(context.Background()); !errors.Is(err, os.ErrExist) {
-		t.Fatalf("lock error = %v", err)
-	}
-	if _, err := os.Stat(plan.Entries[0].OutputDirectory); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("competing writer created output")
+	for _, name := range []string{".certkit-refresh.lock", ".CERTKIT-REFRESH.LOCK", ".CertKit-Refresh.Lock"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			fixture := newBundlePlanFixture(t)
+			plan, err := PlanBundleExports(context.Background(), fixture.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			lock := filepath.Join(fixture.input.OutDir, name)
+			if err := os.MkdirAll(lock, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := plan.Write(context.Background()); !errors.Is(err, os.ErrExist) {
+				t.Fatalf("lock error = %v", err)
+			}
+			if _, err := os.Stat(plan.Entries[0].OutputDirectory); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("competing writer created output")
+			}
+			children, err := os.ReadDir(fixture.input.OutDir)
+			if err != nil || len(children) != 1 || children[0].Name() != name {
+				t.Fatalf("existing lock was changed or bypassed: %v, %v", children, err)
+			}
+		})
 	}
 }

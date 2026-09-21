@@ -514,6 +514,15 @@ func (p *BundleExportPlan) Write(ctx context.Context) error {
 	if err := os.MkdirAll(p.outDir, 0o755); err != nil {
 		return fmt.Errorf("creating bundle output directory: %w", err)
 	}
+	children, err := os.ReadDir(p.outDir)
+	if err != nil {
+		return fmt.Errorf("checking bundle refresh locks: %w", err)
+	}
+	for _, child := range children {
+		if strings.EqualFold(child.Name(), bundleRefreshLockName) {
+			return fmt.Errorf("acquiring bundle refresh lock (existing marker %q): %w", child.Name(), os.ErrExist)
+		}
+	}
 	lockPath := filepath.Join(p.outDir, bundleRefreshLockName)
 	if err := os.Mkdir(lockPath, 0o700); err != nil {
 		return fmt.Errorf("acquiring bundle refresh lock (another refresh may be running): %w", err)

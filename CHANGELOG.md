@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Respect existing refresh-lock markers regardless of filename case, preventing managed writes from bypassing a reserved marker ([#225])
 - Skip not-yet-valid managed bundle candidates even with `--force`, preserving existing bundles and failing required exports ([#225])
 - Reject managed directory names with trailing periods or Windows device names on every platform, preventing normalized directory aliases from overwriting another bundle ([#225])
 - Recognize existing export manifests regardless of filename case, retaining managed bundle and CA identities during refresh and rejecting conflicting manifest identities ([#225])
