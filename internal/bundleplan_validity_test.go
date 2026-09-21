@@ -280,3 +280,72 @@ func TestBundlePlan_CanceledWriteCreatesNoOutput(t *testing.T) {
 		t.Fatalf("canceled write changed status: %s", plan.Entries[0].Status)
 	}
 }
+
+func TestBundlePlan_PreservesEditsMadeDuringStaging(t *testing.T) {
+	// Filesystem injection must remain serial with other writer tests.
+	for _, target := range []string{"service-tls", "z-next"} {
+		t.Run(target, func(t *testing.T) {
+			fixture := newBundlePlanFixture(t)
+			fixture.input.Formats = []string{"pem"}
+			other := newECDSALeaf(t, fixture.ca, "z-next.example.com", nil)
+			if err := fixture.input.Store.HandleCertificate(other.cert, "next.pem"); err != nil {
+				t.Fatal(err)
+			}
+			fixture.input.Configs = append(fixture.input.Configs, BundleConfig{BundleName: "z-next", CommonNames: []string{"z-next.example.com"}})
+			AssignBundleNames(fixture.input.Store, fixture.input.Configs)
+			initial, err := PlanBundleExports(context.Background(), fixture.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := initial.Write(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			plan, err := PlanBundleExports(context.Background(), fixture.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			changedPath := filepath.Join(fixture.input.OutDir, target, "operator-note")
+			originalWriteFile := exporterWriteFile
+			t.Cleanup(func() { exporterWriteFile = originalWriteFile })
+			changed := false
+			exporterWriteFile = func(path string, data []byte, mode os.FileMode) error {
+				if err := originalWriteFile(path, data, mode); err != nil {
+					return err
+				}
+				if !changed && strings.HasPrefix(filepath.Base(filepath.Dir(path)), ".service-tls.tmp-") {
+					changed = true
+					if err := os.WriteFile(changedPath, []byte("preserve external edit"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				}
+				return nil
+			}
+			if err := plan.Write(context.Background()); !errors.Is(err, ErrBundlePlanBlocked) {
+				t.Fatalf("late edit did not block replacement: %v", err)
+			}
+			if string(mustReadTestFile(t, changedPath)) != "preserve external edit" {
+				t.Fatal("late edit was overwritten")
+			}
+			for _, entry := range plan.Entries {
+				want := "planned"
+				if entry.BundleName == target {
+					want = "blocked"
+				} else if target == "z-next" {
+					want = "replaced"
+				}
+				if entry.Status != want {
+					t.Fatalf("%s status = %s, want %s", entry.BundleName, entry.Status, want)
+				}
+			}
+			children, err := os.ReadDir(fixture.input.OutDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, child := range children {
+				if strings.Contains(child.Name(), ".tmp-") {
+					t.Fatal("blocked replacement left staged artifacts behind")
+				}
+			}
+		})
+	}
+}

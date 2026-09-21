@@ -122,6 +122,12 @@ func TestBundlePlan_ReservedOutputNames(t *testing.T) {
 		{"lock with explicit bundle name", ".certkit-refresh.lock", "service-tls", nil, false},
 		{"device artifact with safe bundle name", "CON", "service-tls", []string{"pem"}, true},
 		{"device artifact with extension", "COM1.example.com", "service-tls", []string{"key"}, true},
+		{"NUL artifact with safe bundle name", "bad\x00name", "service-tls", []string{"pem"}, true},
+		{"tab artifact with safe bundle name", "bad\tname", "service-tls", []string{"pem"}, true},
+		{"newline artifact with safe bundle name", "bad\nname", "service-tls", []string{"key"}, true},
+		{"delete control artifact", "bad\x7fname", "service-tls", []string{"json"}, true},
+		{"Unicode control artifact", "bad\u0085name", "service-tls", []string{"pem"}, true},
+		{"control in fallback directory", "bad\tname", "", []string{"pem"}, true},
 		{"trailing period only in artifact prefix", "service.", "service-tls", []string{"pem"}, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {

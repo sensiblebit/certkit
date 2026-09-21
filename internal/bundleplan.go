@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/sensiblebit/certkit"
 	"github.com/sensiblebit/certkit/internal/certstore"
@@ -285,8 +286,8 @@ func reserveBundleFolder(folders map[string]string, name string) (string, error)
 	if equalBundlePathNames(folder, bundleRefreshLockName) {
 		return "", fmt.Errorf("%w: bundle directory %q is reserved for the refresh lock; configure a different bundle name", errBundlePlanInput, folder)
 	}
-	if isWindowsReservedBundleName(folder) {
-		return "", fmt.Errorf("%w: bundle directory %q uses a windows-reserved name or trailing period; configure a different bundle name", errBundlePlanInput, folder)
+	if isUnsafeBundleName(folder) {
+		return "", fmt.Errorf("%w: bundle directory %q uses a reserved or invalid portable name; configure a different bundle name", errBundlePlanInput, folder)
 	}
 	for previousFolder, previousName := range folders {
 		if equalBundlePathNames(previousFolder, folder) {
@@ -297,10 +298,10 @@ func reserveBundleFolder(folders map[string]string, name string) (string, error)
 	return folder, nil
 }
 
-// isWindowsReservedBundleName keeps managed directory and artifact names portable even
-// when a plan is prepared on a different operating system.
-func isWindowsReservedBundleName(folder string) bool {
-	if strings.HasSuffix(folder, ".") || strings.HasSuffix(folder, " ") {
+// isUnsafeBundleName rejects control characters and platform-reserved names in
+// managed directories and artifacts, regardless of the planning platform.
+func isUnsafeBundleName(folder string) bool {
+	if strings.ContainsFunc(folder, unicode.IsControl) || strings.HasSuffix(folder, ".") || strings.HasSuffix(folder, " ") {
 		return true
 	}
 	base, _, _ := strings.Cut(folder, ".")
@@ -506,8 +507,8 @@ func planBundleCandidate(ctx context.Context, input planBundleCandidateInput) (B
 		return entry, write, fmt.Errorf("generating selected artifacts: %w", err)
 	}
 	for _, file := range files {
-		if isWindowsReservedBundleName(file.Name) {
-			return entry, write, fmt.Errorf("%w: generated artifact %q uses a windows-reserved name", errBundlePlanInput, file.Name)
+		if isUnsafeBundleName(file.Name) {
+			return entry, write, fmt.Errorf("%w: generated artifact %q uses a reserved or invalid portable name", errBundlePlanInput, file.Name)
 		}
 		if strings.EqualFold(file.Name, bundleManifestName) {
 			return entry, write, fmt.Errorf("%w: generated artifact %q conflicts with the reserved export manifest; omit the json format", errBundlePlanInput, file.Name)
@@ -580,39 +581,64 @@ func (p *BundleExportPlan) Write(ctx context.Context) error {
 		if err := p.checkCandidateAtWrite(write); err != nil {
 			return err
 		}
-		current, err := inspectBundleDirectory(p.Entries[write.entry].OutputDirectory)
-		if err != nil {
-			return fmt.Errorf("rechecking bundle before write: %w", err)
-		}
-		if current.exists != write.existing.exists || current.digest != write.existing.digest {
-			return fmt.Errorf("%w: bundle %q changed after planning; rerun the command", ErrBundlePlanBlocked, p.Entries[write.entry].BundleName)
+		if err := p.checkExistingAtWrite(write); err != nil {
+			return err
 		}
 	}
-	writer := &filesystemWriter{outDir: p.outDir}
 	for _, write := range p.writes {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("writing bundle plan: %w", err)
 		}
-		if err := p.checkCandidateAtWrite(write); err != nil {
-			return err
-		}
-		entry := p.Entries[write.entry]
-		entry.Status = "created"
-		if entry.Action == "replace" {
-			entry.Status = "replaced"
-		}
-		data, err := json.MarshalIndent(entry, "", "  ")
-		if err != nil {
-			return fmt.Errorf("encoding export manifest: %w", err)
-		}
-		files := append(slices.Clone(write.files), certstore.BundleFile{Name: bundleManifestName, Data: append(data, '\n')})
-		if err := writer.WriteBundleFiles(write.folder, files); err != nil {
+		var entry BundleExportEntry
+		writer := &filesystemWriter{outDir: p.outDir, beforeCommit: func(stagingDir string) error {
+			if err := ctx.Err(); err != nil {
+				return fmt.Errorf("committing bundle plan: %w", err)
+			}
+			if err := p.checkDirectoryScope(); err != nil {
+				return err
+			}
+			if err := p.checkCandidateAtWrite(write); err != nil {
+				return err
+			}
+			if err := p.checkExistingAtWrite(write); err != nil {
+				return err
+			}
+			entry = p.Entries[write.entry]
+			entry.Status = "created"
+			if entry.Action == "replace" {
+				entry.Status = "replaced"
+			}
+			data, err := json.MarshalIndent(entry, "", "  ")
+			if err != nil {
+				return fmt.Errorf("encoding export manifest: %w", err)
+			}
+			// The manifest contains public metadata, never keys or passwords.
+			if err := exporterWriteFile(filepath.Join(stagingDir, bundleManifestName), append(data, '\n'), 0o644); err != nil {
+				return fmt.Errorf("writing export manifest: %w", err)
+			}
+			return nil
+		}}
+		if err := writer.WriteBundleFiles(write.folder, write.files); err != nil {
 			if errors.Is(err, errExportBundleCommittedCleanup) {
 				p.Entries[write.entry] = entry
 			}
 			return fmt.Errorf("writing bundle %q: %w", entry.BundleName, err)
 		}
 		p.Entries[write.entry] = entry
+	}
+	return nil
+}
+
+func (p *BundleExportPlan) checkExistingAtWrite(write plannedBundleWrite) error {
+	entry := &p.Entries[write.entry]
+	current, err := inspectBundleDirectory(entry.OutputDirectory)
+	if err != nil {
+		return fmt.Errorf("rechecking bundle before write: %w", err)
+	}
+	if current.exists != write.existing.exists || current.digest != write.existing.digest {
+		entry.Status, entry.Reason = "blocked", "existing bundle changed after planning; rerun the command"
+		p.blocked = append(p.blocked, entry.BundleName+": "+entry.Reason)
+		return p.Validate()
 	}
 	return nil
 }

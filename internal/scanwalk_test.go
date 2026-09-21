@@ -243,3 +243,56 @@ func TestWalkScanFiles_ExcludesOutputsAndSecrets(t *testing.T) {
 		t.Fatalf("visited %v, want only explicit vendor delivery", visited)
 	}
 }
+
+func TestWalkScanFiles_ExcludesPortablePathAliases(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name     string
+		actual   string
+		excluded string
+	}{
+		{"case variant", "Bundles", "bundles"},
+		{"Unicode normalization", "caf\u00e9", "cafe\u0301"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			root := t.TempDir()
+			output := filepath.Join(root, test.actual)
+			sibling := filepath.Join(root, test.actual+"-archive")
+			for _, directory := range []string{output, sibling} {
+				if err := os.Mkdir(directory, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			secret := filepath.Join(root, test.actual+"-password")
+			artifact := filepath.Join(output, "old.key")
+			input := filepath.Join(root, "delivery.pem")
+			siblingInput := filepath.Join(sibling, "delivery.pem")
+			for _, path := range []string{secret, artifact, input, siblingInput} {
+				if err := os.WriteFile(path, []byte("fixture"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			createSymlinkOrSkip(t, artifact, filepath.Join(root, "old-key-alias"))
+			var visited []string
+			opts := WalkScanFilesInput{RootPath: root,
+				ExcludePaths: []string{filepath.Join(root, test.excluded), filepath.Join(root, test.excluded+"-password")},
+				OnFile:       func(path string) error { visited = append(visited, path); return nil }}
+			if err := WalkScanFiles(opts); err != nil {
+				t.Fatal(err)
+			}
+			want := []string{input, siblingInput}
+			slices.Sort(want)
+			slices.Sort(visited)
+			if !slices.Equal(visited, want) {
+				t.Fatalf("excluded alias was ingested: %v, want %v", visited, want)
+			}
+			for _, path := range []string{output, artifact, secret} {
+				opts.RootPath = path
+				if err := WalkScanFiles(opts); !errors.Is(err, errScanInputExcluded) {
+					t.Fatalf("explicit excluded alias %s was accepted: %v", path, err)
+				}
+			}
+		})
+	}
+}

@@ -34,7 +34,8 @@ var (
 
 // filesystemWriter writes bundle files to the local filesystem under outDir.
 type filesystemWriter struct {
-	outDir string
+	outDir       string
+	beforeCommit func(stagingDir string) error
 }
 
 // WriteBundleFiles creates the folder and writes each file with appropriate permissions.
@@ -84,6 +85,11 @@ func (w *filesystemWriter) WriteBundleFiles(folder string, files []certstore.Bun
 		}
 		if err := exporterWriteFile(filepath.Join(tempDir, f.Name), f.Data, mode); err != nil {
 			return fmt.Errorf("writing %s: %w", f.Name, err)
+		}
+	}
+	if w.beforeCommit != nil {
+		if err := w.beforeCommit(tempDir); err != nil {
+			return fmt.Errorf("preparing staged bundle commit: %w", err)
 		}
 	}
 

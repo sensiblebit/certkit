@@ -60,7 +60,7 @@ func WalkScanFiles(input WalkScanFilesInput) error {
 			return false, fmt.Errorf("resolving scan target: %w", err)
 		}
 		for excludedPath := range excluded {
-			if pathWithinBoundary(absolute, excludedPath) || pathWithinBoundary(canonical, excludedPath) {
+			if bundlePathWithinBoundary(absolute, excludedPath) || bundlePathWithinBoundary(canonical, excludedPath) {
 				return true, nil
 			}
 		}

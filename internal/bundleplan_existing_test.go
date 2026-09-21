@@ -14,6 +14,56 @@ import (
 	"github.com/sensiblebit/certkit/internal/certstore"
 )
 
+func TestBundlePlan_PreservesMalformedArtifactDiagnostics(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name           string
+		filename       string
+		contents       string
+		multipleLeaves bool
+	}{
+		{"malformed only certificate", "broken.pem", "not a PEM certificate", false},
+		{"malformed alongside multiple leaves", "broken.pem", "not a PEM certificate", true},
+		{"malformed manifest", "MANIFEST.JSON", "{", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			fixture := newBundlePlanFixture(t)
+			fixture.input.Formats = []string{"pem"}
+			fixture.input.ForceBundle = false
+			fixture.input.TrustStore, fixture.input.CustomRoots = "custom", []*x509.Certificate{fixture.ca.cert}
+			directory := filepath.Join(fixture.input.OutDir, "service-tls")
+			if err := os.MkdirAll(directory, 0700); err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(directory, test.filename)
+			if err := os.WriteFile(path, []byte(test.contents), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if test.multipleLeaves {
+				other := newECDSALeaf(t, fixture.ca, "other.example.com", nil)
+				leaves := certkit.CertToPEM(fixture.leaf.cert) + certkit.CertToPEM(other.cert)
+				if err := os.WriteFile(filepath.Join(directory, "leaves.pem"), []byte(leaves), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			plan, err := PlanBundleExports(context.Background(), fixture.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !errors.Is(plan.Validate(), ErrBundlePlanBlocked) || !strings.Contains(plan.Entries[0].Reason, test.filename) {
+				t.Fatalf("specific malformed artifact was hidden: %+v", plan.Entries[0])
+			}
+			if err := plan.Write(context.Background()); !errors.Is(err, ErrBundlePlanBlocked) {
+				t.Fatalf("malformed existing output was replaced: %v", err)
+			}
+			if string(mustReadTestFile(t, path)) != test.contents {
+				t.Fatal("malformed artifact was overwritten")
+			}
+		})
+	}
+}
+
 func TestBundlePlan_SkipsUnusableReplacementCandidates(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {

@@ -40,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Recheck managed directory contents, scope, validity, and trust after artifact staging, preserving concurrent edits and reporting late conflicts before replacement ([#225])
+- Keep specific malformed-artifact filenames in replacement diagnostics instead of replacing them with generic missing or multiple leaf errors ([#225])
+- Exclude case and Unicode aliases of declared output, database, and password paths from scans, including aliased symlink targets ([#225])
+- Reject control characters in managed directory and artifact names during planning, preventing platform-specific write failures after partial refreshes ([#225])
 - Reject an already-canceled managed write before creating output directories or lock markers ([#225])
 - Reverify the planned trusted chain before managed writes, blocking expired intermediates or roots and retaining explicit force and expired-leaf policies ([#225])
 - Preserve replaced bundle status when backup cleanup fails after installation, report the retained backup path, and stop subsequent writes ([#225])

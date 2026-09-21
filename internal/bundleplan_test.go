@@ -155,10 +155,10 @@ func TestBundlePlan_ReplacementProtection(t *testing.T) {
 	}{
 		{"expiration downgrade", 24 * time.Hour, false, false, true, "downgrade"},
 		{"equal expiration conflict", 0, false, false, true, "same expiration"},
-		{"unknown existing leaf", 0, true, false, true, "no identifiable"},
+		{"malformed existing leaf", 0, true, false, true, `"previous.pem" cannot be parsed`},
 		{"explicit downgrade override", 24 * time.Hour, false, true, false, "downgrade"},
 		{"explicit conflict override", 0, false, true, false, "same expiration"},
-		{"explicit ambiguous override", 0, true, true, false, "no identifiable"},
+		{"explicit ambiguous override", 0, true, true, false, `"previous.pem" cannot be parsed`},
 		{"newer expiration", -24 * time.Hour, false, true, false, "expires later"},
 	} {
 		t.Run(test.name, func(t *testing.T) {

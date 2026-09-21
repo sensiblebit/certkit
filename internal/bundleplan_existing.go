@@ -79,7 +79,7 @@ func inspectBundleDirectory(path string) (bundleDirectoryState, error) {
 		case strings.EqualFold(name, bundleManifestName):
 			var manifest BundleExportEntry
 			if err := json.Unmarshal(data, &manifest); err != nil {
-				state.ambiguity = "existing export manifest is invalid"
+				state.ambiguity = fmt.Sprintf("existing export manifest %q is invalid", name)
 			} else {
 				if manifest.BundleName != "" {
 					if state.bundleName != "" && state.bundleName != manifest.BundleName {
@@ -133,13 +133,17 @@ func inspectBundleDirectory(path string) (bundleDirectoryState, error) {
 	state.digest = hex.EncodeToString(hash.Sum(nil))
 	switch len(leaves) {
 	case 0:
-		state.ambiguity = "existing directory has no identifiable leaf certificate"
+		if state.ambiguity == "" {
+			state.ambiguity = "existing directory has no identifiable leaf certificate"
+		}
 	case 1:
 		for _, leaf := range leaves {
 			state.leaf = leaf
 		}
 	default:
-		state.ambiguity = "existing directory contains multiple different leaf certificates"
+		if state.ambiguity == "" {
+			state.ambiguity = "existing directory contains multiple different leaf certificates"
+		}
 	}
 	return state, nil
 }
