@@ -402,11 +402,15 @@ Existing bundles are protected against shorter validity, equal expiration with a
 
 If replacement succeeds but removing its backup fails, the command reports the cleanup error and retained backup path, stops later writes, and keeps that bundle's status as `replaced`. The new bundle is already installed; the result manifest agrees with its on-disk manifest.
 
+Each plan shows its absolute, resolved output directory. An in-memory plan keeps that destination if the working directory changes or the original symlink is retargeted. Replacing the resolved directory, or its nearest existing ancestor when output is new, invalidates the plan. Directory identity is checked before writing, under the refresh lock, and before committing staged artifacts.
+
 Managed root and intermediate CA bundles use the manifest's selected certificate for replacement comparisons, so chain CAs are not mistaken for the selected certificate.
 
 Managed exports reserve `manifest.json` for the export manifest and `.certkit-refresh.lock` for the output-directory lock, including case variants. A certificate whose generated JSON filename collides with `manifest.json` must omit the `json` format. A bundle whose directory name collides with the lock must use a different configured `bundleName`. These collisions fail during planning without writing files, even with `--force`.
 
 Bundle directory names must also remain distinct after sanitization, Unicode normalization, and case-insensitive comparison. For example, CN-derived names `MIXED.example.com` and `mixed.example.com` cannot be exported together, nor can composed and decomposed spellings of the same Unicode name. Every selected rule reserves its primary directory before candidates are checked, including rules without a matching certificate. Scoped refresh rejects names claimed by an unselected configuration rule, even before those directories exist. It also rejects aliases of existing directories and refuses to replace a directory whose manifest identifies a different bundle. These protections apply even with `--force`; directory names and contents are rechecked before writing. Use the exact existing bundle name or configure distinct names to preserve both outputs.
+
+Without an explicit `bundleName`, derived names must also be distinct within one rule: `*.example.com` and `_.example.com` both derive `_.example.com` and are rejected. An explicitly named rule can deliberately group multiple common names as candidates for the same bundle.
 
 Managed directory and artifact names must be portable: control characters (including NUL, tabs, and newlines), names ending in a period, and Windows device names such as `CON`, `NUL`, or `COM1` are rejected on every platform. An explicit, distinct `bundleName` fixes a directory-only collision. Artifact filenames still come from the CN, so a safe bundle name does not permit control characters or reserved filenames such as `CON.pem` or `COM1.example.com.key`; these fail during planning too.
 

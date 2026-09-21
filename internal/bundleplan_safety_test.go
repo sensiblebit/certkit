@@ -206,6 +206,49 @@ func TestBundlePlan_RejectsCaseInsensitiveDirectoryCollisions(t *testing.T) {
 	}
 }
 
+func TestBundlePlan_DerivedNameCollisionWithinRule(t *testing.T) {
+	t.Parallel()
+	for _, bundleName := range []string{"", "service-tls"} {
+		name := "derived names must be distinct"
+		if bundleName != "" {
+			name = "explicit name groups common names"
+		}
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			fixture := newBundlePlanFixture(t)
+			commonNames := []string{"*.example.com", "_.example.com"}
+			for _, commonName := range commonNames {
+				leaf := newECDSALeaf(t, fixture.ca, commonName, nil)
+				if err := fixture.input.Store.HandleCertificate(leaf.cert, "delivery.pem"); err != nil {
+					t.Fatal(err)
+				}
+			}
+			fixture.input.Configs = []BundleConfig{{BundleName: bundleName, CommonNames: commonNames}}
+			fixture.input.Formats = []string{"pem"}
+			AssignBundleNames(fixture.input.Store, fixture.input.Configs)
+			plan, err := PlanBundleExports(context.Background(), fixture.input)
+			if bundleName == "" {
+				if !errors.Is(err, errBundlePlanInput) {
+					t.Fatalf("derived collision was accepted: %v", err)
+				}
+				if _, err := os.Stat(fixture.input.OutDir); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("derived collision created output")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(plan.Entries) != 1 || plan.Entries[0].CandidateCount != 2 {
+				t.Fatalf("explicit grouping was lost: %+v", plan.Entries)
+			}
+			if err := plan.Write(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
 func TestBundlePlan_PreservesUnselectedDirectoryAliases(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {

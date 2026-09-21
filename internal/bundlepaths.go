@@ -28,7 +28,7 @@ func ValidateBundleInputPath(outDir, path string) error {
 	if bundlePathWithinBoundary(absolute, output) {
 		return fmt.Errorf("%w: %q must be outside managed bundle output %q", errBundlePlanInput, path, outDir)
 	}
-	output, err = resolveBundleControlPath(output)
+	output, err = resolveBundleControlPath(outDir)
 	if err != nil {
 		return fmt.Errorf("resolving bundle output target: %w", err)
 	}
@@ -59,6 +59,73 @@ func ValidateBundleInputPath(outDir, path string) error {
 			return nil
 		}
 	}
+}
+
+type bundleDestination struct {
+	path     string
+	ancestor string
+	identity os.FileInfo
+}
+
+// planBundleDestination pins a canonical destination and its nearest existing
+// directory so changes to the working directory or path aliases cannot redirect it.
+func planBundleDestination(path string) (bundleDestination, error) {
+	resolved, err := resolveBundleControlPath(path)
+	if err != nil {
+		return bundleDestination{}, fmt.Errorf("resolving planned bundle destination: %w", err)
+	}
+	for ancestor := resolved; ; ancestor = filepath.Dir(ancestor) {
+		info, err := os.Stat(ancestor)
+		if err == nil {
+			if !info.IsDir() {
+				return bundleDestination{}, fmt.Errorf("%w: bundle output ancestor %q must be a directory", errBundlePlanInput, ancestor)
+			}
+			return bundleDestination{path: resolved, ancestor: ancestor, identity: info}, nil
+		}
+		if !errors.Is(err, os.ErrNotExist) || filepath.Dir(ancestor) == ancestor {
+			return bundleDestination{}, fmt.Errorf("inspecting planned bundle destination: %w", err)
+		}
+	}
+}
+
+func (d bundleDestination) check() error {
+	resolved, err := resolveBundleControlPath(d.path)
+	if err != nil {
+		return fmt.Errorf("%w: resolving planned output destination: %w", ErrBundlePlanBlocked, err)
+	}
+	if resolved != d.path {
+		return fmt.Errorf("%w: bundle output destination changed after planning; rerun the command", ErrBundlePlanBlocked)
+	}
+	info, err := os.Stat(d.ancestor)
+	if err != nil {
+		return fmt.Errorf("%w: checking planned output directory %q: %w", ErrBundlePlanBlocked, d.ancestor, err)
+	}
+	if !os.SameFile(info, d.identity) {
+		return fmt.Errorf("%w: bundle output directory identity changed after planning; rerun the command", ErrBundlePlanBlocked)
+	}
+	return nil
+}
+
+// pinCreatedRoot upgrades an absent output's ancestor guard after MkdirAll.
+func (d *bundleDestination) pinCreatedRoot() error {
+	if err := d.check(); err != nil {
+		return err
+	}
+	if d.ancestor == d.path {
+		return nil
+	}
+	info, err := os.Lstat(d.path)
+	if err != nil {
+		return fmt.Errorf("checking created bundle output: %w", err)
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%w: created bundle output must be a directory", ErrBundlePlanBlocked)
+	}
+	if err := d.check(); err != nil {
+		return err
+	}
+	d.ancestor, d.identity = d.path, info
+	return nil
 }
 
 // Compare components without case sensitivity even before paths exist, matching
@@ -96,7 +163,11 @@ func resolveBundleControlPath(path string) (string, error) {
 			if err != nil {
 				return "", fmt.Errorf("resolving absolute control target: %w", err)
 			}
-			return filepath.Join(append([]string{absolute}, suffix...)...), nil
+			canonical, err := filepath.EvalSymlinks(absolute)
+			if err != nil {
+				return "", fmt.Errorf("resolving absolute target symlinks: %w", err)
+			}
+			return filepath.Join(append([]string{canonical}, suffix...)...), nil
 		}
 		if !errors.Is(err, os.ErrNotExist) {
 			return "", fmt.Errorf("resolving control path symlinks: %w", err)

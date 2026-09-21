@@ -40,6 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Reject colliding derived bundle names within one configuration rule while preserving deliberate grouping under an explicit `bundleName` ([#225])
+- Pin managed plans to absolute resolved output directories and validate directory identity before writing, preventing working-directory changes or retargeted aliases from redirecting exports ([#225])
+- Include the planned bundle name in errors that occur before staged artifacts reach the commit callback ([#225])
 - Recheck managed directory contents, scope, validity, and trust after artifact staging, preserving concurrent edits and reporting late conflicts before replacement ([#225])
 - Keep specific malformed-artifact filenames in replacement diagnostics instead of replacing them with generic missing or multiple leaf errors ([#225])
 - Exclude case and Unicode aliases of declared output, database, and password paths from scans, including aliased symlink targets ([#225])

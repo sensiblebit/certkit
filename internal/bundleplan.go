@@ -110,6 +110,7 @@ type BundlePlanInput struct {
 type BundleExportPlan struct {
 	Entries           []BundleExportEntry `json:"exports"`
 	outDir            string
+	destination       bundleDestination
 	writes            []plannedBundleWrite
 	blocked           []string
 	unselectedFolders map[string]string
@@ -182,7 +183,12 @@ func PlanBundleExports(ctx context.Context, input BundlePlanInput) (*BundleExpor
 			return nil, fmt.Errorf("%w: required bundle %q is outside the selected scope", errBundlePlanInput, name)
 		}
 	}
-	plan := &BundleExportPlan{outDir: input.OutDir, Entries: []BundleExportEntry{},
+	destination, err := planBundleDestination(input.OutDir)
+	if err != nil {
+		return nil, err
+	}
+	input.OutDir = destination.path
+	plan := &BundleExportPlan{outDir: input.OutDir, destination: destination, Entries: []BundleExportEntry{},
 		unselectedFolders: map[string]string{}, allowExpired: input.AllowExpired, now: time.Now}
 	for name := range rules {
 		if !slices.Contains(names, name) {
@@ -365,7 +371,7 @@ func bundlePlanRules(input BundlePlanInput) (map[string]*BundleRule, error) {
 			if name == "" {
 				name = strings.ReplaceAll(cn, "*", "_")
 			}
-			if previous, ok := rules[name]; ok && previous.Index != i+1 {
+			if previous, ok := rules[name]; ok && (cfg.BundleName == "" || previous.Index != i+1) {
 				return nil, fmt.Errorf("%w: duplicate bundle name %q in configuration", errBundlePlanInput, name)
 			}
 			rules[name] = &BundleRule{ConfigPath: input.ConfigPath, Index: i + 1, BundleName: name, CommonNames: slices.Clone(cfg.CommonNames)}
@@ -550,11 +556,17 @@ func (p *BundleExportPlan) Write(ctx context.Context) error {
 	if len(p.writes) == 0 {
 		return nil
 	}
+	if err := p.destination.check(); err != nil {
+		return err
+	}
 	// The lock serializes cooperating certkit processes. Recheck after acquiring
 	// it so a preview made before another refresh cannot overwrite that refresh.
 	//nolint:gosec // The output directory contains public certificates; private artifacts use 0600.
 	if err := os.MkdirAll(p.outDir, 0o755); err != nil {
 		return fmt.Errorf("creating bundle output directory: %w", err)
+	}
+	if err := p.destination.pinCreatedRoot(); err != nil {
+		return err
 	}
 	children, err := os.ReadDir(p.outDir)
 	if err != nil {
@@ -574,6 +586,9 @@ func (p *BundleExportPlan) Write(ctx context.Context) error {
 			slog.Warn("removing bundle refresh lock", "path", lockPath, "error", err)
 		}
 	}()
+	if err := p.destination.check(); err != nil {
+		return err
+	}
 	if err := p.checkDirectoryScope(); err != nil {
 		return err
 	}
@@ -593,6 +608,9 @@ func (p *BundleExportPlan) Write(ctx context.Context) error {
 		writer := &filesystemWriter{outDir: p.outDir, beforeCommit: func(stagingDir string) error {
 			if err := ctx.Err(); err != nil {
 				return fmt.Errorf("committing bundle plan: %w", err)
+			}
+			if err := p.destination.check(); err != nil {
+				return err
 			}
 			if err := p.checkDirectoryScope(); err != nil {
 				return err
@@ -622,7 +640,7 @@ func (p *BundleExportPlan) Write(ctx context.Context) error {
 			if errors.Is(err, errExportBundleCommittedCleanup) {
 				p.Entries[write.entry] = entry
 			}
-			return fmt.Errorf("writing bundle %q: %w", entry.BundleName, err)
+			return fmt.Errorf("writing bundle %q: %w", p.Entries[write.entry].BundleName, err)
 		}
 		p.Entries[write.entry] = entry
 	}

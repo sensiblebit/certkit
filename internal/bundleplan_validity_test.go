@@ -237,6 +237,9 @@ func TestBundlePlan_ReportsCommittedReplacementAfterCleanupFailure(t *testing.T)
 			if !errors.Is(err, errInjectedWriteFailure) {
 				t.Fatalf("underlying filesystem failure was lost: %v", err)
 			}
+			if !strings.Contains(err.Error(), `writing bundle "service-tls"`) {
+				t.Fatalf("failure did not identify the planned bundle: %v", err)
+			}
 			if errors.Is(err, errExportBundleCommittedCleanup) != test.committed {
 				t.Fatalf("incorrect commit outcome in error: %v", err)
 			}
@@ -320,8 +323,12 @@ func TestBundlePlan_PreservesEditsMadeDuringStaging(t *testing.T) {
 				}
 				return nil
 			}
-			if err := plan.Write(context.Background()); !errors.Is(err, ErrBundlePlanBlocked) {
-				t.Fatalf("late edit did not block replacement: %v", err)
+			writeErr := plan.Write(context.Background())
+			if !errors.Is(writeErr, ErrBundlePlanBlocked) {
+				t.Fatalf("late edit did not block replacement: %v", writeErr)
+			}
+			if !strings.Contains(writeErr.Error(), `writing bundle "`+target+`"`) {
+				t.Fatalf("commit rejection omitted the bundle name: %v", writeErr)
 			}
 			if string(mustReadTestFile(t, changedPath)) != "preserve external edit" {
 				t.Fatal("late edit was overwritten")

@@ -82,3 +82,19 @@ func TestValidateBundleInputPath_ParentTraversalAfterSymlink(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateBundleInputPath_OutputParentTraversalAfterSymlink(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	actual := filepath.Join(root, "actual")
+	if err := os.MkdirAll(filepath.Join(actual, "child"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(root, "alias")
+	createSymlinkOrSkip(t, filepath.Join(actual, "child"), alias)
+	output := alias + string(os.PathSeparator) + ".." + string(os.PathSeparator) + "bundles"
+	input := filepath.Join(actual, "bundles", "password")
+	if err := ValidateBundleInputPath(output, input); !errors.Is(err, errBundlePlanInput) {
+		t.Fatalf("output symlink traversal bypassed control-file protection: %v", err)
+	}
+}

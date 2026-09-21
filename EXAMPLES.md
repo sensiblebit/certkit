@@ -523,6 +523,8 @@ certkit scan ./tmp -c bundles.yaml --bundle-path ./bundles \
 
 `--json` prints the export manifest, including created/replaced/skipped status and reasons. Every saved bundle also contains `manifest.json`. Existing directories are replaced as a unit; unselected artifacts from a previous export are removed and listed in the plan.
 
+The manifest reports absolute, resolved output directories. Each in-memory plan pins that destination and checks directory identity, so working-directory changes and retargeted aliases cannot redirect its writes; replacing the resolved destination requires a new plan.
+
 `manifest.json` and the output-directory lock `.certkit-refresh.lock` are reserved, including case variants. If the CN is `manifest`, omit `json` from `--formats`. If a CN-derived bundle directory collides with the lock name, set a different `bundleName` in the configuration. Collisions fail during the preview.
 
 Configured directories must remain distinct after sanitization, Unicode normalization, and case-insensitive comparison, including rules that have no matching certificate yet. Control characters and Windows device names are rejected in both directory names and generated artifact filenames, even on other platforms; a safe `bundleName` cannot make a CN-derived `CON.pem` filename or a filename containing a tab, newline, or NUL portable.
