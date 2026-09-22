@@ -9,6 +9,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -775,6 +776,59 @@ func TestBundle_ExpiryWarnings(t *testing.T) {
 				if !strings.Contains(expiryWarnings[0], "expiry-test") {
 					t.Errorf("warning should include cert CN, got: %s", expiryWarnings[0])
 				}
+			}
+		})
+	}
+}
+
+func TestBundle_AllowExpiredPreservesVerification(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name         string
+		allowExpired bool
+		trusted      bool
+		future       bool
+		wantValid    bool
+	}{
+		{"expired leaf rejected by default", false, true, false, false},
+		{"expired trusted leaf allowed", true, true, false, true},
+		{"expired untrusted leaf still rejected", true, false, false, false},
+		{"future leaf still rejected", true, true, true, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			ca := generateTestCA(t, "expiry test root")
+			leaf := generateTestLeafCert(t, ca, func(cert *x509.Certificate) {
+				cert.NotBefore = time.Now().Add(-30 * time.Minute)
+				cert.NotAfter = time.Now().Add(-time.Minute)
+				if test.future {
+					cert.NotBefore = time.Now().Add(time.Hour)
+					cert.NotAfter = time.Now().Add(2 * time.Hour)
+				}
+			})
+			opts := BundleOptions{TrustStore: "custom", Verify: true, AllowExpired: test.allowExpired}
+			if test.trusted {
+				opts.CustomRoots = []*x509.Certificate{ca.Cert}
+			}
+			cert, err := x509.ParseCertificate(leaf.DER)
+			if err != nil {
+				t.Fatal(err)
+			}
+			result, err := Bundle(context.Background(), BundleInput{Leaf: cert, Options: opts})
+			if !test.wantValid {
+				if !errors.Is(err, ErrChainVerificationFailed) {
+					t.Fatalf("expected verification failure, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(result.Roots) != 1 || !result.Roots[0].Equal(ca.Cert) {
+				t.Fatal("historical verification did not build trusted chain")
+			}
+			if !strings.Contains(strings.Join(result.Warnings, "\n"), "chain verified at ") {
+				t.Fatal("historical verification time was not disclosed")
 			}
 		})
 	}

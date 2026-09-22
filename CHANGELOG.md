@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add scoped managed bundle refresh plans with repeatable `scan --bundle-name` / `--only`, replacement comparisons, per-bundle manifests, `--require-bundle`, `--fail-on-skip`, and selectable `--formats` ([#225])
+
 - Add `tree` subcommand to display the full CLI command, subcommand, and flag surface in a tree layout ([#169])
 - Encrypt PEM private key output (`.key`) using PKCS#8 v2 (AES-256-CBC) when an explicit export password is supplied ([#167])
 - Support decryption of PKCS#8 v2 encrypted private keys (`ENCRYPTED PRIVATE KEY` PEM blocks) with all PBES2 cipher (AES-128/192/256-CBC, 3DES-CBC) and PRF (HMAC-SHA-1/256/384/512) combinations ([#167])
@@ -20,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `connect --tls-version` to pin the negotiated protocol version when comparing server TLS behavior across TLS 1.0-1.3 ([#190])
 
 ### Changed
+
+- **Breaking:** `scan --bundle-path` now previews by default and requires `--write` to save bundles; dry runs never write outputs, and unsafe replacement plans fail before modifying bundles ([#225])
+- **Breaking:** Scan input passwords no longer encrypt outputs; use `--output-password-file` explicitly. Managed P12 output retains the default `changeit` password; Kubernetes YAML, YAML, and CSR files now require explicit format selection ([#225])
 
 - **Breaking:** Require Go 1.27+ and update Go, web, and development dependencies to current stable releases ([#200])
 - **Breaking:** Default `TrustStore` in `DefaultOptions()` changed from `"system"` to `"mozilla"` — pure-Go Mozilla root verification is used by default instead of macOS `SecTrustEvaluateWithError` syscalls, eliminating multi-minute hangs on large certificate stores
@@ -34,6 +39,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Surface trust-source load warnings in `inspect`, `verify`, and `connect`, fail fast on invalid `verify` trust-store configuration, and stop reporting a synthetic `file` source when no file-backed roots were requested ([#171])
 
 ### Fixed
+
+- Recheck the opened output destination and refresh lock after manifest staging, immediately before replacement; invalidate pending entries on destination or lock failures while retaining committed statuses ([#225])
+- Anchor bundle staging, writes, rollback, and cleanup to opened directories so output-root relocation cannot strand private artifacts or redirect cleanup ([#225])
+- Mark failed existing-bundle reinspection as blocked and preserve the underlying inspection error alongside the validation result ([#225])
+- Resolve symlinked working directories and future output ancestors in scan exclusions while retaining valid in-root symlink inputs ([#225])
+- Reject managed directory/artifact components above 255 bytes during planning and use short staging/backup names so accepted long bundle names remain writable ([#225])
+- Require certificate PEM fields and manifest bundle identity during replacement inspection; inspect artifact extensions and CSR/Kubernetes exclusions case-insensitively ([#225])
+- Report refresh-lock cleanup failures, preserve replacement lock markers, and anchor cleanup to the original output directory ([#225])
+- Mark pending exports blocked and invalidate stale plans when directory scope changes before writing, preserving already committed statuses ([#225])
+- Include AIA-fetched certificates in configured bundle exports by assigning names after chain resolution ([#225])
+- Block replacement when existing JSON/YAML certificate metadata is malformed, even alongside a valid leaf, and retain filename-specific diagnostics ([#225])
+- Add managed-export and artifact-inspection context to propagated errors while preserving their underlying causes ([#225])
+- Reject colliding derived bundle names within one configuration rule while preserving deliberate grouping under an explicit `bundleName` ([#225])
+- Pin managed plans to absolute resolved output directories and validate directory identity before writing, preventing working-directory changes or retargeted aliases from redirecting exports ([#225])
+- Include the planned bundle name in errors that occur before staged artifacts reach the commit callback ([#225])
+- Recheck managed directory contents, scope, validity, and trust after artifact staging, preserving concurrent edits and reporting late conflicts before replacement ([#225])
+- Keep specific malformed-artifact filenames in replacement diagnostics instead of replacing them with generic missing or multiple leaf errors ([#225])
+- Exclude case and Unicode aliases of declared output, database, and password paths from scans, including aliased symlink targets ([#225])
+- Reject control characters in managed directory and artifact names during planning, preventing platform-specific write failures after partial refreshes ([#225])
+- Reject an already-canceled managed write before creating output directories or lock markers ([#225])
+- Reverify the planned trusted chain before managed writes, blocking expired intermediates or roots and retaining explicit force and expired-leaf policies ([#225])
+- Preserve replaced bundle status when backup cleanup fails after installation, report the retained backup path, and stop subsequent writes ([#225])
+- Reserve every selected bundle directory before candidate lookup and reject Unicode-equivalent aliases, including when a rule has no matching certificate yet ([#225])
+- Reject Windows device names in generated bundle artifacts even when the configured directory name is safe ([#225])
+- Recheck candidate validity before managed writes, preventing certificates that expire after planning from replacing bundles without explicit `--allow-expired` ([#225])
+- Reject config, password, and database paths inside managed output before scanning, protecting declared files from replacement and keeping database snapshots outside bundle artifacts ([#225])
+- Respect existing refresh-lock markers regardless of filename case, preventing managed writes from bypassing a reserved marker ([#225])
+- Skip not-yet-valid managed bundle candidates even with `--force`, preserving existing bundles and failing required exports ([#225])
+- Reject managed directory names with trailing periods or Windows device names on every platform, preventing normalized directory aliases from overwriting another bundle ([#225])
+- Recognize existing export manifests regardless of filename case, retaining managed bundle and CA identities during refresh and rejecting conflicting manifest identities ([#225])
+- Reserve unselected configuration aliases before the first scoped export, including when the output directory does not yet exist ([#225])
+- Exclude declared database snapshots and their symlink aliases from scan file ingestion while preserving explicit `--load-db` imports ([#225])
+- Preserve unselected existing bundles when a scoped refresh uses a case or sanitized name alias, and recheck directory names before applying the plan ([#225])
+- Identify the operation when loading trust pools fails during managed bundle export, preserving the underlying error ([#225])
+- Reject bundle-directory names that differ only by case, preventing one requested bundle from silently overwriting another on case-insensitive filesystems ([#225])
+- Reserve managed manifest and refresh-lock names during planning, and skip optional untrusted candidates before replacement conflicts can block other exports ([#225])
+- Skip optional expired or keyless bundle candidates before replacement checks, exclude existing dump outputs from scans, and stop managed writes if the default-password warning cannot be displayed ([#225])
+- Ignore CSR JSON when identifying existing bundle certificates, so complete legacy bundles can refresh without a false replacement conflict; report the filename for malformed certificate artifacts ([#225])
+- Keep the managed P12 default-password warning visible regardless of `--log-level` ([#225])
+- Protect managed bundle refreshes against expiration downgrades, equal-expiry certificate conflicts, ambiguous existing leaves, and files changed after planning ([#225])
+- Make certificate selection deterministic using expiry, issuance time, and SHA-256 fingerprint; expose skipped candidates and fail on invalid export configuration ([#225])
+- Honor explicitly selected scan roots named `vendor`, and exclude declared output directories and password files from directory ingestion ([#225])
+- Preserve default P12 exports, exclude symlink aliases of managed output and password files, report unselected certificate candidates, and honor `--allow-expired` independently of `--force` during managed refreshes ([#225])
+- Preserve managed CA identity during refresh, keep duplicate Kubernetes Secret names valid, and allow required bundles to succeed when only historical duplicates are skipped ([#225])
 
 - Remove Homebrew's deprecated `postflight` warning from stable and nightly casks while preserving macOS quarantine handling ([#200])
 - Display ML-DSA signature scheme names when Go 1.27 TLS peers request client certificates ([#200])
@@ -993,6 +1042,7 @@ Initial release.
 - Homebrew distribution via GoReleaser
 
 [Unreleased]: https://github.com/sensiblebit/certkit/compare/v0.8.3...HEAD
+[#225]: https://github.com/sensiblebit/certkit/pull/225
 [#200]: https://github.com/sensiblebit/certkit/pull/200
 [0.8.3]: https://github.com/sensiblebit/certkit/compare/v0.8.2...v0.8.3
 [0.8.2]: https://github.com/sensiblebit/certkit/compare/v0.8.1...v0.8.2

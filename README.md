@@ -97,6 +97,19 @@ certkit bundle cert.pem -o chain.pem
 
 See [EXAMPLES.md](EXAMPLES.md) for a walkthrough of the main certificate workflows and real-world scenarios.
 
+## Managed bundle refresh
+
+Use `scan --bundle-path` to turn a vendor delivery into named bundle directories. It shows a plan by default; saving files requires `--write`:
+
+```sh
+certkit scan ./tmp --config ./bundles.yaml --bundle-path ./bundles \
+  --bundle-name sentinelone-tls --bundle-name sentinelonev5-tls \
+  --formats pem,key,chain,fullchain,intermediates,root,json,yaml \
+  --input-password-file ./tmp/vendor-password --dry-run
+```
+
+Review the selected certificates, source files, validity, trust result, and replacement decisions. Repeat the command with `--write` in place of `--dry-run` to apply it. Add `--json` for a machine-readable export manifest. The `bundle` command remains the single-chain workflow; managed directories are produced by `scan`.
+
 ## Common Commands
 
 | Command                     | What it does                                            |
@@ -137,7 +150,7 @@ See [EXAMPLES.md](EXAMPLES.md) for a walkthrough of the main certificate workflo
 | `--verbose`, `-v`   | `false` | Extended details in output (serial, key info, signature algorithm, key usage, EKU, extensions) |
 <!-- /certkit:flags -->
 
-Common passwords (`""`, `"password"`, `"changeit"`, `"keypassword"`) are always tried automatically.
+Common passwords (`""`, `"password"`, `"changeit"`, `"keypassword"`) are always tried automatically for input decryption. On `scan`, password flags never select output encryption; use `--output-password-file` explicitly.
 
 ### Inspect Flags
 
@@ -256,21 +269,32 @@ Input format is auto-detected.
 ### Scan Flags
 
 <!-- certkit:flags:scan -->
-| Flag                      | Default          | Description                                              |
-| ------------------------- | ---------------- | -------------------------------------------------------- |
-| `--aia-timeout`           | `2s`             | Timeout for AIA certificate fetches (e.g. 2s, 500ms)     |
-| `--allow-private-network` | `false`          | Allow AIA fetches to private/internal endpoints          |
-| `--bundle-path`           |                  | Export bundles to this directory                         |
-| `--config`, `-c`          | `./bundles.yaml` | Path to bundle config YAML                               |
-| `--dump-certs`            |                  | Dump all discovered certificates to a single PEM file    |
-| `--dump-keys`             |                  | Dump all discovered keys to a single PEM file            |
-| `--duplicates`            | `false`          | Export all certificates per bundle, not just the newest  |
-| `--force`, `-f`           | `false`          | Allow export of untrusted certificate bundles            |
-| `--format`                | `text`           | Output format: text, json                                |
-| `--load-db`               |                  | Load an existing database into memory before scanning    |
-| `--max-file-size`         | `10485760`       | Skip files larger than this size in bytes (0 to disable) |
-| `--save-db`               |                  | Save the in-memory database to disk after scanning       |
-| `--trust-store`           | `mozilla`        | Trust store: system, mozilla                             |
+| Flag                      | Default          | Description                                                                                                                                               |
+| ------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--aia-timeout`           | `2s`             | Timeout for AIA certificate fetches (e.g. 2s, 500ms)                                                                                                      |
+| `--allow-private-network` | `false`          | Allow AIA fetches to private/internal endpoints                                                                                                           |
+| `--bundle-name`           |                  | Export only these configured bundle names (repeatable)                                                                                                    |
+| `--bundle-path`           |                  | Plan bundles in this directory; --write applies the plan                                                                                                  |
+| `--config`, `-c`          | `./bundles.yaml` | Path to bundle config YAML                                                                                                                                |
+| `--dry-run`               | `false`          | Show the export plan without writing any files                                                                                                            |
+| `--dump-certs`            |                  | Dump all discovered certificates to a single PEM file                                                                                                     |
+| `--dump-keys`             |                  | Dump all discovered keys to a single PEM file                                                                                                             |
+| `--duplicates`            | `false`          | Export all certificates per bundle, not just the newest                                                                                                   |
+| `--fail-on-skip`          | `false`          | Fail the entire export if any requested bundle is skipped                                                                                                 |
+| `--force`, `-f`           | `false`          | Allow untrusted bundles and explicitly override replacement conflicts or expiration downgrades                                                            |
+| `--format`                | `text`           | Output format: text, json                                                                                                                                 |
+| `--formats`               |                  | Bundle artifacts: pem,key,chain,fullchain,intermediates,root,json,yaml,p12,k8s,csr,csr-json (default pem,key,chain,fullchain,intermediates,root,json,p12) |
+| `--input-password-file`   |                  | Input decryption passwords, one per line; never used for output encryption                                                                                |
+| `--load-db`               |                  | Load an existing database into memory before scanning                                                                                                     |
+| `--max-file-size`         | `10485760`       | Skip files larger than this size in bytes (0 to disable)                                                                                                  |
+| `--only`                  |                  | Alias for --bundle-name (repeatable)                                                                                                                      |
+| `--output-password-file`  |                  | Output password for encrypted key/YAML and P12 artifacts (P12 defaults to changeit; key/YAML remain unencrypted)                                          |
+| `--password-file`         |                  | Input decryption passwords, one per line (alias for --input-password-file)                                                                                |
+| `--passwords`, `-p`       |                  | Comma-separated input decryption passwords; never used for scan output encryption                                                                         |
+| `--require-bundle`        |                  | Fail unless each named bundle can be produced (repeatable)                                                                                                |
+| `--save-db`               |                  | Save the in-memory database to disk after scanning                                                                                                        |
+| `--trust-store`           | `mozilla`        | Trust store: system, mozilla                                                                                                                              |
+| `--write`                 | `false`          | Apply the bundle export plan (default is a read-only preview)                                                                                             |
 <!-- /certkit:flags -->
 
 ### Keygen Flags
@@ -368,24 +392,57 @@ Bundles without an explicit `subject` block inherit from `defaultSubject`. Certi
 
 ### Bundle Output Files
 
-When running `certkit scan --bundle-path`, each bundle produces the following files under `<dir>/<bundleName>/`. If `--duplicates` keeps older matching certificates, those extra exports are written under suffixed directories like `<bundleName>_<RFC3339>_<serial>/`:
+`certkit scan --bundle-path <dir>` previews a plan. Add `--write` to create or replace `<dir>/<bundleName>/`. Repeat `--bundle-name` (or `--only`) to limit the scope. Explicitly selected names must be produced; `--require-bundle` adds required names without narrowing an otherwise unscoped export, and `--fail-on-skip` makes every skip fatal. Missing, malformed, empty, or ambiguous configuration is an error during export.
 
-| File                     | Contents                                                                              |
-| ------------------------ | ------------------------------------------------------------------------------------- |
-| `<cn>.pem`               | Leaf certificate                                                                      |
-| `<cn>.chain.pem`         | Leaf + intermediates                                                                  |
-| `<cn>.fullchain.pem`     | Leaf + intermediates + root                                                           |
-| `<cn>.intermediates.pem` | Intermediate certificates                                                             |
-| `<cn>.root.pem`          | Root certificate                                                                      |
-| `<cn>.key`               | Private key (PKCS#8 PEM, mode 0600). When an export password is supplied, contains an `ENCRYPTED PRIVATE KEY` block (PKCS#8 v2, PBES2/AES-256-CBC) |
-| `<cn>.p12`               | PKCS#12 archive (uses first non-empty export password from `--passwords`/`--password-file`, or defaults to `changeit` with a warning, mode 0600) |
-| `<cn>.k8s.yaml`          | Kubernetes `kubernetes.io/tls` Secret (mode 0600)                                     |
-| `<cn>.json`              | Certificate metadata                                                                  |
-| `<cn>.yaml`              | Certificate and key metadata (mode 0600). When an export password is supplied, the `key` field contains an `ENCRYPTED PRIVATE KEY` block |
-| `<cn>.csr`               | Certificate Signing Request                                                           |
-| `<cn>.csr.json`          | CSR details (subject, SANs, key algorithm)                                            |
+Selection is deterministic: latest `NotAfter`, then latest `NotBefore`, then lowest SHA-256 fingerprint. The plan reports the winning certificate and selection order. The newest candidate is not silently replaced by an older candidate if it lacks a key or fails trust verification. `--duplicates` additionally exports older candidates to directories suffixed with a UTC timestamp, serial, and fingerprint prefix.
 
-Wildcard characters in the CN are replaced with `_` in filenames (e.g., `*.example.com` becomes `_.example.com`). The `.intermediates.pem` and `.root.pem` files are only created when those certificates exist in the chain.
+With `--duplicates`, required or explicitly selected names still require the primary `<bundleName>` directory. Skipped historical candidates do not fail that requirement when the primary bundle can be produced; `--fail-on-skip` makes those skips fatal too. Kubernetes Secrets in every duplicate directory retain the configured bundle name as `metadata.name`, validated before export.
+
+Existing bundles are protected against shorter validity, equal expiration with a different certificate, an unidentifiable existing leaf, and malformed certificate metadata. Invalid or incomplete JSON/YAML certificate artifacts block replacement and identify the filename, even when another artifact contains a valid leaf. JSON requires nonempty `pem`, YAML requires nonempty `crt`, and manifests require `bundle_name` and `leaf.pem`. Artifact extensions are inspected without case sensitivity; CSR JSON and Kubernetes YAML remain excluded from leaf inspection. `--force` explicitly overrides these replacement checks and also disables trust verification. Skipped candidates and their reasons are always shown. Blocked replacements or unmet requirements return exit code 2 and prevent all planned writes. Each directory is staged before replacement; a later write-time error can leave earlier bundles applied, and the result manifest shows their status. A lock rejects overlapping certkit refreshes against the same output directory. If a process is killed and leaves `.certkit-refresh.lock`, remove that empty directory only after confirming no refresh is still running.
+
+If replacement succeeds but removing its backup fails, the command reports the cleanup error and retained backup path, stops later writes, and keeps that bundle's status as `replaced`. The new bundle is already installed; the result manifest agrees with its on-disk manifest. Refresh-lock cleanup failures also return an error without hiding committed statuses. Lock ownership is checked before replacement, and cleanup uses the originally opened output directory so a moved directory or replacement lock cannot redirect removal.
+
+Each plan shows its absolute, resolved output directory. An in-memory plan keeps that destination if the working directory changes or the original symlink is retargeted. Replacing the resolved directory, or its nearest existing ancestor when output is new, invalidates the plan. Directory identity is checked before writing, under the refresh lock, and after the manifest is staged, immediately before replacement through the opened parent directory. A destination change, lost lock, or scope conflict at write time marks pending entries as blocked and invalidates the plan; already committed entries retain their status. Failed reinspection of an output that becomes unreadable, symlinked, or non-regular also blocks the affected entry and invalidates the plan.
+
+Managed root and intermediate CA bundles use the manifest's selected certificate for replacement comparisons, so chain CAs are not mistaken for the selected certificate.
+
+Managed exports reserve `manifest.json` for the export manifest and `.certkit-refresh.lock` for the output-directory lock, including case variants. A certificate whose generated JSON filename collides with `manifest.json` must omit the `json` format. A bundle whose directory name collides with the lock must use a different configured `bundleName`. These collisions fail during planning without writing files, even with `--force`.
+
+Bundle directory names must also remain distinct after sanitization, Unicode normalization, and case-insensitive comparison. For example, CN-derived names `MIXED.example.com` and `mixed.example.com` cannot be exported together, nor can composed and decomposed spellings of the same Unicode name. Every selected rule reserves its primary directory before candidates are checked, including rules without a matching certificate. Scoped refresh rejects names claimed by an unselected configuration rule, even before those directories exist. It also rejects aliases of existing directories and refuses to replace a directory whose manifest identifies a different bundle. These protections apply even with `--force`; directory names and contents are rechecked before writing. Use the exact existing bundle name or configure distinct names to preserve both outputs.
+
+Without an explicit `bundleName`, derived names must also be distinct within one rule: `*.example.com` and `_.example.com` both derive `_.example.com` and are rejected. An explicitly named rule can deliberately group multiple common names as candidates for the same bundle.
+
+Managed directory and artifact names must be portable: control characters (including NUL, tabs, and newlines), names ending in a period, and Windows device names such as `CON`, `NUL`, or `COM1` are rejected on every platform. An explicit, distinct `bundleName` fixes a directory-only collision. Artifact filenames still come from the CN, so a safe bundle name does not permit control characters or reserved filenames such as `CON.pem` or `COM1.example.com.key`; these fail during planning too. Directory components and artifact filenames have a 255-byte UTF-8 limit, including extensions. Temporary and backup directories use short names independent of the bundle name. Staging, artifact writes, renames, and cleanup use opened directory handles, so moving the output root cannot strand staged keys or redirect cleanup to replacement paths.
+
+Default artifacts are `pem,key,chain,fullchain,intermediates,root,json,p12`. Select any subset with `--formats`; public-only formats work without a private key. YAML, Kubernetes secrets, and CSR files require explicit selection:
+
+| Format | File | Contents |
+| --- | --- | --- |
+| `pem` | `<cn>.pem` | Leaf certificate |
+| `chain` | `<cn>.chain.pem` | Leaf + intermediates |
+| `fullchain` | `<cn>.fullchain.pem` | Leaf + intermediates + root |
+| `intermediates` | `<cn>.intermediates.pem` | Intermediates, when present |
+| `root` | `<cn>.root.pem` | Root, when present |
+| `key` | `<cn>.key` | PKCS#8 private key, mode 0600 |
+| `json` | `<cn>.json` | Public certificate metadata |
+| `yaml` | `<cn>.yaml` | Certificate metadata **and private key**, mode 0600 |
+| `p12` | `<cn>.p12` | PKCS#12 archive; password defaults to `changeit`, mode 0600 |
+| `k8s` | `<cn>.k8s.yaml` | Kubernetes TLS Secret with an unencrypted private key, mode 0600 |
+| `csr` | `<cn>.csr` | Certificate Signing Request |
+| `csr-json` | `<cn>.csr.json` | CSR details |
+| Always | `manifest.json` | Export decision, rule, provenance, leaf identity, validity, trust result, and artifact list; no private keys or passwords |
+
+For `scan`, `--passwords`, `--password-file`, and `--input-password-file` are input decryption credentials only. `--output-password-file` contains exactly one nonempty password and controls encryption of `.key` and `.yaml` output, plus the P12 password. Without an explicit output password, P12 retains the legacy `changeit` default with a warning on stderr, while `.key` and `.yaml` contain unencrypted keys. Omit `p12` from `--formats` to omit the archive. Kubernetes TLS secrets always contain unencrypted keys.
+
+Candidates whose `NotBefore` is in the future are always skipped, including with `--force` or `--allow-expired`. Expired candidates are skipped unless `--allow-expired` is supplied, even with `--force`. Required keys, validity dates, and trust are checked before replacement conflicts, so optional candidates that cannot be exported do not block other bundles. Explicitly selected or required bundles and `--fail-on-skip` still make those skips fatal. When expired leaves are allowed and verification is enabled, trust is checked at the leaf's `NotBefore` time; the manifest records that historical verification time in chain warnings. Certificates that cannot build a trusted chain still require `--force`. Unselected candidates appear in `skipped_candidates` with identity, provenance, and the tie-breaker that excluded them; these alternatives do not trigger `--fail-on-skip` when the requested bundle can be produced.
+
+Validity and the planned trusted chain are rechecked for all planned writes before any bundle is replaced, and again after artifacts are staged, immediately before each replacement. Existing directory names and contents are also checked at that final step, preserving edits made while other bundles or the current bundle were being staged. Reverification uses the chain that produced the planned artifacts, so an expired intermediate or root blocks a verified write even if the leaf remains valid. A candidate that expires after planning blocks the write unless `--allow-expired` was supplied; that option retains historical verification for expired leaves and records its time in the manifest. A candidate that is not yet valid at write time always blocks the write, even with that option. `--force` continues to disable trust verification.
+
+A preview creates no output directories, manifests, database snapshots, or key files. It can fetch AIA certificates to evaluate chains. Bundle names are assigned after AIA resolution, so fetched CA certificates can also match configured bundles. `--bundle-path` cannot be combined with `--dump-keys` or `--dump-certs`; preview mode also rejects `--save-db`. The declared output directory, dump files, database paths (`--save-db` and `--load-db`), and password files are excluded from directory ingestion, including symlink, case, and Unicode-normalization aliases. Exclusions resolve symlinked working directories and existing ancestors of not-yet-created output paths. Exclusions compare whole path components, so a sibling such as `bundles-old` remains eligible when `bundles` is excluded. `--load-db` still deliberately imports the saved inventory before scanning. Applying a plan replaces the entire managed bundle directory; the plan lists files that will be removed when artifact selection changes. Files in unselected bundle directories are untouched.
+
+Keep the config, password files, and database paths outside `--bundle-path`. Managed previews and writes reject these paths inside the output tree, including aliases and future database destinations, before loading inputs. This prevents refresh from deleting a control file or saving an unlisted database inside a bundle.
+
+Wildcard characters in the CN are replaced with `_` in filenames (e.g., `*.example.com` becomes `_.example.com`).
 
 ### Library
 

@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/sensiblebit/certkit/internal"
 	"github.com/spf13/cobra"
@@ -35,6 +36,8 @@ type readonlyGlobals struct {
 	passwordFile string
 
 	// scan flags
+	scanAIATimeout          time.Duration
+	scanRefresh             scanRefreshFlags
 	scanBundlePath          string
 	scanConfigPath          string
 	scanTrustStore          string
@@ -95,7 +98,9 @@ func snapshotReadonlyGlobals() readonlyGlobals {
 		passwordList: passwordCopy,
 		passwordFile: passwordFile,
 
+		scanRefresh:             scanRefresh,
 		scanBundlePath:          scanBundlePath,
+		scanAIATimeout:          scanAIATimeout,
 		scanConfigPath:          scanConfigPath,
 		scanTrustStore:          scanTrustStore,
 		scanForceExport:         scanForceExport,
@@ -148,6 +153,8 @@ func restoreReadonlyGlobals(g readonlyGlobals) {
 	passwordList = append([]string(nil), g.passwordList...)
 	passwordFile = g.passwordFile
 
+	scanRefresh = g.scanRefresh
+	scanAIATimeout = g.scanAIATimeout
 	scanBundlePath = g.scanBundlePath
 	scanConfigPath = g.scanConfigPath
 	scanTrustStore = g.scanTrustStore
@@ -481,10 +488,10 @@ func TestRunScan_ExportEnablesSystemFallback(t *testing.T) {
 	defer restoreReadonlyGlobals(snap)
 
 	origSummaryLoader := scanSummaryTrustPoolLoader
-	origExportBundles := scanExportBundles
+	origPlanBundles := scanPlanBundles
 	t.Cleanup(func() {
 		scanSummaryTrustPoolLoader = origSummaryLoader
-		scanExportBundles = origExportBundles
+		scanPlanBundles = origPlanBundles
 	})
 
 	dir := t.TempDir()
@@ -498,12 +505,14 @@ func TestRunScan_ExportEnablesSystemFallback(t *testing.T) {
 	}
 
 	var gotFallback bool
+	var gotAllowExpired bool
 	scanSummaryTrustPoolLoader = func(string) (scanTrustPools, error) {
 		return scanTrustPools{}, nil
 	}
-	scanExportBundles = func(_ context.Context, input internal.ExportBundlesInput) error {
+	scanPlanBundles = func(_ context.Context, input internal.BundlePlanInput) (*internal.BundleExportPlan, error) {
 		gotFallback = input.AllowSystemFallback
-		return nil
+		gotAllowExpired = input.AllowExpired
+		return &internal.BundleExportPlan{}, nil
 	}
 
 	passwordList = nil
@@ -514,6 +523,7 @@ func TestRunScan_ExportEnablesSystemFallback(t *testing.T) {
 	scanConfigPath = configPath
 	scanTrustStore = "mozilla"
 	scanForceExport = false
+	allowExpired = true
 	scanDuplicates = false
 	scanDumpKeys = ""
 	scanDumpCerts = ""
@@ -523,15 +533,18 @@ func TestRunScan_ExportEnablesSystemFallback(t *testing.T) {
 	scanSaveDB = ""
 	scanLoadDB = ""
 
-	_, stderr, err := captureOutput(t, func() error { return runScan(newCommandWithContext(), []string{dir}) })
+	stdout, _, err := captureOutput(t, func() error { return runScan(newCommandWithContext(), []string{dir}) })
 	if err != nil {
 		t.Fatalf("runScan export failed: %v", err)
 	}
 	if !gotFallback {
 		t.Fatal("scan export did not enable system fallback")
 	}
-	if !strings.Contains(stderr, "Exported bundles to") {
-		t.Fatalf("scan export stderr missing export status:\n%s", stderr)
+	if !gotAllowExpired {
+		t.Fatal("scan export did not pass --allow-expired to planning")
+	}
+	if !strings.Contains(stdout, "Bundle export plan") {
+		t.Fatalf("scan stdout missing export plan:\n%s", stdout)
 	}
 }
 
