@@ -282,6 +282,63 @@ func TestBundlePlan_SkipsUnusableReplacementCandidates(t *testing.T) {
 	}
 }
 
+func TestBundlePlan_BlocksFailedReinspection(t *testing.T) {
+	t.Parallel()
+	for _, scenario := range []string{"bundle becomes a file", "bundle becomes a symlink", "artifact becomes a symlink", "nested directory appears"} {
+		t.Run(scenario, func(t *testing.T) {
+			t.Parallel()
+			fixture := newBundlePlanFixture(t)
+			fixture.input.Formats = []string{"pem"}
+			initial, err := PlanBundleExports(context.Background(), fixture.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := initial.Write(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			plan, err := PlanBundleExports(context.Background(), fixture.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			directory := plan.Entries[0].OutputDirectory
+			switch scenario {
+			case "bundle becomes a file", "bundle becomes a symlink":
+				if err := os.Rename(directory, directory+"-saved"); err != nil {
+					t.Fatal(err)
+				}
+				if scenario == "bundle becomes a file" {
+					if err := os.WriteFile(directory, []byte("external file"), 0600); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					createSymlinkOrSkip(t, directory+"-saved", directory)
+				}
+			case "artifact becomes a symlink":
+				artifact := filepath.Join(directory, bundleManifestName)
+				if err := os.Rename(artifact, artifact+"-saved"); err != nil {
+					t.Fatal(err)
+				}
+				createSymlinkOrSkip(t, artifact+"-saved", artifact)
+			case "nested directory appears":
+				if err := os.Mkdir(filepath.Join(directory, "external"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err = plan.Write(context.Background())
+			if !errors.Is(err, ErrBundlePlanBlocked) || !errors.Is(err, errBundleInspection) {
+				t.Fatalf("failed reinspection did not preserve validation and inspection errors: %v", err)
+			}
+			entry := plan.Entries[0]
+			if entry.Status != "blocked" || !strings.Contains(entry.Reason, "reinspect") {
+				t.Fatalf("failed reinspection reported as writable: %+v", entry)
+			}
+			if !errors.Is(plan.Validate(), ErrBundlePlanBlocked) {
+				t.Fatal("rejected plan remained valid")
+			}
+		})
+	}
+}
+
 func TestBundlePlan_FutureCertificatesCannotReplaceExistingBundles(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sensiblebit/certkit/internal/certstore"
 )
 
 func TestBundlePlan_RefreshLockCleanup(t *testing.T) {
@@ -14,21 +16,22 @@ func TestBundlePlan_RefreshLockCleanup(t *testing.T) {
 	for _, scenario := range []string{"nonempty lock", "replaced lock", "moved output"} {
 		t.Run(scenario, func(t *testing.T) {
 			fixture := newBundlePlanFixture(t)
-			fixture.input.Formats = []string{"pem"}
+			fixture.input.Formats = []string{"key", "pem"}
 			plan, err := PlanBundleExports(context.Background(), fixture.input)
 			if err != nil {
 				t.Fatal(err)
 			}
 			lock := filepath.Join(fixture.input.OutDir, bundleRefreshLockName)
 			movedOutput := fixture.input.OutDir + "-moved"
+			decoy := ""
 			originalWrite := exporterWriteFile
 			t.Cleanup(func() { exporterWriteFile = originalWrite })
 			changed := false
-			exporterWriteFile = func(path string, data []byte, mode os.FileMode) error {
-				if err := originalWrite(path, data, mode); err != nil {
+			exporterWriteFile = func(root *os.Root, file certstore.BundleFile) error {
+				if err := originalWrite(root, file); err != nil {
 					return err
 				}
-				if changed {
+				if changed || (scenario == "moved output" && !file.Sensitive) {
 					return nil
 				}
 				changed = true
@@ -49,6 +52,14 @@ func TestBundlePlan_RefreshLockCleanup(t *testing.T) {
 						t.Fatal(err)
 					}
 					if err := os.MkdirAll(lock, 0700); err != nil {
+						t.Fatal(err)
+					}
+					decoyDirectory := filepath.Join(fixture.input.OutDir, filepath.Base(root.Name()))
+					if err := os.Mkdir(decoyDirectory, 0700); err != nil {
+						t.Fatal(err)
+					}
+					decoy = filepath.Join(decoyDirectory, "keep")
+					if err := os.WriteFile(decoy, []byte("external content"), 0600); err != nil {
 						t.Fatal(err)
 					}
 				}
@@ -82,6 +93,13 @@ func TestBundlePlan_RefreshLockCleanup(t *testing.T) {
 			if scenario == "moved output" {
 				if _, err := os.Stat(filepath.Join(movedOutput, bundleRefreshLockName)); !errors.Is(err, os.ErrNotExist) {
 					t.Fatalf("original lock was not released through its directory handle: %v", err)
+				}
+				children, err := os.ReadDir(movedOutput)
+				if err != nil || len(children) != 0 {
+					t.Fatalf("failed write stranded staged private artifacts: %v, %v", children, err)
+				}
+				if string(mustReadTestFile(t, decoy)) != "external content" {
+					t.Fatal("cleanup modified a replacement staging path")
 				}
 			}
 		})

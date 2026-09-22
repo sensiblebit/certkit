@@ -44,7 +44,7 @@ func WalkScanFiles(input WalkScanFilesInput) error {
 			return fmt.Errorf("resolving excluded scan path: %w", err)
 		}
 		excluded[absolute] = true
-		canonical, err := scanRootBoundary(path)
+		canonical, err := resolveBundleControlPath(path)
 		if err != nil {
 			return fmt.Errorf("resolving excluded scan target: %w", err)
 		}
@@ -162,7 +162,11 @@ func scanRootBoundary(root string) (string, error) {
 		if absErr != nil {
 			return "", fmt.Errorf("absolute path for %s: %w", resolved, absErr)
 		}
-		return absResolved, nil
+		canonical, err := filepath.EvalSymlinks(absResolved)
+		if err != nil {
+			return "", fmt.Errorf("resolving absolute scan target %s: %w", absResolved, err)
+		}
+		return canonical, nil
 	}
 	absRoot, absErr := filepath.Abs(root)
 	if absErr != nil {
@@ -172,7 +176,7 @@ func scanRootBoundary(root string) (string, error) {
 }
 
 func resolveScanSymlink(path string) (string, os.FileInfo, bool) {
-	resolvedPath, err := filepath.EvalSymlinks(path)
+	resolvedPath, err := scanRootBoundary(path)
 	if err != nil {
 		slog.Debug("skipping broken symlink", "path", path)
 		return "", nil, false

@@ -221,17 +221,18 @@ func TestBundlePlan_ReportsCommittedReplacementAfterCleanupFailure(t *testing.T)
 			t.Cleanup(func() { exporterRemoveAll, exporterWriteFile = originalRemoveAll, originalWriteFile })
 			backup := ""
 			if test.committed {
-				exporterRemoveAll = func(path string) error {
+				exporterRemoveAll = func(root *os.Root, name string) error {
+					path := filepath.Join(root.Name(), name)
 					if strings.Contains(filepath.Base(path), ".bak-") {
 						if _, err := os.Stat(filepath.Join(path, "manifest.json")); err == nil {
 							backup = path
 							return errInjectedWriteFailure
 						}
 					}
-					return originalRemoveAll(path)
+					return originalRemoveAll(root, name)
 				}
 			} else {
-				exporterWriteFile = func(string, []byte, os.FileMode) error { return errInjectedWriteFailure }
+				exporterWriteFile = func(*os.Root, certstore.BundleFile) error { return errInjectedWriteFailure }
 			}
 			err = plan.Write(context.Background())
 			if !errors.Is(err, errInjectedWriteFailure) {
@@ -311,11 +312,11 @@ func TestBundlePlan_PreservesEditsMadeDuringStaging(t *testing.T) {
 			originalWriteFile := exporterWriteFile
 			t.Cleanup(func() { exporterWriteFile = originalWriteFile })
 			changed := false
-			exporterWriteFile = func(path string, data []byte, mode os.FileMode) error {
-				if err := originalWriteFile(path, data, mode); err != nil {
+			exporterWriteFile = func(root *os.Root, file certstore.BundleFile) error {
+				if err := originalWriteFile(root, file); err != nil {
 					return err
 				}
-				if !changed && strings.HasPrefix(filepath.Base(filepath.Dir(path)), ".certkit.tmp-") {
+				if !changed && strings.HasPrefix(filepath.Base(root.Name()), ".certkit.tmp-") {
 					changed = true
 					if err := os.WriteFile(changedPath, []byte("preserve external edit"), 0600); err != nil {
 						t.Fatal(err)

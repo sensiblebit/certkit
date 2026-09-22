@@ -2,6 +2,7 @@ package internal
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/x509"
 	"errors"
 	"fmt"
@@ -23,19 +24,14 @@ var (
 	errExportBundlePathNotDir       = errors.New("existing bundle path is not a directory")
 	errExportBundleCommittedCleanup = errors.New("bundle committed but backup cleanup failed")
 
-	exporterMkdirAll  = os.MkdirAll
-	exporterMkdir     = os.Mkdir
-	exporterMkdirTemp = os.MkdirTemp
-	exporterWriteFile = os.WriteFile
-	exporterRename    = os.Rename
-	exporterRemoveAll = os.RemoveAll
-	exporterStat      = os.Stat
+	exporterWriteFile = writeExportFile
+	exporterRemoveAll = func(root *os.Root, name string) error { return root.RemoveAll(name) }
 )
 
 // filesystemWriter writes bundle files to the local filesystem under outDir.
 type filesystemWriter struct {
 	outDir       string
-	beforeCommit func(stagingDir string) error
+	beforeCommit func(stagingDir *os.Root) error
 }
 
 // WriteBundleFiles creates the folder and writes each file with appropriate permissions.
@@ -46,12 +42,23 @@ func (w *filesystemWriter) WriteBundleFiles(folder string, files []certstore.Bun
 	}
 
 	parentDir := filepath.Dir(folderPath)
-	if err := exporterMkdirAll(parentDir, 0o755); err != nil {
+	//nolint:gosec // Public bundle directories; private files use 0600.
+	if err := os.MkdirAll(parentDir, 0o755); err != nil {
 		return fmt.Errorf("creating bundle parent directory %s: %w", parentDir, err)
 	}
+	root, err := os.OpenRoot(parentDir)
+	if err != nil {
+		return fmt.Errorf("opening bundle parent directory: %w", err)
+	}
+	defer func() {
+		if err := root.Close(); err != nil {
+			slog.Warn("closing bundle parent directory", "error", err)
+		}
+	}()
+	folderName := filepath.Base(folderPath)
 
 	dirMode := os.FileMode(0o755)
-	if info, statErr := exporterStat(folderPath); statErr == nil {
+	if info, statErr := root.Stat(folderName); statErr == nil {
 		if !info.IsDir() {
 			return fmt.Errorf("%w: %s", errExportBundlePathNotDir, folderPath)
 		}
@@ -60,11 +67,8 @@ func (w *filesystemWriter) WriteBundleFiles(folder string, files []certstore.Bun
 		return fmt.Errorf("checking existing bundle directory: %w", statErr)
 	}
 
-	tempDir, err := reserveTemporaryPath(parentDir, ".certkit.tmp-")
+	tempDir, err := createExportTemporaryDirectory(root, exportTemporaryDirectoryInput{Prefix: ".certkit.tmp-", Mode: dirMode})
 	if err != nil {
-		return fmt.Errorf("reserving temporary bundle directory for %s: %w", folderPath, err)
-	}
-	if err := exporterMkdir(tempDir, dirMode); err != nil {
 		return fmt.Errorf("creating temporary bundle directory for %s: %w", folderPath, err)
 	}
 
@@ -73,27 +77,32 @@ func (w *filesystemWriter) WriteBundleFiles(folder string, files []certstore.Bun
 		if committed {
 			return
 		}
-		if removeErr := exporterRemoveAll(tempDir); removeErr != nil {
+		if removeErr := exporterRemoveAll(root, tempDir); removeErr != nil {
 			slog.Warn("removing temporary bundle directory", "path", tempDir, "error", removeErr)
+		}
+	}()
+	stagingRoot, err := root.OpenRoot(tempDir)
+	if err != nil {
+		return fmt.Errorf("opening staged bundle directory: %w", err)
+	}
+	defer func() {
+		if err := stagingRoot.Close(); err != nil {
+			slog.Warn("closing staged bundle directory", "error", err)
 		}
 	}()
 
 	for _, f := range files {
-		mode := os.FileMode(0644)
-		if f.Sensitive {
-			mode = 0600
-		}
-		if err := exporterWriteFile(filepath.Join(tempDir, f.Name), f.Data, mode); err != nil {
+		if err := exporterWriteFile(stagingRoot, f); err != nil {
 			return fmt.Errorf("writing %s: %w", f.Name, err)
 		}
 	}
 	if w.beforeCommit != nil {
-		if err := w.beforeCommit(tempDir); err != nil {
+		if err := w.beforeCommit(stagingRoot); err != nil {
 			return fmt.Errorf("preparing staged bundle commit: %w", err)
 		}
 	}
 
-	if err := replaceDirectoryAtomically(tempDir, folderPath); err != nil {
+	if err := replaceDirectoryAtomically(root, replaceDirectoryInput{Temporary: tempDir, Destination: folderName}); err != nil {
 		committed = errors.Is(err, errExportBundleCommittedCleanup)
 		return fmt.Errorf("committing bundle directory %s: %w", folderPath, err)
 	}
@@ -101,19 +110,37 @@ func (w *filesystemWriter) WriteBundleFiles(folder string, files []certstore.Bun
 	return nil
 }
 
-func replaceDirectoryAtomically(tempDir, folderPath string) error {
-	parentDir := filepath.Dir(folderPath)
-	backupDir, err := reserveTemporaryPath(parentDir, ".certkit.bak-")
+func writeExportFile(root *os.Root, file certstore.BundleFile) error {
+	mode := os.FileMode(0644)
+	if file.Sensitive {
+		mode = 0600
+	}
+	if err := root.WriteFile(file.Name, file.Data, mode); err != nil {
+		return fmt.Errorf("writing staged artifact %q: %w", file.Name, err)
+	}
+	return nil
+}
+
+type replaceDirectoryInput struct {
+	Temporary   string
+	Destination string
+}
+
+func replaceDirectoryAtomically(root *os.Root, input replaceDirectoryInput) error {
+	backupDir, err := createExportTemporaryDirectory(root, exportTemporaryDirectoryInput{Prefix: ".certkit.bak-", Mode: 0700})
 	if err != nil {
 		return fmt.Errorf("reserving backup directory path: %w", err)
 	}
+	if err := root.Remove(backupDir); err != nil {
+		return fmt.Errorf("releasing reserved backup path: %w", err)
+	}
 
 	hadExisting := false
-	if info, err := exporterStat(folderPath); err == nil {
+	if info, err := root.Stat(input.Destination); err == nil {
 		if !info.IsDir() {
-			return fmt.Errorf("%w: %s", errExportBundlePathNotDir, folderPath)
+			return fmt.Errorf("%w: %s", errExportBundlePathNotDir, input.Destination)
 		}
-		if err := exporterRename(folderPath, backupDir); err != nil {
+		if err := root.Rename(input.Destination, backupDir); err != nil {
 			return fmt.Errorf("moving existing bundle aside: %w", err)
 		}
 		hadExisting = true
@@ -121,9 +148,9 @@ func replaceDirectoryAtomically(tempDir, folderPath string) error {
 		return fmt.Errorf("checking existing bundle directory: %w", err)
 	}
 
-	if err := exporterRename(tempDir, folderPath); err != nil {
+	if err := root.Rename(input.Temporary, input.Destination); err != nil {
 		if hadExisting {
-			if restoreErr := exporterRename(backupDir, folderPath); restoreErr != nil {
+			if restoreErr := root.Rename(backupDir, input.Destination); restoreErr != nil {
 				return fmt.Errorf(
 					"moving staged bundle into place: %w",
 					errors.Join(err, fmt.Errorf("restoring previous bundle: %w", restoreErr)),
@@ -134,22 +161,30 @@ func replaceDirectoryAtomically(tempDir, folderPath string) error {
 	}
 
 	if hadExisting {
-		if err := exporterRemoveAll(backupDir); err != nil {
-			return fmt.Errorf("%w: removing %s: %w", errExportBundleCommittedCleanup, backupDir, err)
+		if err := exporterRemoveAll(root, backupDir); err != nil {
+			return fmt.Errorf("%w: removing %s: %w", errExportBundleCommittedCleanup, filepath.Join(root.Name(), backupDir), err)
 		}
 	}
 	return nil
 }
 
-func reserveTemporaryPath(parentDir, pattern string) (string, error) {
-	path, err := exporterMkdirTemp(parentDir, pattern)
-	if err != nil {
-		return "", err
+type exportTemporaryDirectoryInput struct {
+	Prefix string
+	Mode   os.FileMode
+}
+
+func createExportTemporaryDirectory(root *os.Root, input exportTemporaryDirectoryInput) (string, error) {
+	for {
+		name := input.Prefix + rand.Text()
+		if err := root.Mkdir(name, input.Mode); err != nil {
+			if errors.Is(err, os.ErrExist) {
+				slog.Debug("retrying temporary directory name collision", "name", name)
+				continue
+			}
+			return "", fmt.Errorf("creating temporary directory: %w", err)
+		}
+		return name, nil
 	}
-	if err := exporterRemoveAll(path); err != nil {
-		return "", fmt.Errorf("releasing reserved path %s: %w", path, err)
-	}
-	return path, nil
 }
 
 // safeJoin joins base and folder while ensuring the result stays within base.

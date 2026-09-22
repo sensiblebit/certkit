@@ -648,7 +648,7 @@ func (p *BundleExportPlan) Write(ctx context.Context) (writeErr error) {
 			return fmt.Errorf("writing bundle plan: %w", err)
 		}
 		var entry BundleExportEntry
-		writer := &filesystemWriter{outDir: p.outDir, beforeCommit: func(stagingDir string) error {
+		writer := &filesystemWriter{outDir: p.outDir, beforeCommit: func(stagingDir *os.Root) error {
 			if err := ctx.Err(); err != nil {
 				return fmt.Errorf("committing bundle plan: %w", err)
 			}
@@ -677,7 +677,7 @@ func (p *BundleExportPlan) Write(ctx context.Context) (writeErr error) {
 				return fmt.Errorf("encoding export manifest: %w", err)
 			}
 			// The manifest contains public metadata, never keys or passwords.
-			if err := exporterWriteFile(filepath.Join(stagingDir, bundleManifestName), append(data, '\n'), 0o644); err != nil {
+			if err := exporterWriteFile(stagingDir, certstore.BundleFile{Name: bundleManifestName, Data: append(data, '\n')}); err != nil {
 				return fmt.Errorf("writing export manifest: %w", err)
 			}
 			return nil
@@ -714,7 +714,10 @@ func (p *BundleExportPlan) checkExistingAtWrite(write plannedBundleWrite) error 
 	entry := &p.Entries[write.entry]
 	current, err := inspectBundleDirectory(entry.OutputDirectory)
 	if err != nil {
-		return fmt.Errorf("rechecking bundle before write: %w", err)
+		entry.Status = "blocked"
+		entry.Reason = "existing bundle could not be reinspected after planning; rerun the command: " + err.Error()
+		p.blocked = append(p.blocked, entry.BundleName+": "+entry.Reason)
+		return fmt.Errorf("rechecking bundle %q before write: %w", entry.BundleName, errors.Join(p.Validate(), err))
 	}
 	if current.exists != write.existing.exists || current.digest != write.existing.digest {
 		entry.Status, entry.Reason = "blocked", "existing bundle changed after planning; rerun the command"

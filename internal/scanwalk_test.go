@@ -10,6 +10,86 @@ import (
 
 var errOnFileFailed = errors.New("onfile failed")
 
+func TestWalkScanFiles_ExcludesAcrossWorkingDirectorySymlinks(t *testing.T) {
+	// Chdir changes process state, so these cases must remain serial.
+	for _, relativeExclusions := range []bool{true, false} {
+		name := "relative exclusions with absolute scan root"
+		if !relativeExclusions {
+			name = "absolute exclusions with relative scan root"
+		}
+		t.Run(name, func(t *testing.T) {
+			parent := t.TempDir()
+			root := filepath.Join(parent, "real")
+			if err := os.MkdirAll(filepath.Join(root, "bundles"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			root, err := filepath.EvalSymlinks(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, path := range []string{"delivery.pem", "password", "bundles/old.key"} {
+				if err := os.WriteFile(filepath.Join(root, path), []byte("fixture"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			createSymlinkOrSkip(t, "delivery.pem", filepath.Join(root, "delivery-link"))
+			alias := filepath.Join(parent, "alias")
+			createSymlinkOrSkip(t, root, alias)
+			t.Chdir(alias)
+			var visited []string
+			input := WalkScanFilesInput{RootPath: root, ExcludePaths: []string{"bundles", "password"},
+				OnFile: func(path string) error { visited = append(visited, filepath.Base(path)); return nil }}
+			if !relativeExclusions {
+				input.RootPath = "."
+				input.ExcludePaths = []string{filepath.Join(root, "bundles"), filepath.Join(root, "password")}
+			}
+			if err := WalkScanFiles(input); err != nil {
+				t.Fatal(err)
+			}
+			slices.Sort(visited)
+			if !slices.Equal(visited, []string{"delivery-link", "delivery.pem"}) {
+				t.Fatalf("symlinked working directory changed exclusions or valid inputs: %v", visited)
+			}
+		})
+	}
+}
+
+func TestWalkScanFiles_ExcludesFutureOutputThroughSymlink(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	parent := filepath.Join(root, "z-parent")
+	if err := os.Mkdir(parent, 0700); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(root, "alias")
+	createSymlinkOrSkip(t, parent, alias)
+	trigger := filepath.Join(root, "a-delivery.pem")
+	if err := os.WriteFile(trigger, []byte("input"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(parent, "bundles")
+	var visited []string
+	err := WalkScanFiles(WalkScanFilesInput{RootPath: root, ExcludePaths: []string{filepath.Join(alias, "bundles")},
+		OnFile: func(path string) error {
+			visited = append(visited, path)
+			if path == trigger {
+				if err := os.Mkdir(output, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(output, "old.key"), []byte("output"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			return nil
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(visited, []string{trigger}) {
+		t.Fatalf("newly created output through symlink was ingested: %v", visited)
+	}
+}
+
 func TestWalkScanFiles_SkipsSymlinkOutsideRoot(t *testing.T) {
 	// WHY: Directory scans must stay within the requested root and avoid
 	// ingesting symlink targets from unrelated paths.

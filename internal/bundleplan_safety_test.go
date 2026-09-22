@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sensiblebit/certkit"
+	"github.com/sensiblebit/certkit/internal/certstore"
 )
 
 func TestBundlePlan_UntrustedReplacementDoesNotBlockOptionalExports(t *testing.T) {
@@ -432,11 +433,11 @@ func TestBundlePlan_LateScopeConflictPreservesCommittedStatus(t *testing.T) {
 	original := mustReadTestFile(t, filepath.Join(directory, bundleManifestName))
 	originalWrite := exporterWriteFile
 	t.Cleanup(func() { exporterWriteFile = originalWrite })
-	exporterWriteFile = func(path string, data []byte, mode os.FileMode) error {
-		if err := originalWrite(path, data, mode); err != nil {
+	exporterWriteFile = func(root *os.Root, file certstore.BundleFile) error {
+		if err := originalWrite(root, file); err != nil {
 			return err
 		}
-		if filepath.Base(path) == "z-next.example.com.pem" {
+		if file.Name == "z-next.example.com.pem" {
 			if err := os.Rename(directory, renamed); err != nil {
 				t.Fatal(err)
 			}
