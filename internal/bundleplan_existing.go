@@ -73,39 +73,50 @@ func inspectBundleDirectory(path string) (bundleDirectoryState, error) {
 			return fmt.Errorf("fingerprinting existing bundle: %w", err)
 		}
 		var pemData string
+		foldedName := strings.ToLower(name)
 		switch {
-		case strings.HasSuffix(name, ".pem"):
+		case strings.HasSuffix(foldedName, ".pem"):
 			pemData = string(data)
 		case strings.EqualFold(name, bundleManifestName):
 			var manifest BundleExportEntry
 			if err := json.Unmarshal(data, &manifest); err != nil {
 				state.ambiguity = fmt.Sprintf("existing export manifest %q is invalid", name)
 			} else {
-				if manifest.BundleName != "" {
+				if strings.TrimSpace(manifest.BundleName) == "" {
+					state.ambiguity = fmt.Sprintf("existing export manifest %q is missing bundle_name", name)
+				} else {
 					if state.bundleName != "" && state.bundleName != manifest.BundleName {
 						return fmt.Errorf("%w: existing manifests identify different bundles", errBundleInspection)
 					}
 					state.bundleName = manifest.BundleName
 				}
-				if manifest.Leaf != nil {
+				if manifest.Leaf == nil || strings.TrimSpace(manifest.Leaf.PEM) == "" {
+					state.ambiguity = fmt.Sprintf("existing export manifest %q is missing leaf.pem", name)
+				} else {
 					pemData = manifest.Leaf.PEM
 				}
 			}
-		case strings.HasSuffix(name, ".json") && !strings.HasSuffix(name, ".csr.json"):
+		case strings.HasSuffix(foldedName, ".json") && !strings.HasSuffix(foldedName, ".csr.json"):
 			var metadata struct {
 				PEM string `json:"pem"`
 			}
 			if err := json.Unmarshal(data, &metadata); err == nil {
 				pemData = metadata.PEM
+				if strings.TrimSpace(pemData) == "" {
+					state.ambiguity = fmt.Sprintf("existing JSON certificate artifact %q is missing pem", name)
+				}
 			} else {
 				state.ambiguity = fmt.Sprintf("existing JSON certificate artifact %q is invalid", name)
 			}
-		case strings.HasSuffix(name, ".yaml") && !strings.HasSuffix(name, ".k8s.yaml"):
+		case strings.HasSuffix(foldedName, ".yaml") && !strings.HasSuffix(foldedName, ".k8s.yaml"):
 			var metadata struct {
 				CRT string `yaml:"crt"`
 			}
 			if err := yaml.Unmarshal(data, &metadata); err == nil {
 				pemData = metadata.CRT
+				if strings.TrimSpace(pemData) == "" {
+					state.ambiguity = fmt.Sprintf("existing YAML certificate artifact %q is missing crt", name)
+				}
 			} else {
 				state.ambiguity = fmt.Sprintf("existing YAML certificate artifact %q is invalid", name)
 			}

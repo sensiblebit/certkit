@@ -60,7 +60,7 @@ func (w *filesystemWriter) WriteBundleFiles(folder string, files []certstore.Bun
 		return fmt.Errorf("checking existing bundle directory: %w", statErr)
 	}
 
-	tempDir, err := reserveTemporaryPath(parentDir, "."+filepath.Base(folderPath)+".tmp-")
+	tempDir, err := reserveTemporaryPath(parentDir, ".certkit.tmp-")
 	if err != nil {
 		return fmt.Errorf("reserving temporary bundle directory for %s: %w", folderPath, err)
 	}
@@ -103,7 +103,7 @@ func (w *filesystemWriter) WriteBundleFiles(folder string, files []certstore.Bun
 
 func replaceDirectoryAtomically(tempDir, folderPath string) error {
 	parentDir := filepath.Dir(folderPath)
-	backupDir, err := reserveTemporaryPath(parentDir, "."+filepath.Base(folderPath)+".bak-")
+	backupDir, err := reserveTemporaryPath(parentDir, ".certkit.bak-")
 	if err != nil {
 		return fmt.Errorf("reserving backup directory path: %w", err)
 	}

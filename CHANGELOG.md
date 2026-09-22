@@ -40,6 +40,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Reject managed directory/artifact components above 255 bytes during planning and use short staging/backup names so accepted long bundle names remain writable ([#225])
+- Require certificate PEM fields and manifest bundle identity during replacement inspection; inspect artifact extensions and CSR/Kubernetes exclusions case-insensitively ([#225])
+- Report refresh-lock cleanup failures, preserve replacement lock markers, and anchor cleanup to the original output directory ([#225])
+- Mark pending exports blocked and invalidate stale plans when directory scope changes before writing, preserving already committed statuses ([#225])
 - Include AIA-fetched certificates in configured bundle exports by assigning names after chain resolution ([#225])
 - Block replacement when existing JSON/YAML certificate metadata is malformed, even alongside a valid leaf, and retain filename-specific diagnostics ([#225])
 - Add managed-export and artifact-inspection context to propagated errors while preserving their underlying causes ([#225])

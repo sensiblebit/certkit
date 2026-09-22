@@ -3,6 +3,7 @@ package internal
 import (
 	"context"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -31,6 +32,18 @@ func TestBundlePlan_PreservesMalformedArtifactDiagnostics(t *testing.T) {
 		{"malformed YAML without leaf", "broken.yaml", "crt: [", 0},
 		{"malformed YAML alongside valid leaf", "broken.yaml", "crt: [", 1},
 		{"invalid YAML certificate field", "broken.yaml", "crt: [invalid]", 1},
+		{"empty JSON object", "broken.json", "{}", 1},
+		{"null JSON", "broken.json", "null", 1},
+		{"empty JSON certificate", "broken.json", `{"pem":""}`, 1},
+		{"empty YAML object", "broken.yaml", "{}", 1},
+		{"null YAML", "broken.yaml", "null", 1},
+		{"empty YAML certificate", "broken.yaml", "crt: ''", 1},
+		{"empty manifest", "manifest.json", "{}", 1},
+		{"null manifest", "manifest.json", "null", 1},
+		{"manifest without leaf", "manifest.json", `{"bundle_name":"service-tls"}`, 1},
+		{"manifest without certificate", "manifest.json", `{"bundle_name":"service-tls","leaf":{}}`, 1},
+		{"mixed case malformed JSON", "broken.JsOn", "{", 1},
+		{"mixed case malformed YAML", "broken.YaMl", "crt: [", 1},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
@@ -68,6 +81,108 @@ func TestBundlePlan_PreservesMalformedArtifactDiagnostics(t *testing.T) {
 			}
 			if string(mustReadTestFile(t, path)) != test.contents {
 				t.Fatal("malformed artifact was overwritten")
+			}
+		})
+	}
+}
+
+func TestBundlePlan_ManifestRequiresBundleName(t *testing.T) {
+	t.Parallel()
+	for _, name := range []string{"", " \t"} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			fixture := newBundlePlanFixture(t)
+			fixture.input.Formats = []string{"pem"}
+			initial, err := PlanBundleExports(context.Background(), fixture.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := initial.Write(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			manifest := initial.Entries[0]
+			manifest.BundleName = name
+			data, err := json.Marshal(manifest)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(manifest.OutputDirectory, bundleManifestName)
+			if err := os.WriteFile(path, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			fixture.input.ForceBundle = false
+			fixture.input.TrustStore, fixture.input.CustomRoots = "custom", []*x509.Certificate{fixture.ca.cert}
+			plan, err := PlanBundleExports(context.Background(), fixture.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := plan.Write(context.Background()); !errors.Is(err, ErrBundlePlanBlocked) {
+				t.Fatalf("incomplete manifest was replaced: %v", err)
+			}
+			if !strings.Contains(plan.Entries[0].Reason, bundleManifestName) {
+				t.Fatalf("missing manifest diagnostic: %s", plan.Entries[0].Reason)
+			}
+			if string(mustReadTestFile(t, path)) != string(data) {
+				t.Fatal("incomplete manifest was overwritten")
+			}
+		})
+	}
+}
+
+func TestBundlePlan_InspectsMixedCaseArtifacts(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name    string
+		field   string
+		ignored bool
+	}{
+		{"other.PEM", "", false},
+		{"other.JsOn", "pem", false},
+		{"other.YaMl", "crt", false},
+		{"other.CsR.JsOn", "pem", true},
+		{"other.K8s.YaMl", "crt", true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			fixture := newBundlePlanFixture(t)
+			fixture.input.Formats = []string{"pem"}
+			initial, err := PlanBundleExports(context.Background(), fixture.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := initial.Write(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			other := newECDSALeaf(t, fixture.ca, "other.example.com", nil)
+			data := []byte(certkit.CertToPEM(other.cert))
+			if test.field != "" {
+				data, err = json.Marshal(map[string]string{test.field: string(data)})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			path := filepath.Join(initial.Entries[0].OutputDirectory, test.name)
+			if err := os.WriteFile(path, data, 0600); err != nil {
+				t.Fatal(err)
+			}
+			fixture.input.ForceBundle = false
+			fixture.input.TrustStore, fixture.input.CustomRoots = "custom", []*x509.Certificate{fixture.ca.cert}
+			plan, err := PlanBundleExports(context.Background(), fixture.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = plan.Write(context.Background())
+			if test.ignored {
+				if err != nil {
+					t.Fatalf("non-certificate metadata blocked refresh: %v", err)
+				}
+			} else {
+				if !errors.Is(err, ErrBundlePlanBlocked) {
+					t.Fatalf("mixed-case conflicting leaf was replaced: %v", err)
+				}
+				if string(mustReadTestFile(t, path)) != string(data) {
+					t.Fatal("conflicting artifact was overwritten")
+				}
 			}
 		})
 	}

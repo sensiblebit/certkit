@@ -315,7 +315,7 @@ func TestBundlePlan_PreservesEditsMadeDuringStaging(t *testing.T) {
 				if err := originalWriteFile(path, data, mode); err != nil {
 					return err
 				}
-				if !changed && strings.HasPrefix(filepath.Base(filepath.Dir(path)), ".service-tls.tmp-") {
+				if !changed && strings.HasPrefix(filepath.Base(filepath.Dir(path)), ".certkit.tmp-") {
 					changed = true
 					if err := os.WriteFile(changedPath, []byte("preserve external edit"), 0600); err != nil {
 						t.Fatal(err)

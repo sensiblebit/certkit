@@ -206,6 +206,59 @@ func TestBundlePlan_RejectsCaseInsensitiveDirectoryCollisions(t *testing.T) {
 	}
 }
 
+func TestBundlePlan_ComponentLengthLimits(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name       string
+		commonName string
+		bundleName string
+		wantError  bool
+	}{
+		{"oversized artifact", strings.Repeat("a", 300), "service-tls", true},
+		{"artifact just over limit", strings.Repeat("a", 252), "service-tls", true},
+		{"artifact at limit", strings.Repeat("a", 251), "service-tls", false},
+		{"multibyte artifact over limit", strings.Repeat("é", 126), "service-tls", true},
+		{"multibyte artifact within limit", strings.Repeat("é", 125), "service-tls", false},
+		{"derived directory over limit", strings.Repeat("a", 256), "", true},
+		{"long derived directory remains writable", strings.Repeat("a", 251), "", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			fixture := newBundlePlanFixture(t)
+			leaf := newECDSALeaf(t, fixture.ca, test.commonName, nil)
+			if err := fixture.input.Store.HandleCertificate(leaf.cert, "delivery.pem"); err != nil {
+				t.Fatal(err)
+			}
+			fixture.input.Configs = append(fixture.input.Configs, BundleConfig{BundleName: test.bundleName, CommonNames: []string{test.commonName}})
+			// Keep the valid bundle first so invalid names cannot cause partial writes.
+			fixture.input.Configs[0].BundleName = "a-valid"
+			AssignBundleNames(fixture.input.Store, fixture.input.Configs)
+			fixture.input.Formats = []string{"pem"}
+			plan, err := PlanBundleExports(context.Background(), fixture.input)
+			if test.wantError {
+				if !errors.Is(err, errBundlePlanInput) || !strings.Contains(err.Error(), "255-byte") {
+					t.Fatalf("overlong component accepted: %v", err)
+				}
+				if _, err := os.Stat(fixture.input.OutDir); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("invalid plan wrote output")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := plan.Write(context.Background()); err != nil {
+				t.Fatalf("accepted component was not writable: %v", err)
+			}
+			for _, entry := range plan.Entries {
+				if entry.Status != "created" {
+					t.Fatalf("missing bundle: %+v", entry)
+				}
+			}
+		})
+	}
+}
+
 func TestBundlePlan_DerivedNameCollisionWithinRule(t *testing.T) {
 	t.Parallel()
 	for _, bundleName := range []string{"", "service-tls"} {
@@ -335,12 +388,69 @@ func TestBundlePlan_RechecksDirectoryNamesBeforeWrite(t *testing.T) {
 	if err := plan.Write(context.Background()); !errors.Is(err, errExportBundleFolderCollision) {
 		t.Fatalf("renamed unselected directory was accepted: %v", err)
 	}
+	if plan.Entries[0].Status != "blocked" || !errors.Is(plan.Validate(), ErrBundlePlanBlocked) {
+		t.Fatalf("stale scope did not invalidate the plan: %+v", plan.Entries[0])
+	}
 	if string(mustReadTestFile(t, manifestPath)) != string(original) {
 		t.Fatal("renamed bundle was changed")
 	}
 	children, err := os.ReadDir(fixture.input.OutDir)
 	if err != nil || len(children) != 1 || children[0].Name() != "SERVICE-TLS" {
 		t.Fatalf("blocked write changed directory names: %v, %v", children, err)
+	}
+	if err := os.Rename(renamedDir, originalDir); err != nil {
+		t.Fatal(err)
+	}
+	if err := plan.Write(context.Background()); !errors.Is(err, ErrBundlePlanBlocked) {
+		t.Fatalf("stale plan was reusable after restoring directory names: %v", err)
+	}
+}
+
+func TestBundlePlan_LateScopeConflictPreservesCommittedStatus(t *testing.T) {
+	// Filesystem injection must remain serial with other writer tests.
+	fixture := newBundlePlanFixture(t)
+	fixture.input.Formats = []string{"pem"}
+	other := newECDSALeaf(t, fixture.ca, "z-next.example.com", nil)
+	if err := fixture.input.Store.HandleCertificate(other.cert, "next.pem"); err != nil {
+		t.Fatal(err)
+	}
+	fixture.input.Configs = append(fixture.input.Configs, BundleConfig{BundleName: "z-next", CommonNames: []string{"z-next.example.com"}})
+	AssignBundleNames(fixture.input.Store, fixture.input.Configs)
+	initial, err := PlanBundleExports(context.Background(), fixture.input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := initial.Write(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := PlanBundleExports(context.Background(), fixture.input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(fixture.input.OutDir, "z-next")
+	renamed := filepath.Join(fixture.input.OutDir, "Z-NEXT")
+	original := mustReadTestFile(t, filepath.Join(directory, bundleManifestName))
+	originalWrite := exporterWriteFile
+	t.Cleanup(func() { exporterWriteFile = originalWrite })
+	exporterWriteFile = func(path string, data []byte, mode os.FileMode) error {
+		if err := originalWrite(path, data, mode); err != nil {
+			return err
+		}
+		if filepath.Base(path) == "z-next.example.com.pem" {
+			if err := os.Rename(directory, renamed); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return nil
+	}
+	if err := plan.Write(context.Background()); !errors.Is(err, ErrBundlePlanBlocked) || !errors.Is(err, errExportBundleFolderCollision) {
+		t.Fatalf("late scope conflict did not invalidate the write: %v", err)
+	}
+	if plan.Entries[0].Status != "replaced" || plan.Entries[1].Status != "blocked" {
+		t.Fatalf("incorrect partial-write statuses: %+v", plan.Entries)
+	}
+	if string(mustReadTestFile(t, filepath.Join(renamed, bundleManifestName))) != string(original) {
+		t.Fatal("renamed bundle was overwritten")
 	}
 }
 

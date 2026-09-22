@@ -8,7 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"slices"
@@ -292,6 +292,9 @@ func reserveBundleFolder(folders map[string]string, name string) (string, error)
 	if equalBundlePathNames(folder, bundleRefreshLockName) {
 		return "", fmt.Errorf("%w: bundle directory %q is reserved for the refresh lock; configure a different bundle name", errBundlePlanInput, folder)
 	}
+	if err := validateBundleComponentLength(folder); err != nil {
+		return "", fmt.Errorf("validating bundle directory: %w", err)
+	}
 	if isUnsafeBundleName(folder) {
 		return "", fmt.Errorf("%w: bundle directory %q uses a reserved or invalid portable name; configure a different bundle name", errBundlePlanInput, folder)
 	}
@@ -302,6 +305,16 @@ func reserveBundleFolder(folders map[string]string, name string) (string, error)
 	}
 	folders[folder] = name
 	return folder, nil
+}
+
+// validateBundleComponentLength enforces a portable byte limit independently of
+// the current filesystem, including multibyte certificate common names.
+func validateBundleComponentLength(name string) error {
+	const maxBytes = 255
+	if len(name) > maxBytes {
+		return fmt.Errorf("%w: component %q exceeds the %d-byte filename limit", errBundlePlanInput, name, maxBytes)
+	}
+	return nil
 }
 
 // isUnsafeBundleName rejects control characters and platform-reserved names in
@@ -513,6 +526,9 @@ func planBundleCandidate(ctx context.Context, input planBundleCandidateInput) (B
 		return entry, write, fmt.Errorf("generating selected artifacts: %w", err)
 	}
 	for _, file := range files {
+		if err := validateBundleComponentLength(file.Name); err != nil {
+			return entry, write, fmt.Errorf("validating generated artifact: %w", err)
+		}
 		if isUnsafeBundleName(file.Name) {
 			return entry, write, fmt.Errorf("%w: generated artifact %q uses a reserved or invalid portable name", errBundlePlanInput, file.Name)
 		}
@@ -545,8 +561,8 @@ func describeBundleLeaf(cert *x509.Certificate, source string) *BundleLeaf {
 
 // Write applies a validated plan, rechecking existing directories and candidate
 // validity and trust before modifying bundles. Each directory is replaced using
-// staging and rollback; committed status is retained if backup cleanup fails.
-func (p *BundleExportPlan) Write(ctx context.Context) error {
+// staging and rollback; committed status is retained if backup or lock cleanup fails.
+func (p *BundleExportPlan) Write(ctx context.Context) (writeErr error) {
 	if err := ctx.Err(); err != nil {
 		return fmt.Errorf("writing bundle plan: %w", err)
 	}
@@ -568,7 +584,16 @@ func (p *BundleExportPlan) Write(ctx context.Context) error {
 	if err := p.destination.pinCreatedRoot(); err != nil {
 		return err
 	}
-	children, err := os.ReadDir(p.outDir)
+	lockRoot, err := os.OpenRoot(p.outDir)
+	if err != nil {
+		return fmt.Errorf("opening bundle refresh lock directory: %w", err)
+	}
+	defer func() {
+		if err := lockRoot.Close(); err != nil {
+			writeErr = errors.Join(writeErr, fmt.Errorf("closing bundle refresh lock directory: %w", err))
+		}
+	}()
+	children, err := fs.ReadDir(lockRoot.FS(), ".")
 	if err != nil {
 		return fmt.Errorf("checking bundle refresh locks: %w", err)
 	}
@@ -578,18 +603,36 @@ func (p *BundleExportPlan) Write(ctx context.Context) error {
 		}
 	}
 	lockPath := filepath.Join(p.outDir, bundleRefreshLockName)
-	if err := os.Mkdir(lockPath, 0o700); err != nil {
+	if err := lockRoot.Mkdir(bundleRefreshLockName, 0o700); err != nil {
 		return fmt.Errorf("acquiring bundle refresh lock (another refresh may be running): %w", err)
 	}
+	lockIdentity, err := lockRoot.Lstat(bundleRefreshLockName)
+	if err != nil {
+		return fmt.Errorf("checking acquired bundle refresh lock %q: %w", lockPath, err)
+	}
+	checkLock := func() error {
+		current, err := lockRoot.Lstat(bundleRefreshLockName)
+		if err != nil {
+			return fmt.Errorf("%w: checking bundle refresh lock: %w", ErrBundlePlanBlocked, err)
+		}
+		if !os.SameFile(lockIdentity, current) {
+			return fmt.Errorf("%w: bundle refresh lock changed during export", ErrBundlePlanBlocked)
+		}
+		return nil
+	}
 	defer func() {
-		if err := os.Remove(lockPath); err != nil {
-			slog.Warn("removing bundle refresh lock", "path", lockPath, "error", err)
+		err := checkLock()
+		if err == nil {
+			err = lockRoot.Remove(bundleRefreshLockName)
+		}
+		if err != nil {
+			writeErr = errors.Join(writeErr, fmt.Errorf("removing bundle refresh lock %q: %w", lockPath, err))
 		}
 	}()
 	if err := p.destination.check(); err != nil {
 		return err
 	}
-	if err := p.checkDirectoryScope(); err != nil {
+	if err := p.checkDirectoryScopeAtWrite(); err != nil {
 		return err
 	}
 	for _, write := range p.writes {
@@ -612,7 +655,10 @@ func (p *BundleExportPlan) Write(ctx context.Context) error {
 			if err := p.destination.check(); err != nil {
 				return err
 			}
-			if err := p.checkDirectoryScope(); err != nil {
+			if err := checkLock(); err != nil {
+				return err
+			}
+			if err := p.checkDirectoryScopeAtWrite(); err != nil {
 				return err
 			}
 			if err := p.checkCandidateAtWrite(write); err != nil {
@@ -643,6 +689,23 @@ func (p *BundleExportPlan) Write(ctx context.Context) error {
 			return fmt.Errorf("writing bundle %q: %w", p.Entries[write.entry].BundleName, err)
 		}
 		p.Entries[write.entry] = entry
+	}
+	return nil
+}
+
+// checkDirectoryScopeAtWrite invalidates pending entries if directory aliases
+// change after review, while retaining the status of already committed bundles.
+func (p *BundleExportPlan) checkDirectoryScopeAtWrite() error {
+	if err := p.checkDirectoryScope(); err != nil {
+		for _, write := range p.writes {
+			entry := &p.Entries[write.entry]
+			if entry.Status == "planned" {
+				entry.Status = "blocked"
+				entry.Reason = "bundle directory scope changed after planning; rerun the command: " + err.Error()
+				p.blocked = append(p.blocked, entry.BundleName+": "+entry.Reason)
+			}
+		}
+		return fmt.Errorf("rechecking bundle directory scope: %w", errors.Join(p.Validate(), err))
 	}
 	return nil
 }
