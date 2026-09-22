@@ -143,6 +143,62 @@ func TestBundlePlan_ScopedPreviewAndWrite(t *testing.T) {
 	}
 }
 
+func TestBundlePlan_RequiredBundlesRespectScope(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		name      string
+		selected  []string
+		required  []string
+		wantNames []string
+		wantError string
+	}{
+		{"required outside explicit scope", []string{"service-tls"}, []string{"unrelated"}, nil, "outside the selected scope"},
+		{"required within explicit scope", []string{"service-tls"}, []string{"service-tls"}, []string{"service-tls"}, ""},
+		{"required without explicit scope", nil, []string{"unrelated"}, []string{"service-tls", "unrelated"}, ""},
+		{"unknown required rule", []string{"service-tls"}, []string{"unknown"}, nil, "has no configuration rule"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			t.Parallel()
+			fixture := newBundlePlanFixture(t)
+			other := newECDSALeaf(t, fixture.ca, "unrelated.example.com", nil)
+			if err := fixture.input.Store.HandleCertificate(other.cert, "other.pem"); err != nil {
+				t.Fatal(err)
+			}
+			fixture.input.Configs = append(fixture.input.Configs, BundleConfig{BundleName: "unrelated", CommonNames: []string{"unrelated.example.com"}})
+			AssignBundleNames(fixture.input.Store, fixture.input.Configs)
+			fixture.input.BundleNames, fixture.input.RequireBundles = test.selected, test.required
+			fixture.input.Formats = []string{"pem"}
+			plan, err := PlanBundleExports(context.Background(), fixture.input)
+			if test.wantError != "" {
+				if !errors.Is(err, errBundlePlanInput) || !strings.Contains(err.Error(), test.wantError) {
+					t.Fatalf("scope error = %v, want %s", err, test.wantError)
+				}
+				if _, err := os.Stat(fixture.input.OutDir); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("invalid scope wrote output: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := plan.Write(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			directories, err := os.ReadDir(fixture.input.OutDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var names []string
+			for _, directory := range directories {
+				names = append(names, directory.Name())
+			}
+			if !slices.Equal(names, test.wantNames) {
+				t.Fatalf("written directories = %v, want %v", names, test.wantNames)
+			}
+		})
+	}
+}
+
 func TestBundlePlan_ReplacementProtection(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {

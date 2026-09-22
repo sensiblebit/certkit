@@ -173,6 +173,7 @@ func PlanBundleExports(ctx context.Context, input BundlePlanInput) (*BundleExpor
 	}
 	slices.Sort(names)
 	names = slices.Compact(names)
+	// Validate required rules without expanding the explicitly selected scope.
 	for _, name := range append(slices.Clone(names), input.RequireBundles...) {
 		if _, ok := rules[name]; !ok {
 			return nil, fmt.Errorf("%w: bundle %q has no configuration rule", errBundlePlanInput, name)
@@ -573,7 +574,7 @@ func (p *BundleExportPlan) Write(ctx context.Context) (writeErr error) {
 		return nil
 	}
 	if err := p.destination.check(); err != nil {
-		return err
+		return p.blockPendingWrites("bundle output destination changed after planning", err)
 	}
 	// The lock serializes cooperating certkit processes. Recheck after acquiring
 	// it so a preview made before another refresh cannot overwrite that refresh.
@@ -582,7 +583,7 @@ func (p *BundleExportPlan) Write(ctx context.Context) (writeErr error) {
 		return fmt.Errorf("creating bundle output directory: %w", err)
 	}
 	if err := p.destination.pinCreatedRoot(); err != nil {
-		return err
+		return p.blockPendingWrites("bundle output destination could not be pinned", err)
 	}
 	lockRoot, err := os.OpenRoot(p.outDir)
 	if err != nil {
@@ -613,10 +614,10 @@ func (p *BundleExportPlan) Write(ctx context.Context) (writeErr error) {
 	checkLock := func() error {
 		current, err := lockRoot.Lstat(bundleRefreshLockName)
 		if err != nil {
-			return fmt.Errorf("%w: checking bundle refresh lock: %w", ErrBundlePlanBlocked, err)
+			return p.blockPendingWrites("bundle refresh lock could not be checked", fmt.Errorf("%w: checking bundle refresh lock: %w", ErrBundlePlanBlocked, err))
 		}
 		if !os.SameFile(lockIdentity, current) {
-			return fmt.Errorf("%w: bundle refresh lock changed during export", ErrBundlePlanBlocked)
+			return p.blockPendingWrites("bundle refresh lock changed during export", fmt.Errorf("%w: bundle refresh lock changed during export", ErrBundlePlanBlocked))
 		}
 		return nil
 	}
@@ -630,7 +631,7 @@ func (p *BundleExportPlan) Write(ctx context.Context) (writeErr error) {
 		}
 	}()
 	if err := p.destination.check(); err != nil {
-		return err
+		return p.blockPendingWrites("bundle output destination changed after planning", err)
 	}
 	if err := p.checkDirectoryScopeAtWrite(); err != nil {
 		return err
@@ -647,13 +648,12 @@ func (p *BundleExportPlan) Write(ctx context.Context) (writeErr error) {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("writing bundle plan: %w", err)
 		}
-		var entry BundleExportEntry
-		writer := &filesystemWriter{outDir: p.outDir, beforeCommit: func(stagingDir *os.Root) error {
+		checkWrite := func() error {
 			if err := ctx.Err(); err != nil {
 				return fmt.Errorf("committing bundle plan: %w", err)
 			}
 			if err := p.destination.check(); err != nil {
-				return err
+				return p.blockPendingWrites("bundle output destination changed after planning", err)
 			}
 			if err := checkLock(); err != nil {
 				return err
@@ -665,6 +665,21 @@ func (p *BundleExportPlan) Write(ctx context.Context) (writeErr error) {
 				return err
 			}
 			if err := p.checkExistingAtWrite(write); err != nil {
+				return err
+			}
+			return nil
+		}
+		var entry BundleExportEntry
+		writer := &filesystemWriter{outDir: p.outDir, checkCommit: func(parent *os.Root) error {
+			if err := checkWrite(); err != nil {
+				return err
+			}
+			if err := p.destination.checkRoot(parent); err != nil {
+				return p.blockPendingWrites("opened bundle output directory changed after planning", err)
+			}
+			return checkLock()
+		}, beforeCommit: func(stagingDir *os.Root) error {
+			if err := checkWrite(); err != nil {
 				return err
 			}
 			entry = p.Entries[write.entry]
@@ -693,19 +708,25 @@ func (p *BundleExportPlan) Write(ctx context.Context) (writeErr error) {
 	return nil
 }
 
+// blockPendingWrites records a shared write-time safety failure without changing
+// the status of bundles that have already committed.
+func (p *BundleExportPlan) blockPendingWrites(reason string, cause error) error {
+	for _, write := range p.writes {
+		entry := &p.Entries[write.entry]
+		if entry.Status == "planned" {
+			entry.Status = "blocked"
+			entry.Reason = reason + "; rerun the command: " + cause.Error()
+			p.blocked = append(p.blocked, entry.BundleName+": "+entry.Reason)
+		}
+	}
+	return errors.Join(p.Validate(), cause)
+}
+
 // checkDirectoryScopeAtWrite invalidates pending entries if directory aliases
 // change after review, while retaining the status of already committed bundles.
 func (p *BundleExportPlan) checkDirectoryScopeAtWrite() error {
 	if err := p.checkDirectoryScope(); err != nil {
-		for _, write := range p.writes {
-			entry := &p.Entries[write.entry]
-			if entry.Status == "planned" {
-				entry.Status = "blocked"
-				entry.Reason = "bundle directory scope changed after planning; rerun the command: " + err.Error()
-				p.blocked = append(p.blocked, entry.BundleName+": "+entry.Reason)
-			}
-		}
-		return fmt.Errorf("rechecking bundle directory scope: %w", errors.Join(p.Validate(), err))
+		return fmt.Errorf("rechecking bundle directory scope: %w", p.blockPendingWrites("bundle directory scope changed after planning", err))
 	}
 	return nil
 }

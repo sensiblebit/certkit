@@ -106,6 +106,22 @@ func (d bundleDestination) check() error {
 	return nil
 }
 
+// checkRoot binds the writer's opened parent to the pinned output identity.
+// Path validation is also required: an open handle follows a renamed directory.
+func (d bundleDestination) checkRoot(root *os.Root) error {
+	if err := d.check(); err != nil {
+		return err
+	}
+	info, err := root.Stat(".")
+	if err != nil {
+		return fmt.Errorf("checking opened bundle output directory: %w", err)
+	}
+	if !os.SameFile(info, d.identity) {
+		return fmt.Errorf("%w: opened bundle output directory differs from the reviewed destination", ErrBundlePlanBlocked)
+	}
+	return nil
+}
+
 // pinCreatedRoot upgrades an absent output's ancestor guard after MkdirAll.
 func (d *bundleDestination) pinCreatedRoot() error {
 	if err := d.check(); err != nil {

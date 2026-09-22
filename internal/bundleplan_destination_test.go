@@ -121,6 +121,12 @@ func TestBundlePlan_RejectsChangedDestinationIdentity(t *testing.T) {
 			if err := plan.Write(context.Background()); !errors.Is(err, ErrBundlePlanBlocked) {
 				t.Fatalf("changed destination was not blocked: %v", err)
 			}
+			if plan.Entries[0].Status != "blocked" || plan.Entries[0].Reason == "" {
+				t.Fatalf("changed destination did not invalidate the entry: %+v", plan.Entries[0])
+			}
+			if !errors.Is(plan.Validate(), ErrBundlePlanBlocked) {
+				t.Fatal("changed destination left the plan valid")
+			}
 			for _, path := range []string{anchor, anchor + "-original", other} {
 				children, err := os.ReadDir(path)
 				if err != nil || len(children) != 0 {

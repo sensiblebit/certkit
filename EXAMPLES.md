@@ -523,7 +523,7 @@ certkit scan ./tmp -c bundles.yaml --bundle-path ./bundles \
 
 `--json` prints the export manifest, including created/replaced/skipped status and reasons. Every saved bundle also contains `manifest.json`. Existing directories are replaced as a unit; unselected artifacts from a previous export are removed and listed in the plan.
 
-The manifest reports absolute, resolved output directories. Each in-memory plan pins that destination and checks directory identity, so working-directory changes and retargeted aliases cannot redirect its writes; replacing the resolved destination requires a new plan.
+The manifest reports absolute, resolved output directories. Each in-memory plan pins that destination and checks directory identity, so working-directory changes and retargeted aliases cannot redirect its writes; replacing the resolved destination requires a new plan. Destination and lock checks run again after staging the manifest, immediately before replacement. Failures mark pending entries as blocked while preserving the status of earlier committed bundles.
 
 `manifest.json` and the output-directory lock `.certkit-refresh.lock` are reserved, including case variants. If the CN is `manifest`, omit `json` from `--formats`. If a CN-derived bundle directory collides with the lock name, set a different `bundleName` in the configuration. Collisions fail during the preview.
 

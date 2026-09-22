@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Recheck the opened output destination and refresh lock after manifest staging, immediately before replacement; invalidate pending entries on destination or lock failures while retaining committed statuses ([#225])
 - Anchor bundle staging, writes, rollback, and cleanup to opened directories so output-root relocation cannot strand private artifacts or redirect cleanup ([#225])
 - Mark failed existing-bundle reinspection as blocked and preserve the underlying inspection error alongside the validation result ([#225])
 - Resolve symlinked working directories and future output ancestors in scan exclusions while retaining valid in-root symlink inputs ([#225])

@@ -32,6 +32,7 @@ var (
 type filesystemWriter struct {
 	outDir       string
 	beforeCommit func(stagingDir *os.Root) error
+	checkCommit  func(parent *os.Root) error
 }
 
 // WriteBundleFiles creates the folder and writes each file with appropriate permissions.
@@ -102,7 +103,7 @@ func (w *filesystemWriter) WriteBundleFiles(folder string, files []certstore.Bun
 		}
 	}
 
-	if err := replaceDirectoryAtomically(root, replaceDirectoryInput{Temporary: tempDir, Destination: folderName}); err != nil {
+	if err := replaceDirectoryAtomically(root, replaceDirectoryInput{Temporary: tempDir, Destination: folderName, BeforeRename: w.checkCommit}); err != nil {
 		committed = errors.Is(err, errExportBundleCommittedCleanup)
 		return fmt.Errorf("committing bundle directory %s: %w", folderPath, err)
 	}
@@ -122,8 +123,9 @@ func writeExportFile(root *os.Root, file certstore.BundleFile) error {
 }
 
 type replaceDirectoryInput struct {
-	Temporary   string
-	Destination string
+	Temporary    string
+	Destination  string
+	BeforeRename func(parent *os.Root) error
 }
 
 func replaceDirectoryAtomically(root *os.Root, input replaceDirectoryInput) error {
@@ -140,12 +142,22 @@ func replaceDirectoryAtomically(root *os.Root, input replaceDirectoryInput) erro
 		if !info.IsDir() {
 			return fmt.Errorf("%w: %s", errExportBundlePathNotDir, input.Destination)
 		}
-		if err := root.Rename(input.Destination, backupDir); err != nil {
-			return fmt.Errorf("moving existing bundle aside: %w", err)
-		}
 		hadExisting = true
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("checking existing bundle directory: %w", err)
+	}
+
+	// Check after every staged artifact, including the manifest, and immediately
+	// before the first rename through this exact parent handle.
+	if input.BeforeRename != nil {
+		if err := input.BeforeRename(root); err != nil {
+			return fmt.Errorf("validating bundle commit: %w", err)
+		}
+	}
+	if hadExisting {
+		if err := root.Rename(input.Destination, backupDir); err != nil {
+			return fmt.Errorf("moving existing bundle aside: %w", err)
+		}
 	}
 
 	if err := root.Rename(input.Temporary, input.Destination); err != nil {
