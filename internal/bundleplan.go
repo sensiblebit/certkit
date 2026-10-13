@@ -51,6 +51,7 @@ type BundleRule struct {
 	Index       int      `json:"index"`
 	BundleName  string   `json:"bundle_name"`
 	CommonNames []string `json:"common_names"`
+	Compat      bool     `json:"compat"`
 }
 
 // BundleChain describes the chain and whether trust verification was performed.
@@ -388,7 +389,7 @@ func bundlePlanRules(input BundlePlanInput) (map[string]*BundleRule, error) {
 			if previous, ok := rules[name]; ok && (cfg.BundleName == "" || previous.Index != i+1) {
 				return nil, fmt.Errorf("%w: duplicate bundle name %q in configuration", errBundlePlanInput, name)
 			}
-			rules[name] = &BundleRule{ConfigPath: input.ConfigPath, Index: i + 1, BundleName: name, CommonNames: slices.Clone(cfg.CommonNames)}
+			rules[name] = &BundleRule{ConfigPath: input.ConfigPath, Index: i + 1, BundleName: name, CommonNames: slices.Clone(cfg.CommonNames), Compat: cfg.Compat}
 		}
 	}
 	return rules, nil
@@ -430,6 +431,7 @@ func planBundleCandidate(ctx context.Context, input planBundleCandidateInput) (B
 		return entry, write, nil
 	}
 	bundleOpts := certkit.DefaultOptions()
+	bundleOpts.Compat = input.Rule.Compat
 	bundleOpts.AllowExpired = opts.AllowExpired
 	bundleOpts.CustomRoots = opts.CustomRoots
 	bundleOpts.ExtraIntermediates = opts.Store.Intermediates()

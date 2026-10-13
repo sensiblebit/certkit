@@ -392,3 +392,19 @@ func crossSignIntermediate(t *testing.T, intermediateKey *ecdsa.PrivateKey, orig
 	}
 	return cert
 }
+
+func TestFormatConnectVerbose_CrossSignedRoot(t *testing.T) {
+	t.Parallel()
+	modernKey, modern := generateKeyAndCert(t, "Modern Root", true)
+	legacyKey, legacy := generateKeyAndCert(t, "Legacy Root", true)
+	cross := crossSignIntermediate(t, modernKey, modern, legacyKey, legacy)
+	_, leaf := signCert(t, "service.example.com", false, modernKey, modern)
+	result := &certkit.ConnectResult{
+		PeerChain:      []*x509.Certificate{leaf, cross},
+		VerifiedChains: [][]*x509.Certificate{{leaf, modern}, {leaf, cross, legacy}},
+	}
+	text := formatConnectVerbose(result, time.Now())
+	if !strings.Contains(text, "CN=Modern Root (intermediate, cross-signed)") {
+		t.Fatalf("missing cross-signed label: %s", text)
+	}
+}

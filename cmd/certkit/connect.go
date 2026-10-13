@@ -118,6 +118,7 @@ type connectCertJSON struct {
 	NotAfter      string   `json:"not_after"`
 	SHA256        string   `json:"sha256_fingerprint"`
 	CertType      string   `json:"cert_type"`
+	CrossSigned   bool     `json:"cross_signed,omitempty"`
 	TrustAnchors  []string `json:"trust_anchors"`
 	TrustWarnings []string `json:"trust_warnings,omitempty"`
 	SANs          []string `json:"sans,omitempty"`
@@ -295,9 +296,13 @@ func runConnect(cmd *cobra.Command, args []string) error {
 				NotAfter:      cert.NotAfter.UTC().Format(time.RFC3339),
 				SHA256:        certkit.CertFingerprintColonSHA256(cert),
 				CertType:      certkit.GetCertificateType(cert),
+				CrossSigned:   result.IsCrossSignedRoot(cert),
 				TrustAnchors:  result.ChainTrustAnchors[len(jr.Chain)],
 				TrustWarnings: result.ChainTrustWarnings[len(jr.Chain)],
 				SANs:          certkit.CollectCertificateSANs(cert),
+			}
+			if cj.CrossSigned {
+				cj.CertType = "intermediate"
 			}
 			if verbose {
 				isCA := cert.IsCA
@@ -399,6 +404,9 @@ func formatConnectVerbose(r *certkit.ConnectResult, now time.Time) string {
 			expired = " [EXPIRED]"
 		}
 		certType := certkit.GetCertificateType(cert)
+		if r.IsCrossSignedRoot(cert) {
+			certType = "intermediate, cross-signed"
+		}
 		fmt.Fprintf(&out, "  %d: %s (%s)%s\n", i, certkit.FormatDNFromRaw(cert.RawSubject, cert.Subject), certType, expired)
 		fmt.Fprintf(&out, "     Issuer:      %s\n", certkit.FormatDNFromRaw(cert.RawIssuer, cert.Issuer))
 		fmt.Fprintf(&out, "     Serial:      %s\n", formatSerial(cert.SerialNumber))

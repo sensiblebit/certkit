@@ -25,6 +25,7 @@ type scanRefreshFlags struct {
 	Write              bool
 	DryRun             bool
 	FailOnSkip         bool
+	Compat             bool
 }
 
 var errScanRefreshOptions = errors.New("invalid managed bundle options")
@@ -43,12 +44,13 @@ func init() {
 	flags.BoolVar(&scanRefresh.Write, "write", false, "Apply the bundle export plan (default is a read-only preview)")
 	flags.BoolVar(&scanRefresh.DryRun, "dry-run", false, "Show the export plan without writing any files")
 	flags.BoolVar(&scanRefresh.FailOnSkip, "fail-on-skip", false, "Fail the entire export if any requested bundle is skipped")
+	flags.BoolVar(&scanRefresh.Compat, "compat", false, "Select the longest verified chain; overrides bundle compat settings (requires verification)")
 	// These command-local flags deliberately shadow the legacy shared semantics.
 	flags.StringSliceVarP(&passwordList, "passwords", "p", nil, "Comma-separated input decryption passwords; never used for scan output encryption")
 	flags.StringVar(&passwordFile, "password-file", "", "Input decryption passwords, one per line (alias for --input-password-file)")
 }
 
-func validateScanRefreshFlags() error {
+func validateScanRefreshFlags(compatSet bool) error {
 	for _, selection := range []struct {
 		flag   string
 		values []string
@@ -61,7 +63,7 @@ func validateScanRefreshFlags() error {
 		return fmt.Errorf("%w: --write and --dry-run cannot be combined", errScanRefreshOptions)
 	}
 	if scanBundlePath == "" {
-		if scanRefresh.Write || scanRefresh.DryRun || scanRefresh.FailOnSkip || len(scanRefresh.Names)+len(scanRefresh.Only)+len(scanRefresh.Required)+len(scanRefresh.Formats) > 0 || scanRefresh.OutputPasswordFile != "" {
+		if scanRefresh.Write || scanRefresh.DryRun || scanRefresh.FailOnSkip || compatSet || len(scanRefresh.Names)+len(scanRefresh.Only)+len(scanRefresh.Required)+len(scanRefresh.Formats) > 0 || scanRefresh.OutputPasswordFile != "" {
 			return fmt.Errorf("%w: bundle export options require --bundle-path", errScanRefreshOptions)
 		}
 		return nil
@@ -124,11 +126,19 @@ type runScanBundleExportInput struct {
 	Configs        []internal.BundleConfig
 	OutputPassword string
 	Format         string
+	CompatSet      bool
 }
 
 func runScanBundleExport(ctx context.Context, input runScanBundleExportInput) error {
+	configs := input.Configs
+	if input.CompatSet {
+		configs = slices.Clone(configs)
+		for i := range configs {
+			configs[i].Compat = scanRefresh.Compat
+		}
+	}
 	plan, err := scanPlanBundles(ctx, internal.BundlePlanInput{
-		Configs: input.Configs, OutDir: scanBundlePath,
+		Configs: configs, OutDir: scanBundlePath,
 		Store: input.Store, TrustStore: scanTrustStore, ForceBundle: scanForceExport,
 		Duplicates: scanDuplicates, P12Password: input.OutputPassword,
 		AllowSystemFallback: true, EncryptKey: input.OutputPassword != "",
@@ -191,6 +201,9 @@ func printBundleExportPlan(plan *internal.BundleExportPlan) error {
 		fmt.Fprintf(&out, "\n%s: %s (%s)\n  Directory: %s\n  Reason: %s\n", entry.BundleName, entry.Status, entry.Action, entry.OutputDirectory, entry.Reason)
 		if entry.Rule != nil {
 			fmt.Fprintf(&out, "  Rule: %s #%d (%s)\n", entry.Rule.ConfigPath, entry.Rule.Index, strings.Join(entry.Rule.CommonNames, ", "))
+			if entry.Rule.Compat {
+				out.WriteString("  Compatibility: longest verified chain\n")
+			}
 		}
 		for _, skipped := range entry.SkippedCandidates {
 			fmt.Fprintf(&out, "  Unselected candidate: serial=%s SHA-256=%s\n    Validity: %s to %s\n    Source: %s\n    Key source: %s\n    Reason: %s\n",

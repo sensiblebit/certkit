@@ -307,6 +307,9 @@ func exportBundleCerts(ctx context.Context, input exportBundleCertsInput) error 
 	}
 
 	var csrSubject *certstore.CSRSubjectOverride
+	if matchingConfig != nil {
+		input.Opts.Compat = matchingConfig.Compat
+	}
 	if matchingConfig != nil && matchingConfig.Subject != nil {
 		csrSubject = &certstore.CSRSubjectOverride{
 			Country:            matchingConfig.Subject.Country,

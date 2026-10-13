@@ -79,7 +79,8 @@ func init() {
 
 func runScan(cmd *cobra.Command, args []string) error {
 	inputPath := args[0]
-	if err := validateScanRefreshFlags(); err != nil {
+	compatSet := scanRefresh.Compat || cmd.Flags().Changed("compat")
+	if err := validateScanRefreshFlags(compatSet); err != nil {
 		return err
 	}
 	format := scanFormat
@@ -400,7 +401,8 @@ func runScan(cmd *cobra.Command, args []string) error {
 			}
 		}
 		if err := runScanBundleExport(cmd.Context(), runScanBundleExportInput{
-			Store: store, Configs: bundleConfigs, OutputPassword: outputPassword, Format: format,
+			CompatSet: compatSet,
+			Store:     store, Configs: bundleConfigs, OutputPassword: outputPassword, Format: format,
 		}); err != nil {
 			return fmt.Errorf("exporting managed scan bundles: %w", err)
 		}

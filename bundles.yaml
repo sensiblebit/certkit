@@ -12,6 +12,7 @@ defaultSubject:
 
 bundles:
   - bundleName: examplecom-tls
+    compat: true
     commonNames:
       - '*.example.com'
       - example.com
