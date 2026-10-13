@@ -9,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Add `bundle --compat`, `scan --compat`, and per-bundle `compat` settings in `bundles.yaml` to retain cross-signed intermediates by selecting the longest verified chain within the chain-length limit.
+- Label known cross-signed roots as intermediates in `connect` text output and expose `cross_signed` in JSON; only self-signed roots trigger the root-in-chain warning.
+
 - Add scoped managed bundle refresh plans with repeatable `scan --bundle-name` / `--only`, replacement comparisons, per-bundle manifests, `--require-bundle`, `--fail-on-skip`, and selectable `--formats` ([#225])
 
 - Add `tree` subcommand to display the full CLI command, subcommand, and flag surface in a tree layout ([#169])
@@ -22,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `connect --tls-version` to pin the negotiated protocol version when comparing server TLS behavior across TLS 1.0-1.3 ([#190])
 
 ### Changed
+
+- Update Go to 1.27.2 and refresh Go modules, web dependencies, and development tools to their current stable versions.
 
 - **Breaking:** `scan --bundle-path` now previews by default and requires `--write` to save bundles; dry runs never write outputs, and unsafe replacement plans fail before modifying bundles ([#225])
 - **Breaking:** Scan input passwords no longer encrypt outputs; use `--output-password-file` explicitly. Managed P12 output retains the default `changeit` password; Kubernetes YAML, YAML, and CSR files now require explicit format selection ([#225])

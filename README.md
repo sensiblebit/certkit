@@ -220,14 +220,15 @@ Port defaults to 22 if not specified.
 ### Bundle Flags
 
 <!-- certkit:flags:bundle -->
-| Flag                      | Default    | Description                                     |
-| ------------------------- | ---------- | ----------------------------------------------- |
-| `--allow-private-network` | `false`    | Allow AIA fetches to private/internal endpoints |
-| `--force`, `-f`           | `false`    | Skip chain verification                         |
-| `--format`                | `pem`      | Output format: pem, chain, fullchain, p12, jks  |
-| `--key`                   |            | Private key file (PEM)                          |
-| `--out-file`, `-o`        | _(stdout)_ | Output file                                     |
-| `--trust-store`           | `mozilla`  | Trust store: system, mozilla                    |
+| Flag                      | Default    | Description                                                                        |
+| ------------------------- | ---------- | ---------------------------------------------------------------------------------- |
+| `--allow-private-network` | `false`    | Allow AIA fetches to private/internal endpoints                                    |
+| `--compat`                | `false`    | Select the longest verified chain for legacy compatibility (requires verification) |
+| `--force`, `-f`           | `false`    | Skip chain verification                                                            |
+| `--format`                | `pem`      | Output format: pem, chain, fullchain, p12, jks                                     |
+| `--key`                   |            | Private key file (PEM)                                                             |
+| `--out-file`, `-o`        | _(stdout)_ | Output file                                                                        |
+| `--trust-store`           | `mozilla`  | Trust store: system, mozilla                                                       |
 <!-- /certkit:flags -->
 
 ### Convert Flags
@@ -275,6 +276,7 @@ Input format is auto-detected.
 | `--allow-private-network` | `false`          | Allow AIA fetches to private/internal endpoints                                                                                                           |
 | `--bundle-name`           |                  | Export only these configured bundle names (repeatable)                                                                                                    |
 | `--bundle-path`           |                  | Plan bundles in this directory; --write applies the plan                                                                                                  |
+| `--compat`                | `false`          | Select the longest verified chain; overrides bundle compat settings (requires verification)                                                               |
 | `--config`, `-c`          | `./bundles.yaml` | Path to bundle config YAML                                                                                                                                |
 | `--dry-run`               | `false`          | Show the export plan without writing any files                                                                                                            |
 | `--dump-certs`            |                  | Dump all discovered certificates to a single PEM file                                                                                                     |
@@ -372,6 +374,7 @@ defaultSubject:
 
 bundles:
   - bundleName: examplecom-tls
+    compat: true
     commonNames:
       - "*.example.com"
       - example.com
@@ -389,6 +392,14 @@ bundles:
 ```
 
 Bundles without an explicit `subject` block inherit from `defaultSubject`. Certificate-to-bundle matching uses exact Common Name comparison against the `commonNames` list (a CN of `*.example.com` matches the literal wildcard string, not subdomains).
+
+Set `compat: true` on a bundle to select the longest verified chain within the chain-length limit. This retains cross-signed CA certificates as intermediates when a longer trusted path is available. The default is `false`, which selects the shortest verified chain. An explicit `scan --compat` or `scan --compat=false` overrides the setting for every selected bundle. The setting also works in the legacy YAML array format.
+
+Use `certkit bundle cert.pem --compat` for a single bundle. Equal-length compatibility paths prefer the trust anchor with the earliest `NotBefore`, then certificate fingerprint order. All certificates must pass the selected trust store's verification. Compatibility mode cannot be combined with `--force`, which disables that verification. With `--allow-expired` in managed exports, verification still uses the existing historical-time policy.
+
+Compatibility depends on the available input and AIA certificates and the client's trust store. A longer verified chain does not guarantee support for every older client. Self-signed trust anchors remain separate from intermediates; use `chain` output for the leaf and intermediates, or `fullchain` to also include the trust anchor.
+
+`connect` labels recognized cross-signed roots as `intermediate, cross-signed` in text and sets `cross_signed: true` in JSON. Recognition requires the same subject and public key as a known self-signed root; the label does not establish trust. Cross-signed intermediates do not trigger the root-in-chain warning. A self-signed root sent by the server still triggers that warning.
 
 ### Bundle Output Files
 

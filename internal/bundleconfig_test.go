@@ -60,6 +60,7 @@ func TestLoadBundleConfigs_OldFormat(t *testing.T) {
 	yaml := `
 - commonNames: ["example.com"]
   bundleName: "example-bundle"
+  compat: true
 - commonNames: ["other.com"]
   bundleName: "other-bundle"
 `
@@ -77,6 +78,9 @@ func TestLoadBundleConfigs_OldFormat(t *testing.T) {
 	}
 	if configs[0].BundleName != "example-bundle" {
 		t.Errorf("expected bundle name 'example-bundle', got %q", configs[0].BundleName)
+	}
+	if !configs[0].Compat || configs[1].Compat {
+		t.Fatalf("legacy compat settings = %t, %t; want true, false", configs[0].Compat, configs[1].Compat)
 	}
 	if configs[1].BundleName != "other-bundle" {
 		t.Errorf("expected bundle name 'other-bundle', got %q", configs[1].BundleName)

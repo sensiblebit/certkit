@@ -22,6 +22,7 @@ var (
 	bundleOutFile             string
 	bundleFormat              string
 	bundleForce               bool
+	bundleCompat              bool
 	bundleAllowPrivateNetwork bool
 	bundleTrustStore          string
 	errBundleExportPassword   = errors.New("PKCS#12/JKS export requires an explicit password")
@@ -60,6 +61,7 @@ func init() {
 	bundleCmd.Flags().StringVarP(&bundleOutFile, "out-file", "o", "", "Output file")
 	bundleCmd.Flags().StringVar(&bundleFormat, "format", "pem", "Output format: pem, chain, fullchain, p12, jks")
 	bundleCmd.Flags().BoolVarP(&bundleForce, "force", "f", false, "Skip chain verification")
+	bundleCmd.Flags().BoolVar(&bundleCompat, "compat", false, "Select the longest verified chain for legacy compatibility (requires verification)")
 	bundleCmd.Flags().BoolVar(&bundleAllowPrivateNetwork, "allow-private-network", false, "Allow AIA fetches to private/internal endpoints")
 	bundleCmd.Flags().StringVar(&bundleTrustStore, "trust-store", "mozilla", "Trust store: system, mozilla")
 
@@ -109,6 +111,7 @@ func runBundle(cmd *cobra.Command, args []string) error {
 
 	opts := certkit.DefaultOptions()
 	opts.TrustStore = bundleTrustStore
+	opts.Compat = bundleCompat
 	opts.ExtraIntermediates = extraCerts
 	opts.AllowPrivateNetworks = bundleAllowPrivateNetwork
 	if bundleForce {

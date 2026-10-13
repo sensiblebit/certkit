@@ -37,6 +37,7 @@ type outputGlobals114 struct {
 	bundleOutFile             string
 	bundleFormat              string
 	bundleForce               bool
+	bundleCompat              bool
 	bundleAllowPrivateNetwork bool
 	bundleTrustStore          string
 
@@ -92,6 +93,7 @@ func snapshotOutputGlobals114() outputGlobals114 {
 		bundleOutFile:             bundleOutFile,
 		bundleFormat:              bundleFormat,
 		bundleForce:               bundleForce,
+		bundleCompat:              bundleCompat,
 		bundleAllowPrivateNetwork: bundleAllowPrivateNetwork,
 		bundleTrustStore:          bundleTrustStore,
 
@@ -147,6 +149,7 @@ func restoreOutputGlobals114(g outputGlobals114) {
 	bundleOutFile = g.bundleOutFile
 	bundleFormat = g.bundleFormat
 	bundleForce = g.bundleForce
+	bundleCompat = g.bundleCompat
 	bundleAllowPrivateNetwork = g.bundleAllowPrivateNetwork
 	bundleTrustStore = g.bundleTrustStore
 

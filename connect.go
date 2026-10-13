@@ -96,7 +96,7 @@ func DiagnoseConnectChain(input DiagnoseConnectChainInput) []ChainDiagnostic {
 		}
 
 		// Check for root certs in non-leaf positions.
-		if i > 0 && GetCertificateType(cert) == "root" {
+		if i > 0 && isSelfSignedCA(cert) {
 			diags = append(diags, ChainDiagnostic{
 				Check:  "root-in-chain",
 				Status: "warn",
@@ -486,6 +486,40 @@ type ConnectResult struct {
 	// negotiate any cipher suite. The chain is still valid for inspection
 	// but no full TLS connection was established.
 	LegacyProbe bool `json:"legacy_probe,omitempty"`
+}
+
+// IsCrossSignedRoot reports whether cert is a non-self-signed CA with the same
+// subject and public key as a known root. Known roots come from Mozilla, the
+// peer chain, or verified paths. This label does not establish trust.
+func (result *ConnectResult) IsCrossSignedRoot(cert *x509.Certificate) bool {
+	if cert == nil || !cert.IsCA || isSelfSignedCA(cert) {
+		return false
+	}
+	if IsMozillaRoot(cert) {
+		return true
+	}
+	matchesRoot := func(candidate *x509.Certificate) bool {
+		return candidate != nil && candidate.IsCA &&
+			bytes.Equal(cert.RawSubject, candidate.RawSubject) &&
+			bytes.Equal(cert.RawSubjectPublicKeyInfo, candidate.RawSubjectPublicKeyInfo) &&
+			isSelfSignedCA(candidate)
+	}
+	if slices.ContainsFunc(result.PeerChain, matchesRoot) {
+		return true
+	}
+	for _, chain := range result.VerifiedChains {
+		if slices.ContainsFunc(chain, matchesRoot) {
+			return true
+		}
+	}
+	return false
+}
+
+func isSelfSignedCA(cert *x509.Certificate) bool {
+	// CheckSignature accepts legacy root self-signatures without treating their
+	// signature algorithm as a trust decision for an intermediate certificate.
+	return cert != nil && cert.IsCA && bytes.Equal(cert.RawSubject, cert.RawIssuer) &&
+		cert.CheckSignature(cert.SignatureAlgorithm, cert.RawTBSCertificate, cert.Signature) == nil
 }
 
 // ConnectTrustPathStatus describes whether the certificates presented by the
@@ -3022,6 +3056,9 @@ func FormatConnectResult(r *ConnectResult) string {
 			expired = " [EXPIRED]"
 		}
 		certType := GetCertificateType(cert)
+		if r.IsCrossSignedRoot(cert) {
+			certType = "intermediate, cross-signed"
+		}
 		fmt.Fprintf(&out, "  %d: %s (%s)%s\n", i, FormatDNFromRaw(cert.RawSubject, cert.Subject), certType, expired)
 		fmt.Fprintf(&out, "     Issuer:      %s\n", FormatDNFromRaw(cert.RawIssuer, cert.Issuer))
 		fmt.Fprintf(&out, "     Not Before:  %s\n", cert.NotBefore.UTC().Format(time.RFC3339))

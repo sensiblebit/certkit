@@ -20,6 +20,7 @@ type SubjectConfig struct {
 type BundleConfig struct {
 	CommonNames []string       `yaml:"commonNames"`
 	BundleName  string         `yaml:"bundleName"`
+	Compat      bool           `yaml:"compat,omitempty"`
 	Subject     *SubjectConfig `yaml:"subject,omitempty"`
 }
 

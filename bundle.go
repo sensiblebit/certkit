@@ -53,6 +53,7 @@ var (
 	errBundleLeafNil            = errors.New("leaf certificate is nil")
 	errBundleMaxChainExceeded   = errors.New("certificate chain exceeded maximum intermediate limit")
 	errBundleUnknownTrustStore  = errors.New("unknown trust_store")
+	errBundleCompatNeedsVerify  = errors.New("compat requires chain verification; cannot combine with force")
 	errVerifyChainCertNil       = errors.New("certificate is nil")
 	errVerifyChainRootsNil      = errors.New("root pool is nil")
 )
@@ -517,6 +518,9 @@ type BundleOptions struct {
 	CustomRoots []*x509.Certificate
 	// Verify enables chain verification against the trust store.
 	Verify bool
+	// Compat selects the longest verified chain within MaxIntermediates.
+	// Equal-length paths prefer the oldest trust anchor, then fingerprint order.
+	Compat bool
 	// AllowExpired verifies expired leaves at their NotBefore time when Verify
 	// is enabled. Trust and all other verification constraints still apply.
 	AllowExpired bool
@@ -1008,6 +1012,9 @@ func Bundle(ctx context.Context, input BundleInput) (*BundleResult, error) {
 	}
 	leaf := input.Leaf
 	opts := input.Options
+	if opts.Compat && !opts.Verify {
+		return nil, errBundleCompatNeedsVerify
+	}
 	maxIntermediates := maxIntermediatesLimit(opts.MaxIntermediates)
 	// Detect reversed chain order
 	var swapWarnings []string
@@ -1104,13 +1111,7 @@ func Bundle(ctx context.Context, input BundleInput) (*BundleResult, error) {
 			result.Warnings = append(result.Warnings, "expired leaf: chain verified at "+verifyOpts.CurrentTime.UTC().Format(time.RFC3339))
 		}
 
-		// Pick shortest valid chain
-		best := chains[0]
-		for _, chain := range chains[1:] {
-			if len(chain) < len(best) {
-				best = chain
-			}
-		}
+		best := selectBundleChain(chains, opts.Compat, maxIntermediates)
 
 		// Extract intermediates and root from verified chain
 		// Chain order: [leaf, intermediate1, ..., root]
@@ -1149,4 +1150,37 @@ func Bundle(ctx context.Context, input BundleInput) (*BundleResult, error) {
 	result.Warnings = append(result.Warnings, checkExpiryWarnings(fullChain)...)
 
 	return result, nil
+}
+
+// selectBundleChain keeps the shortest path by default. Compat prefers the
+// longest verified path that fits the limit, including cross-signed CAs.
+func selectBundleChain(chains [][]*x509.Certificate, compat bool, maxIntermediates int) []*x509.Certificate {
+	shortest := chains[0]
+	var compatible []*x509.Certificate
+	for _, chain := range chains {
+		if len(chain) < len(shortest) {
+			shortest = chain
+		}
+		if compat && len(chain) <= maxIntermediates+2 && (compatible == nil || preferCompatibilityChain(chain, compatible)) {
+			compatible = chain
+		}
+	}
+	if compatible != nil {
+		return compatible
+	}
+	// The caller reports a length error if every verified chain exceeds the limit.
+	return shortest
+}
+
+func preferCompatibilityChain(candidate, current []*x509.Certificate) bool {
+	if len(candidate) != len(current) {
+		return len(candidate) > len(current)
+	}
+	candidateRoot, currentRoot := candidate[len(candidate)-1], current[len(current)-1]
+	if !candidateRoot.NotBefore.Equal(currentRoot.NotBefore) {
+		return candidateRoot.NotBefore.Before(currentRoot.NotBefore)
+	}
+	return slices.CompareFunc(candidate, current, func(a, b *x509.Certificate) int {
+		return strings.Compare(CertFingerprint(a), CertFingerprint(b))
+	}) < 0
 }
