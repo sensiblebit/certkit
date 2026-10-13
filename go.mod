@@ -15,7 +15,7 @@ require (
 	golang.org/x/sys v0.48.0
 	golang.org/x/text v0.42.0
 	gopkg.in/yaml.v3 v3.0.1
-	modernc.org/sqlite v1.59.0
+	modernc.org/sqlite v1.60.1
 	software.sslmate.com/src/go-pkcs12 v0.7.3
 )
 
