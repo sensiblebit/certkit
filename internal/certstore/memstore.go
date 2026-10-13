@@ -1,10 +1,12 @@
 package certstore
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/rsa"
+	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
 	"errors"
@@ -333,7 +335,7 @@ func (s *MemStore) hasCertID(id string) bool {
 }
 
 // CertsByBundleName returns all certificates with the given bundle name,
-// sorted by NotAfter descending (newest first).
+// sorted by NotAfter, then NotBefore descending, then SHA-256 fingerprint ascending.
 func (s *MemStore) CertsByBundleName(name string) []*CertRecord {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -344,7 +346,7 @@ func (s *MemStore) CertsByBundleName(name string) []*CertRecord {
 		}
 	}
 	sort.Slice(result, func(i, j int) bool {
-		return result[i].NotAfter.After(result[j].NotAfter)
+		return compareCertRecords(result[i], result[j]) < 0
 	})
 	return result
 }
@@ -558,9 +560,21 @@ func latestCertRecord(certs []*CertRecord) *CertRecord {
 	}
 	latest := certs[0]
 	for _, c := range certs[1:] {
-		if c.NotAfter.After(latest.NotAfter) {
+		if compareCertRecords(c, latest) < 0 {
 			latest = c
 		}
 	}
 	return latest
+}
+
+// compareCertRecords defines a total order independent of map and ingestion order.
+func compareCertRecords(a, b *CertRecord) int {
+	if order := b.NotAfter.Compare(a.NotAfter); order != 0 {
+		return order
+	}
+	if order := b.NotBefore.Compare(a.NotBefore); order != 0 {
+		return order
+	}
+	aHash, bHash := sha256.Sum256(a.Cert.Raw), sha256.Sum256(b.Cert.Raw)
+	return bytes.Compare(aHash[:], bHash[:])
 }

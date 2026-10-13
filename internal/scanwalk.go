@@ -13,13 +13,16 @@ import (
 var (
 	errScanRootPathRequired = errors.New("root path is required")
 	errScanFileHandlerNil   = errors.New("file handler is required")
+	errScanInputExcluded    = errors.New("scan input cannot also be a declared output, database, or password file")
 )
 
 // WalkScanFilesInput configures WalkScanFiles.
 type WalkScanFilesInput struct {
 	RootPath    string
 	MaxFileSize int64
-	OnFile      func(path string) error
+	// ExcludePaths omits declared outputs, databases, and secret input files.
+	ExcludePaths []string
+	OnFile       func(path string) error
 }
 
 // WalkScanFiles iterates scan-eligible files under RootPath.
@@ -31,6 +34,43 @@ func WalkScanFiles(input WalkScanFilesInput) error {
 		return errScanFileHandlerNil
 	}
 
+	excluded := make(map[string]bool)
+	for _, path := range input.ExcludePaths {
+		if path == "" {
+			continue
+		}
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return fmt.Errorf("resolving excluded scan path: %w", err)
+		}
+		excluded[absolute] = true
+		canonical, err := resolveBundleControlPath(path)
+		if err != nil {
+			return fmt.Errorf("resolving excluded scan target: %w", err)
+		}
+		excluded[canonical] = true
+	}
+	isExcluded := func(path string) (bool, error) {
+		absolute, err := filepath.Abs(path)
+		if err != nil {
+			return false, fmt.Errorf("resolving scan path: %w", err)
+		}
+		canonical, err := scanRootBoundary(path)
+		if err != nil {
+			return false, fmt.Errorf("resolving scan target: %w", err)
+		}
+		for excludedPath := range excluded {
+			if bundlePathWithinBoundary(absolute, excludedPath) || bundlePathWithinBoundary(canonical, excludedPath) {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+	if skip, err := isExcluded(input.RootPath); err != nil {
+		return err
+	} else if skip {
+		return fmt.Errorf("checking scan root %s: %w", input.RootPath, errScanInputExcluded)
+	}
 	info, err := os.Stat(input.RootPath)
 	if err != nil {
 		return fmt.Errorf("stat %s: %w", input.RootPath, err)
@@ -62,8 +102,18 @@ func WalkScanFiles(input WalkScanFilesInput) error {
 			}
 			return nil
 		}
+		skip, err := isExcluded(path)
+		if err != nil {
+			return err
+		}
+		if skip {
+			if d.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
 		if d.IsDir() {
-			if IsSkippableDir(d.Name()) {
+			if path != input.RootPath && IsSkippableDir(d.Name()) {
 				slog.Debug("skipping directory", "path", path)
 				return filepath.SkipDir
 			}
@@ -112,7 +162,11 @@ func scanRootBoundary(root string) (string, error) {
 		if absErr != nil {
 			return "", fmt.Errorf("absolute path for %s: %w", resolved, absErr)
 		}
-		return absResolved, nil
+		canonical, err := filepath.EvalSymlinks(absResolved)
+		if err != nil {
+			return "", fmt.Errorf("resolving absolute scan target %s: %w", absResolved, err)
+		}
+		return canonical, nil
 	}
 	absRoot, absErr := filepath.Abs(root)
 	if absErr != nil {
@@ -122,7 +176,7 @@ func scanRootBoundary(root string) (string, error) {
 }
 
 func resolveScanSymlink(path string) (string, os.FileInfo, bool) {
-	resolvedPath, err := filepath.EvalSymlinks(path)
+	resolvedPath, err := scanRootBoundary(path)
 	if err != nil {
 		slog.Debug("skipping broken symlink", "path", path)
 		return "", nil, false

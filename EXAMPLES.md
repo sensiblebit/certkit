@@ -372,7 +372,7 @@ PKCS#12/JKS exports use the first non-empty password from `-p`/`--password-file`
 certkit bundle cert.pem --key key.pem --format jks -p "your-password" -o keystore.jks
 ```
 
-If no non-empty export password is provided, certkit defaults to `changeit` for PKCS#12/JKS. A warning is emitted on stderr so production exports do not silently rely on the well-known default.
+For the single-chain `bundle` and `convert` commands, if no non-empty export password is provided, certkit defaults to `changeit` for PKCS#12/JKS. A warning is emitted on stderr so production exports do not silently rely on the well-known default.
 
 ---
 
@@ -451,6 +451,8 @@ Resume from a previous scan:
 certkit scan /path/to/new-certs/ --load-db inventory.db --save-db inventory.db
 ```
 
+Declared `--save-db` and `--load-db` paths are excluded from file ingestion, including their symlink aliases. `--load-db` imports the saved inventory once through the database loader; `--save-db` alone does not import an existing snapshot.
+
 ### Dump all certs or keys to a single file
 
 Dump every discovered certificate into a single PEM file:
@@ -491,15 +493,55 @@ bundles:
       - api.example.com
 ```
 
-Then scan and export:
+Preview a refresh of only `myapp-tls`:
 
 ```sh
-certkit scan /path/to/certs/ --bundle-path ./bundles -c bundles.yaml
+certkit scan ./tmp --config ./bundles.yaml --bundle-path ./bundles \
+  --bundle-name myapp-tls --input-password-file ./tmp/vendor-password --dry-run
 ```
 
-This creates a directory per bundle with the exported formats certkit supports there: PEM (leaf, chain, fullchain, intermediates, root), private key, PKCS#12, Kubernetes Secret, JSON, YAML, and a CSR for renewal.
+The preview compares the candidate with the existing leaf and reports serial, fingerprint, validity, source, and trust results. It writes nothing. After reviewing it, repeat with `--write`:
 
-When an export password is supplied via `-p`/`--password-file`, the `.key` PEM output is encrypted and the `.yaml` bundle's `key` field also contains an encrypted PKCS#8 v2 `ENCRYPTED PRIVATE KEY` block. Without an explicit password, those key outputs are written as unencrypted PKCS#8 (`PRIVATE KEY`). Kubernetes TLS secrets always contain unencrypted keys regardless of the password setting.
+```sh
+certkit scan ./tmp --config ./bundles.yaml --bundle-path ./bundles \
+  --bundle-name myapp-tls --input-password-file ./tmp/vendor-password --write
+```
+
+Repeat `--bundle-name` to select more bundles. An explicitly selected bundle must be produced; missing certificates, required keys, or trust make the command fail. Public-only formats do not require a private key. Use `--require-bundle myapp-tls` to require a bundle while retaining the default all-configured-bundles scope, or `--fail-on-skip` to require every planned bundle. Config errors and protected replacement conflicts fail before any bundles are written. Malformed or incomplete JSON/YAML certificate metadata blocks replacement even alongside a valid PEM and reports the offending filename, including mixed-case extensions; correct the file or explicitly authorize replacement with `--force`. CA certificates fetched through AIA are also eligible for configured bundles. Generated directory and artifact names must fit a 255-byte UTF-8 filename component; a short `bundleName` does not shorten CN-based artifact filenames.
+
+Keep `bundles.yaml`, password files, and any `--load-db` / `--save-db` paths outside `./bundles`. Managed refresh rejects control files inside its output tree, including symlink aliases and database paths that do not yet exist. Scan exclusions also resolve symlinked working directories and ancestors of not-yet-created outputs, keeping their contents out of ingestion.
+
+With `--duplicates`, skipped older candidates do not fail a required or scoped export if the primary bundle is produced. Use `--fail-on-skip` to require every duplicate too. Kubernetes Secret names stay equal to the configured bundle name, even inside dated duplicate directories.
+
+The default output is PEM variants, a `.key` file, a `.p12` archive, public JSON metadata, and `manifest.json`. Request only the artifacts you need:
+
+```sh
+certkit scan ./tmp -c bundles.yaml --bundle-path ./bundles \
+  --bundle-name myapp-tls --formats pem,key,chain,json \
+  --input-password-file vendor-password --write --json
+```
+
+`--json` prints the export manifest, including created/replaced/skipped status and reasons. Every saved bundle also contains `manifest.json`. Existing directories are replaced as a unit; unselected artifacts from a previous export are removed and listed in the plan.
+
+The manifest reports absolute, resolved output directories. Each in-memory plan pins that destination and checks directory identity, so working-directory changes and retargeted aliases cannot redirect its writes; replacing the resolved destination requires a new plan. Destination and lock checks run again after staging the manifest, immediately before replacement. Failures mark pending entries as blocked while preserving the status of earlier committed bundles.
+
+`manifest.json` and the output-directory lock `.certkit-refresh.lock` are reserved, including case variants. If the CN is `manifest`, omit `json` from `--formats`. If a CN-derived bundle directory collides with the lock name, set a different `bundleName` in the configuration. Collisions fail during the preview.
+
+Configured directories must remain distinct after sanitization, Unicode normalization, and case-insensitive comparison, including rules that have no matching certificate yet. Control characters and Windows device names are rejected in both directory names and generated artifact filenames, even on other platforms; a safe `bundleName` cannot make a CN-derived `CON.pem` filename or a filename containing a tab, newline, or NUL portable.
+
+Scan input passwords never become output passwords. To deliberately create an encrypted key and P12, supply a separate output password file:
+
+```sh
+certkit scan ./tmp -c bundles.yaml --bundle-path ./bundles \
+  --bundle-name myapp-tls --formats pem,key,p12,json \
+  --input-password-file vendor-password --output-password-file deployment-password --write
+```
+
+Without `--output-password-file`, P12 uses the intentional `changeit` default with a warning on stderr. Select formats without `p12` to omit the archive. A selected `.yaml` artifact also contains a private key, encrypted only when `--output-password-file` is supplied. Kubernetes TLS secrets (`--formats k8s`) always contain unencrypted keys.
+
+Expiration downgrades and equal-expiry conflicts are blocked for candidates that pass the key, validity, and trust checks. Optional candidates that fail those checks are skipped before replacement conflicts are considered. `--force` explicitly allows protected replacements **and untrusted certificates**. Future-dated leaves are always skipped, even with `--force`. Expired leaves additionally require `--allow-expired`; with verification enabled, their chains are checked at the leaf's `NotBefore` time, reported in chain warnings. The manifest records force overrides and whether trust verification was disabled. Selection uses latest expiry, latest issuance time, and then a stable fingerprint tie-breaker. Unselected candidates and their reasons appear in the plan and manifest; they do not count as failed bundles for `--fail-on-skip`.
+
+Validity and the planned trusted chain are checked again before writing, including intermediate and root expiry. If a candidate expires after planning, the write fails unless `--allow-expired` was supplied; expired leaves retain historical chain verification. All candidates are rechecked before the first replacement, and each is checked again after staging, immediately before its own replacement. Existing names and contents are also rechecked then, so edits made during staging are preserved. If a later write fails, the result manifest records bundles already applied, including a replacement whose backup cleanup failed. Cleanup failures identify the retained backup path and stop subsequent writes.
 
 ---
 
@@ -669,11 +711,11 @@ For encrypted private keys, PKCS#12, or JKS files, pass passwords with `-p`:
 # Single password
 certkit inspect server.p12 -p "mysecret"
 
-# Multiple passwords (tries each one and uses the first explicit one as the default PKCS#12/JKS export password)
+# Multiple input passwords (scan never uses these for output encryption)
 certkit scan /path/to/certs/ -p "secret1,secret2,changeit"
 
-# Passwords from a file (one per line, also used for PKCS#12/JKS export defaults)
-certkit scan /path/to/certs/ --password-file passwords.txt
+# Input passwords from a file (one per line)
+certkit scan /path/to/certs/ --input-password-file passwords.txt
 ```
 
 certkit always tries empty string, `password`, `changeit`, and `keypassword` automatically -- those cover most default passwords.

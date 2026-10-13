@@ -179,12 +179,12 @@ func TestFilesystemWriter_WriteBundleFilesPreservesExistingBundleOnFailure(t *te
 	})
 
 	writeCount := 0
-	exporterWriteFile = func(name string, data []byte, perm os.FileMode) error {
+	exporterWriteFile = func(root *os.Root, file certstore.BundleFile) error {
 		writeCount++
 		if writeCount == 2 {
 			return errInjectedWriteFailure
 		}
-		return originalWriteFile(name, data, perm)
+		return originalWriteFile(root, file)
 	}
 
 	writer := &filesystemWriter{outDir: outDir}

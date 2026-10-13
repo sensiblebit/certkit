@@ -517,6 +517,9 @@ type BundleOptions struct {
 	CustomRoots []*x509.Certificate
 	// Verify enables chain verification against the trust store.
 	Verify bool
+	// AllowExpired verifies expired leaves at their NotBefore time when Verify
+	// is enabled. Trust and all other verification constraints still apply.
+	AllowExpired bool
 	// ExcludeRoot omits the root certificate from the result.
 	ExcludeRoot bool
 	// AllowPrivateNetworks allows AIA fetches to private/internal endpoints.
@@ -1080,6 +1083,9 @@ func Bundle(ctx context.Context, input BundleInput) (*BundleResult, error) {
 			Intermediates: intermediatePool,
 			Roots:         rootPool,
 		}
+		if opts.AllowExpired && time.Now().After(leaf.NotAfter) {
+			verifyOpts.CurrentTime = leaf.NotBefore
+		}
 		chains, err := leaf.Verify(verifyOpts)
 		if err != nil {
 			if result.AIAIncomplete {
@@ -1092,6 +1098,10 @@ func Bundle(ctx context.Context, input BundleInput) (*BundleResult, error) {
 				)
 			}
 			return result, fmt.Errorf("%w: %w", ErrChainVerificationFailed, err)
+		}
+
+		if !verifyOpts.CurrentTime.IsZero() {
+			result.Warnings = append(result.Warnings, "expired leaf: chain verified at "+verifyOpts.CurrentTime.UTC().Format(time.RFC3339))
 		}
 
 		// Pick shortest valid chain
