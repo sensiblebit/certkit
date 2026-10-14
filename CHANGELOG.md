@@ -43,7 +43,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `scan` now counts `untrusted_*` certificates as trusted by neither Mozilla nor system, and exposes per-store trust counts in JSON output ([`0ee41ad`])
 - Surface trust-source load warnings in `inspect`, `verify`, and `connect`, fail fast on invalid `verify` trust-store configuration, and stop reporting a synthetic `file` source when no file-backed roots were requested ([#171])
 
+### Security
+
+- Validate the complete PKCS#7 BER structure before recursive decoding. Reject overlapping values and nesting beyond 32 constructed values, while retaining valid definite- and indefinite-length BER support ([#233]).
+
 ### Fixed
+
+- Keep managed bundle defaults usable for CN-derived names by generating valid, stable Kubernetes secret names. Show progress through planning, writes, and trust checks, and preserve progress cleanup errors ([#233]).
 
 - Restore all 12 default formats for managed scan exports, including CSR, CSR JSON, YAML, and Kubernetes YAML. Explicit `--formats` selections still limit the output ([#233]).
 

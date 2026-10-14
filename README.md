@@ -423,6 +423,8 @@ Bundle directory names must also remain distinct after sanitization, Unicode nor
 
 Without an explicit `bundleName`, derived names must also be distinct within one rule: `*.example.com` and `_.example.com` both derive `_.example.com` and are rejected. An explicitly named rule can deliberately group multiple common names as candidates for the same bundle.
 
+CN-derived bundle directories keep their existing names. If a derived name is not a valid Kubernetes label, its Secret name uses a lowercase prefix and a stable hash suffix. The plan reports that name as `rule.secret_name`. Explicit `bundleName` values remain the Secret names.
+
 Managed directory and artifact names must be portable: control characters (including NUL, tabs, and newlines), names ending in a period, and Windows device names such as `CON`, `NUL`, or `COM1` are rejected on every platform. An explicit, distinct `bundleName` fixes a directory-only collision. Artifact filenames still come from the CN, so a safe bundle name does not permit control characters or reserved filenames such as `CON.pem` or `COM1.example.com.key`; these fail during planning too. Directory components and artifact filenames have a 255-byte UTF-8 limit, including extensions. Temporary and backup directories use short names independent of the bundle name. Staging, artifact writes, renames, and cleanup use opened directory handles, so moving the output root cannot strand staged keys or redirect cleanup to replacement paths.
 
 Managed exports select all 12 supported formats by default, including CSR, CSR JSON, YAML, and Kubernetes YAML. Use `--formats` to select a subset. Public-only formats work without a private key.

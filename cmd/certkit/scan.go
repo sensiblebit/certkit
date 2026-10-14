@@ -18,7 +18,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/mattn/go-isatty"
 	"github.com/sensiblebit/certkit"
 	"github.com/sensiblebit/certkit/internal"
 	"github.com/sensiblebit/certkit/internal/certstore"
@@ -111,8 +110,8 @@ func runScan(cmd *cobra.Command, args []string) (runErr error) {
 	}
 	scannedFiles := 0
 	var progressOutput io.Writer
-	if format == "text" && (isatty.IsTerminal(os.Stderr.Fd()) || isatty.IsCygwinTerminal(os.Stderr.Fd())) {
-		progressOutput = os.Stderr
+	if format == "text" {
+		progressOutput = scanProgressWriter()
 	}
 	progress := newScanProgress(progressOutput)
 	if progressOutput != nil {
@@ -122,8 +121,8 @@ func runScan(cmd *cobra.Command, args []string) (runErr error) {
 	}
 	progress.Start(cmd.Context())
 	defer func() {
-		if err := progress.Stop(); runErr == nil {
-			runErr = err
+		if err := progress.Stop(); err != nil {
+			runErr = errors.Join(runErr, err)
 		}
 	}()
 	renderScanProgress := func() error {
@@ -390,11 +389,9 @@ func runScan(cmd *cobra.Command, args []string) (runErr error) {
 	}
 
 	if scanExport {
-		if err := progress.Stop(); err != nil {
-			return err
-		}
 		if err := runScanBundleExport(cmd.Context(), runScanBundleExportInput{
 			CompatSet: compatSet,
+			Progress:  progress,
 			Store:     store, Configs: bundleConfigs, OutputPassword: outputPassword, Format: format,
 		}); err != nil {
 			return fmt.Errorf("exporting managed scan bundles: %w", err)

@@ -527,6 +527,8 @@ The manifest reports absolute, resolved output directories. Each in-memory plan 
 
 `manifest.json` and the output-directory lock `.certkit-refresh.lock` are reserved, including case variants. If the CN is `manifest`, omit `json` from `--formats`. If a CN-derived bundle directory collides with the lock name, set a different `bundleName` in the configuration. Collisions fail during the preview.
 
+If you omit `bundleName`, the default formats still include Kubernetes YAML. Derived names such as `service.example.com` and `_.example.com` get valid Secret names with a stable hash suffix. The plan reports the Secret name in `rule.secret_name`; bundle directory names stay the same. Set `bundleName` explicitly to choose the Secret name.
+
 Configured directories must remain distinct after sanitization, Unicode normalization, and case-insensitive comparison, including rules that have no matching certificate yet. Control characters and Windows device names are rejected in both directory names and generated artifact filenames, even on other platforms; a safe `bundleName` cannot make a CN-derived `CON.pem` filename or a filename containing a tab, newline, or NUL portable.
 
 Scan input passwords never become output passwords. To deliberately create an encrypted key and P12, supply a separate output password file:

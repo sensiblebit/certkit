@@ -2,14 +2,25 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"os"
 	"sync"
 	"time"
+
+	"github.com/mattn/go-isatty"
 )
 
 const scanProgressInterval = 250 * time.Millisecond
+
+var scanProgressWriter = func() io.Writer {
+	if isatty.IsTerminal(os.Stderr.Fd()) || isatty.IsCygwinTerminal(os.Stderr.Fd()) {
+		return os.Stderr
+	}
+	return nil
+}
 
 // scanProgress keeps the current activity visible while a file or phase runs.
 type scanProgress struct {
@@ -82,6 +93,21 @@ func (p *scanProgress) Stop() error {
 	return p.err
 }
 
+// WriteWarning clears progress and holds the display lock while writing.
+// The timer can resume after the warning without mixing it into a progress line.
+func (p *scanProgress) WriteWarning(out io.Writer, message string) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.clear()
+	if p.err != nil {
+		return p.err
+	}
+	if _, err := fmt.Fprintln(out, message); err != nil {
+		return fmt.Errorf("writing scan warning: %w", err)
+	}
+	return nil
+}
+
 // The caller must hold mu while rendering or clearing the progress line.
 func (p *scanProgress) render(now time.Time) {
 	if p.out == nil || p.err != nil || p.activity == "" {
@@ -107,8 +133,8 @@ func (p *scanProgress) clear() {
 	if !p.visible {
 		return
 	}
-	if _, err := fmt.Fprint(p.out, "\r\033[K"); err != nil && p.err == nil {
-		p.err = fmt.Errorf("clearing scan progress: %w", err)
+	if _, err := fmt.Fprint(p.out, "\r\033[K"); err != nil {
+		p.err = errors.Join(p.err, fmt.Errorf("clearing scan progress: %w", err))
 	}
 	p.visible = false
 }

@@ -19,7 +19,7 @@ var (
 	errPKCS12LeafNil            = errors.New("leaf certificate cannot be nil")
 	errPKCS7NoCertificates      = errors.New("no certificates to encode")
 	errPKCS7BundleEmpty         = errors.New("PKCS#7 bundle contains no certificates")
-	errPKCS7ContentInfo         = errors.New("invalid PKCS#7 ContentInfo")
+	errPKCS7ContentInfo         = errors.New("invalid PKCS#7 content info")
 )
 
 // validatePKCS12KeyType checks that the private key is a supported type for PKCS#12 encoding.
@@ -95,13 +95,17 @@ func EncodePKCS7(certs []*x509.Certificate) ([]byte, error) {
 	return data, nil
 }
 
-// DecodePKCS7 decodes a DER-encoded PKCS#7 bundle and returns the certificates it contains.
-// Returns an error if decoding fails or the bundle contains no certificates.
+// DecodePKCS7 decodes a DER- or BER-encoded PKCS#7 bundle and returns its certificates.
+// It rejects malformed input, nesting beyond 32 constructed values, and empty bundles.
 func DecodePKCS7(derData []byte) ([]*x509.Certificate, error) {
-	if err := checkPKCS7ContentInfo(derData); err != nil {
+	data, err := normalizePKCS7BER(derData)
+	if err != nil {
 		return nil, fmt.Errorf("parsing PKCS#7: %w", err)
 	}
-	p7, err := pkcs7.Parse(derData)
+	if err := checkPKCS7ContentInfo(data); err != nil {
+		return nil, fmt.Errorf("parsing PKCS#7: %w", err)
+	}
+	p7, err := pkcs7.Parse(data)
 	if err != nil {
 		return nil, fmt.Errorf("parsing PKCS#7: %w", err)
 	}
@@ -111,32 +115,30 @@ func DecodePKCS7(derData []byte) ([]*x509.Certificate, error) {
 	return p7.Certificates, nil
 }
 
-// Check the envelope before the upstream BER decoder recursively reads it.
-// Unrelated text can cause excessive work in that decoder.
+// Check the content type after the complete BER structure has been normalized.
 func checkPKCS7ContentInfo(data []byte) error {
-	if len(data) < 2 || data[0] != 0x30 {
+	var envelope asn1.RawValue
+	rest, err := asn1.Unmarshal(data, &envelope)
+	if err != nil {
+		return fmt.Errorf("reading PKCS#7 envelope: %w", err)
+	}
+	if len(rest) != 0 {
 		return errPKCS7ContentInfo
 	}
-	var content []byte
-	if data[1] == 0x80 {
-		// BER permits an indefinite-length outer sequence.
-		content = data[2:]
-	} else {
-		var envelope asn1.RawValue
-		rest, err := asn1.Unmarshal(data, &envelope)
-		if err != nil {
-			return fmt.Errorf("reading PKCS#7 envelope: %w", err)
-		}
-		if len(rest) != 0 {
-			return errPKCS7ContentInfo
-		}
-		content = envelope.Bytes
-	}
 	var contentType asn1.ObjectIdentifier
-	if _, err := asn1.Unmarshal(content, &contentType); err != nil {
+	rest, err = asn1.Unmarshal(envelope.Bytes, &contentType)
+	if err != nil {
 		return fmt.Errorf("reading PKCS#7 content type: %w", err)
 	}
 	if !contentType.Equal(pkcs7.OIDSignedData) && !contentType.Equal(pkcs7.OIDEnvelopedData) && !contentType.Equal(pkcs7.OIDEncryptedData) {
+		return errPKCS7ContentInfo
+	}
+	var content asn1.RawValue
+	rest, err = asn1.Unmarshal(rest, &content)
+	if err != nil {
+		return fmt.Errorf("reading PKCS#7 content: %w", err)
+	}
+	if len(rest) != 0 || content.Class != asn1.ClassContextSpecific || content.Tag != 0 || !content.IsCompound {
 		return errPKCS7ContentInfo
 	}
 	return nil
