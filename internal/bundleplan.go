@@ -50,6 +50,7 @@ type BundleRule struct {
 	ConfigPath  string   `json:"config_path"`
 	Index       int      `json:"index"`
 	BundleName  string   `json:"bundle_name"`
+	SecretName  string   `json:"secret_name"`
 	CommonNames []string `json:"common_names"`
 	Compat      bool     `json:"compat"`
 }
@@ -166,6 +167,15 @@ func PlanBundleExports(ctx context.Context, input BundlePlanInput) (*BundleExpor
 	if err != nil {
 		return nil, err
 	}
+	if slices.Contains(formats, "k8s") {
+		secretNames := map[string]string{}
+		for name, rule := range rules {
+			if previous, exists := secretNames[rule.SecretName]; exists {
+				return nil, fmt.Errorf("%w: bundles %q and %q use the same kubernetes secret name", errBundlePlanInput, previous, name)
+			}
+			secretNames[rule.SecretName] = name
+		}
+	}
 	names := slices.Clone(input.BundleNames)
 	if len(names) == 0 {
 		for name := range rules {
@@ -215,7 +225,7 @@ func PlanBundleExports(ctx context.Context, input BundlePlanInput) (*BundleExpor
 			return nil, fmt.Errorf("planning bundle export: %w", err)
 		}
 		if slices.Contains(formats, "k8s") {
-			if err := certstore.ValidateK8sSecretName(name); err != nil {
+			if err := certstore.ValidateK8sSecretName(rules[name].SecretName); err != nil {
 				return nil, fmt.Errorf("validating kubernetes secret name for bundle %q: %w", name, err)
 			}
 		}
@@ -383,16 +393,38 @@ func bundlePlanRules(input BundlePlanInput) (map[string]*BundleRule, error) {
 			}
 			commonNames[cn] = true
 			name := cfg.BundleName
+			secretName := name
 			if name == "" {
 				name = strings.ReplaceAll(cn, "*", "_")
+				secretName = derivedBundleSecretName(name)
 			}
 			if previous, ok := rules[name]; ok && (cfg.BundleName == "" || previous.Index != i+1) {
 				return nil, fmt.Errorf("%w: duplicate bundle name %q in configuration", errBundlePlanInput, name)
 			}
-			rules[name] = &BundleRule{ConfigPath: input.ConfigPath, Index: i + 1, BundleName: name, CommonNames: slices.Clone(cfg.CommonNames), Compat: cfg.Compat}
+			rules[name] = &BundleRule{ConfigPath: input.ConfigPath, Index: i + 1, BundleName: name, SecretName: secretName, CommonNames: slices.Clone(cfg.CommonNames), Compat: cfg.Compat}
 		}
 	}
 	return rules, nil
+}
+
+// Keep bundle directories unchanged while making derived secret names valid.
+// The hash distinguishes names that normalize to the same DNS label.
+func derivedBundleSecretName(name string) string {
+	if err := certstore.ValidateK8sSecretName(name); err == nil {
+		return name
+	}
+	label := strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' {
+			return r
+		}
+		return '-'
+	}, strings.ToLower(name))
+	label = strings.Trim(label[:min(len(label), 30)], "-")
+	if label == "" {
+		label = "bundle"
+	}
+	hash := sha256.Sum256([]byte(name))
+	return fmt.Sprintf("%s-%x", label, hash[:16])
 }
 
 type planBundleCandidateInput struct {
@@ -515,7 +547,7 @@ func planBundleCandidate(ctx context.Context, input planBundleCandidateInput) (B
 		}
 	}
 	fileInput := certstore.BundleExportInput{Bundle: bundle,
-		Prefix: certstore.SanitizeFileName(certstore.FormatCN(rec.Cert)), SecretName: rec.BundleName,
+		Prefix: certstore.SanitizeFileName(certstore.FormatCN(rec.Cert)), SecretName: input.Rule.SecretName,
 		P12Password: opts.P12Password, EncryptKey: opts.EncryptKey, Formats: opts.Formats}
 	if key != nil {
 		fileInput.KeyPEM, fileInput.KeyType, fileInput.BitLength = key.PEM, key.KeyType, key.BitLength

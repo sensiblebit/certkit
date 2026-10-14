@@ -49,6 +49,83 @@ func TestBundlePlan_DuplicateSecretNames(t *testing.T) {
 	}
 }
 
+func TestBundlePlan_DefaultFormatsWithDerivedNames(t *testing.T) {
+	t.Parallel()
+	for _, commonName := range []string{"service.example.com", "*.example.com", "UPPER.example.com", strings.Repeat("a", 64) + ".example.com", "service-tls"} {
+		t.Run(commonName, func(t *testing.T) {
+			t.Parallel()
+			fixture := newBundlePlanFixture(t)
+			leaf := newECDSALeaf(t, fixture.ca, commonName, nil)
+			store := certstore.NewMemStore()
+			if err := store.HandleCertificate(leaf.cert, "leaf.pem"); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.HandleKey(leaf.key, leaf.keyPEM, "leaf.key"); err != nil {
+				t.Fatal(err)
+			}
+			fixture.input.Store = store
+			fixture.input.Configs = []BundleConfig{{CommonNames: []string{commonName}}}
+			AssignBundleNames(store, fixture.input.Configs)
+			plan, err := PlanBundleExports(t.Context(), fixture.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := plan.Write(t.Context()); err != nil {
+				t.Fatal(err)
+			}
+			entry := plan.Entries[0]
+			derivedName := strings.ReplaceAll(commonName, "*", "_")
+			if entry.BundleName != derivedName || filepath.Base(entry.OutputDirectory) != derivedName {
+				t.Fatalf("derived bundle identity changed: %+v", entry)
+			}
+			if len(entry.Formats) != 12 {
+				t.Fatalf("default formats = %v", entry.Formats)
+			}
+			var secret certstore.K8sSecret
+			data := mustReadTestFile(t, filepath.Join(entry.OutputDirectory, certstore.SanitizeFileName(commonName)+".k8s.yaml"))
+			if err := yaml.Unmarshal(data, &secret); err != nil {
+				t.Fatal(err)
+			}
+			if err := certstore.ValidateK8sSecretName(secret.Metadata.Name); err != nil {
+				t.Fatal(err)
+			}
+			if secret.Metadata.Name != entry.Rule.SecretName {
+				t.Fatal("written secret name differs from plan")
+			}
+			if commonName == "service-tls" && secret.Metadata.Name != commonName {
+				t.Fatal("valid derived secret name changed")
+			}
+			second, err := PlanBundleExports(t.Context(), fixture.input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if second.Entries[0].Rule.SecretName != secret.Metadata.Name {
+				t.Fatal("derived secret name is not stable across refreshes")
+			}
+		})
+	}
+}
+
+func TestBundlePlan_RejectsDerivedSecretNameCollision(t *testing.T) {
+	t.Parallel()
+	fixture := newBundlePlanFixture(t)
+	fixture.input.Configs[0].BundleName = ""
+	AssignBundleNames(fixture.input.Store, fixture.input.Configs)
+	plan, err := PlanBundleExports(t.Context(), fixture.input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture.input.Configs = append(fixture.input.Configs, BundleConfig{
+		BundleName: plan.Entries[0].Rule.SecretName, CommonNames: []string{"other.example.com"},
+	})
+	if _, err := PlanBundleExports(t.Context(), fixture.input); !errors.Is(err, errBundlePlanInput) {
+		t.Fatalf("accepted an explicit name that collides with a derived Secret name: %v", err)
+	}
+	if _, err := os.Stat(fixture.input.OutDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("preview wrote bundle output: %v", err)
+	}
+}
+
 func TestBundlePlan_DuplicateRequirements(t *testing.T) {
 	t.Parallel()
 	for _, test := range []struct {

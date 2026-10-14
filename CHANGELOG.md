@@ -29,7 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Update Go to 1.27.2 and refresh Go modules, web dependencies, and development tools to their current stable versions.
 
 - **Breaking:** `scan --bundle-path` now previews by default and requires `--write` to save bundles; dry runs never write outputs, and unsafe replacement plans fail before modifying bundles ([#225])
-- **Breaking:** Scan input passwords no longer encrypt outputs; use `--output-password-file` explicitly. Managed P12 output retains the default `changeit` password; Kubernetes YAML, YAML, and CSR files now require explicit format selection ([#225])
+- **Breaking:** Scan input passwords no longer encrypt outputs; use `--output-password-file` explicitly. Managed P12 output retains the default `changeit` password ([#225])
 
 - **Breaking:** Require Go 1.27+ and update Go, web, and development dependencies to current stable releases ([#200])
 - **Breaking:** Default `TrustStore` in `DefaultOptions()` changed from `"system"` to `"mozilla"` — pure-Go Mozilla root verification is used by default instead of macOS `SecTrustEvaluateWithError` syscalls, eliminating multi-minute hangs on large certificate stores
@@ -43,7 +43,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `scan` now counts `untrusted_*` certificates as trusted by neither Mozilla nor system, and exposes per-store trust counts in JSON output ([`0ee41ad`])
 - Surface trust-source load warnings in `inspect`, `verify`, and `connect`, fail fast on invalid `verify` trust-store configuration, and stop reporting a synthetic `file` source when no file-backed roots were requested ([#171])
 
+### Security
+
+- Validate the complete PKCS#7 BER structure before recursive decoding. Reject overlapping values and nesting beyond 32 constructed values, while retaining valid definite- and indefinite-length BER support ([#233]).
+
 ### Fixed
+
+- Keep managed bundle defaults usable for CN-derived names by generating valid, stable Kubernetes secret names. Show progress through planning, writes, and trust checks, and preserve progress cleanup errors ([#233]).
+
+- Restore all 12 default formats for managed scan exports, including CSR, CSR JSON, YAML, and Kubernetes YAML. Explicit `--formats` selections still limit the output ([#233]).
+
+- Prevent scans from stalling when JSON or other unrelated files reach the PKCS#7 decoder. Show the active file or phase and elapsed time during terminal scans, and keep warnings separate from progress ([#233]).
 
 - Recheck the opened output destination and refresh lock after manifest staging, immediately before replacement; invalidate pending entries on destination or lock failures while retaining committed statuses ([#225])
 - Anchor bundle staging, writes, rollback, and cleanup to opened directories so output-root relocation cannot strand private artifacts or redirect cleanup ([#225])
@@ -1047,6 +1057,7 @@ Initial release.
 - Homebrew distribution via GoReleaser
 
 [Unreleased]: https://github.com/sensiblebit/certkit/compare/v0.8.3...HEAD
+[#233]: https://github.com/sensiblebit/certkit/pull/233
 [#225]: https://github.com/sensiblebit/certkit/pull/225
 [#200]: https://github.com/sensiblebit/certkit/pull/200
 [0.8.3]: https://github.com/sensiblebit/certkit/compare/v0.8.2...v0.8.3

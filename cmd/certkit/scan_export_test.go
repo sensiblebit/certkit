@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -123,6 +124,33 @@ func TestRunScan_ManagedBundleWorkflow(t *testing.T) {
 				t.Fatalf("exports = %d", len(output.Exports))
 			}
 			entry := output.Exports[0]
+			wantFormats := []string{"pem", "key", "chain", "fullchain", "intermediates", "root", "json", "yaml", "p12", "k8s", "csr", "csr-json"}
+			if scanRefresh.Formats != nil {
+				wantFormats = scanRefresh.Formats
+			}
+			if !slices.Equal(entry.Formats, wantFormats) {
+				t.Fatalf("formats = %v, want %v", entry.Formats, wantFormats)
+			}
+			for _, artifact := range []struct {
+				format string
+				suffix string
+			}{{"csr", ".csr"}, {"csr-json", ".csr.json"}, {"yaml", ".yaml"}, {"k8s", ".k8s.yaml"}} {
+				name := "service.example.com" + artifact.suffix
+				if slices.Contains(entry.Files, name) != slices.Contains(wantFormats, artifact.format) {
+					t.Fatalf("artifact %s does not match format selection: %v", name, entry.Files)
+				}
+			}
+			if scanRefresh.Formats != nil {
+				wantFiles := []string{"manifest.json", "service.example.com.json", "service.example.com.key"}
+				if !test.omitP12 {
+					wantFiles = append(wantFiles, "service.example.com.p12")
+				}
+				files := slices.Clone(entry.Files)
+				slices.Sort(files)
+				if !slices.Equal(files, wantFiles) {
+					t.Fatalf("explicit formats produced files %v, want %v", files, wantFiles)
+				}
+			}
 			if entry.Leaf.Fingerprint != certkit.CertFingerprint(leaf) {
 				t.Fatal("wrong selected leaf")
 			}
@@ -141,6 +169,26 @@ func TestRunScan_ManagedBundleWorkflow(t *testing.T) {
 					t.Fatalf("preview created output: %v", err)
 				}
 				return
+			}
+			files, err := os.ReadDir(entry.OutputDirectory)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var names []string
+			for _, file := range files {
+				names = append(names, file.Name())
+				info, err := file.Info()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !info.Mode().IsRegular() || info.Size() == 0 {
+					t.Fatalf("exported artifact %s is not a nonempty regular file", file.Name())
+				}
+			}
+			wantFiles := slices.Clone(entry.Files)
+			slices.Sort(wantFiles)
+			if !slices.Equal(names, wantFiles) {
+				t.Fatalf("written files = %v, planned files = %v", names, wantFiles)
 			}
 			keyPath := filepath.Join(entry.OutputDirectory, "service.example.com.key")
 			//nolint:gosec // The key path is created by this test inside t.TempDir.

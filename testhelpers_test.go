@@ -232,7 +232,7 @@ func buildEmptyPKCS7DER() ([]byte, error) {
 	}
 	outer := outerContentInfo{
 		ContentType: oidSignedData,
-		Content:     asn1.RawValue{FullBytes: sdBytes},
+		Content:     asn1.RawValue{Class: asn1.ClassContextSpecific, Tag: 0, IsCompound: true, Bytes: sdBytes},
 	}
 	outerBytes, err := asn1.Marshal(outer)
 	if err != nil {

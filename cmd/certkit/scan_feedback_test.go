@@ -1,18 +1,122 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/sensiblebit/certkit"
 	"github.com/sensiblebit/certkit/internal"
 	"github.com/sensiblebit/certkit/internal/certstore"
 )
+
+type scanProgressClearFailure struct{}
+
+func (scanProgressClearFailure) Write(data []byte) (int, error) {
+	if string(data) == "\r\033[K" {
+		return 0, io.ErrClosedPipe
+	}
+	return len(data), nil
+}
+
+func TestRunScan_PreservesPlanningAndProgressErrors(t *testing.T) {
+	_, input := setupScanRefreshTest(t)
+	scanFormat, jsonOutput = "text", false
+	originalWriter, originalPlanner := scanProgressWriter, scanPlanBundles
+	t.Cleanup(func() { scanProgressWriter, scanPlanBundles = originalWriter, originalPlanner })
+	scanProgressWriter = func() io.Writer { return scanProgressClearFailure{} }
+	planErr := internal.ErrBundlePlanBlocked
+	scanPlanBundles = func(context.Context, internal.BundlePlanInput) (*internal.BundleExportPlan, error) {
+		return nil, planErr
+	}
+	_, _, err := captureOutput(t, func() error { return runScan(newCommandWithContext(), []string{input}) })
+	if !errors.Is(err, planErr) {
+		t.Fatalf("lost planning error: %v", err)
+	}
+	if !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatalf("lost progress cleanup error: %v", err)
+	}
+}
+
+func TestRunScan_ProgressContinuesDuringManagedPlanning(t *testing.T) {
+	_, input := setupScanRefreshTest(t)
+	scanFormat, jsonOutput = "text", false
+	originalWriter, originalPlanner := scanProgressWriter, scanPlanBundles
+	originalTrustLoader := scanSummaryTrustPoolLoader
+	t.Cleanup(func() {
+		scanProgressWriter, scanPlanBundles = originalWriter, originalPlanner
+		scanSummaryTrustPoolLoader = originalTrustLoader
+	})
+	out := &scanProgressRecorder{writes: make(chan string, 16)}
+	scanProgressWriter = func() io.Writer { return out }
+	waitForActivity := func(activity string) {
+		t.Helper()
+		deadline := time.After(3 * time.Second)
+		for count := 0; count < 2; {
+			select {
+			case line := <-out.writes:
+				if strings.Contains(line, activity) {
+					count++
+				}
+			case <-deadline:
+				t.Fatalf("progress stopped during %s", activity)
+			}
+		}
+	}
+	scanPlanBundles = func(ctx context.Context, in internal.BundlePlanInput) (*internal.BundleExportPlan, error) {
+		waitForActivity("Planning managed bundles")
+		return originalPlanner(ctx, in)
+	}
+	scanSummaryTrustPoolLoader = func(name string) (scanTrustPools, error) {
+		waitForActivity("Loading certificate trust pools")
+		return originalTrustLoader(name)
+	}
+	stdout, _, err := captureOutput(t, func() error { return runScan(newCommandWithContext(), []string{input}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(stdout, "Bundle export plan") || strings.ContainsAny(stdout, "\r\033") {
+		t.Fatalf("invalid plan output: %q", stdout)
+	}
+	if !strings.HasSuffix(out.String(), "\r\033[K") {
+		t.Fatalf("progress was not cleared before plan output: %q", out.String())
+	}
+}
+
+func TestRunScan_ContinuesAfterJSONInput(t *testing.T) {
+	_, input := setupScanRefreshTest(t)
+	scanBundlePath = ""
+	data := "{\n" + strings.Repeat(" ", 128) + `"value": "` + strings.Repeat(" ", 256) + `"}`
+	if err := os.WriteFile(filepath.Join(input, "a-plan.json"), []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, leaf := generateKeyAndCert(t, "scan.example.com", false)
+	// The extension must not determine whether the scanner accepts a certificate.
+	if err := os.WriteFile(filepath.Join(input, "b-certificate.json"), []byte(certkit.CertToPEM(leaf)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, err := captureOutput(t, func() error { return runScan(newCommandWithContext(), []string{input}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	var summary certstore.ScanSummary
+	if err := json.Unmarshal([]byte(stdout), &summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary.Leaves != 1 || summary.Keys != 0 {
+		t.Fatalf("scan did not continue after JSON input: %+v", summary)
+	}
+	if strings.ContainsAny(stdout+stderr, "\r\033") {
+		t.Fatal("redirected JSON output contains terminal progress")
+	}
+}
 
 func TestRunScan_ExcludesExistingDumpOutputs(t *testing.T) {
 	for _, test := range []struct {

@@ -38,7 +38,7 @@ func init() {
 	flags.StringSliceVar(&scanRefresh.Names, "bundle-name", nil, "Export only these configured bundle names (repeatable)")
 	flags.StringSliceVar(&scanRefresh.Only, "only", nil, "Alias for --bundle-name (repeatable)")
 	flags.StringSliceVar(&scanRefresh.Required, "require-bundle", nil, "Fail unless each named bundle can be produced (repeatable)")
-	flags.StringSliceVar(&scanRefresh.Formats, "formats", nil, "Bundle artifacts: pem,key,chain,fullchain,intermediates,root,json,yaml,p12,k8s,csr,csr-json (default pem,key,chain,fullchain,intermediates,root,json,p12)")
+	flags.StringSliceVar(&scanRefresh.Formats, "formats", nil, "Bundle artifacts: pem,key,chain,fullchain,intermediates,root,json,yaml,p12,k8s,csr,csr-json (default all formats)")
 	flags.StringVar(&scanRefresh.InputPasswordFile, "input-password-file", "", "Input decryption passwords, one per line; never used for output encryption")
 	flags.StringVar(&scanRefresh.OutputPasswordFile, "output-password-file", "", "Output password for encrypted key/YAML and P12 artifacts (P12 defaults to changeit; key/YAML remain unencrypted)")
 	flags.BoolVar(&scanRefresh.Write, "write", false, "Apply the bundle export plan (default is a read-only preview)")
@@ -127,9 +127,13 @@ type runScanBundleExportInput struct {
 	OutputPassword string
 	Format         string
 	CompatSet      bool
+	Progress       *scanProgress
 }
 
 func runScanBundleExport(ctx context.Context, input runScanBundleExportInput) error {
+	if err := input.Progress.SetActivity("Planning managed bundles"); err != nil {
+		return err
+	}
 	configs := input.Configs
 	if input.CompatSet {
 		configs = slices.Clone(configs)
@@ -153,9 +157,12 @@ func runScanBundleExport(ctx context.Context, input runScanBundleExportInput) er
 	if input.OutputPassword == "" && slices.ContainsFunc(plan.Entries, func(entry internal.BundleExportEntry) bool {
 		return slices.Contains(entry.Formats, "p12")
 	}) {
-		if _, err := fmt.Fprintln(os.Stderr, "Using default password 'changeit'. Use --output-password-file for scan exports."); err != nil {
+		if err := input.Progress.WriteWarning(os.Stderr, "Using default password 'changeit'. Use --output-password-file for scan exports."); err != nil {
 			return fmt.Errorf("writing default-password warning: %w", err)
 		}
+	}
+	if err := input.Progress.SetActivity("Loading certificate trust pools"); err != nil {
+		return err
 	}
 	trustPools, err := scanSummaryTrustPoolLoader(scanTrustStore)
 	if err != nil {
@@ -163,9 +170,18 @@ func runScanBundleExport(ctx context.Context, input runScanBundleExportInput) er
 	}
 	planErr := plan.Validate()
 	if scanRefresh.Write && planErr == nil {
+		if err := input.Progress.SetActivity("Writing managed bundles"); err != nil {
+			return err
+		}
 		planErr = plan.Write(ctx)
 	}
+	if err := input.Progress.SetActivity("Checking certificate trust"); err != nil {
+		return errors.Join(planErr, err)
+	}
 	summary := input.Store.ScanSummary(certstore.ScanSummaryInput{MozillaPool: trustPools.Mozilla, SystemPool: trustPools.System})
+	if err := input.Progress.Stop(); err != nil {
+		return errors.Join(planErr, err)
+	}
 	if input.Format == "json" {
 		output := scanExportJSON{ScanSummary: summary, BundlePath: scanBundlePath,
 			DryRun: !scanRefresh.Write, Exports: plan.Entries}
@@ -201,6 +217,9 @@ func printBundleExportPlan(plan *internal.BundleExportPlan) error {
 		fmt.Fprintf(&out, "\n%s: %s (%s)\n  Directory: %s\n  Reason: %s\n", entry.BundleName, entry.Status, entry.Action, entry.OutputDirectory, entry.Reason)
 		if entry.Rule != nil {
 			fmt.Fprintf(&out, "  Rule: %s #%d (%s)\n", entry.Rule.ConfigPath, entry.Rule.Index, strings.Join(entry.Rule.CommonNames, ", "))
+			if slices.Contains(entry.Formats, "k8s") {
+				fmt.Fprintf(&out, "  Kubernetes secret: %s\n", entry.Rule.SecretName)
+			}
 			if entry.Rule.Compat {
 				out.WriteString("  Compatibility: longest verified chain\n")
 			}

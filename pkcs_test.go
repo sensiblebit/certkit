@@ -1,6 +1,7 @@
 package certkit
 
 import (
+	"bytes"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -9,6 +10,8 @@ import (
 	"crypto/rsa"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/asn1"
+	"errors"
 	"strings"
 	"testing"
 	"time"
@@ -395,27 +398,130 @@ func TestDecodePKCS7_roundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	decoded, err := DecodePKCS7(derData)
-	if err != nil {
+	var envelope asn1.RawValue
+	if _, err := asn1.Unmarshal(derData, &envelope); err != nil {
 		t.Fatal(err)
 	}
-	if len(decoded) != 3 {
-		t.Fatalf("expected 3 certs, got %d", len(decoded))
-	}
-
-	// Verify all original certs are present (set-based, order-independent).
-	for _, orig := range original {
-		found := false
-		for _, dec := range decoded {
-			if dec.Equal(orig) {
-				found = true
-				break
+	berData := append([]byte{0x30, 0x80}, envelope.Bytes...)
+	berData = append(berData, 0, 0)
+	lengthBytes := int(derData[1] & 0x7f)
+	longBER := append([]byte{0x30, 0x80 | byte(lengthBytes+1), 0}, derData[2:]...)
+	for name, data := range map[string][]byte{
+		"DER":                             derData,
+		"BER indefinite sequence":         berData,
+		"BER nonminimal definite length":  longBER,
+		"BER nested indefinite sequences": indefinitePKCS7TestValue(t, derData),
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			decoded, err := DecodePKCS7(data)
+			if err != nil {
+				t.Fatal(err)
 			}
+			if len(decoded) != len(original) {
+				t.Fatalf("expected %d certs, got %d", len(original), len(decoded))
+			}
+			for _, orig := range original {
+				found := false
+				for _, dec := range decoded {
+					if dec.Equal(orig) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("cert CN=%q missing from decoded PKCS#7", orig.Subject.CommonName)
+				}
+			}
+		})
+	}
+}
+
+func indefinitePKCS7TestValue(t *testing.T, data []byte) []byte {
+	t.Helper()
+	var value asn1.RawValue
+	rest, err := asn1.Unmarshal(data, &value)
+	if err != nil || len(rest) != 0 {
+		t.Fatalf("invalid test DER: %v", err)
+	}
+	if !value.IsCompound {
+		return data
+	}
+	out := []byte{data[0], 0x80}
+	for remaining := value.Bytes; len(remaining) > 0; {
+		var child asn1.RawValue
+		remaining, err = asn1.Unmarshal(remaining, &child)
+		if err != nil {
+			t.Fatal(err)
 		}
-		if !found {
-			t.Errorf("cert CN=%q missing from decoded PKCS#7", orig.Subject.CommonName)
+		out = append(out, indefinitePKCS7TestValue(t, child.FullBytes)...)
+	}
+	return append(out, 0, 0)
+}
+
+func TestDecodePKCS7_RejectsMalformedContent(t *testing.T) {
+	t.Parallel()
+	deepDefinite := []byte{0x04, 0x00}
+	for range 128 {
+		var err error
+		deepDefinite, err = asn1.Marshal(asn1.RawValue{Tag: asn1.TagSequence, IsCompound: true, Bytes: deepDefinite})
+		if err != nil {
+			t.Fatal(err)
 		}
 	}
+	for name, payload := range map[string][]byte{
+		"overlapping children": bytes.Join([][]byte{
+			bytes.Repeat([]byte{0xa0, 0x02, 0xa0, 0x20}, 64),
+			bytes.Repeat([]byte{0x04, 0x00}, 32),
+		}, nil),
+		"deep definite nesting": deepDefinite,
+		"deep indefinite nesting": bytes.Join([][]byte{
+			bytes.Repeat([]byte{0x30, 0x80}, 4096), {0x04, 0x00}, bytes.Repeat([]byte{0, 0}, 4096),
+		}, nil),
+		"child outside parent":            {0x30, 0x02, 0x04, 0x02, 0x01, 0x01},
+		"indefinite child outside parent": {0x30, 0x02, 0x30, 0x80, 0, 0},
+		"indefinite primitive":            {0x04, 0x80, 0, 0},
+		"missing end marker":              {0x30, 0x80, 0x04, 0x00},
+		"unexpected end marker":           {0x30, 0x02, 0, 0},
+		"truncated tag":                   {0x1f, 0xff},
+		"missing length":                  {0x1f, 0x01},
+		"truncated length":                {0x04, 0x84, 0x01},
+		"overflow length":                 {0x04, 0x88, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			for _, contentType := range []byte{2, 3, 6} {
+				// Each payload follows an accepted PKCS#7 OID and explicit content tag.
+				data := []byte{0x30, 0x80, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, contentType, 0xa0, 0x80}
+				data = append(data, payload...)
+				data = append(data, 0, 0, 0, 0)
+				definite, err := asn1.Marshal(asn1.RawValue{Tag: asn1.TagSequence, IsCompound: true, Bytes: data[2 : len(data)-2]})
+				if err != nil {
+					t.Fatal(err)
+				}
+				for _, envelope := range [][]byte{data, definite} {
+					if _, err := DecodePKCS7(envelope); !errors.Is(err, errPKCS7ContentInfo) {
+						t.Fatalf("content type %d bypassed structural validation: %v", contentType, err)
+					}
+				}
+			}
+		})
+	}
+}
+
+func FuzzDecodePKCS7(f *testing.F) {
+	empty, err := buildEmptyPKCS7DER()
+	if err != nil {
+		f.Fatal(err)
+	}
+	f.Add(empty)
+	f.Add([]byte{0x30, 0x80, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x07, 0x02, 0xa0, 0x80, 0x30, 0x80, 0, 0, 0, 0, 0, 0})
+	f.Add([]byte{0x30, 0x84, 0xff})
+	f.Fuzz(func(_ *testing.T, data []byte) {
+		if _, err := DecodePKCS7(data); err != nil {
+			return // Malformed input must return without panicking or stalling.
+		}
+	})
 }
 
 func TestDecodePKCS7_EmptyPKCS7(t *testing.T) {
@@ -456,11 +562,29 @@ func TestDecodePKCS7_GarbageInput(t *testing.T) {
 	// WHY: Completely invalid (non-PKCS#7) data must produce a clear error
 	// with the "parsing PKCS#7" context, not a panic or silent nil return.
 	t.Parallel()
-	_, err := DecodePKCS7([]byte("this is not pkcs7 data"))
-	if err == nil {
-		t.Fatal("expected error for garbage PKCS#7 input")
-	}
-	if !strings.Contains(err.Error(), "parsing PKCS#7") {
-		t.Errorf("error should wrap with context, got: %v", err)
+	for name, data := range map[string][]byte{
+		"empty":         nil,
+		"text":          []byte("this is not pkcs7 data"),
+		"indented JSON": []byte("{\n" + strings.Repeat(" ", 128) + `"value": "` + strings.Repeat(" ", 256) + `"}`),
+		// Alternating lengths make the upstream parser repeatedly read overlapping objects.
+		"overlapping BER objects": bytes.Join([][]byte{
+			{0x7b, 0x0a},
+			bytes.Repeat([]byte{0x20, 0x02, 0x20, 0x20}, 64),
+			bytes.Repeat([]byte{0x04, 0x00}, 32),
+		}, nil),
+		"truncated sequence":            {0x30, 0x82, 0xff},
+		"sequence without content type": {0x30, 0x02, 0x05, 0x00},
+		"unrelated content type":        {0x30, 0x05, 0x06, 0x03, 0x55, 0x04, 0x03},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+			_, err := DecodePKCS7(data)
+			if err == nil {
+				t.Fatal("expected error for non-PKCS#7 input")
+			}
+			if !strings.Contains(err.Error(), "parsing PKCS#7") {
+				t.Errorf("error should wrap with context, got: %v", err)
+			}
+		})
 	}
 }
