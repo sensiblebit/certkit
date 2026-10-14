@@ -45,9 +45,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Restore all 12 default formats for managed scan exports, including CSR, CSR JSON, YAML, and Kubernetes YAML. Explicit `--formats` selections still limit the output.
+- Restore all 12 default formats for managed scan exports, including CSR, CSR JSON, YAML, and Kubernetes YAML. Explicit `--formats` selections still limit the output ([#233]).
 
-- Prevent scans from stalling when JSON or other unrelated files reach the PKCS#7 decoder. Show the active file or phase and elapsed time during terminal scans, and keep warnings separate from progress.
+- Prevent scans from stalling when JSON or other unrelated files reach the PKCS#7 decoder. Show the active file or phase and elapsed time during terminal scans, and keep warnings separate from progress ([#233]).
 
 - Recheck the opened output destination and refresh lock after manifest staging, immediately before replacement; invalidate pending entries on destination or lock failures while retaining committed statuses ([#225])
 - Anchor bundle staging, writes, rollback, and cleanup to opened directories so output-root relocation cannot strand private artifacts or redirect cleanup ([#225])
@@ -1051,6 +1051,7 @@ Initial release.
 - Homebrew distribution via GoReleaser
 
 [Unreleased]: https://github.com/sensiblebit/certkit/compare/v0.8.3...HEAD
+[#233]: https://github.com/sensiblebit/certkit/pull/233
 [#225]: https://github.com/sensiblebit/certkit/pull/225
 [#200]: https://github.com/sensiblebit/certkit/pull/200
 [0.8.3]: https://github.com/sensiblebit/certkit/compare/v0.8.2...v0.8.3
