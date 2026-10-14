@@ -513,7 +513,7 @@ Keep `bundles.yaml`, password files, and any `--load-db` / `--save-db` paths out
 
 With `--duplicates`, skipped older candidates do not fail a required or scoped export if the primary bundle is produced. Use `--fail-on-skip` to require every duplicate too. Kubernetes Secret names stay equal to the configured bundle name, even inside dated duplicate directories.
 
-The default output is PEM variants, a `.key` file, a `.p12` archive, public JSON metadata, and `manifest.json`. Request only the artifacts you need:
+By default, managed exports select all 12 formats: PEM variants, private key, PKCS#12, JSON, YAML, Kubernetes YAML, CSR, and CSR JSON. Each bundle also includes `manifest.json`. Request only the artifacts you need:
 
 ```sh
 certkit scan ./tmp -c bundles.yaml --bundle-path ./bundles \

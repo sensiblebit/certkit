@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mattn/go-isatty"
 	"github.com/sensiblebit/certkit"
 	"github.com/sensiblebit/certkit/internal"
 	"github.com/sensiblebit/certkit/internal/certstore"
@@ -77,7 +78,7 @@ func init() {
 	registerCompletion(scanCmd, completionInput{"bundle-path", directoryCompletion})
 }
 
-func runScan(cmd *cobra.Command, args []string) error {
+func runScan(cmd *cobra.Command, args []string) (runErr error) {
 	inputPath := args[0]
 	compatSet := scanRefresh.Compat || cmd.Flags().Changed("compat")
 	if err := validateScanRefreshFlags(compatSet); err != nil {
@@ -109,49 +110,28 @@ func runScan(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("loading passwords: %w", err)
 	}
 	scannedFiles := 0
-	var lastProgressUpdate time.Time
-	stderrInfo, err := os.Stderr.Stat()
-	if err != nil {
-		slog.Debug("disabling scan progress: stat stderr", "error", err)
+	var progressOutput io.Writer
+	if format == "text" && (isatty.IsTerminal(os.Stderr.Fd()) || isatty.IsCygwinTerminal(os.Stderr.Fd())) {
+		progressOutput = os.Stderr
 	}
-	progressEnabled := err == nil && !jsonOutput && scanFormat == "text" && (stderrInfo.Mode()&os.ModeCharDevice) != 0
-	progressWidth := 0
-	clearScanProgressLine := func() error {
-		if !progressEnabled || progressWidth == 0 {
-			return nil
+	progress := newScanProgress(progressOutput)
+	if progressOutput != nil {
+		logger := slog.Default()
+		slog.SetDefault(slog.New(scanProgressLogHandler{Handler: logger.Handler(), progress: progress}))
+		defer slog.SetDefault(logger)
+	}
+	progress.Start(cmd.Context())
+	defer func() {
+		if err := progress.Stop(); runErr == nil {
+			runErr = err
 		}
-		if _, err := fmt.Fprintf(os.Stderr, "\r%s\r", strings.Repeat(" ", progressWidth)); err != nil {
-			return fmt.Errorf("clearing scan progress line: %w", err)
-		}
-		return nil
-	}
-	formatScanProgressLine := func(certs, keys, files int) string {
-		return fmt.Sprintf(
-			"Found %d certificate(s) and %d key(s) in %d file(s)",
-			certs,
-			keys,
-			files,
-		)
-	}
+	}()
 	renderScanProgress := func() error {
-		if !progressEnabled {
-			return nil
-		}
-		if !lastProgressUpdate.IsZero() && time.Since(lastProgressUpdate) < 250*time.Millisecond {
-			return nil
-		}
-		line := formatScanProgressLine(store.CertCount(), store.KeyCount(), scannedFiles)
-		if progressWidth > len(line) {
-			line += strings.Repeat(" ", progressWidth-len(line))
-		}
-		if len(line) > progressWidth {
-			progressWidth = len(line)
-		}
-		if _, err := fmt.Fprintf(os.Stderr, "\r%s", line); err != nil {
-			return fmt.Errorf("writing scan progress: %w", err)
-		}
-		lastProgressUpdate = time.Now()
-		return nil
+		return progress.SetCounts(fmt.Sprintf("%d certs, %d keys, %d files",
+			store.CertCount(), store.KeyCount(), scannedFiles))
+	}
+	if err := renderScanProgress(); err != nil {
+		return err
 	}
 
 	// Only load bundle configs when exporting
@@ -165,6 +145,9 @@ func runScan(cmd *cobra.Command, args []string) error {
 
 	// Ingest — always store all certs including expired; filtering is output-only.
 	if inputPath == "-" {
+		if err := progress.SetActivity("Reading stdin"); err != nil {
+			return err
+		}
 		scannedFiles++
 		if err := internal.ProcessFile(internal.ProcessFileInput{
 			Path:      "-",
@@ -187,6 +170,9 @@ func runScan(cmd *cobra.Command, args []string) error {
 			MaxFileSize:  scanMaxFileSize,
 			ExcludePaths: []string{scanBundlePath, scanDumpKeys, scanDumpCerts, scanSaveDB, scanLoadDB, passwordFile, scanRefresh.InputPasswordFile, scanRefresh.OutputPasswordFile},
 			OnFile: func(path string) error {
+				if err := progress.SetActivity(fmt.Sprintf("Scanning %+q", path)); err != nil {
+					return err
+				}
 				scannedFiles++
 				if archiveFormat := internal.ArchiveFormat(path); archiveFormat != "" {
 					data, readErr := internal.ReadFileLimited(path, scanMaxFileSize)
@@ -248,6 +234,9 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 
 	// Resolve missing intermediates via AIA before trust checking
+	if err := progress.SetActivity("Resolving certificate chains (AIA)"); err != nil {
+		return err
+	}
 	if certstore.HasUnresolvedIssuers(store) {
 		slog.Debug("resolving certificate chains")
 		aiaResult := certstore.ResolveAIA(cmd.Context(), certstore.ResolveAIAInput{
@@ -266,6 +255,9 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 
 	if scanDumpKeys != "" {
+		if err := progress.SetActivity("Writing key dump"); err != nil {
+			return err
+		}
 		keys := store.AllKeysFlat()
 		if len(keys) > 0 {
 			var data []byte
@@ -282,6 +274,9 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 
 	if scanDumpCerts != "" {
+		if err := progress.SetActivity("Checking trust and writing certificate dump"); err != nil {
+			return err
+		}
 		certs := store.AllCertsFlat()
 		if len(certs) > 0 {
 			trustPools := scanTrustPools{}
@@ -395,10 +390,8 @@ func runScan(cmd *cobra.Command, args []string) error {
 	}
 
 	if scanExport {
-		if progressEnabled {
-			if err := clearScanProgressLine(); err != nil {
-				return err
-			}
+		if err := progress.Stop(); err != nil {
+			return err
 		}
 		if err := runScanBundleExport(cmd.Context(), runScanBundleExportInput{
 			CompatSet: compatSet,
@@ -407,10 +400,8 @@ func runScan(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("exporting managed scan bundles: %w", err)
 		}
 	} else {
-		if progressEnabled {
-			if err := clearScanProgressLine(); err != nil {
-				return err
-			}
+		if err := progress.SetActivity("Checking certificate trust"); err != nil {
+			return err
 		}
 		// Print summary with trust and expiry annotations
 		trustPools, err := scanSummaryTrustPoolLoader(scanTrustStore)
@@ -421,6 +412,9 @@ func runScan(cmd *cobra.Command, args []string) error {
 			MozillaPool: trustPools.Mozilla,
 			SystemPool:  trustPools.System,
 		})
+		if err := progress.Stop(); err != nil {
+			return err
+		}
 		switch format {
 		case "json":
 			if verbose {

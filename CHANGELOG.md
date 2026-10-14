@@ -29,7 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Update Go to 1.27.2 and refresh Go modules, web dependencies, and development tools to their current stable versions.
 
 - **Breaking:** `scan --bundle-path` now previews by default and requires `--write` to save bundles; dry runs never write outputs, and unsafe replacement plans fail before modifying bundles ([#225])
-- **Breaking:** Scan input passwords no longer encrypt outputs; use `--output-password-file` explicitly. Managed P12 output retains the default `changeit` password; Kubernetes YAML, YAML, and CSR files now require explicit format selection ([#225])
+- **Breaking:** Scan input passwords no longer encrypt outputs; use `--output-password-file` explicitly. Managed P12 output retains the default `changeit` password ([#225])
 
 - **Breaking:** Require Go 1.27+ and update Go, web, and development dependencies to current stable releases ([#200])
 - **Breaking:** Default `TrustStore` in `DefaultOptions()` changed from `"system"` to `"mozilla"` — pure-Go Mozilla root verification is used by default instead of macOS `SecTrustEvaluateWithError` syscalls, eliminating multi-minute hangs on large certificate stores
@@ -44,6 +44,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Surface trust-source load warnings in `inspect`, `verify`, and `connect`, fail fast on invalid `verify` trust-store configuration, and stop reporting a synthetic `file` source when no file-backed roots were requested ([#171])
 
 ### Fixed
+
+- Restore all 12 default formats for managed scan exports, including CSR, CSR JSON, YAML, and Kubernetes YAML. Explicit `--formats` selections still limit the output.
+
+- Prevent scans from stalling when JSON or other unrelated files reach the PKCS#7 decoder. Show the active file or phase and elapsed time during terminal scans, and keep warnings separate from progress.
 
 - Recheck the opened output destination and refresh lock after manifest staging, immediately before replacement; invalidate pending entries on destination or lock failures while retaining committed statuses ([#225])
 - Anchor bundle staging, writes, rollback, and cleanup to opened directories so output-root relocation cannot strand private artifacts or redirect cleanup ([#225])

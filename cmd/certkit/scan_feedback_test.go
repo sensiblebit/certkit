@@ -14,6 +14,34 @@ import (
 	"github.com/sensiblebit/certkit/internal/certstore"
 )
 
+func TestRunScan_ContinuesAfterJSONInput(t *testing.T) {
+	_, input := setupScanRefreshTest(t)
+	scanBundlePath = ""
+	data := "{\n" + strings.Repeat(" ", 128) + `"value": "` + strings.Repeat(" ", 256) + `"}`
+	if err := os.WriteFile(filepath.Join(input, "a-plan.json"), []byte(data), 0600); err != nil {
+		t.Fatal(err)
+	}
+	_, leaf := generateKeyAndCert(t, "scan.example.com", false)
+	// The extension must not determine whether the scanner accepts a certificate.
+	if err := os.WriteFile(filepath.Join(input, "b-certificate.json"), []byte(certkit.CertToPEM(leaf)), 0600); err != nil {
+		t.Fatal(err)
+	}
+	stdout, stderr, err := captureOutput(t, func() error { return runScan(newCommandWithContext(), []string{input}) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	var summary certstore.ScanSummary
+	if err := json.Unmarshal([]byte(stdout), &summary); err != nil {
+		t.Fatal(err)
+	}
+	if summary.Leaves != 1 || summary.Keys != 0 {
+		t.Fatalf("scan did not continue after JSON input: %+v", summary)
+	}
+	if strings.ContainsAny(stdout+stderr, "\r\033") {
+		t.Fatal("redirected JSON output contains terminal progress")
+	}
+}
+
 func TestRunScan_ExcludesExistingDumpOutputs(t *testing.T) {
 	for _, test := range []struct {
 		name string

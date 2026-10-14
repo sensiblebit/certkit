@@ -6,6 +6,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/asn1"
 	"errors"
 	"fmt"
 
@@ -18,6 +19,7 @@ var (
 	errPKCS12LeafNil            = errors.New("leaf certificate cannot be nil")
 	errPKCS7NoCertificates      = errors.New("no certificates to encode")
 	errPKCS7BundleEmpty         = errors.New("PKCS#7 bundle contains no certificates")
+	errPKCS7ContentInfo         = errors.New("invalid PKCS#7 ContentInfo")
 )
 
 // validatePKCS12KeyType checks that the private key is a supported type for PKCS#12 encoding.
@@ -96,6 +98,9 @@ func EncodePKCS7(certs []*x509.Certificate) ([]byte, error) {
 // DecodePKCS7 decodes a DER-encoded PKCS#7 bundle and returns the certificates it contains.
 // Returns an error if decoding fails or the bundle contains no certificates.
 func DecodePKCS7(derData []byte) ([]*x509.Certificate, error) {
+	if err := checkPKCS7ContentInfo(derData); err != nil {
+		return nil, fmt.Errorf("parsing PKCS#7: %w", err)
+	}
 	p7, err := pkcs7.Parse(derData)
 	if err != nil {
 		return nil, fmt.Errorf("parsing PKCS#7: %w", err)
@@ -104,4 +109,35 @@ func DecodePKCS7(derData []byte) ([]*x509.Certificate, error) {
 		return nil, errPKCS7BundleEmpty
 	}
 	return p7.Certificates, nil
+}
+
+// Check the envelope before the upstream BER decoder recursively reads it.
+// Unrelated text can cause excessive work in that decoder.
+func checkPKCS7ContentInfo(data []byte) error {
+	if len(data) < 2 || data[0] != 0x30 {
+		return errPKCS7ContentInfo
+	}
+	var content []byte
+	if data[1] == 0x80 {
+		// BER permits an indefinite-length outer sequence.
+		content = data[2:]
+	} else {
+		var envelope asn1.RawValue
+		rest, err := asn1.Unmarshal(data, &envelope)
+		if err != nil {
+			return fmt.Errorf("reading PKCS#7 envelope: %w", err)
+		}
+		if len(rest) != 0 {
+			return errPKCS7ContentInfo
+		}
+		content = envelope.Bytes
+	}
+	var contentType asn1.ObjectIdentifier
+	if _, err := asn1.Unmarshal(content, &contentType); err != nil {
+		return fmt.Errorf("reading PKCS#7 content type: %w", err)
+	}
+	if !contentType.Equal(pkcs7.OIDSignedData) && !contentType.Equal(pkcs7.OIDEnvelopedData) && !contentType.Equal(pkcs7.OIDEncryptedData) {
+		return errPKCS7ContentInfo
+	}
+	return nil
 }

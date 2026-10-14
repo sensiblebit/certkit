@@ -270,33 +270,33 @@ Input format is auto-detected.
 ### Scan Flags
 
 <!-- certkit:flags:scan -->
-| Flag                      | Default          | Description                                                                                                                                               |
-| ------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--aia-timeout`           | `2s`             | Timeout for AIA certificate fetches (e.g. 2s, 500ms)                                                                                                      |
-| `--allow-private-network` | `false`          | Allow AIA fetches to private/internal endpoints                                                                                                           |
-| `--bundle-name`           |                  | Export only these configured bundle names (repeatable)                                                                                                    |
-| `--bundle-path`           |                  | Plan bundles in this directory; --write applies the plan                                                                                                  |
-| `--compat`                | `false`          | Select the longest verified chain; overrides bundle compat settings (requires verification)                                                               |
-| `--config`, `-c`          | `./bundles.yaml` | Path to bundle config YAML                                                                                                                                |
-| `--dry-run`               | `false`          | Show the export plan without writing any files                                                                                                            |
-| `--dump-certs`            |                  | Dump all discovered certificates to a single PEM file                                                                                                     |
-| `--dump-keys`             |                  | Dump all discovered keys to a single PEM file                                                                                                             |
-| `--duplicates`            | `false`          | Export all certificates per bundle, not just the newest                                                                                                   |
-| `--fail-on-skip`          | `false`          | Fail the entire export if any requested bundle is skipped                                                                                                 |
-| `--force`, `-f`           | `false`          | Allow untrusted bundles and explicitly override replacement conflicts or expiration downgrades                                                            |
-| `--format`                | `text`           | Output format: text, json                                                                                                                                 |
-| `--formats`               |                  | Bundle artifacts: pem,key,chain,fullchain,intermediates,root,json,yaml,p12,k8s,csr,csr-json (default pem,key,chain,fullchain,intermediates,root,json,p12) |
-| `--input-password-file`   |                  | Input decryption passwords, one per line; never used for output encryption                                                                                |
-| `--load-db`               |                  | Load an existing database into memory before scanning                                                                                                     |
-| `--max-file-size`         | `10485760`       | Skip files larger than this size in bytes (0 to disable)                                                                                                  |
-| `--only`                  |                  | Alias for --bundle-name (repeatable)                                                                                                                      |
-| `--output-password-file`  |                  | Output password for encrypted key/YAML and P12 artifacts (P12 defaults to changeit; key/YAML remain unencrypted)                                          |
-| `--password-file`         |                  | Input decryption passwords, one per line (alias for --input-password-file)                                                                                |
-| `--passwords`, `-p`       |                  | Comma-separated input decryption passwords; never used for scan output encryption                                                                         |
-| `--require-bundle`        |                  | Fail unless each named bundle can be produced (repeatable)                                                                                                |
-| `--save-db`               |                  | Save the in-memory database to disk after scanning                                                                                                        |
-| `--trust-store`           | `mozilla`        | Trust store: system, mozilla                                                                                                                              |
-| `--write`                 | `false`          | Apply the bundle export plan (default is a read-only preview)                                                                                             |
+| Flag                      | Default          | Description                                                                                                       |
+| ------------------------- | ---------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `--aia-timeout`           | `2s`             | Timeout for AIA certificate fetches (e.g. 2s, 500ms)                                                              |
+| `--allow-private-network` | `false`          | Allow AIA fetches to private/internal endpoints                                                                   |
+| `--bundle-name`           |                  | Export only these configured bundle names (repeatable)                                                            |
+| `--bundle-path`           |                  | Plan bundles in this directory; --write applies the plan                                                          |
+| `--compat`                | `false`          | Select the longest verified chain; overrides bundle compat settings (requires verification)                       |
+| `--config`, `-c`          | `./bundles.yaml` | Path to bundle config YAML                                                                                        |
+| `--dry-run`               | `false`          | Show the export plan without writing any files                                                                    |
+| `--dump-certs`            |                  | Dump all discovered certificates to a single PEM file                                                             |
+| `--dump-keys`             |                  | Dump all discovered keys to a single PEM file                                                                     |
+| `--duplicates`            | `false`          | Export all certificates per bundle, not just the newest                                                           |
+| `--fail-on-skip`          | `false`          | Fail the entire export if any requested bundle is skipped                                                         |
+| `--force`, `-f`           | `false`          | Allow untrusted bundles and explicitly override replacement conflicts or expiration downgrades                    |
+| `--format`                | `text`           | Output format: text, json                                                                                         |
+| `--formats`               |                  | Bundle artifacts: pem,key,chain,fullchain,intermediates,root,json,yaml,p12,k8s,csr,csr-json (default all formats) |
+| `--input-password-file`   |                  | Input decryption passwords, one per line; never used for output encryption                                        |
+| `--load-db`               |                  | Load an existing database into memory before scanning                                                             |
+| `--max-file-size`         | `10485760`       | Skip files larger than this size in bytes (0 to disable)                                                          |
+| `--only`                  |                  | Alias for --bundle-name (repeatable)                                                                              |
+| `--output-password-file`  |                  | Output password for encrypted key/YAML and P12 artifacts (P12 defaults to changeit; key/YAML remain unencrypted)  |
+| `--password-file`         |                  | Input decryption passwords, one per line (alias for --input-password-file)                                        |
+| `--passwords`, `-p`       |                  | Comma-separated input decryption passwords; never used for scan output encryption                                 |
+| `--require-bundle`        |                  | Fail unless each named bundle can be produced (repeatable)                                                        |
+| `--save-db`               |                  | Save the in-memory database to disk after scanning                                                                |
+| `--trust-store`           | `mozilla`        | Trust store: system, mozilla                                                                                      |
+| `--write`                 | `false`          | Apply the bundle export plan (default is a read-only preview)                                                     |
 <!-- /certkit:flags -->
 
 ### Keygen Flags
@@ -425,7 +425,7 @@ Without an explicit `bundleName`, derived names must also be distinct within one
 
 Managed directory and artifact names must be portable: control characters (including NUL, tabs, and newlines), names ending in a period, and Windows device names such as `CON`, `NUL`, or `COM1` are rejected on every platform. An explicit, distinct `bundleName` fixes a directory-only collision. Artifact filenames still come from the CN, so a safe bundle name does not permit control characters or reserved filenames such as `CON.pem` or `COM1.example.com.key`; these fail during planning too. Directory components and artifact filenames have a 255-byte UTF-8 limit, including extensions. Temporary and backup directories use short names independent of the bundle name. Staging, artifact writes, renames, and cleanup use opened directory handles, so moving the output root cannot strand staged keys or redirect cleanup to replacement paths.
 
-Default artifacts are `pem,key,chain,fullchain,intermediates,root,json,p12`. Select any subset with `--formats`; public-only formats work without a private key. YAML, Kubernetes secrets, and CSR files require explicit selection:
+Managed exports select all 12 supported formats by default, including CSR, CSR JSON, YAML, and Kubernetes YAML. Use `--formats` to select a subset. Public-only formats work without a private key.
 
 | Format | File | Contents |
 | --- | --- | --- |
