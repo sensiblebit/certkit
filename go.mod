@@ -3,7 +3,7 @@ module github.com/sensiblebit/certkit
 go 1.27.2
 
 require (
-	github.com/breml/rootcerts v0.3.7
+	github.com/breml/rootcerts v0.3.8
 	github.com/google/certificate-transparency-go v1.3.3
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/mattn/go-isatty v0.0.24
